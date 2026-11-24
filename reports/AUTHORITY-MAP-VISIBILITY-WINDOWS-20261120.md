@@ -9,16 +9,20 @@ panned so that the NPC's icon is offscreen? The test captures the same NPC in th
 offscreen, back onscreen). For each view it records the NPC ID, a camera readback, a screenshot of the map
 and the raw list membership.
 
-## Answer (native, one fixture per run)
+## Reported Windows result (one fixture per run)
 
-The NPC was **not** kept. The raw list followed the view:
+Cobalt reported that the NPC disappeared from the list when the camera panned away and focus cleared:
 
 - Onscreen: the NPC is listed and its icon is drawn.
 - Offscreen: the raw list is empty and no icon is drawn.
 - Back onscreen: the NPC is listed and the icon is drawn again.
 
 Two independent runs (6 and 7) with different NPCs and opposite pan directions agree. Run 5 agrees as well,
-but its offscreen camera move was only partial (see failed controls).
+but its offscreen camera move was only partial (see failed controls). In runs 6 and 7, the NPC was
+focused in the onscreen views and unfocused in the offscreen view. These runs show membership
+changing under that combination of controls. To measure camera clipping independently, hold focus at 0
+for all three views and check that the NPC stays known and radar-visible. The original logs and images
+were retained locally on the test machine. This branch records the reported observations and hashes.
 
 ## Evidence: run 7 (pan of -80 km X, staying inside the sector)
 
@@ -87,6 +91,10 @@ The runner:
 - removes the view;
 - confirms that the other profiles and the game's extension list are unchanged;
 - writes `evidence.md` and `result.json`.
+
+The runner returns success only after complete evidence, a matching protected-file metadata check,
+and successful removal of the disposable view. The historical runs below left an empty view folder,
+which the current runner reports as a cleanup failure. Inspect the screenshots to establish icon visibility.
 
 The offline checks in `tests/test_authority_map_visibility.py` are synthetic: they cover parsing, the
 evidence rules, the composed extension and the PNG writer.

@@ -53,12 +53,21 @@ def log(on=True, off=False, back=True, off_reached=True):
 
 
 class Evidence(unittest.TestCase):
-    def evaluate(self, text):
-        return evidence.evaluate(evidence.parse_rows(text))
+    def evaluate(self, text, missing_shot=None):
+        with tempfile.TemporaryDirectory() as directory:
+            shots = {}
+            for seq, view in enumerate(evidence.VIEWS, start=1):
+                if view == missing_shot:
+                    continue
+                shot = Path(directory) / f'shot-{seq}-{view}.png'
+                shot.write_bytes(runner.png_bytes(1, 1, [bytes(3)]))
+                shots[seq] = shot
+            return evidence.evaluate(evidence.parse_rows(text), shots)
 
     def test_list_follows_view(self):
         result = self.evaluate(log(on=True, off=False, back=True))
         self.assertEqual(result['problems'], [])
+        self.assertTrue(result['accepted'])
         self.assertTrue(result['conclusion'].startswith('listed onscreen, absent offscreen'))
         self.assertEqual([entry['shot_seq'] for entry in result['views']], [1, 2, 3])
 
@@ -95,6 +104,33 @@ class Evidence(unittest.TestCase):
         text = '\n'.join(line for line in log().splitlines() if 'view=back' not in line)
         result = self.evaluate(text)
         self.assertIn('back: missing view rows', result['problems'])
+
+    def test_missing_offscreen_list_rows_are_rejected(self):
+        text = '\n'.join(line for line in log().splitlines() if 'LIST view=offscreen' not in line)
+        result = self.evaluate(text)
+        self.assertIn('offscreen: missing raw list rows', result['problems'])
+        self.assertFalse(result['accepted'])
+
+    def test_missing_screenshot_or_done_is_rejected(self):
+        self.assertFalse(self.evaluate(log(), missing_shot='offscreen')['accepted'])
+        self.assertFalse(self.evaluate(log().rsplit('\n', 1)[0])['accepted'])
+
+    def test_radar_change_and_membership_mismatch_are_rejected(self):
+        for text in (log().replace('npc_radar=true', 'npc_radar=false', 1),
+                     log().replace('npc_listed=false', 'npc_listed=true')):
+            with self.subTest(text=text):
+                self.assertFalse(self.evaluate(text)['accepted'])
+
+    def test_camera_readback_must_match_the_offscreen_target(self):
+        result = self.evaluate(log().replace('target_x=-3520000', 'target_x=-3599999'))
+        self.assertIn('did not match the target', result['conclusion'])
+        self.assertFalse(result['accepted'])
+
+    def test_focus_change_is_disclosed(self):
+        text = log().replace(f'focus={PLAYER}', f'focus={NPC}', 2)
+        result = self.evaluate(text)
+        self.assertTrue(result['accepted'])
+        self.assertIn('Map focus changed', evidence.markdown(result))
 
     def test_bad_boolean_is_refused(self):
         with self.assertRaises(ValueError):
@@ -138,6 +174,15 @@ class Runner(unittest.TestCase):
         idat = data.index(b'IDAT')
         length = struct.unpack('>I', data[idat - 4:idat])[0]
         self.assertEqual(zlib.decompress(data[idat + 4:idat + 4 + length]), b'\x00' + rows[0] + b'\x00' + rows[1])
+
+    def test_done_is_not_sufficient_for_runner_success(self):
+        result = {'outcome': 'done', 'protected_unchanged': True, 'view_removed': True,
+                  'x4_running_after': False, 'evidence': {'accepted': True}}
+        self.assertTrue(runner.successful_run(result))
+        for key, value in (('protected_unchanged', False), ('view_removed', False),
+                           ('x4_running_after', True), ('evidence', {'accepted': False})):
+            with self.subTest(key=key):
+                self.assertFalse(runner.successful_run(dict(result, **{key: value})))
 
     def test_tree_metadata_lists_files_only(self):
         with tempfile.TemporaryDirectory() as folder:

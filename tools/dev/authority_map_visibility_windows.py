@@ -210,6 +210,8 @@ def run(args):
     from lockstep.launcher import game as game_mod, profile as profile_mod, steam
     import authority_map_visibility_evidence as evidence_mod
 
+    if args.profile not in profile_mod.PROFILES:
+        raise SystemExit(f'Profile {args.profile} is outside the disposable launcher lanes')
     out = Path(args.out).resolve()
     if out.exists():
         raise SystemExit(f'{out} exists; output folders are single-use')
@@ -235,7 +237,7 @@ def run(args):
                'pan_factor': args.pan_factor, 'min_m': args.min_m, 'max_m': args.max_m,
                'warmup_s': args.warmup, 'map_settle_s': args.map_settle, 'hint_wait_s': args.hint_wait}
     result = {'options': options, 'game': str(game), 'view': str(view), 'shots': {}, 'outcome': 'started'}
-    process = None
+    process = log_path = None
     ctypes.windll.user32.SetProcessDPIAware()
     try:
         game_mod.create_view(game, view)
@@ -295,9 +297,8 @@ def run(args):
         if process is not None:
             result['exit_code'] = process.returncode
         time.sleep(2.0)
-        log = profile_mod.profile_dir(args.profile) / LOGFILE
-        if log.is_file():
-            shutil.copyfile(log, out / LOGFILE)
+        if process is not None and log_path.is_file():
+            shutil.copyfile(log_path, out / LOGFILE)
         try:
             remove_view_patiently(game_mod, view)
         except OSError as error:
@@ -319,6 +320,12 @@ def run(args):
         with (out / 'result.json').open('x', encoding='utf-8') as handle:
             json.dump(result, handle, indent=2, default=str)
     return result
+
+
+def successful_run(result):
+    return (result['outcome'] == 'done' and result['protected_unchanged']
+            and result['view_removed'] and not result['x4_running_after']
+            and result.get('evidence', {}).get('accepted', False))
 
 
 def main(argv=None):
@@ -344,7 +351,7 @@ def main(argv=None):
                                                          'view_removed', 'x4_running_after')}))
     if 'evidence' in result:
         print((Path(args.out) / 'evidence.md').read_text(encoding='utf-8'))
-    return 0 if result.get('outcome') == 'done' else 1
+    return 0 if successful_run(result) else 1
 
 
 if __name__ == '__main__':

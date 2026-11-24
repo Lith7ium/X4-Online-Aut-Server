@@ -183,6 +183,7 @@ local sampler
 local function sample_list()
 	local observation, reason = sampler:sample()
 	if not observation then return nil, reason end
+	if not observation.map_open then return nil, 'map closed' end
 	local set = {}
 	for _, id in ipairs(observation.component_ids) do set[id] = true end
 	return observation, set
@@ -339,7 +340,7 @@ local function frame()
 		-- Offscreen controls, in order, each failure recorded: (1) SetMapState pan while the NPC is the map
 		-- focus; (2) focus a far station in the sector; (3) when the map then reports no focus, the same
 		-- SetMapState pan again from that unfocused state.
-		if view.name == 'offscreen' and not view.reached then
+		if view.name == 'offscreen' and (not view.reached or view.attempt == 2) then
 			view.attempt = view.attempt or 1
 			if view.attempt == 1 then
 				record_view(view, 'pan_failed')
@@ -351,6 +352,9 @@ local function frame()
 					C.SetFocusMapComponent(probe.map, far, true)
 					return
 				end
+			end
+			if view.attempt == 2 then
+				view.reached = false
 			end
 			if view.attempt == 2 and id_text(C.GetMapFocusComponent(probe.map)) == '0' then
 				record_view(view, 'focus_failed')

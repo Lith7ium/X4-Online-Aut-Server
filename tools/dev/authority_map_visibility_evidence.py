@@ -10,12 +10,16 @@ images, not from these rows; the table names the image of each view.
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sys
 
 PREFIX = '[X4LAN] AUTH_MAPVIS '
 VIEWS = ('onscreen', 'offscreen', 'back')
+POSITION = ('x', 'y', 'z', 'distance')
+ROTATION = ('yaw', 'pitch', 'roll')
+CAMERA = POSITION + ROTATION
 _FIELD = re.compile(r'(\w+)=(\S*)')
 
 
@@ -32,8 +36,8 @@ def parse_rows(text):
             rows.append((kind, {'message': rest}))
             continue
         fields = dict(_FIELD.findall(rest))
-        if kind == 'LIST':
-            fields['ids'] = [item for item in fields.get('ids', '').split(',') if item]
+        if kind == 'LIST' and 'ids' in fields:
+            fields['ids'] = [item for item in fields['ids'].split(',') if item]
         rows.append((kind, fields))
     return rows
 
@@ -48,38 +52,73 @@ def evaluate(rows, shots=None):
     """Evidence dict. `shots` maps seq (int) to an image path, when the images are at hand."""
     errors = [fields['message'] for kind, fields in rows if kind == 'ERROR']
     pick = next((fields for kind, fields in rows if kind == 'PICK'), None)
-    views = {}
-    for kind, fields in rows:
-        if kind == 'VIEW' and fields.get('view') in VIEWS:
-            views.setdefault(fields['view'], {})[fields['phase']] = fields
-        if kind == 'LIST' and fields.get('view') in VIEWS:
-            views.setdefault(fields['view'], {}).setdefault('lists', {})[fields['phase']] = fields['ids']
-    seq_of = {fields['view']: int(fields['seq']) for kind, fields in rows if kind == 'SHOT'}
+    views, seq_of = {}, {}
     table, problems = [], list(errors)
-    npc_ids, distances = set(), set()
+    done = [fields for kind, fields in rows if kind == 'DONE']
+    if done != [{'views': '3'}]:
+        problems.append('missing or invalid DONE row')
+    if not pick or pick.get('npc') in (None, 'none', '0'):
+        problems.append('missing NPC fixture')
+    for kind, fields in rows:
+        name = fields.get('view')
+        if name not in VIEWS:
+            continue
+        if kind in ('VIEW', 'LIST'):
+            key = (kind, fields['phase'])
+            view = views.setdefault(name, {})
+            if key in view:
+                problems.append(f'{name}: duplicate {key[0]} {key[1]}')
+            view[key] = fields
+        elif kind == 'SHOT':
+            if name in seq_of:
+                problems.append(f'{name}: duplicate SHOT row')
+            seq_of[name] = int(fields['seq'])
+    if [seq_of.get(name) for name in VIEWS] != [1, 2, 3]:
+        problems.append('missing or invalid screenshot sequence')
+    npc_ids, distances, selections, players = set(), set(), set(), set()
     for name in VIEWS:
         phases = views.get(name, {})
-        before, after = phases.get('before_shot'), phases.get('after_shot')
+        before = phases.get(('VIEW', 'before_shot'))
+        after = phases.get(('VIEW', 'after_shot'))
         if not before or not after:
             problems.append(f'{name}: missing view rows')
             continue
-        lists = phases.get('lists', {})
-        stable_list = lists.get('before_shot') == lists.get('after_shot')
-        if not stable_list:
+        raw_before = phases.get(('LIST', 'before_shot'), {}).get('ids')
+        raw_after = phases.get(('LIST', 'after_shot'), {}).get('ids')
+        stable_list = raw_before is not None and raw_before == raw_after
+        if raw_before is None or raw_after is None:
+            problems.append(f'{name}: missing raw list rows')
+        elif not stable_list:
             problems.append(f'{name}: raw list changed during the screenshot')
-        for row in (before, after):
+        for row, ids in ((before, raw_before), (after, raw_after)):
             npc_ids.add(row['npc'])
+            players.add(row['player'])
             distances.add(row['npc_player_m'])
+            selections.add(row['selected'])
             if not _flag(row['paused']):
                 problems.append(f'{name}: game not paused')
+            if not (_flag(row['npc_known']) and _flag(row['npc_radar'])):
+                problems.append(f'{name}: NPC not known and radar-visible')
+            if ids is not None and (int(row['raw_count']) != len(ids)
+                                    or _flag(row['npc_listed']) != (row['npc'] in ids)
+                                    or _flag(row['player_listed']) != (row['player'] in ids)):
+                problems.append(f'{name}: raw list disagrees with view row')
+        if before['focus'] != after['focus'] or any(before[f'camera_{key}'] != after[f'camera_{key}'] for key in CAMERA):
+            problems.append(f'{name}: camera or focus changed during the screenshot')
         image = None
-        if shots and name in seq_of and seq_of[name] in shots:
-            path = Path(shots[seq_of[name]])
-            image = {'file': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        seq = seq_of.get(name)
+        if shots and seq in shots:
+            path = Path(shots[seq])
+            if path.name == f'shot-{seq}-{name}.png' and path.is_file():
+                png = path.read_bytes()
+                if png.startswith(b'\x89PNG\r\n\x1a\n'):
+                    image = {'file': path.name, 'sha256': hashlib.sha256(png).hexdigest()}
+        if image is None:
+            problems.append(f'{name}: missing screenshot')
         entry = {
             'view': name,
             'control': before['control'],
-            'reached': _flag(before['reached']),
+            'reached': _flag(before['reached']) and _flag(after['reached']),
             'npc_listed': _flag(before['npc_listed']) and _flag(after['npc_listed']),
             'npc_listed_before_after': [_flag(before['npc_listed']), _flag(after['npc_listed'])],
             'player_listed': _flag(before['player_listed']),
@@ -87,8 +126,8 @@ def evaluate(rows, shots=None):
             'list_stable': stable_list,
             'focus': before['focus'],
             'selected': int(before['selected']),
-            'camera': {key: float(before[f'camera_{key}']) for key in ('x', 'y', 'z', 'distance')},
-            'target': ({key: float(before[f'target_{key}']) for key in ('x', 'y', 'z', 'distance')}
+            'camera': {key: float(before[f'camera_{key}']) for key in CAMERA},
+            'target': ({key: float(before[f'target_{key}']) for key in CAMERA}
                        if 'target_x' in before else None),
             'npc_known': _flag(before['npc_known']),
             'npc_radar': _flag(before['npc_radar']),
@@ -96,28 +135,35 @@ def evaluate(rows, shots=None):
             'image': image,
         }
         entry['failed_controls'] = [
-            {'phase': phase, 'control': phases[phase]['control'], 'focus': phases[phase]['focus'],
-             'npc_listed': _flag(phases[phase]['npc_listed']), 'raw_count': int(phases[phase]['raw_count']),
-             'camera': {key: float(phases[phase][f'camera_{key}']) for key in ('x', 'y', 'z', 'distance')}}
-            for phase in ('pan_failed', 'focus_failed') if phase in phases]
+            {'phase': phase, 'control': phases['VIEW', phase]['control'], 'focus': phases['VIEW', phase]['focus'],
+             'npc_listed': _flag(phases['VIEW', phase]['npc_listed']), 'raw_count': int(phases['VIEW', phase]['raw_count']),
+             'camera': {key: float(phases['VIEW', phase][f'camera_{key}']) for key in ('x', 'y', 'z', 'distance')}}
+            for phase in ('pan_failed', 'focus_failed') if ('VIEW', phase) in phases]
         table.append(entry)
-    if len(npc_ids) > 1:
-        problems.append('NPC identity changed between views')
+    if pick and (npc_ids - {pick.get('npc')} or players - {pick.get('player')}):
+        problems.append('NPC or player identity differs from the fixture')
     if len(distances) > 1:
         problems.append('NPC-player distance changed although paused')
-    selected = {entry['selected'] for entry in table}
-    if len(selected) > 1:
+    if len(selections) > 1:
         problems.append('map selection changed between views')
     by_name = {entry['view']: entry for entry in table}
+    focus_changed = len({entry['focus'] for entry in table}) > 1
     conclusion = 'inconclusive'
+    accepted = False
     if not problems and len(by_name) == 3:
         on, off, back = by_name['onscreen'], by_name['offscreen'], by_name['back']
         if not (on['reached'] and off['reached'] and back['reached']):
             conclusion = 'inconclusive: a requested camera effect was not reached'
+        elif not all(camera_reached(entry['camera'], entry['target']) for entry in table):
+            conclusion = 'inconclusive: camera readback did not match the target'
+        elif not camera_reached(back['camera'], on['camera']) or camera_reached(off['camera'], on['camera']):
+            conclusion = 'inconclusive: camera did not pan away and return'
         elif on['npc_listed'] and back['npc_listed'] and not off['npc_listed']:
-            conclusion = 'listed onscreen, absent offscreen, listed again: the raw list follows the view for this fixture'
+            accepted = True
+            conclusion = 'listed onscreen, absent offscreen, listed again for this fixture'
         elif on['npc_listed'] and off['npc_listed'] and back['npc_listed']:
-            conclusion = 'listed in all three views: the raw list is not clipped to the view for this fixture'
+            accepted = True
+            conclusion = 'listed in all three views for this fixture'
         elif not on['npc_listed'] and not back['npc_listed']:
             conclusion = 'inconclusive: the NPC is not listed even onscreen'
         else:
@@ -128,8 +174,20 @@ def evaluate(rows, shots=None):
         'problems': problems,
         'conclusion': conclusion,
         'icon_visibility': 'judge from the images; not derived from the API under test',
-        'done': any(kind == 'DONE' for kind, _ in rows),
+        'done': done == [{'views': '3'}],
+        'accepted': accepted,
+        'focus_changed': focus_changed,
     }
+
+
+def camera_reached(camera, target):
+    if target is None or any(not math.isfinite(state[key]) for state in (camera, target) for key in CAMERA):
+        return False
+    if camera['distance'] <= 0 or target['distance'] <= 0:
+        return False
+    tolerance = max(1.0, 0.01 * target['distance'])
+    return (all(abs(camera[key] - target[key]) <= tolerance for key in POSITION)
+            and all(abs(camera[key] - target[key]) <= 1e-3 for key in ROTATION))
 
 
 def markdown(evidence):
@@ -142,6 +200,8 @@ def markdown(evidence):
                      f"{entry['focus']} | {image} |")
     lines.append('')
     lines.append(f"Conclusion: {evidence['conclusion']}")
+    if evidence['focus_changed']:
+        lines.append('Map focus changed between views. The measurements do not isolate the effect of the pan.')
     for problem in evidence['problems']:
         lines.append(f'- problem: {problem}')
     return '\n'.join(lines) + '\n'
@@ -162,7 +222,7 @@ def main(argv=None):
         with args.json.open('x', encoding='utf-8') as handle:
             json.dump(evidence, handle, indent=2)
     sys.stdout.write(markdown(evidence))
-    return 0 if evidence['done'] and not evidence['problems'] else 1
+    return 0 if evidence['accepted'] else 1
 
 
 if __name__ == '__main__':
