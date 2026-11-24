@@ -15,6 +15,9 @@
      <include_actions ref="InspectShip"/>
     </do_if>
     <set_value name="$Receipt" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$Status,if @$Ship.exists then $Ship else '0',if @$Station.exists then $Station else '0',if @$Bay.exists then $Bay else '0',if player.controlled then player.controlled else '0',if player.occupiedship then player.occupiedship else '0',if player.container then player.container else '0',if @$Captain.exists then $Captain else '0',$Distance,$Water,$Company,player.age / 1s]"/>
+    <do_if value="$Status == 'DOCKED' and $Bay.external and @$Bay.dockarea.isclass.dockarea and $Bay.docked.count == 1 and $Bay.docked.{1} == $Ship and player.controlled == $Ship and player.occupiedship == $Ship and player.container == $Ship">
+     <set_value name="$Receipt" exact="'%s|%s|%s|%s|%s|%s|1|%s'.[$Receipt,$Bay.seed,$Station.sector.macro.id,$Station.idcode,$Bay.macro.id,$Bay.dockarea.macro.id,$Bay.docked.{1}]"/>
+    </do_if>
     <raise_lua_event name="'X4AuthorityPlayerDockObserver.Result'" param="$Receipt"/>
    </actions>
   </cue>

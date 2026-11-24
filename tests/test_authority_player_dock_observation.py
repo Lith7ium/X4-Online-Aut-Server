@@ -64,3 +64,20 @@ class PlayerDockFlightTests(unittest.TestCase):
         bad[before] = 'DOCK_TRADE_ENTRY|direct_map'
         with self.assertRaises(ValueError):
             verify_player_flight(bad, require_dock_trade_entry=True)
+
+    def test_acquired_berth_requires_exact_seed_and_observed_occupant(self):
+        berth = ('ACQUIRED_BERTH|0x10|0x20|0x30|12509841970777979655|cluster_01_sector001_macro|BIM-169'
+                 '|dockingbay_arg_s_01_lowtech_macro|dockarea_arg_m_station_02_lowtech_macro|1|0x10')
+        with self.assertRaisesRegex(ValueError, 'expected exactly one ACQUIRED_BERTH'):
+            verify_player_flight(self.rows, require_acquired_berth=True)
+        rows = self.rows[:6] + [berth] + self.rows[6:]
+        result = verify_player_flight(rows, require_acquired_berth=True)
+        self.assertEqual(result['acquired_berth']['bay_seed'], '12509841970777979655')
+        self.assertTrue(result['acquired_berth']['external'])
+        self.assertTrue(result['acquired_berth']['occupied_by_ship'])
+        for altered in (berth.replace('|0x30|', '|0x31|'), berth.removesuffix('0x10') + '0x11',
+                        berth.replace('|1|0x10', '|0|0x10'),
+                        berth.replace('12509841970777979655', '18446744073709551616'),
+                        berth.replace('12509841970777979655', '1.2509841970778e19')):
+            with self.subTest(altered=altered), self.assertRaises(ValueError):
+                verify_player_flight(self.rows[:6] + [altered] + self.rows[6:])

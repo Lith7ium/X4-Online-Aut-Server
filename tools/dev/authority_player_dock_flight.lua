@@ -119,7 +119,14 @@ local function on_observation(_, row)
     pending = false
     local fields = {}
     for field in row:gmatch('[^|]+') do fields[#fields + 1] = field end
-    assert(#fields == 12, 'observer_shape')
+    local berth
+    if fields[1] == 'DOCKED' then
+        assert(#fields == 19 and fields[13]:match('^%-?[0-9]+$'), 'occupied_external_berth_unobserved')
+        berth = table.concat(fields, '|', 2, 4) .. '|' .. table.concat(fields, '|', 13, 19)
+        row = table.concat(fields, '|', 1, 12)
+    else
+        assert(#fields == 12, 'observer_shape')
+    end
     local parse = X4LAN_RESOLVE_STRING.parse_hex
     local status, ship, station = fields[1], parse(fields[2]), parse(fields[3])
     local distance, water, account, age = tonumber(fields[9]), tonumber(fields[10]),
@@ -151,6 +158,7 @@ local function on_observation(_, row)
         assert(not use_berth or observation.bay == binding.requested_bay, 'physical_bay_differs')
         phase = 'begin_capture'
         log('DOCKED|' .. row)
+        log('ACQUIRED_BERTH|' .. berth)
     elseif phase == 'before_confirm_wait' or phase == 'after_confirm_wait' then
         assert(status == 'DOCKED' and observation.bay == binding.bay and listed_at_station()
             and water and water >= 0 and account and account >= 0, 'confirm_observation_unverified')

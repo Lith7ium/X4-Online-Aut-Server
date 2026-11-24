@@ -88,6 +88,25 @@ def _verify_berth(stages, source, docked):
         previous = age
 
 
+def _acquired_berth(rows, stages, docked):
+    index, raw = _once(rows, 'ACQUIRED_BERTH')
+    fields = raw.split('|')
+    if len(fields) != 10 or index != stages['DOCKED'][0] + 1:
+        raise ValueError('invalid native acquired berth receipt')
+    ship, station, bay = map(_handle, fields[:3])
+    seed, sector, station_code, bay_macro, dockarea_macro, external, occupant = fields[3:]
+    if (ship, station, bay, _handle(occupant)) != (docked.ship, docked.station, docked.bay, docked.ship):
+        raise ValueError('acquired berth does not bind to the occupied pilot ship')
+    if (external != '1' or sector != 'cluster_01_sector001_macro' or station_code != 'BIM-169'
+            or not all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', macro) for macro in (bay_macro, dockarea_macro))
+            or not re.fullmatch(r'-?[1-9][0-9]{0,19}', seed) or not -(2**63) <= int(seed) < 2**64):
+        raise ValueError('invalid external berth identity')
+    # Keep native largeint text exact across the Lua and JSON boundaries.
+    return {'sector': sector, 'station_code': station_code, 'bay_macro': bay_macro,
+            'dockarea_macro': dockarea_macro, 'bay_seed': seed,
+            'external': True, 'occupied_by_ship': True}
+
+
 def _verify_approach(stages, source):
     start, later = map(int, stages['DEPARTURE'][1].split('|'))
     if start != source.distance or start - later < 1000 or later < 0:
@@ -98,7 +117,8 @@ def _verify_approach(stages, source):
         raise ValueError('native quick docking command lacks its receipt')
 
 
-def verify_player_flight(rows, *, prepare_berth=False, require_dock_trade_entry=False):
+def verify_player_flight(rows, *, prepare_berth=False, require_dock_trade_entry=False,
+                         require_acquired_berth=False):
     docking = (('ROUTE', 'PLACEMENT', 'PLAYER_DOCK_REQUEST', 'BERTH|REQUESTED', 'BERTH|ASSIGNED', 'BERTH|DISPATCHED')
                if prepare_berth else ('AUTOPILOT', 'DEPARTURE', 'QUICKDOCK'))
     names = ('START', 'SEAT', *docking, 'DOCKED', 'BEFORE_CONFIRM', 'CONFIRM_PATH', 'AFTER_CONFIRM', 'DONE')
@@ -145,6 +165,8 @@ def verify_player_flight(rows, *, prepare_berth=False, require_dock_trade_entry=
             'stock_confirm_path': CONFIRM_PATH, 'records': rows}
     if dock_entries:
         result['stock_dock_trade_entry'] = DOCK_TRADE_ENTRY
+    if require_acquired_berth or any(row.startswith('ACQUIRED_BERTH|') for row in rows):
+        result['acquired_berth'] = _acquired_berth(rows, stages, docked)
     return result
 
 
@@ -153,4 +175,5 @@ def observe_player_flight(log, deadline, guard, *, prepare_berth=False):
                            error_markers=(b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT_ERROR ',
                                           b'[X4LAN] AUTH_RECOVERY ERROR',
                                           b'[X4LAN] AUTH_CLIENT_SEAT_REFUSED '))
-    return verify_player_flight(rows, prepare_berth=prepare_berth, require_dock_trade_entry=True)
+    return verify_player_flight(rows, prepare_berth=prepare_berth, require_dock_trade_entry=True,
+                                require_acquired_berth=True)
