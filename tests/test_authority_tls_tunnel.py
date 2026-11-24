@@ -7,13 +7,19 @@ import ssl
 import struct
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
+sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests'), str(ROOT / 'tools/dev')]
 
-from authority.experimental_tls_tunnel import create_server_context, _relay, start_client, start_server
+from authority.experimental_client_session import client_connection
+from authority.experimental_tls_tunnel import (
+    _MAGIC, _MOTION, _client_context, _relay, create_server_context, start_client, start_server,
+)
+from authority_recovered_tls_gateway import RecoveredTLSGateway
+from authority_windows_fixture_client import read_connection_settings
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY
 
 
@@ -46,9 +52,11 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
-    async def endpoint(self, prefix):
+    async def endpoint(self, prefix, arrived=None):
         async def handler(reader, writer):
             self.backend_connections.append(prefix)
+            if arrived is not None:
+                arrived.set()
             try:
                 payload = await reader.read()
                 writer.write(prefix + payload)
@@ -81,6 +89,28 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         self.tunnels.append(client)
         return client_ports
 
+    async def motion_server(self, *, motion_enabled=True, arrived=None):
+        host = listener()
+        host_port = host.getsockname()[1]
+        control_port = await self.endpoint(b'control:')
+        file_port = await self.endpoint(b'file:')
+        motion_port = await self.endpoint(b'motion:', arrived) if motion_enabled else None
+        server = await start_server(listener=host, ssl_context=self.context, shared_key=b'a' * 32,
+                                    control_port=control_port, file_port=file_port, motion_port=motion_port,
+                                    max_connections=2, max_motion_connections=1)
+        self.tunnels.append(server)
+        return host_port
+
+    async def motion_client(self, host_port, *, fingerprint=None, key=b'a' * 32):
+        control, files, motion = listener(), listener(), listener()
+        ports = tuple(item.getsockname()[1] for item in (control, files, motion))
+        client = await start_client(control_listener=control, file_listener=files, motion_listener=motion,
+                                    server_host='127.0.0.1', server_port=host_port,
+                                    server_fingerprint=fingerprint or self.fingerprint, shared_key=key,
+                                    max_connections=1, max_motion_connections=2)
+        self.tunnels.append(client)
+        return ports
+
     async def exchange(self, port, payload):
         reader, writer = await asyncio.open_connection('127.0.0.1', port)
         writer.write(payload)
@@ -96,6 +126,82 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
         payload = bytes(range(256)) * 2048
         self.assertEqual(await self.exchange(files, payload), b'file:' + payload)
         self.assertEqual(await self.exchange(control, b'command'), b'control:command')
+
+    async def test_motion_capacity_is_separate_on_both_sides(self):
+        arrived = asyncio.Event()
+        host_port = await self.motion_server(arrived=arrived)
+        control, files, motion = await self.motion_client(host_port)
+        reader, writer = await asyncio.open_connection('127.0.0.1', motion)
+        try:
+            await asyncio.wait_for(arrived.wait(), 3)
+            overflow, excess = await asyncio.open_connection('127.0.0.1', motion)
+            try:
+                self.assertEqual(await asyncio.wait_for(overflow.read(), 3), b'')
+            finally:
+                excess.close()
+                await excess.wait_closed()
+            self.assertEqual(await self.exchange(control, b'command'), b'control:command')
+            self.assertEqual(await self.exchange(files, b'save'), b'file:save')
+            writer.write(b'snapshot')
+            await writer.drain()
+            writer.write_eof()
+            self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'motion:snapshot')
+            self.assertCountEqual(self.backend_connections, [b'control:', b'file:', b'motion:'])
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def test_motion_requires_negotiated_service_pin_and_motion_key_domain(self):
+        legacy_port = await self.motion_server(motion_enabled=False)
+        control, files, motion = await self.motion_client(legacy_port)
+        self.assertEqual(await self.exchange(motion, b'unsupported'), b'')
+        self.assertEqual(await self.exchange(control, b'legacy'), b'control:legacy')
+        self.assertEqual(await self.exchange(files, b'legacy'), b'file:legacy')
+
+        host_port = await self.motion_server()
+        for label, credentials in (('wrong pin', {'fingerprint': '0' * 64}),
+                                   ('wrong key', {'key': b'b' * 32})):
+            with self.subTest(label=label):
+                _, _, motion = await self.motion_client(host_port, **credentials)
+                self.assertEqual(await self.exchange(motion, b'unauthorized'), b'')
+
+        reader, writer = await asyncio.open_connection('127.0.0.1', host_port,
+                                                       ssl=_client_context(), server_hostname='')
+        try:
+            writer.write(_MAGIC + b'a' * 32 + bytes([_MOTION]))
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'')
+        finally:
+            writer.close()
+            await writer.wait_closed()
+        self.assertNotIn(b'motion:', self.backend_connections)
+
+    async def test_foreground_session_exposes_motion_only_during_opt_in_context(self):
+        options = ('127.0.0.1', 0, '127.0.0.1', None, self.fingerprint, self.context, b'a' * 32)
+        gateway = RecoveredTLSGateway(options, out=Path(self.temp.name),
+                                      control_port=await self.endpoint(b'control:'),
+                                      file_port=await self.endpoint(b'file:'), file_token='a' * 32,
+                                      motion_port=await self.endpoint(b'motion:'))
+        self.addAsyncCleanup(asyncio.to_thread, gateway.close)
+        await asyncio.to_thread(gateway.start, 3)
+        settings = read_connection_settings(gateway.connection)
+
+        def use_session():
+            options = dict(settings, deadline=time.monotonic() + 10, io_timeout=3)
+            with client_connection(**options) as legacy:
+                self.assertIsNone(legacy.motion_port)
+            with client_connection(**options, motion_enabled=True) as owner:
+                port = owner.motion_port
+                self.assertIsInstance(port, int)
+                with socket.create_connection(('127.0.0.1', port), timeout=3) as conn:
+                    conn.sendall(b'snapshot')
+                    conn.shutdown(socket.SHUT_WR)
+                    with conn.makefile('rb') as stream:
+                        self.assertEqual(stream.read(), b'motion:snapshot')
+            with self.assertRaises(ConnectionRefusedError):
+                socket.create_connection(('127.0.0.1', port), timeout=1)
+
+        await asyncio.to_thread(use_session)
 
     async def test_idle_connection_remains_usable(self):
         control, _ = await self.make_pair(idle_timeout=1)

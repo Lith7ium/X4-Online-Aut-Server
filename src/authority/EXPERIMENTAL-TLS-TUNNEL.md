@@ -182,3 +182,21 @@ already-listening sockets and return `RunningTunnel`. The owner must monitor
 `await tunnel.wait()` and call `await tunnel.close()` during shutdown. A listener
 failure closes all of that tunnel's listeners and connections and raises a
 sanitized `RuntimeError` from `wait()`.
+
+## Optional motion service for an embedded participant client
+
+Pass `motion_port` to `start_server` or to `RecoveredTLSGateway` after starting
+the participant motion backend on a separate fixed IPv4 loopback port. Clients
+that want the additional stream pass `motion_listener` to `start_client`, or
+use `client_connection(..., motion_enabled=True)` and connect to
+`127.0.0.1` at `owner.motion_port` during that context. Both routes use the same
+public address and port already supplied for control and file transfer. The
+private connection settings and the control and file wire frames are unchanged.
+
+The client verifies the pinned certificate before sending the motion-domain
+authentication value. The gateway checks that value before opening the fixed
+backend. The backend separately validates the participant's session ticket
+before accepting any motion data. Control and file relays share their existing
+capacity. Motion has an independent `max_motion_connections` limit and a
+saturated service refuses extra authenticated connections immediately. Incoming
+TLS handshakes share bounded headroom on the public listener.

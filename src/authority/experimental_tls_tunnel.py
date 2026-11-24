@@ -25,7 +25,9 @@ _CONNECT_TIMEOUT = 10.0
 _CLOSE_TIMEOUT = 2.0
 _HEADER = struct.Struct('!BI')
 _DATA, _EOF, _PING, _PONG = 1, 2, 3, 4
-_CONTROL, _FILE = 1, 2
+_CONTROL, _FILE, _MOTION = 1, 2, 3
+_MOTION_AUTH_DOMAIN = _MAGIC + b'motion'
+_SERVER_HANDSHAKE_HEADROOM = 8
 
 
 def _validate_listener(listener, *, loopback):
@@ -41,11 +43,15 @@ def _validate_listener(listener, *, loopback):
 def _validate_options(shared_key, max_connections, idle_timeout):
     if type(shared_key) is not bytes or len(shared_key) != 32:
         raise ValueError('shared key must contain exactly 32 bytes')
-    if type(max_connections) is not int or not 1 <= max_connections <= 64:
-        raise ValueError('max_connections must be between 1 and 64')
+    _validate_limit(max_connections)
     if (type(idle_timeout) not in (int, float) or not math.isfinite(idle_timeout)
             or not 1 <= idle_timeout <= 3600):
         raise ValueError('idle timeout must be between 1 and 3600 seconds')
+
+
+def _validate_limit(value):
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValueError('connection limit must be between 1 and 64')
 
 
 def _port(value):
@@ -165,16 +171,17 @@ class RunningTunnel:
         self._connections = set()
         self._closed = False
 
-    async def _accept(self, listener, handler):
+    async def _accept(self, listener, handler, *, slots=None):
+        slots = self._slots if slots is None else slots
         loop = asyncio.get_running_loop()
         while True:
             conn, _ = await loop.sock_accept(listener)
             try:
-                await self._slots.acquire()
+                await slots.acquire()
             except BaseException:
                 conn.close()
                 raise
-            task = asyncio.create_task(self._run_connection(conn, handler))
+            task = asyncio.create_task(self._run_connection(conn, handler, slots))
             self._connections.add(task)
             task.add_done_callback(self._connection_finished)
 
@@ -191,7 +198,7 @@ class RunningTunnel:
         await self.close()
         raise RuntimeError('tunnel listener stopped') from None
 
-    async def _run_connection(self, conn, handler):
+    async def _run_connection(self, conn, handler, slots):
         try:
             await handler(conn)
         except (OSError, ssl.SSLError, ValueError, TimeoutError,
@@ -201,7 +208,7 @@ class RunningTunnel:
             pass
         finally:
             conn.close()
-            self._slots.release()
+            slots.release()
 
     async def close(self):
         if self._closed:
@@ -267,11 +274,16 @@ async def _open_client_stream(host, port, context):
 async def _server_authenticate(reader, shared_key, services):
     auth = await asyncio.wait_for(reader.readexactly(len(_MAGIC) + 33), _CONNECT_TIMEOUT)
     service = auth[-1]
-    if (auth[:len(_MAGIC)] != _MAGIC or
-            not hmac.compare_digest(auth[len(_MAGIC):-1], shared_key) or
-            service not in services):
+    if (auth[:len(_MAGIC)] != _MAGIC or service not in services or
+            not hmac.compare_digest(auth[len(_MAGIC):-1], _service_key(shared_key, service))):
         raise ValueError('tunnel authentication failed')
     return service
+
+
+def _service_key(shared_key, service):
+    if service == _MOTION:
+        return hmac.digest(shared_key, _MOTION_AUTH_DOMAIN, 'sha256')
+    return shared_key
 
 
 class _ServerFingerprintMismatch(ValueError):
@@ -282,7 +294,7 @@ async def _client_authenticate(reader, writer, fingerprint, shared_key, service)
     certificate = writer.get_extra_info('ssl_object').getpeercert(binary_form=True)
     if not certificate or not hmac.compare_digest(hashlib.sha256(certificate).hexdigest(), fingerprint):
         raise _ServerFingerprintMismatch('server fingerprint mismatch')
-    writer.write(_MAGIC + shared_key + bytes([service]))
+    writer.write(_MAGIC + _service_key(shared_key, service) + bytes([service]))
     await asyncio.wait_for(writer.drain(), _CONNECT_TIMEOUT)
     if await asyncio.wait_for(reader.readexactly(1), _CONNECT_TIMEOUT) != b'\x01':
         raise ValueError('tunnel authentication failed')
@@ -379,48 +391,84 @@ async def relay_connected_client(*, raw_socket, tls_socket, server_hostname,
 
 
 async def start_server(*, listener, ssl_context, shared_key, control_port, file_port,
-                       max_connections=8, idle_timeout=300):
-    """Start an authenticated gateway to two fixed server-local TCP ports.
+                       max_connections=8, idle_timeout=300, motion_port=None,
+                       max_motion_connections=8):
+    """Start an authenticated gateway to fixed server-local TCP ports.
 
     Takes ownership of the listening socket.  The TLS context must contain the
     operator's certificate and private key; callers distribute its fingerprint.
+    The optional motion service has its own authenticated relay capacity. All
+    incoming streams share bounded TLS/authentication headroom on the listener.
     """
     _validate_options(shared_key, max_connections, idle_timeout)
     _validate_server_context(ssl_context)
     destinations = {_CONTROL: _port(control_port), _FILE: _port(file_port)}
+    relay_slots = None
+    limit = max_connections
+    if motion_port is not None:
+        _validate_limit(max_motion_connections)
+        motion_port = _port(motion_port)
+        if motion_port in destinations.values():
+            raise ValueError('motion service requires a separate local backend')
+        destinations[_MOTION] = motion_port
+        reliable_slots = asyncio.Semaphore(max_connections)
+        relay_slots = {_CONTROL: reliable_slots, _FILE: reliable_slots,
+                       _MOTION: asyncio.Semaphore(max_motion_connections)}
+        limit += max_motion_connections + _SERVER_HANDSHAKE_HEADROOM
     _validate_listener(listener, loopback=False)
-    tunnel = RunningTunnel([listener], max_connections)
+    tunnel = RunningTunnel([listener], limit)
 
     async def handle(conn):
         tls_writer = raw_writer = None
+        reserved = None
         try:
             tls_reader, tls_writer = await _accepted_stream(conn, ssl_context=ssl_context)
             service = await _server_authenticate(tls_reader, shared_key, destinations)
+            if relay_slots is not None:
+                slots = relay_slots[service]
+                if slots.locked():
+                    tls_writer.transport.abort()
+                    return  # Do not queue overloaded requests in handshake headroom.
+                await slots.acquire()
+                reserved = slots
             raw_reader, raw_writer = await asyncio.wait_for(
                 asyncio.open_connection('127.0.0.1', destinations[service]), _CONNECT_TIMEOUT)
             tls_writer.write(b'\x01')
             await asyncio.wait_for(tls_writer.drain(), _CONNECT_TIMEOUT)
             await _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout)
         finally:
-            await _close_writer(raw_writer)
-            await _close_writer(tls_writer)
+            try:
+                try:
+                    await _close_writer(raw_writer)
+                finally:
+                    await _close_writer(tls_writer)
+            finally:
+                if reserved is not None:
+                    reserved.release()
 
     tunnel._accept_tasks.append(asyncio.create_task(tunnel._accept(listener, handle)))
     return tunnel
 
 
 async def start_client(*, control_listener, file_listener, server_host, server_port,
-                       server_fingerprint, shared_key, max_connections=8, idle_timeout=300):
-    """Start two local endpoints using pinned TLS to one remote gateway."""
+                       server_fingerprint, shared_key, max_connections=8, idle_timeout=300,
+                       motion_listener=None, max_motion_connections=1):
+    """Start local endpoints using pinned TLS to one remote gateway."""
     _validate_options(shared_key, max_connections, idle_timeout)
     _port(server_port)
     _validate_server_identity(server_host, server_fingerprint)
-    if control_listener is file_listener:
+    listeners = [control_listener, file_listener]
+    if motion_listener is not None:
+        _validate_limit(max_motion_connections)
+        listeners.append(motion_listener)
+    if len({id(listener) for listener in listeners}) != len(listeners):
         raise ValueError('separate local listeners required')
-    _validate_listener(control_listener, loopback=True)
-    _validate_listener(file_listener, loopback=True)
+    for listener in listeners:
+        _validate_listener(listener, loopback=True)
+    if len({listener.getsockname() for listener in listeners}) != len(listeners):
+        raise ValueError('separate local listener addresses required')
     context = _client_context()
-    tunnel = RunningTunnel([control_listener, file_listener], max_connections)
+    tunnel = RunningTunnel(listeners, max_connections)
 
     async def handle(conn, service):
         raw_writer = tls_writer = None
@@ -433,9 +481,10 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
             await _close_writer(raw_writer)
             await _close_writer(tls_writer)
 
-    for listener, service in ((control_listener, _CONTROL), (file_listener, _FILE)):
+    for listener, service in zip(listeners, (_CONTROL, _FILE, _MOTION)):
+        slots = asyncio.Semaphore(max_motion_connections) if service == _MOTION else None
         tunnel._accept_tasks.append(asyncio.create_task(
-            tunnel._accept(listener, lambda conn, service=service: handle(conn, service))))
+            tunnel._accept(listener, lambda conn, service=service: handle(conn, service), slots=slots)))
     return tunnel
 
 

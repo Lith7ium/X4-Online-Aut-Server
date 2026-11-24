@@ -20,8 +20,9 @@ class ClientConnectionError(RuntimeError):
 
 
 class _TLSBridgeThread:
-    def __init__(self, options):
+    def __init__(self, options, *, motion_enabled=False):
         self.options = options
+        self.motion_enabled = motion_enabled
         self.ready = threading.Event()
         self.stop_requested = threading.Event()
         self.loop = self.stop = None
@@ -45,8 +46,11 @@ class _TLSBridgeThread:
         try:
             listeners.append(_listener())
             listeners.append(_listener())
+            if self.motion_enabled:
+                listeners.append(_listener())
+            extra = {'motion_listener': listeners[2]} if self.motion_enabled else {}
             tunnel = await start_client(control_listener=listeners[0], file_listener=listeners[1],
-                max_connections=2, **self.options)
+                max_connections=2, **self.options, **extra)
             self.ports = tuple(listener.getsockname()[1] for listener in listeners)
             self.ready.set()
             if not self.stop_requested.is_set():
@@ -77,17 +81,22 @@ class _TLSBridgeThread:
 
 @contextmanager
 def client_connection(*, server_host, server_port, server_fingerprint, shared_key,
-                      file_token, file_slot, deadline, io_timeout=30, keepalive_interval=None):
+                      file_token, file_slot, deadline, io_timeout=30, keepalive_interval=None,
+                      motion_enabled=False):
     """Keep one offer socket alive through native load and participant polling.
 
     All ExperimentalClientOwner methods run on the entering thread. Native
     resources must be stopped inside the with-block, before bridge shutdown.
     Closing/joining the bridge is bounded; failure never returns success.
+    When opted in, owner.motion_port exposes a loopback endpoint. The caller
+    must separately bind and authorize that stream with the admitted session.
     """
     if type(deadline) not in (int, float) or not math.isfinite(deadline) or not 0 < deadline-time.monotonic() <= 3600:
         raise ValueError('invalid_client_deadline')
+    if type(motion_enabled) is not bool:
+        raise ValueError('invalid_motion_option')
     bridge = _TLSBridgeThread(dict(server_host=server_host, server_port=server_port,
-        server_fingerprint=server_fingerprint, shared_key=shared_key))
+        server_fingerprint=server_fingerprint, shared_key=shared_key), motion_enabled=motion_enabled)
     connection = owner = None
     original_error = None
     try:
@@ -102,7 +111,8 @@ def client_connection(*, server_host, server_port, server_fingerprint, shared_ke
         connection = socket.create_connection(('127.0.0.1', bridge.ports[0]), timeout=min(io_timeout, remaining))
         owner = ExperimentalClientOwner(connection, enabled=True, file_host='127.0.0.1',
             file_port=bridge.ports[1], file_token=file_token, file_slot=file_slot,
-            deadline=deadline, io_timeout=io_timeout, keepalive_interval=keepalive_interval)
+            deadline=deadline, io_timeout=io_timeout, keepalive_interval=keepalive_interval,
+            motion_port=bridge.ports[2] if motion_enabled else None)
         yield owner
     except BaseException as error:
         original_error = error

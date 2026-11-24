@@ -32,7 +32,9 @@ class ExperimentalClientOwner:
     """
 
     def __init__(self, conn, *, enabled=False, file_host, file_port, file_token,
-                 file_slot, deadline, io_timeout=30, keepalive_interval=None):
+                 file_slot, deadline, io_timeout=30, keepalive_interval=None, motion_port=None):
+        if motion_port is not None and (type(motion_port) is not int or not 1 <= motion_port <= 65535):
+            raise ValueError('invalid local motion port')
         load = ExperimentalRemoteLoadClient(
             conn, enabled=enabled, file_host=file_host, file_port=file_port,
             file_token=file_token, file_slot=file_slot, deadline=deadline,
@@ -45,8 +47,16 @@ class ExperimentalClientOwner:
         self._offer = None
         self._thread = threading.current_thread()
         self._phase = 'loading'
+        self._motion_port = motion_port
         self._busy = False
         self._invalidated = False
+
+    @property
+    def motion_port(self):
+        """Return the optional loopback transport port during this owner's lifetime."""
+        if threading.current_thread() is not self._thread or self._phase in ('closed', 'failed'):
+            raise RuntimeError('client owner unavailable for motion transport')
+        return self._motion_port
 
     def _close_owned(self):
         try:
