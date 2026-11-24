@@ -309,21 +309,75 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.assertEqual((latest.index, latest.sample['sequence']), (1, 6))
         self.assertEqual(self.service.take_application_batch(), ())
 
+    def test_only_accepted_sector_changes_invalidate_the_inspected_ship(self):
+        self.service.set_running(True)
+        source, stream = self.bind(self.first)
+        other, _ = self.bind(self.second)
+        self.publish(source, self.first, 1, sector='sector_b')
+        self.publish(other, self.second, 1)
+        initial, unrelated = self.service.take_application_batch(2)
+        self.assertEqual(initial.sector_revision, 0)
+        self.assertEqual(json.loads(stream.readline())['sequence'], 1)
+
+        velocity = {'x': 10, 'y': 0, 'z': 0}
+        self.publish(source, self.first, 2, sector='sector_b', velocity=velocity)
+        self.assertEqual(json.loads(stream.readline())['sequence'], 2)
+        self.assertTrue(self.service.is_application_current(initial))
+        self.publish(source, self.first, 3, sector='sector_a', velocity=velocity)
+        self.assertEqual(stream.readline(), b'')
+        self.assertTrue(self.service.is_application_current(initial))
+        self.assertEqual(self.service.accepted_samples, 3)
+
+        source, _ = self.bind(self.first)
+        self.publish(source, self.first, 3, sector='sector_a')
+        self.assertFalse(self.service.is_application_current(initial, after_inspect=True))
+        self.assertEqual(self.application_drops['last_reason'], 'after_inspect_invalidated')
+        self.assertTrue(self.service.is_application_current(unrelated))
+        self.publish(source, self.first, 4, sector='sector_a', velocity=velocity)
+        changed, = self.service.take_application_batch()
+        self.assertEqual((changed.sample['sector_macro'], changed.sample['sequence'], changed.sector_revision),
+                         ('sector_a', 4, 1))
+
+        self.publish(source, self.first, 5, sector='sector_b')
+        self.assertFalse(self.service.is_application_current(changed))
+        self.assertFalse(self.service.is_application_current(initial))
+        self.service.revoke(1)
+        self.assertFalse(self.service.is_application_current(changed))
+        latest, = self.service.freeze_application()
+        self.assertEqual((latest.sample['sector_macro'], latest.sector_revision), ('sector_b', 2))
+        self.assertTrue(self.service.is_application_current(latest))
+
+    def test_sector_revision_continues_across_motion_windows(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        self.publish(source, self.first, 1)
+        self.publish(source, self.first, 2, sector='sector_b')
+        frozen, = self.service.freeze_application()
+        self.assertEqual(frozen.sector_revision, 1)
+        self.assertTrue(self.service.is_application_current(frozen))
+        self.service.set_running(True)
+        self.publish(source, self.first, 3, sector='sector_b')
+        resumed, = self.service.take_application_batch()
+        self.assertEqual(resumed.sector_revision, 1)
+        self.assertFalse(self.service.is_application_current(frozen))
+        self.assertTrue(self.service.is_application_current(resumed))
+
     def test_freeze_keeps_only_accepted_data_from_the_closed_window(self):
         self.service.set_running(True)
         departed, _ = self.bind(self.first)
         remaining, _ = self.bind(self.second)
         self.publish(departed, self.first, 1)
+        self.publish(departed, self.first, 2, sector='sector_b')
         self.publish(remaining, self.second, 1)
         for socket_, grant in ((departed, self.first), (remaining, self.second)):
             socket_.sendall(json.dumps({'kind': 'motion_sample', 'window': 1,
-                                        'sample': self.sample(grant, 2)}).encode() + b'\n')
+                                        'sample': self.sample(grant, 3)}).encode() + b'\n')
         self.service.revoke(1)
         first, second = self.service.freeze_application()
-        self.assertEqual([(record.index, record.sample['sequence']) for record in (first, second)],
-                         [(1, 1), (2, 1)])
+        self.assertEqual([(record.index, record.sample['sequence'], record.sector_revision)
+                          for record in (first, second)], [(1, 2, 1), (2, 1, 0)])
         self.service.poll()
-        self.assertEqual(self.service.accepted_samples, 2)
+        self.assertEqual(self.service.accepted_samples, 3)
         self.assertFalse(self.service.running)
         self.assertTrue(self.service.is_application_current(first))
         self.assertTrue(self.service.is_application_current(second))
@@ -339,8 +393,8 @@ class CompanyMotionServiceTests(unittest.TestCase):
         source, stream = self.bind(replacement)
         self.publish(source, replacement, 1)
         current, = self.service.take_application_batch()
-        self.assertEqual((current.handle, current.window, current.sample['generation']),
-                         (3, 3, replacement['generation']))
+        self.assertEqual((current.handle, current.window, current.sample['generation'], current.sector_revision),
+                         (3, 3, replacement['generation'], 0))
         self.assertTrue(self.service.is_application_current(current))
         self.assertEqual(json.loads(stream.readline())['sequence'], 1)
 

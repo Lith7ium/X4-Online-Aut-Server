@@ -39,6 +39,7 @@ class _Grant:
     last_sample: dict | None = None
     last_accepted: dict | None = None
     last_sequence: int = 0
+    sector_revision: int = 0
     visible_until: float = 0
     trial_route: tuple | None = None
     traffic: _MotionTraffic = field(default_factory=_MotionTraffic)
@@ -75,6 +76,7 @@ class AcceptedCompanyMotion:
     window: int
     accepted_at: float
     _sample: dict = field(repr=False)
+    sector_revision: int = 0
 
     @property
     def index(self):
@@ -427,11 +429,16 @@ class CompanyMotionService:
         check_motion_progress(value, grant.last_accepted)
         if grant.last_accepted is not None and grant.last_accepted['sector_macro'] != value['sector_macro']:
             self._retire_sample(grant.index, grant.generation)
+            grant.sector_revision += 1
+            # An inspected pose stops authorizing writes immediately. Removing
+            # that entry also keeps it invalid if the grant is later revoked.
+            self._application_batch.pop(grant.index, None)
         now = time.monotonic()
         grant.last_accepted = grant.last_sample = value
         grant.last_sequence = value['sequence']
         grant.visible_until = now + MAX_SAMPLE_AGE
-        self._remember_application(AcceptedCompanyMotion(grant.handle, self.window, now, value))
+        self._remember_application(AcceptedCompanyMotion(
+            grant.handle, self.window, now, value, sector_revision=grant.sector_revision))
         grant.traffic.samples_accepted += 1
         grant.traffic.samples_with_velocity += int(value['real_velocity'] is not None)
         self.accepted_samples += 1
