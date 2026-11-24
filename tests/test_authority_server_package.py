@@ -72,6 +72,33 @@ with tempfile.TemporaryDirectory() as directory:
 '''
 
 
+PARKING_OVERLAY = r'''
+from pathlib import Path
+import sys
+import tempfile
+sys.path[:0] = ['src', 'tools/dev']
+import authority_station_parking as parking
+
+with tempfile.TemporaryDirectory() as scratch:
+    for mode in ('prepare', 'verify'):
+        case = Path(scratch) / mode
+        lab = case / 'extensions/x4_lan_lab'
+        ui = lab / 'ui'
+        ui.mkdir(parents=True)
+        (lab / 'md').mkdir()
+        (ui / 'authority_world_bridge_probe.lua').write_text(
+            parking.DECLARATION + parking.ACTIVATION, encoding='ascii')
+        (lab / 'ui.xml').write_text(
+            '    <file name="ui/authority_world_bridge_probe.lua" />\n', encoding='ascii')
+        location = dict(kind='FALLBACK', code=parking.FALLBACK_CODES[0],
+                        sector=parking.FALLBACK_SECTOR, room='room_macro')
+        paths = parking.install(case, 'a' * 32, mode, location if mode == 'verify' else None)
+        assert len(paths) == 6 and all(path.is_file() for path in paths)
+        station = (lab / 'md' / parking.STATION_SCRIPT).read_bytes()
+        assert (b'<teleport_player ' in station) == (mode == 'prepare')
+'''
+
+
 class AuthorityServerPackageTest(unittest.TestCase):
     def test_reproducible_archive_contains_only_committed_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -141,6 +168,12 @@ class AuthorityServerPackageTest(unittest.TestCase):
                         check=True, timeout=10,
                     )
                     self.assertIn('--company-motion', result.stdout)
+                    if role == 'server':
+                        self.assertIn('--park-server-avatar {prepare,verify}', result.stdout)
+
+            # Compose both parking variants using only extracted source assets.
+            subprocess.run([sys.executable, '-c', PARKING_OVERLAY],
+                           cwd=extracted, env=environment, check=True, timeout=10)
 
             # Assemble the normal Linux player overlay from extracted assets.
             # Only the save-byte evidence is synthetic. No X4 binary is needed.

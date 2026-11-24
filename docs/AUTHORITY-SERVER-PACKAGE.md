@@ -108,6 +108,38 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
+## Prepare the parked server avatar for the two-ship test
+
+Use the specific confirmed two-ship format-3 seed supplied for this experiment.
+The supervisor verifies its checkpoint identity before preparing a fresh copy.
+Both modes use the provider's private software-rendered display. They run once
+without opening a game-session listener or publishing `connection.json`.
+
+Prepare from the restored seed, then run the read-only check from the stopped
+preparation output. Keep the preparation directory until verification finishes.
+
+```sh
+game='/path/to/X4 Foundations'
+tools/run_authority_server.sh --game "$game" \
+  --store "$PWD/.local/source-run/checkpoints" \
+  --out .local/station-park-prepare --park-server-avatar prepare
+tools/run_authority_server.sh --game "$game" \
+  --store "$PWD/.local/station-park-prepare/checkpoints" \
+  --out .local/station-park-verify --park-server-avatar verify
+```
+
+Check both `result.json` files for success. The verify run reloads the parked
+avatar and checks that the two Company ships remain available. It leaves the
+prepared checkpoint unchanged. Use the prepare directory for the separate
+portable export. Restore that archive normally and host without
+`--park-server-avatar`.
+
+```sh
+python3 tools/dev/authority_portable_seed.py export \
+  --source "$PWD/.local/station-park-prepare" \
+  --archive "$PWD/.local/parked-two-ship-seed.zip"
+```
+
 ## Join the two-ship Company test
 
 Use matching server and client sources and the separate private format-3 seed
