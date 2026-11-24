@@ -121,12 +121,14 @@ class ReadRunner(unittest.TestCase):
         lock=self.path/'lock';target=self.path/'save';target.write_text('')
         proc=Mock(pid=100);proc.poll.return_value=None
         checkpoint=SimpleNamespace(checkpoint_id=m.archive.CHECKPOINT_ID,sha256=m.archive.SHA256,size=m.archive.SIZE)
-        args=SimpleNamespace(out=out,store=m.archive.DEFAULT_STORE,slot=1,timeout=30,seed=1,game=game,display=':0')
+        archive_store=self.path/'archive'/'checkpoints';archive_store.mkdir(parents=True)
+        args=SimpleNamespace(out=out,store=archive_store,slot=1,timeout=30,seed=1,game=game,display=':0')
         user=SimpleNamespace(pw_dir=str(self.path),pw_uid=1000,pw_gid=1000,pw_name='tester')
         with ExitStack() as stack:
             def set_(obj,name,value): return stack.enter_context(patch.object(obj,name,value))
             set_(m.os,'geteuid',lambda:1000);stack.enter_context(patch.dict(m.os.environ,{'XAUTHORITY':str(auth)}))
-            set_(m.snapshot,'output_path',lambda _:out);set_(m.base,'local_directory',lambda _:m.archive.DEFAULT_STORE.resolve())
+            set_(m.snapshot,'output_path',lambda _:out);set_(m.base,'local_directory',lambda _:archive_store)
+            set_(m.archive,'DEFAULT_STORE',archive_store)
             set_(m.archive,'_path_fingerprints',lambda _: {'stable':1})
             set_(m.archive,'verify',lambda _: {'sha256':m.archive.SHA256,'size':m.archive.SIZE})
             set_(m.live,'EXE_SHA',m.archive.SHA256);set_(m.live,'sha',lambda _:m.archive.SHA256)
