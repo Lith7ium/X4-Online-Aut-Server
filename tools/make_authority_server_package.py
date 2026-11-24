@@ -15,17 +15,19 @@ REQUIRED = {
     'LICENSE.md', 'LICENSING.md', 'NOTICE.txt', 'VERSION.txt',
     'docs/AUTHORITY-SERVER-PACKAGE.md',
     'src/native/net.c', 'src/lockstep/base/ui/sha256.lua',
+    'src/authority/md/checkpoint_marker.xml',
+    'tools/dev/authority_identity_fixture.xml',
+    'tools/run_authority_server.sh',
     'tools/dev/authority_recovered_loopback_server.py',
     'tools/dev/authority_recovered_tls_gateway.py',
 }
 SUPPORT = {
     'tools/make_authority_server_package.py',
-    'tools/run_authority_server.sh',
     'tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md',
     'tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md',
 }
 RUNTIME_DIRS = ('src/authority/', 'src/lockstep/launcher/', 'tools/dev/')
-SOURCE_SUFFIXES = {'.py', '.lua', '.xml', '.json', '.sh'}
+SOURCE_SUFFIXES = {'.py', '.lua', '.xml'}
 
 
 def included(name):
