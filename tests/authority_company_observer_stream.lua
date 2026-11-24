@@ -68,12 +68,12 @@ local trial_module = dofile('src/authority/lua/company_hull_trial.lua')
 local received, writes, stops = {}, 0, 0
 local native = {guard = function() return true end, close = function() end}
 local trial_options = {
-    enabled = true, own_index = 1970, target_index = 12,
+    enabled = true, own_index = 1970, target_index = 12, clock = function() return clock end,
     adapter = {bind = function(_, binding)
         assert(binding.slot == 'cockpit' and binding.actor == '0xc' and binding.index == 12)
         return native
     end},
-    playback = {new = function(options)
+    playback = {MAX_PREDICTION_SECONDS = 5, new = function(options)
         assert(options.guard(options.binding))
         return {
             push = function(_, binding, sample, arrival)
@@ -90,16 +90,19 @@ local trial = trial_module.new(trial_options)
 owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end, trial)
 local ordinary_send = net.send
 net.send = function() return false end
-send('cockpit', 1, 12, 'sector_a', moving)
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. clock)
 owner:tick(true)
 assert(#received == 0 and writes == 0)
 net.send = ordinary_send
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. (clock - 5))
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. (clock + 1))
+send('cockpit', 1, 12, 'sector_a', moving) -- Read-only legacy envelope.
 send('map', 1, 7354, 'sector_b', moving)
 send('cockpit', 2, 12, 'sector_a', moving)
 send('cockpit', 1, 12, 'sector_a', pose)
 owner:tick(true)
 assert(#received == 0 and writes == 0)
-send('cockpit', 1, 12, 'sector_a', moving)
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. clock)
 owner:tick(true)
 assert(#received == 1 and writes == 1 and received[1].real_velocity.y == .002)
 assert(received[1].capture_time == 50.25 and received[1].source_time == 1)
@@ -116,14 +119,14 @@ end
 owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end,
                    trial_module.new(trial_options))
 incoming[1] = end_packet(generation)
-send('cockpit', 1, 12, 'sector_a', moving)
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. clock)
 owner:tick(true)
 assert(#received == 1 and writes == 1)
 owner:close()
 
 owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end,
                    trial_module.new(trial_options))
-send('cockpit', 1, 12, 'sector_a', moving)
+send('cockpit', 1, 12, 'sector_a', moving .. '|' .. clock)
 incoming[2] = end_packet(('d'):rep(32))
 owner:tick(true)
 assert(#received == 2 and writes == 2)

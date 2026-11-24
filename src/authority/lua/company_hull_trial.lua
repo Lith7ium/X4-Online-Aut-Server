@@ -36,6 +36,7 @@ function M.new(options)
 
     function trial:sample(observed, serial, sample, arrival)
         if finished or observed.index ~= target_index then return end
+        if options.clock() - arrival >= factory.MAX_PREDICTION_SECONDS then return end
         if binding and (not same_view(observed, serial) or binding.generation ~= sample.generation) then
             self:close()
             return

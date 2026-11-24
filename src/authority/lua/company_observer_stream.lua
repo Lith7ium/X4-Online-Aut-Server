@@ -66,7 +66,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         net:send(prefix .. table.concat(fields, '|'))
     end
 
-    local function observe(packet, now)
+    local function observe(packet)
         if #packet > 576 or packet:sub(1, #prefix) ~= prefix then return end
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
@@ -81,7 +81,14 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
             end
             return
         end
-        if #row ~= 16 or row[1] ~= 'REMOTE' then return end
+        local received_at
+        if #row == 17 and row[2] == 'cockpit' and playback_trial then
+            -- Both clocks here belong to the receiving machine. Field 16 is
+            -- the original capture clock on the remote pilot's machine.
+            received_at = coordinate(row[17], 1e12)
+            if not received_at or received_at < 0 or received_at > clock() then return end
+        elseif #row ~= 16 then return end
+        if row[1] ~= 'REMOTE' then return end
         local slot = slots[row[2]]
         local binding = slot and slot.binding
         if not binding or counter(row[3]) ~= slot.serial or row[4] ~= epoch
@@ -92,7 +99,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         local receipt = {'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
                          binding.actor, binding.code, unpack(row, 9, 16)}
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
-        if playback_trial and confirmed == true and row[2] == 'cockpit' then
+        if received_at and confirmed == true then
             local velocity
             if row[12] ~= '-' then
                 velocity = {x = tonumber(row[12]), y = tonumber(row[13]), z = tonumber(row[14])}
@@ -102,7 +109,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
                 generation = row[6], sequence = tonumber(row[7]), x = tonumber(row[9]),
                 y = tonumber(row[10]), z = tonumber(row[11]), real_velocity = velocity,
                 source_time = tonumber(row[15]), capture_time = tonumber(row[16]),
-            }, now)
+            }, received_at)
         end
     end
 
@@ -120,7 +127,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         for _ = 1, 8 do
             local packet = net:receive()
             if packet == nil then break end
-            if running then observe(packet, now) end
+            if running then observe(packet) end
         end
         if playback_trial and running then playback_trial:tick() end
     end

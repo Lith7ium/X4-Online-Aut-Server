@@ -127,7 +127,7 @@ local function wait_for_hull_then_lose_it(loss)
         trace[sequence] = {source=source, capture=capture, x=x}
         state.incoming[#state.incoming+1] = prefix .. table.concat({
             'REMOTE', 'cockpit', serial or 2, epoch, remote_index, generation, sequence, 'sector_a',
-            x, 2, 3, 18, 0, 0, source, capture,
+            x, 2, 3, 18, 0, 0, source, capture, state.local_time,
         }, '|')
     end
 
