@@ -228,11 +228,11 @@ async def _accepted_stream(conn, *, ssl_context=None):
     return reader, asyncio.StreamWriter(transport, protocol, reader, loop)
 
 
-def create_server_context(certificate, private_key):
+def create_server_context(certificate, private_key, *, password=None):
     """Use the tunnel's TLS floor regardless of the platform OpenSSL defaults."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certificate, private_key)
+    context.load_cert_chain(certificate, private_key, password=password)
     return context
 
 

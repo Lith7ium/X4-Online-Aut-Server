@@ -11,12 +11,15 @@ import ssl
 import sys
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests'), str(ROOT / 'tools/dev')]
 
 import test_authority_experimental_local_host as local_host_fixture
+from authority_recovered_tls_gateway import RecoveredTLSGateway, gateway_settings
+from authority_windows_fixture_client import read_connection_settings
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
@@ -101,7 +104,10 @@ class RelayIntegrationTests(unittest.TestCase):
     def test_file_service_refusal_reaches_real_load_client(self):
         self._run_load_case(invalid_file_token=True)
 
-    def _run_load_case(self, *, invalid_file_token):
+    def test_owned_gateway_publishes_windows_settings_and_releases_listener(self):
+        self._run_load_case(invalid_file_token=False, owned_gateway=True)
+
+    def _run_load_case(self, *, invalid_file_token, owned_gateway=False):
         fixture = local_host_fixture.HostTest(methodName='runTest')
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -113,14 +119,45 @@ class RelayIntegrationTests(unittest.TestCase):
         private_key = root / 'test-key.pem'
         certificate.write_text(TEST_CERTIFICATE, encoding='ascii')
         private_key.write_text(TEST_PRIVATE_KEY, encoding='ascii')
-        server_context = create_server_context(str(certificate), str(private_key))
-        fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
-        server_listener = listening_socket()
+        settings = {'server_host': '127.0.0.1',
+                    'server_fingerprint': hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest(),
+                    'shared_key': b'k' * 32, 'file_token': fixture.service.token, 'file_slot': 1}
+        control_port = fixture.listener.getsockname()[1]
+        if owned_gateway:
+            key_file = root / 'test-shared-key'
+            key_file.write_text(settings['shared_key'].hex(), encoding='ascii')
+            args = SimpleNamespace(tls_bind='127.0.0.1', tls_port=0, tls_advertise='127.0.0.1',
+                                   tls_certificate=certificate, tls_private_key=private_key)
+            with self.assertRaisesRegex(ValueError, 'requires bind'):
+                gateway_settings(args)
+            args.tls_shared_key_file = key_file
+            options = gateway_settings(args)
+            with listening_socket() as occupied:
+                args.tls_port = occupied.getsockname()[1]
+                unavailable = RecoveredTLSGateway(gateway_settings(args), out=root, control_port=control_port,
+                    file_port=fixture.service.port, file_token=fixture.service.token)
+                try:
+                    with self.assertRaisesRegex(RuntimeError, 'cannot start'):
+                        unavailable.start(5)
+                    self.assertFalse(unavailable.connection.exists())
+                finally:
+                    unavailable.close()
+            gateway = RecoveredTLSGateway(options, out=root, control_port=control_port,
+                                          file_port=fixture.service.port, file_token=fixture.service.token)
+            self.addCleanup(gateway.close)
+            self.assertFalse(gateway.connection.exists())
+            gateway.start(5)
+            settings = read_connection_settings(gateway.connection)
+            self.assertEqual(gateway.connection.stat().st_mode & 0o777, 0o600)
+        else:
+            server_context = create_server_context(certificate, private_key)
+            server_listener = listening_socket()
+            self.addCleanup(server_listener.close)
+            settings['server_port'] = server_listener.getsockname()[1]
         control_listener = listening_socket()
         file_listener = listening_socket()
-        for listener in (server_listener, control_listener, file_listener):
-            self.addCleanup(listener.close)
-        server_port = server_listener.getsockname()[1]
+        self.addCleanup(control_listener.close)
+        self.addCleanup(file_listener.close)
         local_control_port = control_listener.getsockname()[1]
         local_file_port = file_listener.getsockname()[1]
 
@@ -135,15 +172,18 @@ class RelayIntegrationTests(unittest.TestCase):
         loop_thread.start()
         self.assertTrue(loop_started.wait(3))
         async def make_tunnels():
-            server = await start_server(listener=server_listener, ssl_context=server_context,
-                shared_key=b'k' * 32, control_port=fixture.listener.getsockname()[1],
-                file_port=fixture.service.port, idle_timeout=30)
+            server = None
+            if not owned_gateway:
+                server = await start_server(listener=server_listener, ssl_context=server_context,
+                    shared_key=settings['shared_key'], control_port=control_port,
+                    file_port=fixture.service.port, idle_timeout=30)
             try:
                 client = await start_client(control_listener=control_listener, file_listener=file_listener,
-                    server_host='127.0.0.1', server_port=server_port,
-                    server_fingerprint=fingerprint, shared_key=b'k' * 32, idle_timeout=30)
+                    server_host=settings['server_host'], server_port=settings['server_port'],
+                    server_fingerprint=settings['server_fingerprint'], shared_key=settings['shared_key'], idle_timeout=30)
             except BaseException:
-                await server.close()
+                if server is not None:
+                    await server.close()
                 raise
             return server, client
         tunnels = None
@@ -151,7 +191,8 @@ class RelayIntegrationTests(unittest.TestCase):
             async def close():
                 if tunnels is not None:
                     await tunnels[1].close()
-                    await tunnels[0].close()
+                    if tunnels[0] is not None:
+                        await tunnels[0].close()
             try:
                 asyncio.run_coroutine_threadsafe(close(), loop).result(timeout=8)
             finally:
@@ -169,8 +210,8 @@ class RelayIntegrationTests(unittest.TestCase):
                 connection = socket.create_connection(('127.0.0.1', local_control_port), timeout=5)
                 load = ExperimentalRemoteLoadClient(connection, enabled=True,
                     file_host='127.0.0.1', file_port=local_file_port,
-                    file_token=('b' if invalid_file_token else 'a') * 32,
-                    file_slot=1, deadline=time.monotonic()+15, io_timeout=5)
+                    file_token='b' * 32 if invalid_file_token else settings['file_token'],
+                    file_slot=settings['file_slot'], deadline=time.monotonic()+15, io_timeout=5)
                 bound = load.request_offer()
                 save = load.download(root / 'tls-download')
                 downloaded = save.read_bytes()
@@ -205,7 +246,7 @@ class RelayIntegrationTests(unittest.TestCase):
         worker.start()
         try:
             server_connection, _ = fixture.listener.accept()
-            handle = fixture.host.adopt(server_connection)
+            fixture.host.adopt(server_connection, defer_attach=owned_gateway)
             deadline = time.monotonic() + 12
             while not completed.is_set() and time.monotonic() < deadline:
                 fixture.host.tick(.05)
@@ -238,8 +279,9 @@ class RelayIntegrationTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             data, offered_size, operations = results[0]
             self.assertEqual(len(data), offered_size)
-            self.assertEqual(operations, [('resume', (handle,))])
-            self.assertIn(handle, [player[0] for player in fixture.world.session.players])
+            handles = tuple(player[0] for player in fixture.world.session.ready_players)
+            self.assertEqual(len(handles), 1)
+            self.assertEqual(operations, [('resume', handles)])
             # The handler records a completed transfer after its last send;
             # the client can finish consuming those bytes before that record.
             report_deadline = time.monotonic() + 2
@@ -254,6 +296,17 @@ class RelayIntegrationTests(unittest.TestCase):
             release.set()
             worker.join(8)
             self.assertFalse(worker.is_alive())
+        if owned_gateway:
+            deadline = time.monotonic() + 3
+            while fixture.world.session.state != 'paused' and time.monotonic() < deadline:
+                fixture.host.tick(.05)
+            self.assertEqual(fixture.world.session.players, ())
+            self.assertEqual(fixture.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
+            self.assertIsNotNone(fixture.store.latest_marked_confirmed())
+            gateway.close()
+            self.assertFalse(gateway.connection.exists())
+            with self.assertRaises(ConnectionRefusedError):
+                socket.create_connection(('127.0.0.1', settings['server_port']), timeout=1)
 
 
 if __name__ == '__main__':

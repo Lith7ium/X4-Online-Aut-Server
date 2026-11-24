@@ -59,14 +59,12 @@ Keepalive continues while the client reads the save. A requested motion
 stream must refer to ships eligible for movement. Ordinary runtime eligibility
 checks still apply after admission.
 
-Expose the server's existing loopback control and file services through the
-[existing TLS server bridge](../../src/authority/EXPERIMENTAL-TLS-TUNNEL.md#example-setup).
-The recovered Linux supervisor publishes their addresses and file-service
-token in its private `endpoint.json`. Use those actual service ports when
-starting the bridge. Its public host/port, verified certificate fingerprint,
-shared key and file-service token must reach the client through a trusted
-channel. This diagnostic does not configure a router or firewall, and this
-combined route has not yet been validated with Windows X4.
+Use the recovered Linux supervisor's
+[optional pinned TLS gateway](AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client)
+to publish the private `connection.json` after the TLS listener starts.
+Transfer that file to the client through a trusted channel. The
+[standalone TLS bridge](../../src/authority/EXPERIMENTAL-TLS-TUNNEL.md#example-setup)
+also supports manually supplied backend ports and connection settings.
 
 ## Build the current network DLL
 
@@ -96,8 +94,9 @@ these prerequisites before arranging a game test.
 
 ## Invocation
 
-Create a private connection file outside the new output containers. Replace
-every placeholder; credentials are deliberately not command-line arguments:
+Place the supervisor-generated private `connection.json` outside the new
+output containers. For a standalone TLS bridge, create the file using this
+format and fill in each field:
 
 ```json
 {

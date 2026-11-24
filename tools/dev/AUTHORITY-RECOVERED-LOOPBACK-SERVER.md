@@ -3,9 +3,9 @@
 `authority_recovered_loopback_server.py` is an opt-in development entry point.
 It reuses the isolated Linux X4 recovery/marker/control bridge, checkpoint
 store, local TCP control, and participant adapter. It starts no process on
-import. It binds both services to `127.0.0.1`; there is no Internet listener.
-It does not provide a player client, synchronize gameplay, or establish Windows
-compatibility. It must not be used as a playable multiplayer server.
+import. Both backend services bind to `127.0.0.1`. The optional TLS gateway
+enables a remote client diagnostic. The supervisor is for isolated development
+tests with disposable profiles.
 
 The only allowed initial source is the recorded recovery fixture already
 identified by `authority_recovery_join_source.py`. Once an invocation has
@@ -50,6 +50,38 @@ python tools/dev/authority_recovered_loopback_server.py \
   --game /path/to/X4 --display :DISPLAY --out .local/next-server-run \
   --store .local/new-server-run/checkpoints
 ```
+
+## Optional TLS gateway for the Windows fixture client
+
+Pass all six required TLS arguments to run the pinned TLS gateway in the same
+invocation as the Linux backend. Prepare a PEM certificate, its private key
+readable without a passphrase, and a private shared-key file containing 32
+cryptographically random bytes encoded as 64 lowercase hex characters. For
+example, generate the shared-key file with `umask 077` and
+`openssl rand -hex 32 > /path/to/shared-key.hex`.
+
+```sh
+python tools/dev/authority_recovered_loopback_server.py \
+  --game /path/to/X4 --display :DISPLAY --out .local/new-tls-server-run \
+  --tls-bind SERVER_IPV4 --tls-port 47000 --tls-advertise CLIENT_REACHABLE_HOST \
+  --tls-certificate /path/to/server-cert.pem --tls-private-key /path/to/server-key.pem \
+  --tls-shared-key-file /path/to/shared-key.hex
+```
+
+Choose an IPv4 address on the server for `--tls-bind` and the IPv4 address or
+DNS name the client will actually use for `--tls-advertise`.
+`--tls-port 0` uses an OS-assigned port. If the client reaches an existing
+mapping at a different port, specify `--tls-advertise-port`. Router and firewall
+configuration is outside this command.
+
+Once recovery and listener startup succeed, the private output directory
+contains an owner-only `connection.json` for
+[the Windows fixture client](AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#invocation).
+It includes the certificate pin and both bearer credentials. Transfer this
+file through a trusted private channel. The server removes its copy during
+controlled shutdown and settles the final pause/save. Treat client-side copies
+as credentials after shutdown as well. Use `result.json` to verify the final
+checkpoint. The gateway wiring was tested on loopback with simulated X4.
 
 The owner controls and process guards are experimental. Runtime state from
 high-attention clients is not reconciled by this supervisor, and concurrent

@@ -4,7 +4,8 @@
 Experimental development entry point. It accepts the recorded recovery fixture
 or an explicitly selected, cleanly completed output of this same supervisor.
 It never touches normal saves. The X4 process, profile, checkpoint store and
-networking are owned by this invocation; no WAN listener is opened.
+networking are owned by this invocation. By default, all listeners bind to
+loopback. An explicit TLS configuration can expose one pinned TLS listener.
 Actual client loading, gameplay and cross-platform operation are not proven.
 """
 import argparse
@@ -30,6 +31,7 @@ import authority_recovery_live as recovery
 import authority_two_x4_live as owned
 import authority_load_live as load
 import authority_recovered_registry_snapshot as registry_snapshots
+from authority_recovered_tls_gateway import RecoveredTLSGateway, gateway_settings
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
 from authority.checkpoints import CheckpointStore
@@ -838,6 +840,7 @@ def diagnostic_process_measure_seconds(args):
 
 def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
+    tls = gateway_settings(args)
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux user required')
@@ -865,6 +868,9 @@ def run(args):
               'engine_operations':operations}
     processes=[]; handlers={}; lockbox=[]; services=[]; sock=listener=control=clock_sock=source_sock=sample_write_sock=None
     endpoint=out/'endpoint.json'; deadline=time.monotonic()+args.timeout
+    gateway = None
+    if tls is not None:
+        result['scope'] = 'isolated recovered Linux X4 with pinned TLS gateway; gameplay and Internet unverified'
     watch=target=checkpoint=expected=profile=None
     local_pair=False;source_index=None
     witness_pending=None
@@ -1711,19 +1717,41 @@ def run(args):
                 raise _WitnessFinished()
             if count == 1: result['diagnostic_client'] = results[0]
             else: result['diagnostic_clients'] = results
-        # Publish only after the private diagnostic socket has been accepted.
-        # The endpoint contains a bearer secret; its directory is owner-only.
-        fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'w', encoding='ascii') as stream:
-            json.dump({'version':1,'control_host':'127.0.0.1','control_port':listener.getsockname()[1],
-                       'file_host':'127.0.0.1','file_port':service.port,'file_token':service.token,'file_slot':1}, stream)
-            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
-        result.update(serve(listener, host, deadline=deadline, check=check, should_stop=lambda: stop[0]))
-        # Withdraw endpoint first, then disconnect peers; the coordinator's
-        # last-disconnect path must pause and save before terminating X4.
-        endpoint.unlink(); listener.close(); listener = None
-        saved = settle_shutdown(control, world, store, check)
-        control = None
+        # Publish only after the private diagnostic sockets have been accepted
+        # and the selected listener is ready. Both files contain bearer secrets.
+        if tls is not None:
+            if stop[0] or time.monotonic() >= deadline:
+                raise InterruptedError('TLS startup cancelled')
+            gateway = RecoveredTLSGateway(tls, out=out, control_port=listener.getsockname()[1],
+                                          file_port=service.port, file_token=service.token)
+            gateway.start(min(5, max(0, deadline - time.monotonic())))
+        else:
+            fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w', encoding='ascii') as stream:
+                json.dump({'version':1,'control_host':'127.0.0.1','control_port':listener.getsockname()[1],
+                           'file_host':'127.0.0.1','file_port':service.port,'file_token':service.token,'file_slot':1}, stream)
+                stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+
+        def gateway_stopped():
+            return gateway is not None and not gateway.running
+
+        result.update(serve(listener, host, deadline=deadline, check=check,
+                            should_stop=lambda: stop[0] or gateway_stopped()))
+        failed_gateway = gateway_stopped()
+        try:
+            if gateway is not None:
+                gateway.close()
+                gateway = None
+            else:
+                endpoint.unlink()
+        finally:
+            # Stop intake, then settle the last-disconnect save before stopping X4.
+            listener.close()
+            listener = None
+            saved = settle_shutdown(control, world, store, check)
+            control = None
+        if failed_gateway:
+            raise RuntimeError('TLS gateway stopped while serving')
         verify()
         result.update(success=True, final_world_state=world.session.state,
                       final_checkpoint_id=None if saved is None else saved.checkpoint_id,
@@ -1751,6 +1779,9 @@ def run(args):
         for number in handlers:
             try: signal.signal(number,signal.SIG_IGN)
             except BaseException as error: errors.append('cannot fence signals: '+type(error).__name__)
+        if gateway is not None:
+            try: gateway.close()
+            except BaseException as error: errors.append('TLS gateway cleanup: '+type(error).__name__)
         try: endpoint.unlink(missing_ok=True)
         except BaseException as error: errors.append('endpoint cleanup: '+type(error).__name__)
         if listener is not None:
@@ -1854,6 +1885,14 @@ def main():
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--seed',type=int,default=276944566)
+    tls = parser.add_argument_group('optional pinned TLS gateway')
+    tls.add_argument('--tls-bind', help='IPv4 address for the TLS listener')
+    tls.add_argument('--tls-port', type=int, help='TLS listener port; 0 selects an available port')
+    tls.add_argument('--tls-advertise', help='client-reachable IPv4 address or DNS name')
+    tls.add_argument('--tls-advertise-port', type=int, help='client-reachable port, if different from the listener')
+    tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
+    tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
+    tls.add_argument('--tls-shared-key-file', type=Path, help='64 lowercase hex characters from 32 random bytes')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--require-registry-snapshot',action='store_true',
                         help='require confirmed format-3 source and full live registry observations for every save')
