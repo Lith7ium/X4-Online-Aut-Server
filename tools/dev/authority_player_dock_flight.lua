@@ -156,11 +156,12 @@ local function on_observation(_, row)
         log(('DEPARTURE|%s|%s'):format(binding.start_distance, distance))
     elseif phase == 'dock_wait' and status == 'DOCKED' and listed_at_station() then
         assert(not use_berth or observation.bay == binding.requested_bay, 'physical_bay_differs')
+        binding.berth = berth
         phase = 'begin_capture'
         log('DOCKED|' .. row)
         log('ACQUIRED_BERTH|' .. berth)
     elseif phase == 'before_confirm_wait' or phase == 'after_confirm_wait' then
-        assert(status == 'DOCKED' and observation.bay == binding.bay and listed_at_station()
+        assert(status == 'DOCKED' and observation.bay == binding.bay and berth == binding.berth and listed_at_station()
             and water and water >= 0 and account and account >= 0, 'confirm_observation_unverified')
         if phase == 'before_confirm_wait' then
             before, phase = observation, 'confirm'
