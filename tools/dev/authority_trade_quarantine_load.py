@@ -23,19 +23,25 @@ PROFILE = Path('case/home/.config/EgoSoft/X4/45841')
 MARKER_SCRIPT = Path('src/authority/md/checkpoint_marker.xml')
 REGISTRY = 'authority_ship_registry.xml'
 OBSERVER = 'authority_trade_observer.xml'
-END_ROW = b"""    <debug_text text="'[X4LAN] AUTH_TRADE_READ END'"/>"""
-AVATAR_ROW = b"""    <debug_text text="'[X4LAN] AUTH_TRADE_READ AVATAR station=%s sector=%s room=%s occupied=%s controlled=%s'.[@player.station.idcode,@player.station.sector.macro.id,@player.room.macro.id,(if player.occupiedship then 1 else 0),(if player.controlled then 1 else 0)]"/>"""
 
 
 def verify_observation(rows):
-    expected = (
-        r'ACCOUNT faction=player faction_ct=965100 player_ct=965100',
-        r'SHIP index=7354 code=WRN-302 status=observed sector=cluster_01_sector001_macro '
-        r'docked=1 internal=0 dock_state=\S+ dock_host=BIM-169 free_units=\d+ cargo_units=6',
-        r'AVATAR station=XPJ-169 sector=cluster_06_sector002_macro room=dockingbay_arg_s_01_macro '
-        r'occupied=0 controlled=0',
-    )
-    for prefix, pattern in zip(('ACCOUNT ', 'SHIP index=7354 ', 'AVATAR '), expected, strict=True):
+    expected = {
+        'ACCOUNT ': r'ACCOUNT faction=player faction_ct=965100 player_ct=965100',
+        'SHIP index=1970 ': (
+            r'SHIP index=1970 code=WOO-831 status=observed sector=cluster_14_sector001_macro '
+            r'docked=0 internal=0 dock_state=none dock_host=none free_units=90 cargo_units=0'
+        ),
+        'SHIP index=7354 ': (
+            r'SHIP index=7354 code=WRN-302 status=observed sector=cluster_01_sector001_macro '
+            r'docked=1 internal=0 dock_state=\S+ dock_host=BIM-169 free_units=\d+ cargo_units=6'
+        ),
+        'AVATAR ': (
+            r'AVATAR station=XPJ-169 sector=cluster_06_sector002_macro room=dockingbay_arg_s_01_macro '
+            r'occupied=0 controlled=0'
+        ),
+    }
+    for prefix, pattern in expected.items():
         candidates = [row for row in rows if row.startswith(prefix)]
         if len(candidates) != 1 or not re.fullmatch(pattern, candidates[0]):
             raise ValueError(f'quarantined native readback differs: {candidates!r}')
@@ -67,8 +73,6 @@ def run(args):
         if read_evidence(source_md / name, 1 << 20) != read_evidence(current, 1 << 20):
             raise ValueError(f'quarantined source script differs: {name}')
     readonly = read_evidence(recovery.ROOT / 'tools/dev' / OBSERVER, 1 << 20)
-    if readonly.count(END_ROW) != 1:
-        raise ValueError('expected native trade observer boundary missing')
     args.store = source / 'checkpoints'
 
     def stage(_store, stage_profile):
@@ -94,7 +98,7 @@ def run(args):
     def protected(case, _profile):
         md = case / 'extensions/x4_lan_lab/md'
         (md / REGISTRY).write_bytes(read_evidence(registry, 1 << 20))
-        (md / OBSERVER).write_bytes(readonly.replace(END_ROW, AVATAR_ROW + b'\n' + END_ROW))
+        (md / OBSERVER).write_bytes(readonly)
         return [md / REGISTRY, md / OBSERVER]
 
     def observe(*, profile, guard, **_):

@@ -58,6 +58,7 @@
     <do_else>
      <debug_text text="'[X4LAN] AUTH_TRADE_READ REGISTRY status=unavailable'"/>
     </do_else>
+    <debug_text text="'[X4LAN] AUTH_TRADE_READ AVATAR station=%s sector=%s room=%s occupied=%s controlled=%s'.[@player.station.idcode,@player.station.sector.macro.id,@player.room.macro.id,(if player.occupiedship then 1 else 0),(if player.controlled then 1 else 0)]"/>
     <debug_text text="'[X4LAN] AUTH_TRADE_READ END'"/>
    </actions>
   </cue>
