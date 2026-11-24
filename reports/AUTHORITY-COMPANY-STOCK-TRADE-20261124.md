@@ -124,3 +124,22 @@ The original failed supervisor result and unpublished save remain available
 for diagnosis. The opt-in client adapter can display the actual booked
 amount from a receipt; this display was tested with LuaJIT. A purchase
 submitted from a connected cockpit still needs an end-to-end test.
+
+## Native offer read from the purchasing ship's perspective
+
+A private X4 process loaded the same six-unit save with the server avatar
+still on XPJ-169. The stock Lua query used by the trade menu returned 32,241
+water at 58.20 Cr each for WRN-302 at BIM-169, with a minimum order of one.
+The native eligibility check accepted a quantity of six. The independent
+Mission Director station offer matched the unit price and quantity. This
+was a fresh quote after reloading the world; the completed purchase in the
+save was booked earlier at an internal price of 58.19 Cr per unit.
+
+The ship reported both `isdocked=true` and `isdocking=true` while the native
+Mission Director found an external trading bay in its default state. The
+first client-side check rejected this combination before asking for the
+seat. The capture adapter now requires a positive external docking state,
+station dock-list membership and the stock immediate-trade context. It
+also checks the controlled ship and the selected station before accepting
+a purchase. A LuaJIT regression covers the two simultaneous flags, an
+approach without completed docking, and a ship absent from the dock list.
