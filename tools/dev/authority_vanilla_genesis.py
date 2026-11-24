@@ -80,7 +80,7 @@ def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce):
     return [path for path in lab.rglob('*') if path.is_file()] + [profile/'config.xml', profile/'content.xml']
 
 
-def run(game, out, display, auth, timeout, seed):
+def run(game, out, display, auth, timeout, seed, *, software_rendered=True):
     import authority_vanilla_pair as pair
     game = game.resolve(strict=True)
     out = snapshot.output_path(out)
@@ -90,7 +90,8 @@ def run(game, out, display, auth, timeout, seed):
     home = Path(user.pw_dir)
     steam = live.steam_identity(home, user.pw_uid)
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
-    result = {'supervisor_version': 1, 'success': False, 'official_extensions': []}
+    result = {'supervisor_version': 1, 'success': False, 'official_extensions': [],
+              'display_mode': 'private_software' if software_rendered else 'desktop_gpu'}
     handlers, lockbox, processes, errors = {}, [], [], []
     case = checkpoint = None
     try:
@@ -110,9 +111,10 @@ def run(game, out, display, auth, timeout, seed):
             cmd = snapshot.command_for(case, game, binds, lock, display, auth, user.pw_name, seed)
             boundary = cmd.index('--die-with-parent')
             cmd[boundary:boundary] = [part for path in files for part in ('--ro-bind', str(path), str(path))]
-            cmd = software.constrain(cmd, display=display, authorization=auth, icd=live.lavapipe_icd())
             bridge.acquire_lock_with_handlers(handlers, lockbox, user.pw_uid, user.pw_gid)
-            software.verify(cmd, out/'software-vulkan.log')
+            if software_rendered:
+                cmd = software.constrain(cmd, display=display, authorization=auth, icd=live.lavapipe_icd())
+                software.verify(cmd, out/'software-vulkan.log')
             proc, started = owned.spawn_owned_gated(cmd, out/'process.log', processes)
             deadline = time.monotonic() + timeout
             log = profile/'engine-output.log'
@@ -196,14 +198,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
-    parser.add_argument('--xvfb', default='Xvfb')
+    screens = parser.add_mutually_exclusive_group()
+    screens.add_argument('--xvfb', default='Xvfb')
+    screens.add_argument('--desktop-display', help='use a licensed local GPU for the one-time census')
     parser.add_argument('--timeout', type=int, default=7200)
     parser.add_argument('--seed', type=int, default=276944566)
     args = parser.parse_args()
     if not 1 <= args.timeout <= 86400 or not 0 <= args.seed < 2**32:
         parser.error('invalid timeout or seed')
-    with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth):
-        result = run(args.game, args.out, display, auth, args.timeout, args.seed)
+    if args.desktop_display:
+        display, auth = live.desktop_display(args.desktop_display)
+        if not os.access(auth, os.R_OK):
+            parser.error('desktop rendering requires readable Xauthority')
+        result = run(args.game, args.out, display, auth, args.timeout, args.seed, software_rendered=False)
+    else:
+        with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth):
+            result = run(args.game, args.out, display, auth, args.timeout, args.seed)
     print(json.dumps(result, indent=2))
     return 0 if result['success'] else 1
 
