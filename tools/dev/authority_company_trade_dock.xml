@@ -67,10 +67,11 @@
     </do_else>
    </actions>
    <cues>
-    <cue name="Order">
+    <!-- A completed parent can leave an event-based child waiting. Read the
+         retained preparation state on the next check instead. -->
+    <cue name="Order" checkinterval="1s">
      <conditions>
-      <event_cue_completed cue="parent"/>
-      <check_value value="$Status == 'CAPTAIN_ASSIGNED'"/>
+      <check_value value="@Prepare.$Status == 'CAPTAIN_ASSIGNED'"/>
      </conditions>
      <delay exact="1s"/>
      <actions>
@@ -104,7 +105,7 @@
      <cues>
       <cue name="FirstObservation" checkinterval="1s">
        <conditions>
-        <check_value value="@$Status == 'DOCKING'"/>
+        <check_value value="@Prepare.$Status == 'DOCKING'"/>
         <check_value value="player.age ge $Deadline or not @$Ship.isoperational or $Ship.orders.count == 0"/>
        </conditions>
        <actions>
@@ -119,10 +120,9 @@
         </do_else>
        </actions>
        <cues>
-        <cue name="LaterObservation">
+        <cue name="LaterObservation" checkinterval="1s">
          <conditions>
-          <event_cue_completed cue="parent"/>
-          <check_value value="$Status == 'DOCKED_ONCE'"/>
+          <check_value value="@Prepare.$Status == 'DOCKED_ONCE'"/>
          </conditions>
          <delay exact="1s"/>
          <actions>
