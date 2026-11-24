@@ -23,7 +23,7 @@ local C = ffi.C
 local screen = 'X4AuthorityTradeCockpit'
 local quantity = 6
 local phase, deadline, take_time = 'init'
-local binding, menu, hook, captured
+local binding, menu, hook, captured, parked
 local failed = false
 
 local function log(row) DebugError('[X4LAN] AUTH_TRADE_COCKPIT ' .. row) end
@@ -96,6 +96,17 @@ local function controlled()
         and C.GetPlayerContainerID() == ship
 end
 
+local function map_unavailable(reason)
+    log('MAP_UNAVAILABLE|' .. tostring(reason):gsub('[\r\n|]', ' '))
+    finish('seat_unavailable')
+end
+
+local function parked_unchanged()
+    return parked and C.GetPlayerControlledShipID() == parked.controlled
+        and C.GetPlayerOccupiedShipID() == parked.occupied and C.GetPlayerContainerID() == parked.container
+        and C.IsGamePaused() and external_dock()
+end
+
 local function find_water(rows)
     assert(type(rows) == 'table', 'offer_list')
     local found
@@ -122,7 +133,7 @@ local function read_offer()
     if mode == 'offer' then finish('offer_read'); return end
     if not checked or not at_dock then
         log('SEAT|unavailable|dock_binding')
-        finish('seat_unavailable')
+        map_unavailable('dock_binding')
         return
     end
 
@@ -134,20 +145,22 @@ local function read_offer()
     log('PERMISSION|' .. regular .. '|' .. waived)
     if waived ~= 'granted' then
         log('SEAT|unavailable|' .. waived)
-        finish('seat_unavailable')
+        -- No Take was dispatched. Pin the original local seat context.
+        parked = {controlled = C.GetPlayerControlledShipID(), occupied = C.GetPlayerOccupiedShipID(),
+            container = C.GetPlayerContainerID()}
+        phase = 'begin_remote_map'
         return
     end
     deadline = GetCurRealTime() + 8
     issue('Take', {available = true, ship = binding.ship_hex, station = binding.station_hex}, 'take_reply')
 end
 
-local function begin_map()
-    assert(controlled() and external_dock(), 'seat_changed_before_map')
-    local sector = C.GetContextByClass(binding.station, 'sector', false)
-    local code = C.GetObjectIDCode(binding.station)
-    assert(sector ~= 0 and code ~= nil, 'station_context')
-    binding.sector = GetComponentData(lua_id(sector), 'macro')
-    binding.station_code = ffi.string(code)
+local function begin_map(read_only)
+    if read_only then
+        assert(parked_unchanged(), 'dock_or_seat_changed_before_map')
+    else
+        assert(controlled() and external_dock(), 'seat_changed_before_map')
+    end
     for _, candidate in ipairs(Menus) do
         if candidate.name == 'MapMenu' then assert(not menu, 'ambiguous_map_menu'); menu = candidate end
     end
@@ -155,21 +168,37 @@ local function begin_map()
     -- Install before the stock button handlers are built. For this disposable
     -- menu the fallback is a tripwire, never the original booking function.
     menu.buttonConfirmTrade = function() error('blocked_original_trade_confirmation', 0) end
-    hook = assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
-        enabled = true, menu = menu, ship = binding.ship, station = binding.station,
-        sector = binding.sector, station_code = binding.station_code,
-        request = function(intent)
-            assert(not captured and intent.sector == binding.sector and intent.station_code == binding.station_code
-                and intent.ware == 'water' and intent.quantity == quantity, 'unexpected_intent')
-            captured = intent
-            return false
-        end,
-        notice = function(status) log('NOTICE|' .. status) end,
-    }))
+    if not read_only then
+        local sector = C.GetContextByClass(binding.station, 'sector', false)
+        local code = C.GetObjectIDCode(binding.station)
+        assert(sector ~= 0 and code ~= nil, 'station_context')
+        binding.sector = GetComponentData(lua_id(sector), 'macro')
+        binding.station_code = ffi.string(code)
+        hook = assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
+            enabled = true, menu = menu, ship = binding.ship, station = binding.station,
+            sector = binding.sector, station_code = binding.station_code,
+            request = function(intent)
+                assert(not captured and intent.sector == binding.sector and intent.station_code == binding.station_code
+                    and intent.ware == 'water' and intent.quantity == quantity, 'unexpected_intent')
+                captured = intent
+                return false
+            end,
+            notice = function(status) log('NOTICE|' .. status) end,
+        }))
+    end
     deadline = GetCurRealTime() + 8
-    phase = 'wait_map'
+    phase = read_only and 'wait_remote_map' or 'wait_map'
     OpenMenu('MapMenu', {0, 0, true, nil, nil, 'tradecontext',
         {binding.station_lua, binding.ship_lua, false}}, nil)
+end
+
+local function capture_remote_quote(data)
+    assert(parked_unchanged() and not data.wareexchange, 'remote_context_changed')
+    local offer = find_water(data.selloffers)
+    local actual = menu.getTradeOfferByID(lua_id(ConvertIDTo64Bit(offer.id)))
+    assert(actual == offer and integer(actual.amount) and type(data.immediate) == 'boolean', 'remote_offer_shape')
+    log(('MAP_QUOTE|%d|%d|%d'):format(unit_cents(actual.price), actual.amount, data.immediate and 1 or 0))
+    finish('seat_unavailable')
 end
 
 local function capture_menu(data)
@@ -212,7 +241,7 @@ end
 
 local function seat_unavailable(reason)
     log('SEAT|unavailable|' .. reason)
-    finish('seat_unavailable')
+    map_unavailable('seat_transition_unverified')
 end
 
 local function on_result(_, row)
@@ -271,15 +300,24 @@ local function frame()
             issue('Verify', {}, 'verify_reply')
         end
     elseif phase == 'begin_map' then
-        begin_map()
-    elseif phase == 'wait_map' then
+        begin_map(false)
+    elseif phase == 'begin_remote_map' then
+        local ok, failure = pcall(begin_map, true)
+        if not ok then map_unavailable(failure) end
+    elseif phase == 'wait_map' or phase == 'wait_remote_map' then
         local data = menu.contextMenuData
         if menu.contextMenuMode == 'trade' and type(data) == 'table'
                 and data.component == binding.station and data.currentShip == binding.ship
                 and type(data.waredatalist) == 'table' then
-            capture_menu(data)
-        else
-            assert(now < deadline, 'map_context_timeout')
+            if phase == 'wait_remote_map' then
+                local ok, failure = pcall(capture_remote_quote, data)
+                if not ok then map_unavailable(failure) end
+            else
+                capture_menu(data)
+            end
+        elseif now >= deadline then
+            if phase == 'wait_remote_map' then map_unavailable('map_context_timeout')
+            else error('map_context_timeout', 0) end
         end
     elseif phase == 'inspect_reply' then
         assert(now < deadline, 'inspect_timeout')
