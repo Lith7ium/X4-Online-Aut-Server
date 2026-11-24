@@ -21,6 +21,9 @@ _ERROR_INSUFFICIENT_BUFFER = 122
 _MAX_TABLE_BYTES = 16 * 1024 * 1024
 _MAX_TABLE_ATTEMPTS = 3
 _DWORD = ctypes.c_uint32
+# Explicit loopback binding, or the implicit wildcard binding Winsock gives
+# the shipped DLL's connected UDP socket on native Windows.
+_OWNER_ADDRESSES = ('127.0.0.1', '0.0.0.0')
 
 
 class _Udp4Row(ctypes.Structure):
@@ -165,6 +168,10 @@ class WindowsMotionPeer:
         if not self._valid_owner() or not self._socket_valid():
             return False
         source_port = peer[1]
-        exact = [row for row in rows4 if row[0] == '127.0.0.1' and row[1] == source_port and row[2] == self._pid]
+        # The shipped network DLL's nonblocking UDP socket is implicitly bound,
+        # which native Windows lists as 0.0.0.0 rather than 127.0.0.1. The
+        # loopback peer, owning PID and single row for this port still apply.
+        exact = [row for row in rows4 if row[0] in _OWNER_ADDRESSES and
+                 row[1] == source_port and row[2] == self._pid]
         same_port = [row for row in rows4 + rows6 if row[1] == source_port]
         return len(exact) == 1 and len(same_port) == 1
