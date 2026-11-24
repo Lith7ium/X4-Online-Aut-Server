@@ -8,6 +8,8 @@ current task. This document supersedes the [20 November handover](HANDOVER-NEON-
 
 ## Neon can start now
 
+Neon owns NPC ship movement from authoritative X4 capture to playback on a native Windows client, including multi-ship behavior and measurement against the full register. The existing reacquisition work is the first component. [Subsystem assignment and acceptance evidence](NEON-NPC-SHIP-MOTION.md)
+
 Continue the previously assigned NPC reacquisition task. When the same NPC
 returns to view after an unseen sector change, the observing client has
 permission to align once from a fresh server sample. Use the existing
