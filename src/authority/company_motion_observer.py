@@ -16,8 +16,10 @@ _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _TTL = 3.0
 _MAX_PENDING = 4
 _SLOTS = ('cockpit', 'map')
-# A full SEEN can reach 543 bytes with the lease/generation prefix,
-# a 128-byte sector macro and eight round-trippable doubles.
+MAX_COCKPIT_PILOTS = 3
+COCKPIT_SLOTS = ('cockpit', 'cockpit2', 'cockpit3')
+# A full SEEN can reach 544 bytes with the lease/generation prefix,
+# cockpit2/cockpit3 slot name, a 128-byte sector macro and eight round-trippable doubles.
 MAX_OBSERVER_DATAGRAM = 576
 
 
@@ -54,18 +56,24 @@ class _View:
 
 
 class CompanyMotionObserver:
-    """Keep one observed hull per native slot and a bounded receipt history."""
+    """Keep one observed hull per native slot (up to 3 cockpit slots plus independent map) and a bounded receipt history."""
 
-    def __init__(self, registry, send, *, trial_index=None):
+    def __init__(self, registry, send, *, trial_index=None, cockpit_playback_slots=0):
         self._epoch, self._own_index = registry
         if trial_index is not None and (type(trial_index) is not int or not 1 <= trial_index <= 200000
                                         or trial_index == self._own_index):
             raise ValueError('invalid local cockpit trial index')
+        if type(cockpit_playback_slots) is not int or not 0 <= cockpit_playback_slots <= MAX_COCKPIT_PILOTS:
+            raise ValueError('invalid cockpit playback slot count')
+        if trial_index is not None and cockpit_playback_slots > 1:
+            raise ValueError('cannot combine single trial_index with multi-pilot cockpit slots')
         self._trial_index = trial_index
-        self._trial = None
+        self._cockpit_playback_slots = frozenset(COCKPIT_SLOTS[:cockpit_playback_slots])
+        slot_names = (*COCKPIT_SLOTS[:cockpit_playback_slots], 'map') if cockpit_playback_slots > 1 else _SLOTS
+        self._active_tracks = {}
         self._send = send
         self._set_views = None
-        self._slots = {name: _View() for name in _SLOTS}
+        self._slots = {name: _View() for name in slot_names}
         self._subscribed = ()
         self._last_confirmed = None
 
@@ -83,25 +91,25 @@ class CompanyMotionObserver:
             self._subscribed = subscribed
             self._set_views([{'sector_macro': sector, 'indices': list(indices)} for sector, indices in subscribed])
 
-    def _end_trial(self):
-        if self._trial is None:
+    def _end_slot(self, slot):
+        track = self._active_tracks.pop(slot, None)
+        if track is None:
             return
-        serial, index, generation, sector = self._trial
-        self._trial = None
+        serial, index, generation, sector = track
         # A still-queued native SEEN must not certify a pose after revocation.
-        self._slots['cockpit'].pending.clear()
-        self._send(f'END|cockpit|{serial}|{self._epoch}|{index}|{generation}|{sector}')
+        self._slots[slot].pending.clear()
+        self._send(f'END|{slot}|{serial}|{self._epoch}|{index}|{generation}|{sector}')
 
     def expire(self):
         now = time.monotonic()
         for slot, view in self._slots.items():
             if view.active is not None and now >= view.deadline:
-                if slot == 'cockpit':
-                    self._end_trial()
+                if slot in self._active_tracks:
+                    self._end_slot(slot)
                 view.replace(None)
         self._sync_views()
 
-    def _view(self, view, serial, sector, index_text, actor, code):
+    def _view(self, slot, view, serial, sector, index_text, actor, code):
         if (sector, index_text, actor, code) == ('-', '0', '-', '-'):
             binding = None
         else:
@@ -116,8 +124,8 @@ class CompanyMotionObserver:
         view.serial, view.binding = serial, binding
         view.deadline = time.monotonic() + _TTL
         if new_serial or binding != view.active:
-            if view is self._slots['cockpit']:
-                self._end_trial()
+            if slot in self._active_tracks:
+                self._end_slot(slot)
             view.replace(binding)
             self._sync_views()
 
@@ -132,7 +140,7 @@ class CompanyMotionObserver:
             return
         self.expire()
         if kind == 'VIEW' and len(body) == 4:
-            self._view(view, serial, *body)
+            self._view(slot, view, serial, *body)
         elif kind == 'SEEN' and len(body) == 14 and serial == view.serial and view.active is not None:
             self._seen(slot, view, *body[:6], tuple(body[6:]))
 
@@ -181,42 +189,58 @@ class CompanyMotionObserver:
         for slot, view in self._slots.items():
             if view.active is None or (sample['sector_macro'], sample['index']) != view.active[:2]:
                 continue
-            trial = None
-            if slot == 'cockpit' and sample['index'] == self._trial_index:
-                trial = view.serial, sample['index'], sample['generation'], sample['sector_macro']
-                if self._trial != trial:
-                    self._end_trial()
+            track = None
+            is_playback = (
+                (slot == 'cockpit' and sample['index'] == self._trial_index)
+                or (self._trial_index is None and slot in self._cockpit_playback_slots)
+            )
+            if is_playback:
+                track = view.serial, sample['index'], sample['generation'], sample['sector_macro']
+                if self._active_tracks.get(slot) != track:
+                    self._end_slot(slot)
             message = '|'.join(map(str, (
                 'REMOTE', slot, view.serial, self._epoch, sample['index'], sample['generation'],
                 sample['sequence'], sample['sector_macro'], *values,
             )))
-            if trial is not None:
+            if track is not None:
                 # Only the opt-in local writer needs the original launcher
                 # timestamp. The remote sender clock is a separate domain.
                 message += '|' + format(received_at, '.17g')
             if self._send(message):
                 view.pending.append((sample, values, time.monotonic()))
-                if trial is not None:
-                    self._trial = trial
+                if track is not None:
+                    self._active_tracks[slot] = track
 
     def resume_route(self):
         """The single previously forwarded trial route, without pose or clocks."""
-        return self._trial[1:] if self._trial is not None else None
+        track = self._active_tracks.get('cockpit')
+        return track[1:] if track is not None else None
+
+    def resume_routes(self):
+        """All active cockpit playback routes, deduplicated by ship index."""
+        by_index = {}
+        for slot in COCKPIT_SLOTS:
+            track = self._active_tracks.get(slot)
+            if track is not None:
+                by_index[track[1]] = track[1:]
+        return [by_index[index] for index in sorted(by_index)]
 
     def transport_lost(self, index, generation):
-        """Clear old receipt candidates without revoking the local trial's authorization."""
+        """Clear old receipt candidates without revoking the local playback authorization."""
         for view in self._slots.values():
             if view.active is not None and view.active[1] == index:
                 view.pending = deque((item for item in view.pending if item[0]['generation'] != generation),
                                      maxlen=_MAX_PENDING)
 
     def end(self, index, generation):
-        if self._trial is not None and self._trial[1:3] == (index, generation):
-            self._end_trial()
+        for slot, track in tuple(self._active_tracks.items()):
+            if track[1:3] == (index, generation):
+                self._end_slot(slot)
         self.transport_lost(index, generation)
 
     def reset_world(self):
-        self._end_trial()
+        for slot in tuple(self._active_tracks):
+            self._end_slot(slot)
         for view in self._slots.values():
             view.pending.clear()
 

@@ -128,28 +128,48 @@ function M.new_x4(config, save_path, pinned, udp)
         DebugError('[X4LAN] AUTH_COMPANY_OBSERVER_UNAVAILABLE')
     end
     local ok, observer = pcall(function()
-        local cockpit, trial
-        local factory = X4LAN_COMPANY_HULL_TRIAL
-        if config.cockpit_radar_playback == true then
-            factory = assert(X4LAN_COMPANY_COCKPIT_PLAYBACK)
-            cockpit = X4LAN_COMPANY_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
-                radar_fallback = true,
-                target_index = config.playback_index,
-                clock = udp.monotonic,
-            })
-        else
-            cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
-        end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
-        if config.playback_index then
-            local created, candidate = pcall(factory and factory.new_x4,
-                                             config, pinned, cockpit,
-                                             available, udp.monotonic)
-            if created then trial = candidate
-            else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
+        local readers, trial
+        if config.cockpit_radar_playback == true then
+            local max_pilots = config.cockpit_max_pilots or (config.playback_index and 1 or 3)
+            local playback_mod = assert(X4LAN_COMPANY_COCKPIT_PLAYBACK)
+            if max_pilots > 1 or config.playback_index == nil then
+                local multi = assert(X4LAN_COMPANY_COCKPIT_OBSERVER).new_multi_x4(pinned, config.index, available, {
+                    max_pilots = max_pilots,
+                    clock = udp.monotonic,
+                })
+                readers = {map = map}
+                for slot_name, reader in pairs(multi.readers) do
+                    readers[slot_name] = reader
+                end
+                local created, candidate = pcall(playback_mod.new_multi_x4,
+                                                 config, pinned, multi.readers, available, udp.monotonic)
+                if created then trial = candidate
+                else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
+            else
+                local cockpit = assert(X4LAN_COMPANY_COCKPIT_OBSERVER).new_x4(pinned, config.index, available, {
+                    radar_fallback = true,
+                    target_index = config.playback_index,
+                    clock = udp.monotonic,
+                })
+                readers = {cockpit = cockpit, map = map}
+                local created, candidate = pcall(playback_mod.new_x4,
+                                                 config, pinned, cockpit, available, udp.monotonic)
+                if created then trial = candidate
+                else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
+            end
+        else
+            local cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
+            readers = {cockpit = cockpit, map = map}
+            if config.playback_index then
+                local created, candidate = pcall(X4LAN_COMPANY_HULL_TRIAL and X4LAN_COMPANY_HULL_TRIAL.new_x4,
+                                                 config, pinned, cockpit,
+                                                 available, udp.monotonic)
+                if created then trial = candidate
+                else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
+            end
         end
-        return X4LAN_COMPANY_OBSERVER_STREAM.new({cockpit = cockpit, map = map},
-                                                  pinned.epoch, net, prefix, udp.monotonic, trial)
+        return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, trial)
     end)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({

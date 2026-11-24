@@ -1,8 +1,9 @@
--- Opt-in receiving-cockpit Company ship playback with 5 s loss limit, strict generation checks, and reacquisition.
+-- Opt-in receiving-cockpit Company ship playback with independent per-ship 5 s loss limit, strict generation checks, and reacquisition (up to 3 pilots).
 -- Reuses X4LAN_COMPANY_HULL_PLAYBACK (X4LAN_MOTION_BUFFER + X4LAN_MOTION_PLAYBACK) and X4LAN_COMPANY_HULL_PLAYBACK_X4.
 local M = {}
 local MAX_STEP = 50
 local READBACK_TOLERANCE = 3
+local COCKPIT_SLOTS = {'cockpit', 'cockpit2', 'cockpit3'}
 
 local function dist3(a, b)
     local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
@@ -23,19 +24,26 @@ function M.new(options)
         assert(type(target_index) == 'number' and target_index % 1 == 0 and target_index >= 1
             and target_index <= 200000 and target_index ~= own_index, 'invalid cockpit target_index')
     end
+    local slot_name = options.slot or 'cockpit'
+    assert(slot_name == 'cockpit' or slot_name == 'cockpit2' or slot_name == 'cockpit3', 'invalid cockpit slot')
     local factory = options.playback or X4LAN_COMPANY_HULL_PLAYBACK
     local prediction_seconds = assert(factory.MAX_PREDICTION_SECONDS)
     local allow_reacquire_align = options.allow_reacquire_align == true
 
-    local binding, session, controller, last
+    -- Shared per-ship ledgers preserve revocation, reacquisition eligibility, and monotone watermarks across slot re-entry.
+    local revoked_by_index = options.revoked_by_index or {}
+    local reacquire_by_index = options.reacquire_by_index or {}
+    local last_by_index_gen = options.last_by_index_gen or {}
+
+    local binding, session, controller
+    local active_index = nil
     local active_generation = nil
-    local revoked_generations = {}
-    local reacquire_align_allowed = false
     local pending_align = nil
     local last_tick_now = nil
     local closed = false
 
     local stats = {
+        slot = slot_name,
         binds = 0,
         writes = 0,
         readbacks = 0,
@@ -45,12 +53,34 @@ function M.new(options)
         alignments = 0,
         generation_rejections = 0,
         refusals_over_50m = 0,
+        active_index = nil,
         active_generation = nil,
     }
 
+    local function watermark_key(index, generation)
+        return tostring(index) .. ':' .. tostring(generation)
+    end
+
+    local function is_revoked(index, generation)
+        local bucket = revoked_by_index[index]
+        return bucket ~= nil and bucket[generation] == true
+    end
+
+    local function mark_revoked(index, generation)
+        if not hex32(generation) then return end
+        local bucket = revoked_by_index[index]
+        if not bucket then
+            bucket = {}
+            revoked_by_index[index] = bucket
+        end
+        bucket[generation] = true
+    end
+
     local function emit(kind, detail)
         if type(options.on_event) == 'function' then
-            pcall(options.on_event, kind, detail or {})
+            local payload = detail or {}
+            payload.slot = payload.slot or slot_name
+            pcall(options.on_event, kind, payload)
         end
     end
 
@@ -91,7 +121,7 @@ function M.new(options)
         local elapsed = now - pending_align.written_at
         local rec = {
             kind = 'alignment_readback',
-            slot = 'cockpit',
+            slot = slot_name,
             serial = binding.serial,
             epoch = binding.epoch,
             index = binding.index,
@@ -119,34 +149,37 @@ function M.new(options)
         end
         -- Close the alignment session so the next velocity sample opens a fresh controller on this aligned pose.
         stop_track()
-        emit('reacquire_aligned_confirmed', {error = err, elapsed = elapsed, sequence = rec.source_sequence})
+        emit('reacquire_aligned_confirmed', {
+            index = rec.index, error = err, elapsed = elapsed, sequence = rec.source_sequence,
+        })
         return true
     end
 
-    local function retire(reason, now)
+    local function retire(reason)
+        local idx = binding and binding.index or active_index
         local uncertain = controller and controller:outcome_uncertain() == true
         stop_track()
         if uncertain then
             closed = true
-            emit('closed_uncertain', {reason = reason})
+            emit('closed_uncertain', {index = idx, reason = reason})
             return
         end
         if reason == 'stale' or reason == 'arrival_gap' then
             stats.stale_cutoffs = stats.stale_cutoffs + 1
-            reacquire_align_allowed = true
-            emit('stale_5s', {reason = reason})
+            if idx then reacquire_by_index[idx] = true end
+            emit('stale_5s', {index = idx, reason = reason})
         elseif reason == 'correction_out_of_bounds' then
             stats.refusals_over_50m = stats.refusals_over_50m + 1
-            emit('refused_over_50m', {reason = reason})
+            emit('refused_over_50m', {index = idx, reason = reason})
         else
-            reacquire_align_allowed = true
-            emit('track_stopped', {reason = reason})
+            if idx then reacquire_by_index[idx] = true end
+            emit('track_stopped', {index = idx, reason = reason})
         end
     end
 
     local function bind_controller(observed, serial, generation)
         binding = {
-            slot = 'cockpit', serial = serial, epoch = observed.epoch, index = observed.index,
+            slot = slot_name, serial = serial, epoch = observed.epoch, index = observed.index,
             actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
             generation = generation,
         }
@@ -193,8 +226,9 @@ function M.new(options)
         for k, v in pairs(stats) do out[k] = v end
         out.active = controller ~= nil
         out.closed = closed
+        out.active_index = active_index
         out.active_generation = active_generation
-        out.reacquire_align_allowed = reacquire_align_allowed
+        out.reacquire_align_allowed = active_index ~= nil and (reacquire_by_index[active_index] == true) or false
         return out
     end
 
@@ -202,32 +236,38 @@ function M.new(options)
         if closed then return end
         if not binding then return end
         if observed == nil or not same_view(observed, serial) then
+            local prev_index = binding.index
             if controller or pending_align then
                 stop_track()
             end
             if observed == nil or not same_hull(observed, binding) then
                 stats.withdrawals = stats.withdrawals + 1
-                reacquire_align_allowed = true
-                emit('withdrawn', {index = binding.index})
+                reacquire_by_index[prev_index] = true
+                if active_index == prev_index then
+                    active_index = nil
+                    active_generation = nil
+                    stats.active_index = nil
+                    stats.active_generation = nil
+                end
+                emit('withdrawn', {index = prev_index})
             end
             binding = nil
         end
     end
 
     function ctrl:end_track(observed, serial, generation)
-        if closed then return end
+        if closed or not observed then return end
         if target_index ~= nil and observed.index ~= target_index then return end
-        if hex32(generation) then
-            revoked_generations[generation] = true
-        end
-        if active_generation == generation or (binding and same_view(observed, serial) and binding.generation == generation) then
+        mark_revoked(observed.index, generation)
+        local matches_active = (active_index == observed.index and active_generation == generation)
+        local matches_binding = (binding and same_view(observed, serial) and binding.generation == generation)
+        if matches_active or matches_binding then
             stop_track()
-            if active_generation == generation then
+            if matches_active then
                 active_generation = nil
                 stats.active_generation = nil
-                last = nil
             end
-            reacquire_align_allowed = true
+            reacquire_by_index[observed.index] = true
             emit('generation_revoked', {index = observed.index, generation = generation})
         end
     end
@@ -241,7 +281,7 @@ function M.new(options)
         local step = dist3(dest, actual)
         if step > MAX_STEP then
             stats.refusals_over_50m = stats.refusals_over_50m + 1
-            emit('refused_over_50m', {dist = step, max_step = MAX_STEP})
+            emit('refused_over_50m', {index = binding and binding.index, dist = step, max_step = MAX_STEP})
             return false, 'correction_out_of_bounds', step
         end
         return true, 'within_bounds', step
@@ -251,9 +291,10 @@ function M.new(options)
         if closed then return end
         if paused() then
             if controller or pending_align then
+                local idx = binding and binding.index or active_index
                 stop_track()
-                reacquire_align_allowed = true
-                emit('paused_stop', {})
+                if idx then reacquire_by_index[idx] = true end
+                emit('paused_stop', {index = idx})
             end
             return
         end
@@ -269,7 +310,7 @@ function M.new(options)
         end
         if controller then
             local ok, reason = controller:tick()
-            if not ok then retire(reason or controller:state(), now) end
+            if not ok then retire(reason or controller:state()) end
         end
     end
 
@@ -277,7 +318,11 @@ function M.new(options)
         if closed or not observed or observed.index == own_index then return false, 'ineligible' end
         if target_index ~= nil and observed.index ~= target_index then return false, 'other_target' end
         if paused() then
-            if controller or pending_align then stop_track(); reacquire_align_allowed = true end
+            if controller or pending_align then
+                local idx = binding and binding.index or active_index
+                stop_track()
+                if idx then reacquire_by_index[idx] = true end
+            end
             return false, 'paused'
         end
         local now = options.clock()
@@ -289,33 +334,51 @@ function M.new(options)
             stats.generation_rejections = stats.generation_rejections + 1
             return false, 'invalid_generation'
         end
-        if revoked_generations[sample.generation] then
+        local ship_index = observed.index
+        if is_revoked(ship_index, sample.generation) then
             stats.generation_rejections = stats.generation_rejections + 1
-            emit('rejected_revoked_generation', {generation = sample.generation, sequence = sample.sequence})
+            emit('rejected_revoked_generation', {
+                index = ship_index, generation = sample.generation, sequence = sample.sequence,
+            })
             return false, 'revoked_generation'
         end
 
-        -- Strict generation check: never mix poses across two active grants without prior END/retirement.
-        if active_generation ~= nil and sample.generation ~= active_generation then
+        -- Switch ship cleanly if this slot previously held a different ship that was withdrawn.
+        if active_index ~= nil and active_index ~= ship_index then
             if controller or pending_align then
+                stop_track()
+                reacquire_by_index[active_index] = true
+            end
+            binding = nil
+            active_index = nil
+            active_generation = nil
+            stats.active_index = nil
+            stats.active_generation = nil
+        end
+
+        -- Strict generation check: never mix poses across two active grants without prior END/retirement.
+        if active_index == ship_index and active_generation ~= nil and sample.generation ~= active_generation then
+            if controller then
                 stats.generation_rejections = stats.generation_rejections + 1
-                emit('generation_mismatch', {expected = active_generation, actual = sample.generation})
+                emit('generation_mismatch', {
+                    index = ship_index, expected = active_generation, actual = sample.generation,
+                })
                 return false, 'generation_mismatch'
             end
-            -- A replacement after retirement must never revive the previous grant.
-            revoked_generations[active_generation] = true
             active_generation = sample.generation
             stats.active_generation = active_generation
-            last = nil
-            reacquire_align_allowed = true
+            reacquire_by_index[ship_index] = true
         elseif active_generation == nil then
+            active_index = ship_index
             active_generation = sample.generation
+            stats.active_index = active_index
             stats.active_generation = active_generation
         end
 
         if pending_align then return true, 'alignment_pending' end
 
-        -- Enforce per-generation monotone ordering and 5-second cutoff settling.
+        local wkey = watermark_key(ship_index, sample.generation)
+        local last = last_by_index_gen[wkey]
         if last then
             if not (sample.sequence > last.sequence and sample.capture_time > last.capture_time
                     and sample.source_time >= last.source_time and arrival >= last.arrival) then
@@ -332,7 +395,7 @@ function M.new(options)
         -- If currently unbound (initial start OR reacquisition after loss/withdrawal/revocation):
         if not controller then
             local probe_binding = {
-                slot = 'cockpit', serial = serial, epoch = observed.epoch, index = observed.index,
+                slot = slot_name, serial = serial, epoch = observed.epoch, index = ship_index,
                 actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
                 generation = sample.generation,
             }
@@ -348,14 +411,17 @@ function M.new(options)
             end
             local gap = dist3({x = sample.x, y = sample.y, z = sample.z}, actual)
             if gap > MAX_STEP then
-                if not reacquire_align_allowed or not allow_reacquire_align or type(temp_session.align) ~= 'function' then
+                local align_allowed = reacquire_by_index[ship_index] == true
+                if not align_allowed or not allow_reacquire_align or type(temp_session.align) ~= 'function' then
                     temp_session:close()
                     stats.refusals_over_50m = stats.refusals_over_50m + 1
-                    emit('refused_over_50m', {dist = gap, max_step = MAX_STEP, stage = 'reacquire'})
+                    emit('refused_over_50m', {
+                        index = ship_index, dist = gap, max_step = MAX_STEP, stage = 'reacquire',
+                    })
                     return false, 'correction_out_of_bounds'
                 end
-                -- Strictly ONE authorized post-loss/post-withdrawal alignment per episode!
-                reacquire_align_allowed = false
+                -- Strictly ONE authorized post-loss/post-withdrawal alignment per episode for this ship.
+                reacquire_by_index[ship_index] = false
                 binding = probe_binding
                 session = temp_session
                 local ok_align = session:align({x = sample.x, y = sample.y, z = sample.z})
@@ -374,17 +440,19 @@ function M.new(options)
                     source_time = sample.source_time,
                     capture_time = sample.capture_time,
                 }
-                last = {
+                last_by_index_gen[wkey] = {
                     sequence = sample.sequence, capture_time = sample.capture_time,
                     source_time = sample.source_time, arrival = arrival,
                 }
-                emit('reacquire_aligned', {dist = gap, sequence = sample.sequence, mode = observed.mode or 'cockpit'})
+                emit('reacquire_aligned', {
+                    index = ship_index, dist = gap, sequence = sample.sequence,
+                    mode = observed.mode or slot_name,
+                })
                 return true, 'aligned'
             end
             temp_session:close()
             if not sample.real_velocity then
-                -- Record baseline watermark without inventing velocity.
-                last = {
+                last_by_index_gen[wkey] = {
                     sequence = sample.sequence, capture_time = sample.capture_time,
                     source_time = sample.source_time, arrival = arrival,
                 }
@@ -393,11 +461,14 @@ function M.new(options)
             if not bind_controller(observed, serial, sample.generation) then
                 return false, 'native_binding'
             end
-            if reacquire_align_allowed then
+            if reacquire_by_index[ship_index] == true then
                 stats.reacquisitions = stats.reacquisitions + 1
-                emit('reacquired_direct', {dist = gap, sequence = sample.sequence, mode = observed.mode or 'cockpit'})
+                emit('reacquired_direct', {
+                    index = ship_index, dist = gap, sequence = sample.sequence,
+                    mode = observed.mode or slot_name,
+                })
             end
-            reacquire_align_allowed = false
+            reacquire_by_index[ship_index] = false
         end
 
         if not sample.real_velocity then
@@ -406,10 +477,10 @@ function M.new(options)
 
         local ok, reason = controller:push(binding, sample, arrival)
         if not ok then
-            retire(reason or controller:state(), now)
+            retire(reason or controller:state())
             return false, reason
         end
-        last = {
+        last_by_index_gen[wkey] = {
             sequence = sample.sequence, capture_time = sample.capture_time,
             source_time = sample.source_time, arrival = arrival,
         }
@@ -419,30 +490,140 @@ function M.new(options)
     return ctrl
 end
 
-function M.new_x4(config, pinned, cockpit_reader, guard, clock)
-    local ffi = require('ffi')
-    ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
-    local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
-    })
-    local origin, last_logged_at, logged_count = nil, 0, 0
+function M.new_multi(options)
+    assert(type(options) == 'table' and options.enabled == true, 'explicit multi-pilot cockpit playback opt-in required')
+    local slot_names = options.slot_names or COCKPIT_SLOTS
+    assert(type(slot_names) == 'table' and #slot_names >= 1 and #slot_names <= #COCKPIT_SLOTS, 'invalid cockpit slots')
+    assert(type(options.adapters) == 'table', 'per-slot native adapters required')
+
+    local revoked_by_index = {}
+    local reacquire_by_index = {}
+    local last_by_index_gen = {}
+    local controllers = {}
+    for _, name in ipairs(slot_names) do
+        local adapter = assert(options.adapters[name], 'missing adapter for slot ' .. tostring(name))
+        controllers[name] = M.new({
+            enabled = true,
+            slot = name,
+            own_index = options.own_index,
+            allow_reacquire_align = options.allow_reacquire_align,
+            playback = options.playback,
+            adapter = adapter,
+            clock = options.clock,
+            game = options.game,
+            paused = options.paused,
+            record = options.record,
+            fault = function(reason, uncertain, stage)
+                if options.fault then options.fault(reason, uncertain, stage, name) end
+            end,
+            on_event = options.on_event,
+            revoked_by_index = revoked_by_index,
+            reacquire_by_index = reacquire_by_index,
+            last_by_index_gen = last_by_index_gen,
+        })
+    end
+
+    local api = {slot_names = slot_names}
+
+    local function resolve_slot(slot_name)
+        return controllers[slot_name or 'cockpit']
+    end
+
+    function api:view(observed, serial, slot_name)
+        local c = resolve_slot(slot_name)
+        if c then c:view(observed, serial) end
+    end
+
+    function api:sample(observed, serial, sample, arrival, slot_name)
+        local c = resolve_slot(slot_name)
+        if not c then return false, 'unknown_slot' end
+        return c:sample(observed, serial, sample, arrival)
+    end
+
+    function api:end_track(observed, serial, generation, slot_name)
+        local c = resolve_slot(slot_name)
+        if c then c:end_track(observed, serial, generation) end
+    end
+
+    function api:tick(update_started_at)
+        for _, name in ipairs(slot_names) do
+            controllers[name]:tick(update_started_at)
+        end
+    end
+
+    function api:probe_step_guard(offset_m, slot_or_index)
+        if type(slot_or_index) == 'number' then
+            for _, name in ipairs(slot_names) do
+                local st = controllers[name]:stats()
+                if st.active_index == slot_or_index and st.active then
+                    return controllers[name]:probe_step_guard(offset_m)
+                end
+            end
+            return false, 'not_bound'
+        end
+        local c = resolve_slot(slot_or_index)
+        if not c then return false, 'unknown_slot' end
+        return c:probe_step_guard(offset_m)
+    end
+
+    function api:slot_stats(slot_name)
+        local c = resolve_slot(slot_name)
+        return c and c:stats() or nil
+    end
+
+    function api:stats()
+        local total = {
+            binds = 0, writes = 0, readbacks = 0, stale_cutoffs = 0, withdrawals = 0,
+            reacquisitions = 0, alignments = 0, generation_rejections = 0, refusals_over_50m = 0,
+            active_slots = 0, slots = {},
+        }
+        for _, name in ipairs(slot_names) do
+            local st = controllers[name]:stats()
+            total.slots[name] = st
+            for _, field in ipairs({'binds', 'writes', 'readbacks', 'stale_cutoffs', 'withdrawals',
+                                    'reacquisitions', 'alignments', 'generation_rejections', 'refusals_over_50m'}) do
+                total[field] = total[field] + (st[field] or 0)
+            end
+            if st.active then total.active_slots = total.active_slots + 1 end
+        end
+        return total
+    end
+
+    function api:close()
+        for _, name in ipairs(slot_names) do
+            controllers[name]:close()
+        end
+    end
+
+    return api
+end
+
+local function make_x4_record(readers_by_slot, clock)
+    local origins, last_logged_at, logged_count = {}, {}, {}
     local function decimal(value) return ('%.17g'):format(value) end
     local function coordinates(pose)
         return table.concat({decimal(pose.x), decimal(pose.y), decimal(pose.z)}, ',')
     end
-    local function record(event)
-        if not origin then origin = event.actual end
+    return function(event)
+        local key = event.index
+        if not origins[key] then origins[key] = event.actual end
         if event.kind == 'readback' or event.kind == 'alignment_readback' then
             local now = clock()
             local actual, target = event.actual, event.target
+            local origin = origins[key]
             local dx, dy, dz = actual.x - origin.x, actual.y - origin.y, actual.z - origin.z
             local displacement = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if event.kind == 'alignment_readback' or logged_count < 3 or (now - last_logged_at >= 0.5) then
-                last_logged_at = now
-                logged_count = logged_count + 1
-                local mode = cockpit_reader.mode and cockpit_reader:mode() or 'cockpit'
+            local count = logged_count[key] or 0
+            local prev_at = last_logged_at[key] or 0
+            if event.kind == 'alignment_readback' or count < 3 or (now - prev_at >= 0.5) then
+                last_logged_at[key] = now
+                logged_count[key] = count + 1
+                local slot_name = event.slot or 'cockpit'
+                local reader = readers_by_slot[slot_name]
+                local mode = reader and reader.mode and reader:mode() or slot_name
                 DebugError(table.concat({
-                    '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'kind=' .. event.kind, 'mode=' .. tostring(mode),
+                    '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'slot=' .. tostring(slot_name),
+                    'kind=' .. event.kind, 'mode=' .. tostring(mode),
                     'ship=' .. event.code, 'epoch=' .. event.epoch, 'index=' .. event.index,
                     'sector=' .. event.sector_macro, 'generation=' .. event.generation,
                     'sequence=' .. event.source_sequence, 'source_time=' .. decimal(event.source_time),
@@ -454,8 +635,17 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
         end
         return true
     end
+end
+
+function M.new_x4(config, pinned, cockpit_reader, guard, clock)
+    local ffi = require('ffi')
+    ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
+        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
+    })
     return M.new({
         enabled = true,
+        slot = 'cockpit',
         own_index = config.index,
         target_index = config.playback_index,
         allow_reacquire_align = true,
@@ -463,8 +653,42 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
         clock = clock,
         game = function() return ffi.C.GetCurrentGameTime() end,
         paused = function() return ffi.C.IsGamePaused() end,
-        record = record,
+        record = make_x4_record({cockpit = cockpit_reader}, clock),
         fault = function(reason) DebugError('[X4LAN] AUTH_COMPANY_COCKPIT_STOP ' .. tostring(reason)) end,
+        on_event = function(kind, detail)
+            local parts = {'[X4LAN] AUTH_COMPANY_COCKPIT_EVENT', 'kind=' .. tostring(kind)}
+            for k, v in pairs(detail or {}) do parts[#parts + 1] = tostring(k) .. '=' .. tostring(v) end
+            DebugError(table.concat(parts, ' '))
+        end,
+    })
+end
+
+function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
+    local ffi = require('ffi')
+    ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local slot_names, adapters = {}, {}
+    for _, name in ipairs(COCKPIT_SLOTS) do
+        local reader = cockpit_readers[name]
+        if reader ~= nil then
+            slot_names[#slot_names + 1] = name
+            adapters[name] = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
+                enabled = true, pinned = pinned, own_index = config.index, observer = reader, guard = guard,
+            })
+        end
+    end
+    return M.new_multi({
+        enabled = true,
+        slot_names = slot_names,
+        own_index = config.index,
+        allow_reacquire_align = true,
+        adapters = adapters,
+        clock = clock,
+        game = function() return ffi.C.GetCurrentGameTime() end,
+        paused = function() return ffi.C.IsGamePaused() end,
+        record = make_x4_record(cockpit_readers, clock),
+        fault = function(reason, _, _, slot_name)
+            DebugError('[X4LAN] AUTH_COMPANY_COCKPIT_STOP slot=' .. tostring(slot_name or 'cockpit') .. ' ' .. tostring(reason))
+        end,
         on_event = function(kind, detail)
             local parts = {'[X4LAN] AUTH_COMPANY_COCKPIT_EVENT', 'kind=' .. tostring(kind)}
             for k, v in pairs(detail or {}) do parts[#parts + 1] = tostring(k) .. '=' .. tostring(v) end

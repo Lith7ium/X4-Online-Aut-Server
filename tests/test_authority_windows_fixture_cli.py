@@ -177,6 +177,26 @@ class FixtureCliTests(unittest.TestCase):
                 cli.run(args)
         reader.assert_not_called()
 
+    def test_cockpit_playback_cli_options_require_company_motion_and_are_exclusive(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64]
+        parsed = cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback'])
+        self.assertTrue(parsed.company_cockpit_playback)
+        self.assertIsNone(parsed.company_cockpit_playback_index)
+        with patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as run_session, \
+                patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace'):
+            cli.run(parsed)
+        self.assertTrue(run_session.call_args.kwargs['company_motion'])
+        self.assertTrue(run_session.call_args.kwargs['cockpit_radar_playback'])
+        self.assertNotIn('company_hull_playback_index', run_session.call_args.kwargs)
+        with self.assertRaises(ValueError):
+            cli.run(cli.parser().parse_args([*base, '--company-cockpit-playback']))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback',
+                                     '--company-cockpit-playback-index', '1074'])
+
 
 if __name__ == '__main__':
     unittest.main()

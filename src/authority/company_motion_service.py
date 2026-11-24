@@ -16,6 +16,7 @@ _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
 # A stopped game sampler cannot refresh a new viewer from an indefinitely old pose.
 MAX_SAMPLE_AGE = 3.0
+MAX_COCKPIT_PLAYBACK_PILOTS = 3
 
 
 @dataclass
@@ -42,6 +43,7 @@ class _Grant:
     sector_revision: int = 0
     visible_until: float = 0
     trial_route: tuple | None = None
+    cockpit_routes: dict = field(default_factory=dict)
     traffic: _MotionTraffic = field(default_factory=_MotionTraffic)
 
     def traffic_summary(self):
@@ -61,7 +63,9 @@ class _Peer:
     delivered: dict = field(default_factory=dict)
     hidden: set = field(default_factory=set)
     trial_index: int | None = None
+    cockpit_playback_limit: int = 0
     resuming: tuple | None = None
+    resuming_routes: dict = field(default_factory=dict)
     awaiting_ack: tuple | None = None
     source_ack: bytes = b''
     view_id: int = 0
@@ -155,6 +159,7 @@ class CompanyMotionService:
                 and (grant.last_sample is not None or not transport_lost)):
             if not transport_lost:
                 grant.trial_route = None
+                grant.cockpit_routes.clear()
             self._retire_sample(grant.index, grant.generation, transport_lost=transport_lost)
             grant.last_sample = None
 
@@ -170,13 +175,16 @@ class CompanyMotionService:
                 route = viewer_grant.trial_route
                 if route is not None and route[0] == index and (generation is None or route[1] == generation):
                     viewer_grant.trial_route = None
+                croute = viewer_grant.cockpit_routes.get(index)
+                if croute is not None and (generation is None or croute[1] == generation):
+                    del viewer_grant.cockpit_routes[index]
         for viewer in tuple(self._peers.values()):
             viewer.latest.pop(index, None)
             delivered = viewer.delivered.get(index)
             if delivered is None or (generation is not None and delivered[0] != generation):
                 continue
             kind = 'motion_end'
-            if transport_lost and viewer.trial_index == index:
+            if transport_lost and (viewer.trial_index == index or viewer.cockpit_playback_limit > 0):
                 if index in viewer.hidden:
                     continue
                 # Retain only the delivered route until the view or authority
@@ -236,6 +244,7 @@ class CompanyMotionService:
             grant.last_sample = None
             grant.visible_until = 0
             grant.trial_route = None
+            grant.cockpit_routes.clear()
         for peer in tuple(self._peers.values()):
             if peer.grant is None:
                 continue
@@ -243,6 +252,7 @@ class CompanyMotionService:
             peer.delivered.clear()
             peer.hidden.clear()
             peer.resuming = None
+            peer.resuming_routes.clear()
             peer.views.clear()
             peer.awaiting_ack, peer.source_ack, peer.view_id = None, b'', 0
             self._notice(peer, {'kind': 'motion_state', 'window': self.window, 'running': running})
@@ -336,18 +346,28 @@ class CompanyMotionService:
     def _bind(self, peer, message):
         ticket = message.get('ticket')
         fields = set(message)
-        if (fields - {'kind', 'ticket', 'loss_notifications', 'trial_index', 'resume_route'}
-                or message.get('kind') != 'bind_motion'
+        allowed = {'kind', 'ticket', 'loss_notifications', 'trial_index', 'resume_route',
+                   'cockpit_playback_limit', 'resume_routes'}
+        if (fields - allowed or message.get('kind') != 'bind_motion'
                 or type(ticket) is not str or not _TICKET.fullmatch(ticket)):
             raise ValueError('invalid movement binding')
         grant = self._tickets.get(ticket)
         if grant is None or any(other.grant is grant for other in self._peers.values()):
             raise ValueError('movement ticket unavailable')
         trial_index = message.get('trial_index')
-        if fields & {'loss_notifications', 'trial_index'} and (
+        cockpit_limit = message.get('cockpit_playback_limit')
+        if (fields & {'trial_index', 'resume_route'}) and (fields & {'cockpit_playback_limit', 'resume_routes'}):
+            raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
+        if 'loss_notifications' in fields and trial_index is None and cockpit_limit is None:
+            raise ValueError('loss_notifications requires trial_index or cockpit_playback_limit')
+        if fields & {'trial_index'} and (
                 message.get('loss_notifications') is not True or type(trial_index) is not int
                 or not 1 <= trial_index <= 200000 or trial_index == grant.index):
             raise ValueError('invalid movement trial index')
+        if fields & {'cockpit_playback_limit'} and (
+                message.get('loss_notifications') is not True or type(cockpit_limit) is not int
+                or not 1 <= cockpit_limit <= MAX_COCKPIT_PLAYBACK_PILOTS):
+            raise ValueError('invalid cockpit playback limit')
 
         route = None
         if 'resume_route' in fields:
@@ -359,9 +379,29 @@ class CompanyMotionService:
                 raise ValueError('invalid movement resume route')
             if self.running and tuple(claim) == grant.trial_route:
                 route = grant.trial_route
+        resumed_routes = {}
+        if 'resume_routes' in fields:
+            claims = message['resume_routes']
+            if cockpit_limit is None or type(claims) is not list or len(claims) > cockpit_limit:
+                raise ValueError('invalid cockpit resume routes')
+            seen_indices = set()
+            for claim in claims:
+                if (type(claim) is not list or len(claim) != 3
+                        or type(claim[0]) is not int or not 1 <= claim[0] <= 200000
+                        or claim[0] == grant.index or claim[0] in seen_indices
+                        or type(claim[1]) is not str or not _HEX32.fullmatch(claim[1])
+                        or type(claim[2]) is not str or not SECTOR.fullmatch(claim[2])):
+                    raise ValueError('invalid cockpit resume route entry')
+                seen_indices.add(claim[0])
+                triple = tuple(claim)
+                if self.running and grant.cockpit_routes.get(claim[0]) == triple:
+                    resumed_routes[claim[0]] = triple
         grant.trial_route = peer.resuming = route
+        grant.cockpit_routes = dict(resumed_routes)
+        peer.resuming_routes = dict(resumed_routes)
         peer.grant = grant
         peer.trial_index = trial_index
+        peer.cockpit_playback_limit = cockpit_limit or 0
         grant.traffic.channel_bindings += 1
         bound = {'kind': 'motion_bound', 'window': self.window, 'running': self.running,
                  'last_sequence': grant.last_sequence}
@@ -369,6 +409,10 @@ class CompanyMotionService:
             bound.update(loss_notifications=True, trial_index=trial_index)
         if 'resume_route' in fields:
             bound['resume_valid'] = route is not None
+        if cockpit_limit is not None:
+            bound.update(loss_notifications=True, cockpit_playback_limit=cockpit_limit)
+        if 'resume_routes' in fields:
+            bound['resume_valid_indices'] = sorted(resumed_routes)
         self._notice(peer, bound)
 
     def _view(self, peer, message):
@@ -401,9 +445,21 @@ class CompanyMotionService:
                     # Authority may have ended after bind, before the view was restored.
                     self._notice(peer, {'kind': 'motion_end', 'window': self.window, 'view_id': peer.view_id,
                                         'index': index, 'generation': generation})
+        if peer.resuming_routes:
+            resuming_routes, peer.resuming_routes = peer.resuming_routes, {}
+            for index, (r_index, generation, sector) in resuming_routes.items():
+                if view_matches(views, r_index, sector):
+                    if peer.grant.cockpit_routes.get(r_index) == (r_index, generation, sector):
+                        peer.delivered[r_index] = generation, sector
+                    else:
+                        self._notice(peer, {'kind': 'motion_end', 'window': self.window, 'view_id': peer.view_id,
+                                            'index': r_index, 'generation': generation})
         route = peer.grant.trial_route
         if route is not None and not view_matches(views, route[0], route[2]):
             peer.grant.trial_route = None
+        for r_index, croute in tuple(peer.grant.cockpit_routes.items()):
+            if not view_matches(views, croute[0], croute[2]):
+                del peer.grant.cockpit_routes[r_index]
         peer.latest = {index: sample for index, sample in peer.latest.items()
                        if view_matches(views, index, sample['sector_macro'])}
         now = time.monotonic()
@@ -489,6 +545,8 @@ class CompanyMotionService:
                     peer.hidden.discard(index)
                     if index == peer.trial_index:
                         peer.grant.trial_route = (index, sample['generation'], sample['sector_macro'])
+                    if peer.cockpit_playback_limit > 0:
+                        peer.grant.cockpit_routes[index] = (index, sample['generation'], sample['sector_macro'])
                     peer.awaiting_ack = (peer.view_id, index, sample['generation'], sample['sequence'])
                     peer.outgoing = encode_frame({'kind': 'motion_snapshot', 'window': self.window,
                                              'view_id': peer.view_id, 'sample': sample})

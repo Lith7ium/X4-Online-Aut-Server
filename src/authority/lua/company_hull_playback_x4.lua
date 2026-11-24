@@ -2,6 +2,7 @@
 local M = {}
 local LIMIT = 10000000
 local MAX_STEP = 50
+local COCKPIT_SLOTS = {cockpit = true, cockpit2 = true, cockpit3 = true}
 
 local function finite(value)
     return type(value) == 'number' and value == value and math.abs(value) < math.huge
@@ -36,7 +37,7 @@ function M.new(options, engine)
     local adapter = {}
 
     function adapter:bind(binding)
-        if type(binding) ~= 'table' or binding.slot ~= 'cockpit' or binding.epoch ~= epoch
+        if type(binding) ~= 'table' or not COCKPIT_SLOTS[binding.slot] or binding.epoch ~= epoch
                 or not index_in(binding.index, count) or binding.index == own_index
                 or type(binding.actor) ~= 'string' or type(binding.sector_macro) ~= 'string'
                 or type(binding.code) ~= 'string' then return nil end

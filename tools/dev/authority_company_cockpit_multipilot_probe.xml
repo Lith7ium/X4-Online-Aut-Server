@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable opt-in native Windows X4 9.00 setup, removal/restore, and independent readback cue for multi-pilot Company cockpit playback.
+     Never auto-runs: every cue requires an explicit correlated UI-triggered event in disposable profile 45850. -->
+<mdscript name="X4AuthorityCompanyCockpitMultiProbe" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Setup" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyCockpitMultiProbe'" control="'Setup'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$epoch" exact="@$r.$epoch"/>
+    <do_if value="$r.$request_id? and $epoch? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @player.controlled.isclass.ship and @player.sector.isclass.sector">
+     <set_value name="$own" exact="player.controlled"/>
+     <set_value name="$sec" exact="player.sector"/>
+     <!-- Pilot B (index 2): unoccupied Company Pulsar Vanguard ahead-left -->
+     <create_ship name="$pilot_b" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$sec" seed="7401">
+      <owner exact="faction.player" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <position object="$own" x="-160m" y="0m" z="820m"/>
+      <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+     </create_ship>
+     <!-- Pilot C (index 3): unoccupied Company Pulsar Vanguard ahead-right-high -->
+     <create_ship name="$pilot_c" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$sec" seed="7402">
+      <owner exact="faction.player" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <position object="$own" x="220m" y="40m" z="900m"/>
+      <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+     </create_ship>
+     <!-- Pilot D (index 4): 3rd unoccupied Company Pulsar Vanguard ahead-low -->
+     <create_ship name="$pilot_d" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$sec" seed="7403">
+      <owner exact="faction.player" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <position object="$own" x="0m" y="-120m" z="750m"/>
+      <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+     </create_ship>
+     <!-- Map Ship E (index 5): unoccupied Company Pulsar in another sector for independent map interest -->
+     <find_sector name="$all_sectors" space="player.galaxy" multiple="true"/>
+     <set_value name="$other_sec" exact="null"/>
+     <do_for_each name="$cand_sec" in="$all_sectors">
+      <do_if value="$cand_sec != $sec and @$cand_sec.isclass.sector">
+       <set_value name="$other_sec" exact="$cand_sec"/>
+       <break/>
+      </do_if>
+     </do_for_each>
+     <set_value name="$map_ship" exact="null"/>
+     <do_if value="@$other_sec.isclass.sector">
+      <create_ship name="$map_ship" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$other_sec" seed="7404">
+       <owner exact="faction.player" overridenpc="true"/>
+       <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+       <position x="10km" y="0m" z="10km"/>
+      </create_ship>
+     </do_if>
+     <do_if value="@$pilot_b.isoperational and @$pilot_c.isoperational and @$pilot_d.isoperational and @$map_ship.isoperational and not $pilot_b.pilot.exists and not $pilot_c.pilot.exists and not $pilot_d.pilot.exists">
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships.{1}" exact="$own"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$own}" exact="1"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships.{2}" exact="$pilot_b"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$pilot_b}" exact="2"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships.{3}" exact="$pilot_c"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$pilot_c}" exact="3"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships.{4}" exact="$pilot_d"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$pilot_d}" exact="4"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$ships.{5}" exact="$map_ship"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$map_ship}" exact="5"/>
+      <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="5"/>
+      <set_value name="md.X4AuthorityCompanyCockpitMultiProbe.State.$home_sector" exact="$sec"/>
+      <set_value name="md.X4AuthorityCompanyCockpitMultiProbe.State.$other_sector" exact="$other_sec"/>
+      <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Ready|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$own,$own.idcode,$sec.macro.id,$pilot_b,$pilot_b.idcode,$pilot_c,$pilot_c.idcode,$pilot_d,$pilot_d.idcode,$map_ship,$map_ship.idcode,$other_sec.macro.id]"/>
+     </do_if>
+     <do_else>
+      <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Refused|spawn_check'.[$r.$request_id]"/>
+     </do_else>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Refused|setup_args'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="State">
+   <conditions>
+    <event_cue_signalled cue="md.Setup.Start"/>
+   </conditions>
+  </cue>
+
+  <cue name="RemoveShip" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyCockpitMultiProbe'" control="'RemoveShip'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$index}"/>
+    <set_value name="$other" exact="@md.X4AuthorityCompanyCockpitMultiProbe.State.$other_sector"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and @$ship.isoperational and @$other.isclass.sector">
+     <warp object="$ship" sector="$other">
+      <position x="25km" y="0m" z="25km"/>
+     </warp>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Removed|%s|%s'.[$r.$request_id,$r.$index,$ship.sector.macro.id]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Refused|remove_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="RestoreShip" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyCockpitMultiProbe'" control="'RestoreShip'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$index}"/>
+    <set_value name="$home" exact="@md.X4AuthorityCompanyCockpitMultiProbe.State.$home_sector"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and @$ship.isoperational and @$home.isclass.sector">
+     <warp object="$ship" sector="$home">
+      <position x="($r.$x)m" y="($r.$y)m" z="($r.$z)m"/>
+     </warp>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Restored|%s|%s'.[$r.$request_id,$r.$index,$ship.sector.macro.id]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Refused|restore_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="Readback" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyCockpitMultiProbe'" control="'Readback'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$index}"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $r.$index and $ship.owner == faction.player and not $ship.pilot.exists and not $ship.assignedpilot.exists">
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Readback|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$index,$ship,$ship.sector,$ship.parent,$ship.sector.macro.id,$ship.idcode]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitMultiProbe.Result'" param="'%s|Refused|readback_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

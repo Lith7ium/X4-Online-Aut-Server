@@ -62,6 +62,8 @@ def parser():
     result.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
     playback = result.add_mutually_exclusive_group()
+    playback.add_argument('--company-cockpit-playback', action='store_true',
+                          help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-cockpit-playback-index', type=int,
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
@@ -90,8 +92,8 @@ def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
     from authority.company_motion_source import validate_playback_index
-    cockpit_radar_playback = args.company_cockpit_playback_index is not None
-    playback_index = args.company_cockpit_playback_index if cockpit_radar_playback else args.company_hull_playback_index
+    cockpit_radar_playback = getattr(args, 'company_cockpit_playback', False) or args.company_cockpit_playback_index is not None
+    playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
     validate_playback_index(playback_index, company_motion=args.company_motion,
                             own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]

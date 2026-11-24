@@ -6,6 +6,7 @@ M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
 -- the local prediction deadline and tolerates different transit delays.
 local CAPTURE_CONTINUITY_LIMIT = 60
 local BINDING_FIELDS = {'slot', 'serial', 'epoch', 'sector_macro', 'index', 'actor', 'code', 'generation'}
+local COCKPIT_SLOTS = {cockpit = true, cockpit2 = true, cockpit3 = true}
 
 local function number(value, minimum, maximum)
     return type(value) == 'number' and value >= minimum and value <= maximum
@@ -58,7 +59,7 @@ function M.new(options)
 
     local claimed = cfg.binding
     if not (integer(cfg.own_index, 200000) and type(claimed) == 'table' and getmetatable(claimed) == nil
-            and claimed.slot == 'cockpit' and integer(claimed.serial, 9007199254740991)
+            and COCKPIT_SLOTS[claimed.slot] and integer(claimed.serial, 9007199254740991)
             and integer(claimed.index, 200000) and claimed.index ~= cfg.own_index
             and token(claimed.epoch) and token(claimed.generation)
             and pattern(claimed.sector_macro, 128, '^[A-Za-z0-9_]+$')
