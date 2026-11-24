@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 
+from .company_ship_protocol import company_ship_reply
 from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 from .trusted_load_messages import decode_load_claim, encode_bound_offer
 from .trusted_marker_load_session import TrustedMarkerLoadSession
@@ -27,13 +28,14 @@ def offer_request():
     return _REQUEST
 
 
-def _request(raw):
+def _control_message(raw):
     try:
         value = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
     except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
         raise ValueError('invalid request') from error
-    if type(value) is not dict or set(value) != {'version', 'kind'} or type(value['version']) is not int or value['version'] != 1 or value['kind'] != 'offer_request':
-        raise ValueError('invalid request')
+    if type(value) is not dict or type(value.get('version')) is not int or value['version'] != 1:
+        raise ValueError('invalid control message')
+    return value
 
 
 class ExperimentalTCPControl:
@@ -202,52 +204,53 @@ class ExperimentalTCPControl:
 
     def _frame(self, conn, peer, raw):
         try:
-            if peer['stage'] in ('attached', 'offered'):
-                # A re-offer withdraws the old generation before issuing a new one.
-                try: _request(raw)
-                except ValueError:
-                    if peer['stage'] != 'offered': raise
-                else:
-                    if peer['handle'] is None:
-                        if not self._current_socket(conn, peer):
-                            self._drop(conn)
-                            return
-                        peer['handle'] = self._session.attach(conn)
-                    if not self._offer_ready():
-                        peer['out'] += b'{"version":1,"kind":"not_ready"}\n'
-                        return
-                    started = time.monotonic()
-                    bound = self._session.begin(conn)
-                    self._account_host_blocked(started, time.monotonic())
+            message = _control_message(raw)
+            if peer['stage'] in ('attached', 'offered') and message.get('kind') == 'offer_request':
+                if set(message) != {'version', 'kind'}:
+                    raise ValueError('invalid offer request')
+                if peer['handle'] is None:
                     if not self._current_socket(conn, peer):
                         self._drop(conn)
                         return
-                    peer['out'] += encode_bound_offer(bound) + b'\n'
-                    peer['stage'] = 'offered'
-                    peer['attempt_id'] = bound.offer.attempt_id
-                    peer['keepalive_sequence'] = 0
+                    peer['handle'] = self._session.attach(conn)
+                if not self._offer_ready():
+                    peer['out'] += b'{"version":1,"kind":"not_ready"}\n'
                     return
+                started = time.monotonic()
+                bound = self._session.begin(conn)
+                self._account_host_blocked(started, time.monotonic())
+                if not self._current_socket(conn, peer):
+                    self._drop(conn)
+                    return
+                peer['out'] += encode_bound_offer(bound) + b'\n'
+                peer['stage'] = 'offered'
+                peer['attempt_id'] = bound.offer.attempt_id
+                peer['keepalive_sequence'] = 0
+                return
             if peer['stage'] != 'offered':
                 raise ValueError('unexpected control message')
-            if self._keepalive_enabled:
-                try:
-                    value = json.loads(raw.decode('utf-8'), object_pairs_hook=_pairs,
-                                       parse_constant=_reject_constant)
-                except (UnicodeError, json.JSONDecodeError, RecursionError):
-                    value = None
-                if type(value) is dict and value.get('kind') == 'keepalive':
-                    if (set(value) != {'version', 'kind', 'attempt_id', 'sequence'} or
-                            type(value['version']) is not int or value['version'] != 1 or
-                            value['attempt_id'] != peer['attempt_id'] or
-                            type(value['sequence']) is not int or
-                            value['sequence'] != peer['keepalive_sequence'] + 1 or
-                            value['sequence'] > 2**53 - 1):
-                        raise ValueError('invalid keepalive')
-                    peer['keepalive_sequence'] = value['sequence']
-                    reply = {'version': 1, 'kind': 'alive', 'attempt_id': peer['attempt_id'],
-                             'sequence': value['sequence']}
-                    peer['out'] += json.dumps(reply, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
-                    return
+            if message.get('kind') in ('list_company_ships', 'choose_company_ship'):
+                started = time.monotonic()
+                response = company_ship_reply(message, self._session, conn)
+                self._account_host_blocked(started, time.monotonic())
+                if self._current_socket(conn, peer):
+                    peer['out'] += response
+                else:
+                    self._drop(conn)
+                return
+            if self._keepalive_enabled and message.get('kind') == 'keepalive':
+                if (set(message) != {'version', 'kind', 'attempt_id', 'sequence'} or
+                        type(message['version']) is not int or message['version'] != 1 or
+                        message['attempt_id'] != peer['attempt_id'] or
+                        type(message['sequence']) is not int or
+                        message['sequence'] != peer['keepalive_sequence'] + 1 or
+                        message['sequence'] > 2**53 - 1):
+                    raise ValueError('invalid keepalive')
+                peer['keepalive_sequence'] = message['sequence']
+                reply = {'version': 1, 'kind': 'alive', 'attempt_id': peer['attempt_id'],
+                         'sequence': message['sequence']}
+                peer['out'] += json.dumps(reply, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
+                return
             claim = decode_load_claim(raw)
             started = time.monotonic()
             def pre_accept():
