@@ -12,7 +12,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
-from authority_company_pose_trial import CompanyPoseTrial, GamePoseChannel, PARKED_SAVE, verify_reloaded
+from authority_company_pose_trial import (
+    BASE_FIGHTER_SAVE, PARKED_SAVE, CompanyPoseTrial, GamePoseChannel, verify_reloaded,
+)
 
 EPOCH = 'a' * 32
 GENERATION = 'b' * 32
@@ -58,8 +60,8 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.channel, self.peer = self.open_channel()
         self.sample = source_sample()
 
-    def open_channel(self):
-        channel = GamePoseChannel(EPOCH)
+    def open_channel(self, source_sha256=PARKED_SAVE):
+        channel = GamePoseChannel(EPOCH, source_sha256=source_sha256)
         self.addCleanup(channel.close)
         peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addCleanup(peer.close)
@@ -136,6 +138,27 @@ class CompanyPoseTrialTests(unittest.TestCase):
         trial.poll(service)
         self.assertIsNone(report['max_source_speed_mps'])
         self.command('inspect')
+
+    def test_base_game_fighters_use_only_the_identifiers_from_their_own_world(self):
+        channel, peer = self.open_channel(BASE_FIGHTER_SAVE)
+        sector = 'cluster_06_sector002_macro'
+        for index, code in ((1073, 'HVC-420'), (1074, 'KHI-630')):
+            sample = dict(self.sample, index=index, sector_macro=sector)
+            channel.begin('inspect', sample)
+            command = self.command('inspect', peer=peer, channel=channel, index=index, sector=sector)
+            self.reply(command, peer=peer, code=code)
+            self.assertEqual(channel.wait()['code'], code)
+        with self.assertRaisesRegex(ValueError, 'foreign pose identity'):
+            channel.begin('inspect', self.sample)
+        with self.assertRaisesRegex(ValueError, 'pinned source'):
+            GamePoseChannel(EPOCH, source_sha256='0' * 64)
+        self.assert_no_command(peer)
+
+        channel.begin('inspect', sample)
+        command = self.command('inspect', peer=peer, channel=channel, index=1074, sector=sector)
+        self.reply(command, peer=peer, code='HVC-420')
+        with self.assertRaisesRegex(ValueError, 'pose readers disagree'):
+            channel.wait()
 
     def assert_no_command(self, peer=None):
         self.assertFalse(select.select([peer or self.peer], [], [], 0)[0])
@@ -225,7 +248,8 @@ class CompanyPoseTrialTests(unittest.TestCase):
                  'final_checkpoint_sha256': checkpoint.sha256, 'company_pose_trial': report}
 
         cold, peer = self.open_channel()
-        for key, wrong in (('saved_checkpoint_id', 'other-pose'), ('saved_checkpoint_sha256', 'd' * 64)):
+        for key, wrong in (('saved_checkpoint_id', 'other-pose'), ('saved_checkpoint_sha256', 'd' * 64),
+                           ('source_sha256', BASE_FIGHTER_SAVE)):
             with self.subTest(key=key):
                 wrong_proof = dict(prior, company_pose_trial=dict(report, **{key: wrong}))
                 with self.assertRaises(ValueError):

@@ -9,9 +9,12 @@ import time
 from authority_tcp_job_client_live import socket_owner
 
 PARKED_SAVE = '68dc79959984dbd3499b7b6360bde5b0e24d5cbc845b49d24a908d043a7612ca'
-# Stable identities of the two ships in the pinned disposable world.
-SHIP_CODES = {1970: 'WOO-831', 7354: 'WRN-302'}
-_SHIP_INDICES = {str(index): index for index in SHIP_CODES}
+BASE_FIGHTER_SAVE = '1ceb756b1fc6080c6a6752e51d146cfc17c72762b8af9f9c1aed7bce20fa4958'
+# Registry indices have meaning only inside their own disposable world.
+_SHIPS_BY_SOURCE_SAVE = {
+    PARKED_SAVE: {1970: 'WOO-831', 7354: 'WRN-302'},
+    BASE_FIGHTER_SAVE: {1073: 'HVC-420', 1074: 'KHI-630'},
+}
 _MOVEMENT_PROOF_VERSION = 1
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
@@ -46,9 +49,13 @@ def _observed_move(before, target, md, ui):
 class GamePoseChannel:
     """A single in-flight command to the owned game. Never replay an uncertain write."""
 
-    def __init__(self, epoch):
+    def __init__(self, epoch, *, source_sha256=PARKED_SAVE):
         if not _TOKEN.fullmatch(epoch):
             raise ValueError('invalid source registry epoch')
+        if type(source_sha256) is not str or source_sha256 not in _SHIPS_BY_SOURCE_SAVE:
+            raise ValueError('company pose trial requires a pinned source world')
+        self.source_sha256 = source_sha256
+        self.ship_codes = _SHIPS_BY_SOURCE_SAVE[source_sha256].copy()
         self.epoch, self.lease = epoch, secrets.token_hex(16)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -83,7 +90,7 @@ class GamePoseChannel:
             raise RuntimeError('owned X4 pose socket changed')
         sequence = secrets.token_hex(16)
         sector = sample['sector_macro']
-        if (sample['epoch'] != self.epoch or sample['index'] not in SHIP_CODES or
+        if (sample['epoch'] != self.epoch or sample['index'] not in self.ship_codes or
                 not _TOKEN.fullmatch(sample['generation']) or not _SECTOR.fullmatch(sector)):
             raise ValueError('foreign pose identity or frame')
         identity = (sequence, self.epoch, str(sample['index']), sample['generation'])
@@ -120,7 +127,7 @@ class GamePoseChannel:
                     or (actor != '0' and actual_actor != actor)):
                 raise ValueError('X4 pose receipt changed actor or sector')
             md, ui = _xyz(fields[8:11]), _xyz(fields[11:14])
-            if action != 'apply' and (fields[14] != SHIP_CODES[int(identity[2])]
+            if action != 'apply' and (fields[14] != self.ship_codes[int(identity[2])]
                                       or math.dist(md, ui) > READBACK_METRES):
                 raise ValueError(f'independent pose readers disagree for ship {identity[2]}: {md}, {ui}')
             self.pending = None
@@ -275,17 +282,18 @@ def _check_movement(move, item):
         raise ValueError('invalid checkpoint movement proof')
 
 
-def _paused_poses(report):
+def _paused_poses(report, ship_codes):
     version = report.get('movement_proof_version')
     if type(version) is not int or version != _MOVEMENT_PROOF_VERSION:
         raise ValueError('unsupported checkpoint movement proof')
 
     poses = {}
+    indices = {str(index): index for index in ship_codes}
     for key, item in report['paused'].items():
-        index = _SHIP_INDICES.get(key)
+        index = indices.get(key)
         if index is None:
             raise ValueError('unexpected saved company ship')
-        if (type(item) is not dict or item.get('code') != SHIP_CODES[index]
+        if (type(item) is not dict or item.get('code') != ship_codes[index]
                 or type(item.get('sequence')) is not int or item['sequence'] <= 0
                 or type(item.get('sector_macro')) is not str or not _SECTOR.fullmatch(item['sector_macro'])):
             raise ValueError('invalid saved company ship pose')
@@ -317,12 +325,12 @@ def verify_reloaded(channel, prior, checkpoint):
             or prior.get('final_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_sha256') != checkpoint.sha256
-            or report.get('source_sha256') != PARKED_SAVE or type(report.get('paused')) is not dict
+            or report.get('source_sha256') != channel.source_sha256 or type(report.get('paused')) is not dict
             or not report['paused'] or type(report.get('writes_verified')) is not int
             or report['writes_verified'] <= 0):
         raise ValueError('cold pose check requires a confirmed checkpoint with a verified movement write')
     verified = {}
-    for index, (item, target, movement) in _paused_poses(report).items():
+    for index, (item, target, movement) in _paused_poses(report, channel.ship_codes).items():
         sample = dict(index=index, epoch=channel.epoch, generation=secrets.token_hex(16),
                       sector_macro=item['sector_macro'], **dict(zip('xyz', target)))
         channel.begin('inspect', sample)

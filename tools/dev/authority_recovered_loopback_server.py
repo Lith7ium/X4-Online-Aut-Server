@@ -1072,11 +1072,11 @@ def run(args):
                     result['company_trade_trial'].update(cockpit_purchase=cockpit_purchase,
                                                          request_id=trade_nonce, capture_sha256=capture_sha256)
             if pose_live or pose_cold:
-                if pose_live and checkpoint.sha256 != company_pose.PARKED_SAVE:
-                    raise ValueError('company pose trial requires the pinned parked source')
+                pose_source_sha256 = checkpoint.sha256
                 if pose_cold:
                     prior_pose = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20))
-                pose_channel = company_pose.GamePoseChannel(saved_evidence['epoch'])
+                    pose_source_sha256 = prior_pose.get('company_pose_trial', {}).get('source_sha256')
+                pose_channel = company_pose.GamePoseChannel(saved_evidence['epoch'], source_sha256=pose_source_sha256)
                 if pose_live:
                     result['company_pose_trial'] = {'source_sha256': checkpoint.sha256}
                     pose_trial = company_pose.CompanyPoseTrial(pose_channel, result['company_pose_trial'])

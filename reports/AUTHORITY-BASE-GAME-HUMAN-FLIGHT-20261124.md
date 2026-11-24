@@ -35,6 +35,17 @@ and saved the world. Both checkpoint pointers identified
 `checkpoint-22475d6fe7534ccb8d198d931e9855da` at shutdown. The provider
 exited with no owned process remaining.
 
+## Saved state
+
+The confirmed starting checkpoint and final checkpoint were 70 simulation
+seconds apart. Both still resolved the two registry indices to the expected
+fighters, undocked in the same zone. Each retained its starting position;
+their separation was 3,000 m in both saves. Neither ship's saved component
+tree contained an explicit current hull or shield value. Those endpoints
+cannot tell us whether a temporary shield hit occurred during the session.
+The provider used the motion relay for this run. The optional native server
+position writer had previously been exercised on a different two-ship world.
+
 ## Findings for the next automated tests
 
 * The cockpit observer in this build reads the selected HUD target and checks

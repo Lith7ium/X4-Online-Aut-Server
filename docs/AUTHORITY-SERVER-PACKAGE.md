@@ -108,6 +108,17 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
+## Server position trial for the two base-game fighters
+
+With the disposable Black Hole Sun V starting seed, `--base-game-only
+--company-pose-trial` enables native server position readback for HVC-420
+(1073) and KHI-630 (1074). The checkpoint digest selects the permitted ships.
+The older parked test seed retains its own ship indices. The trial inspects
+the live ship and sector before relocating it, then reads the position back.
+A later `--verify-company-pose` checks the saved position on a cold start.
+The ordinary `--company-motion` option alone runs the relay. The human
+flight used that relay. [Two-pilot flight report](../reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
+
 ## Starting ships for human flight tests
 
 Prepare fresh human playtest worlds with **two fully equipped Xperimental
