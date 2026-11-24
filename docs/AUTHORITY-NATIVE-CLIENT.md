@@ -1,4 +1,40 @@
-# Independent Linux native client (internal)
+# Linux authority client
+
+Run from the project checkout as your Steam desktop user. The server operator
+provides an owner-only `connection.json` containing the endpoint, pinned TLS
+fingerprint and access credentials. The server must offer format-3 checkpoints
+and enable company ship selection. Install the same official DLC as the server
+and use the pinned native X4 9.00 install, Steam, Python 3, bubblewrap and a C
+compiler. The launcher builds the project's UDP module locally.
+
+```sh
+tools/run_authority_client.sh \
+  --connection-file /private/connection.json \
+  --game '/path/to/X4 Foundations' \
+  --out .local/player-01
+```
+
+The terminal lists the free company ships and keeps the offer alive while you
+choose. Use `--company-ship-index N` to request a known free index. The server
+reserves the selection while the client downloads and verifies the checkpoint.
+X4 loads a read-only copy in a disposable windowed profile. The client checks
+the live checkpoint marker and full registry. Its admission claim follows a
+correlated cockpit-control receipt for the chosen ship and a paused-state
+receipt. Close the game window or press Ctrl-C in the client terminal to leave.
+The default one-hour run limit includes joining.
+
+The client uses the current authenticated X11 or Xwayland `DISPLAY` by default.
+Use `--display :N` when launching on another authenticated local display.
+The launcher isolates the game's file lock and profile from any local server
+process. It keeps the chosen display socket available inside the sandbox and
+only stops processes belonging to its own launch. Outputs are retained in the
+new private run directory. Use a fresh run name to reconnect.
+
+This path supplies native client admission and server-directed pause/resume.
+A remote Internet run and a native same-host server-and-client session through
+this entry point still need verification.
+
+## Internal native client diagnostic
 
 `tools/dev/authority_client_native.py` keeps one authenticated pinned-TLS offer
 connection alive through verified download, private-profile X4 load, marker/pause

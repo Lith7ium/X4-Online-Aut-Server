@@ -19,13 +19,20 @@ import stat
 import sys
 import threading
 import time
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
+from authority.company_ship_selection import reserve_company_ship
+from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_client_session import client_connection
+from authority.client_seat_overlay import REFUSALS
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
 import authority_load_live as load
+import authority_linux_company_seat as company_seat
+from authority_linux_player_namespace import command_with_private_lock
+from authority_sector_pair_transfer_live import compile_net
 import authority_trusted_marked_live as marked
 from authority_two_x4_resume_live import Participant
 from authority_tcp_job_client_live import socket_owner
@@ -150,7 +157,7 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     result['phase'] = 'active'
 
 
-def validate_environment(args):
+def validate_environment(args, *, player_mode=False):
     if args.internal_native_client is not True or sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('explicit_unprivileged_linux_opt_in_required')
     if threading.current_thread() is not threading.main_thread():
@@ -159,22 +166,29 @@ def validate_environment(args):
     game = args.game.resolve(strict=True)
     if live.sha(game/'X4') != live.EXE_SHA or not (game/'extensions').is_dir() or not shutil.which('bwrap'):
         raise ValueError('pinned_game_or_namespace_unavailable')
-    if live.x4_executables():
+    if not player_mode and live.x4_executables():
         raise ValueError('another_x4_running')
     if not re.fullmatch(r':[0-9]+(?:\.[0-9]+)?', args.display):
         raise ValueError('local_x11_display_required')
-    auth = Path(os.environ.get('XAUTHORITY', ''))
+    default_auth = str(Path.home() / '.Xauthority') if player_mode else ''
+    auth = Path(os.environ.get('XAUTHORITY', default_auth))
     if not auth.is_file() or not os.access(auth, os.R_OK):
         raise ValueError('readable_xauthority_required')
     if (not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600 or
-            not math.isfinite(args.active_seconds) or not 0 < args.active_seconds < args.timeout or
+            (not player_mode and
+             (not math.isfinite(args.active_seconds) or not 0 < args.active_seconds < args.timeout)) or
             not 0 <= args.seed <= 0xffffffff):
         raise ValueError('invalid_native_budget')
-    library = args.native_library.resolve(strict=True)
-    if (args.native_library.is_symlink() or not stat.S_ISREG(library.stat().st_mode) or
-            not re.fullmatch(r'[0-9a-f]{64}', args.native_library_sha256) or
-            live.sha(library) != args.native_library_sha256):
-        raise ValueError('verified_native_library_required')
+    library = None
+    if player_mode:
+        if not shutil.which('cc'):
+            raise ValueError('native_udp_compiler_unavailable')
+    else:
+        library = args.native_library.resolve(strict=True)
+        if (args.native_library.is_symlink() or not stat.S_ISREG(library.stat().st_mode) or
+                not re.fullmatch(r'[0-9a-f]{64}', args.native_library_sha256) or
+                live.sha(library) != args.native_library_sha256):
+            raise ValueError('verified_native_library_required')
     if args.archived_identity_fixture is not None and (
             args.archived_identity_fixture_sha256 is None or args.expected_content_sha256 is None):
         raise ValueError('archived_fixture_and_content_pins_required')
@@ -196,43 +210,82 @@ def error_code(error):
         'owned_loaded_state_unconfirmed', 'no_server_control_confirmed', 'insufficient_active_budget',
         'participant_socket_not_owned', 'tls_startup_timeout', 'tls_startup_failed', 'tls_bridge_failed',
         'client_cleanup_failed', 'tls_cleanup_failed', 'private_content_configuration_differs',
-        'archived_fixture_differs', 'native_library_copy_changed'}
+        'archived_fixture_differs', 'native_library_copy_changed', 'local_x11_socket_unavailable',
+        'native UDP module compilation failed', 'owned seat log incomplete', 'owned seat log changed'}
     code = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
+    if isinstance(error, CompanyShipChoiceDenied) and code in (
+            'no_free_company_ships', 'company_ship_unavailable', 'stale_ship_choice',
+            'company_ship_catalog_unavailable'):
+        return code
+    if code and code.startswith('client seat refused: ') and code.removeprefix('client seat refused: ').encode() in REFUSALS:
+        return code
     if code == 'staged save changed during load attempt':
         return 'staged_save_changed_during_load'
     return code if code in known_codes else 'operation_failed'
 
 
-def run(args, *, playback_driver=None):
+def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None):
+    player_mode = player_settings is not None
+    if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
+        raise ValueError('player seat selection and admission callback required')
     playback_scripts = native_playback.read_config(
         getattr(args, 'internal_saved_playback_config', None), args, playback_driver)
-    out, game, auth, library, user, home, steam = validate_environment(args)
-    shared_key = bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64))
-    file_token = stage_cli._read_secret_file(args.file_token_file, 32)
+    if player_mode:
+        out, game, auth, library, user, home, steam = validate_environment(args, player_mode=True)
+        connection_settings = player_settings
+        if playback_scripts is not None or args.archived_identity_fixture is not None:
+            raise ValueError('fixture diagnostics unavailable in player mode')
+        library_digest = None
+    else:
+        out, game, auth, library, user, home, steam = validate_environment(args)
+        connection_settings = dict(server_host=args.host, server_port=args.port,
+            server_fingerprint=args.fingerprint, file_slot=args.slot,
+            shared_key=bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64)),
+            file_token=stage_cli._read_secret_file(args.file_token_file, 32))
+        library_digest = args.native_library_sha256
     deadline = time.monotonic()+args.timeout
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     result = dict(success=False, scope='one private Linux native client; cooperative load/control; no gameplay proof',
         exact_loaded_file_proven=False, admission_state='not_attempted', server_pause_confirmations=0,
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
-    participant = watch = target = ticket = playback = None
+    participant = watch = target = ticket = playback = seat_watch = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
     result['phase'] = 'connect'
+    stop_requested = False
+
+    def cancel(number, frame):
+        nonlocal stop_requested
+        if player_mode and number == signal.SIGINT and result['phase'] == 'active':
+            stop_requested = True
+        else:
+            snapshot.cancel_capture(number, frame)
+
     try:
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            handlers[number] = signal.signal(number, snapshot.cancel_capture)
-        download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
-        with client_connection(server_host=args.host, server_port=args.port,
-                server_fingerprint=args.fingerprint, shared_key=shared_key, file_token=file_token,
-                file_slot=args.slot, deadline=deadline, keepalive_interval=args.keepalive_interval) as owner:
+            handlers[number] = signal.signal(number, cancel)
+        if player_mode:
+            result['phase'] = 'build_native_module'
+            library = out / 'x4lan_net.so'
+            compile_net(shutil.which('cc'), library)
+            library_digest = live.sha(library)
+            result['phase'] = 'connect'
+        else:
+            download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
+        with client_connection(**connection_settings, deadline=deadline,
+                keepalive_interval=args.keepalive_interval) as owner:
             try:
                 case, profile, binds, lock = snapshot.prepare_case(out, game, home)
                 if any((profile/'save').iterdir()):
                     raise ValueError('private_save_directory_not_empty')
                 result['phase'] = 'offer'
                 bound = owner.request_offer()
+                index = None
+                if player_mode:
+                    result['phase'] = 'choose_company_ship'
+                    index = reserve_company_ship(owner, select_ship)
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
                 stage_offered_save(owner, out/'download', target)
@@ -294,15 +347,20 @@ def run(args, *, playback_driver=None):
                     *participant.protected(case)]
                 paths += [lab/'ui'/name for name in
                     ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
+                if player_mode:
+                    seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index, owner.poll)
+                    paths.extend(seat_paths)
                 if fixture_path is not None:
                     paths.append(fixture_path)
                 if playback is not None:
                     paths.extend(playback.paths)
                 protected = {path: live.sha(path) for path in paths}
-                if live.sha(lab/'native/x4lan_net.so') != args.native_library_sha256:
+                if live.sha(lab/'native/x4lan_net.so') != library_digest:
                     raise ValueError('native_library_copy_changed')
                 command = load.readonly_save_command(case, game, binds, lock,
                     args.display, auth, user.pw_name, args.seed, target)
+                if player_mode:
+                    command = command_with_private_lock(command, display=args.display, authorization=auth)
                 position = command.index('--die-with-parent')
                 for path in protected:
                     command[position:position] = ['--ro-bind', str(path), str(path)]
@@ -310,30 +368,41 @@ def run(args, *, playback_driver=None):
                 # The existing signal-fenced helper registers ownership before gate release.
                 result['phase'] = 'launch'
                 load.spawn_owned_gated(command, out/'process.log', processes)
-                watch = download.ReceiptWatch(profile/'engine-output.log', ticket)
+                watch = seat_watch if seat_watch is not None else download.ReceiptWatch(
+                    profile/'engine-output.log', ticket)
 
                 def verify_loaded():
                     guard(full=True)
                     if process_identity is None or live.sha(target) != ticket['sha256']:
                         raise ValueError('owned_loaded_state_unconfirmed')
 
+                registry_check = None
+                if seat_watch is not None:
+                    registry_check = seat_watch.verify
+                elif playback is not None:
+                    registry_check = playback.verify_registry
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
-                    guard, verify_loaded, result,
-                    registry_check=playback.verify_registry if playback is not None else None,
+                    guard, verify_loaded, result, registry_check=registry_check,
                     motion_consumer=(playback_driver.accept_motion
                         if type(playback_driver) is native_playback.LiveSourceInput else None))
-                active_until = time.monotonic()+args.active_seconds
-                if active_until >= deadline:
-                    raise TimeoutError('insufficient_active_budget')
-                while time.monotonic() < active_until:
-                    guard()
-                    owner.poll(.1)
-                    if playback is not None:
-                        if playback.thread is None and participant.confirmations['resume']:
-                            guard(full=True)
-                            playback.start(participant.process, protected)
-                        playback.poll()
-                guard(full=True)
+                if player_mode:
+                    result['controlled_company_ship_index'] = index
+                    on_admitted(index)
+                    result['session_end'] = poll_player(owner, processes[0][0], guard,
+                                                        deadline, lambda: stop_requested)
+                else:
+                    active_until = time.monotonic()+args.active_seconds
+                    if active_until >= deadline:
+                        raise TimeoutError('insufficient_active_budget')
+                    while time.monotonic() < active_until:
+                        guard()
+                        owner.poll(.1)
+                        if playback is not None:
+                            if playback.thread is None and participant.confirmations['resume']:
+                                guard(full=True)
+                                playback.start(participant.process, protected)
+                            playback.poll()
+                    guard(full=True)
                 if playback is not None:
                     result['playback'] = playback.finish()
                 result.update(server_pause_confirmations=participant.confirmations['pause'],
@@ -355,6 +424,8 @@ def run(args, *, playback_driver=None):
                     try:
                         watch.poll()
                         verify_receipts(watch.path, ticket, bound.marker)
+                        if seat_watch is not None:
+                            seat_watch.verify()
                         if playback is not None:
                             playback.verify_registry()
                             playback.records()
@@ -426,6 +497,28 @@ def run(args, *, playback_driver=None):
                 signal.signal(number, handler)
 
     return result
+
+
+def poll_player(owner, process, guard, deadline, stop_requested):
+    """Serve the admitted client until its own game exits or the user leaves."""
+    while time.monotonic() < deadline:
+        if stop_requested():
+            return 'user_left'
+        if process.poll() == 0:
+            return 'game_closed'
+        try:
+            guard()
+        except RuntimeError as error:
+            if error.args not in (('owned_x4_disappeared',), ('owned_launcher_stopped',)):
+                raise
+            try:
+                if process.wait(timeout=.25) == 0:
+                    return 'game_closed'
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        owner.poll(.1)
+    return 'session_limit'
 
 
 def main(argv=None, *, playback_driver=None):

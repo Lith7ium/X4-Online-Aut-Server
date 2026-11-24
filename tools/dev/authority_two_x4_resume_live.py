@@ -69,9 +69,9 @@ class Participant(LocalParticipantControl):
         fd = os.open(self.config, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != self.config_identity or st.st_size > 65536:
+            if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != self.config_identity or st.st_size > 512 * 1024:
                 raise ValueError('owned client config changed before redaction')
-            text = os.read(fd, 65537).decode('ascii')
+            text = os.read(fd, 512 * 1024 + 1).decode('ascii')
             original = f'authority_participant_lease="{self.lease}"'
             if text.count(original) != 1: raise ValueError('client lease missing or repeated')
             data = text.replace(original, 'authority_participant_lease="redacted"').encode('ascii')
