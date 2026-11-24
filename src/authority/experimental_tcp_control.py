@@ -322,8 +322,8 @@ class ExperimentalTCPControl:
         except BaseException as error:
             self._fatal(error)
 
-    def poll(self, timeout=0):
-        """Handle bounded socket I/O and idle expiry once on the owner thread."""
+    def poll(self, timeout=0, *, wake_reader=None):
+        """Pump control once. An external reader may wake select and retains its data."""
         self._owner()
         self._reader_free(motion=True)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 <= timeout <= 1:
@@ -337,13 +337,14 @@ class ExperimentalTCPControl:
         if not self._peers:
             return
         sockets = tuple(self._peers)
+        readers = sockets if wake_reader is None else (*sockets, wake_reader)
         if self._latest_motion is not None:
             for peer in self._peers.values(): self._latest_motion.prepare(peer)
         deadlines = [p['deadline'] for p in self._peers.values() if p['deadline'] is not None]
         deadlines += [p['motion_active']['deadline'] for p in self._peers.values() if p.get('motion_active')]
         wait = min(timeout, max(0, min(deadlines) - time.monotonic())) if deadlines else timeout
         try:
-            readable, writable, exceptional = select.select(sockets, [c for c in sockets if self._peers[c]['out'] or (self._peers[c].get('motion_active') and self._peers[c]['motion_active']['sent'] < len(self._peers[c]['motion_active']['data']))], sockets, wait)
+            readable, writable, exceptional = select.select(readers, [c for c in sockets if self._peers[c]['out'] or (self._peers[c].get('motion_active') and self._peers[c]['motion_active']['sent'] < len(self._peers[c]['motion_active']['data']))], sockets, wait)
         except (OSError, ValueError) as error:
             self._fatal(error)
         now = time.monotonic()

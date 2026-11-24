@@ -3,6 +3,7 @@ import json
 import gzip
 from pathlib import Path
 import socket
+import select
 import sys
 import tempfile
 import threading
@@ -57,6 +58,34 @@ class HostTest(unittest.TestCase):
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.bind(('127.0.0.1', 0)); self.listener.listen(1)
         self.addCleanup(self.listener.close)
+
+    def test_pose_socket_wakes_six_idle_control_peers_without_consuming_the_datagram(self):
+        remotes = []
+        for _ in range(6):
+            remote = socket.create_connection(self.listener.getsockname(), timeout=1)
+            self.addCleanup(remote.close)
+            local, _ = self.listener.accept()
+            self.host.adopt(local, defer_attach=True)
+            remotes.append(remote)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver, socket.socket(
+                socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            receiver.bind(('127.0.0.1', 0))
+            receiver.setblocking(False)
+            sender.sendto(b'pose reply', receiver.getsockname())
+            with patch('authority.experimental_tcp_control.select.select', wraps=select.select) as wait:
+                self.host.tick(.5, wake_reader=receiver)
+            readers, writers, exceptional, timeout = wait.call_args.args
+            self.assertEqual(set(readers), set(self.control._peers) | {receiver})
+            self.assertNotIn(receiver, writers)
+            self.assertNotIn(receiver, exceptional)
+            self.assertEqual(timeout, .5)
+            self.assertEqual(len(self.control._peers), 6)
+
+            # A simultaneously ready control socket is serviced in the same tick.
+            remotes[-1].shutdown(socket.SHUT_WR)
+            self.host.tick(.5, wake_reader=receiver)
+            self.assertEqual(len(self.control._peers), 5)
+            self.assertEqual(receiver.recv(32), b'pose reply')
 
     def test_tcp_claim_ack_resume_and_last_disconnect_save(self):
         self.host.tick(); self.assertEqual(self.engine.calls, ['pause'])

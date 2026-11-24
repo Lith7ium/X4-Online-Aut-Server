@@ -652,6 +652,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
     accepted = 0
     admitted = 0
     admitted_handles = set()
+    last_pose_request = None
+    next_pose_wake = 0.0
     while time.monotonic() < deadline and not should_stop():
         check()
         # Limit accepts per tick so connection attempts cannot starve X4 actions.
@@ -668,7 +670,18 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             except BaseException:
                 conn.close()
                 raise
-        host.tick(tick_interval)
+        channel = (pose_trial.channel if pose_trial is not None and motion_service is not None
+                   and motion_service.running else None)
+        pending = channel.pending if channel is not None else None
+        now = time.monotonic()
+        if pending is not None and (pending is not last_pose_request or now >= next_pose_wake):
+            # One early wake per request per control interval. Repeated HELLOs
+            # cannot spin the loop, and a new native command can wake immediately.
+            last_pose_request = pending
+            next_pose_wake = now + tick_interval
+            host.tick(tick_interval, wake_reader=channel.socket)
+        else:
+            host.tick(tick_interval)
         if motion_service is not None:
             motion_service.poll()
             if pose_trial is not None and motion_service.running:

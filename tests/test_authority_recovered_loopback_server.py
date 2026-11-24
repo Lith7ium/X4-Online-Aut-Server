@@ -483,6 +483,39 @@ class LoopTests(unittest.TestCase):
                 MODULE.serve(listener,Host(),deadline=time.monotonic()+1,check=failed)
 
 
+class PoseWakeTests(unittest.TestCase):
+    def test_hello_backlog_cannot_spin_control_or_delay_a_new_request(self):
+        now = 10.0
+        channel = SimpleNamespace(pending=None, socket=object())
+        service = SimpleNamespace(running=True, poll=lambda: None)
+        wakes = []
+
+        def tick(timeout, *, wake_reader=None):
+            nonlocal now
+            wakes.append(wake_reader)
+            if wake_reader is None:
+                now += timeout
+            # A permanently readable pose socket would otherwise return instantly.
+
+        def poll_pose(_service):
+            if len(wakes) in (1, 4):
+                channel.pending = object()
+            elif len(wakes) == 5:
+                service.running = False
+
+        control = SimpleNamespace(_peers={1: {'stage': 'admitted', 'handle': 1}})
+        host = SimpleNamespace(_control=control, tick=tick)
+        trial = SimpleNamespace(channel=channel, poll=poll_pose)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            with patch.object(MODULE.time, 'monotonic', side_effect=lambda: now):
+                MODULE.serve(listener, host, deadline=12, check=lambda: None,
+                    should_stop=lambda: len(wakes) == 6, tick_interval=.125,
+                    motion_service=service, pose_trial=trial)
+        self.assertEqual(wakes, [None, channel.socket, None, channel.socket, channel.socket, None])
+
+
 class OwnedCleanupTests(unittest.TestCase):
     def test_recovery_lock_is_retained_when_service_drain_is_unconfirmed(self):
         with tempfile.TemporaryDirectory() as folder:

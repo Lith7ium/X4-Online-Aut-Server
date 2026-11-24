@@ -69,7 +69,7 @@ class ExperimentalLocalHost:
         finally:
             self._busy = False
 
-    def tick(self, timeout=0, *, defer_world=False):
+    def tick(self, timeout=0, *, defer_world=False, wake_reader=None):
         """Pump sockets and dispatch at most one pending synchronous action."""
         if type(defer_world) is not bool:raise ValueError('invalid world dispatch option')
         self._check()
@@ -78,7 +78,7 @@ class ExperimentalLocalHost:
             motion = self._control._latest_motion
             if motion is not None and self._world.session.pending is not None:
                 motion.barrier(world=True)
-            self._control.poll(timeout)
+            self._control.poll(timeout, wake_reader=wake_reader)
             pending = self._world.session.pending
             if pending is None:
                 if motion is not None and motion.world_blocked:
