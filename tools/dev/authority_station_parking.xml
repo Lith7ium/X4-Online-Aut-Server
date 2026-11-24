@@ -64,7 +64,7 @@
    </actions>
   </cue>
 
-  <library name="Inspect" purpose="run_actions">
+  <library name="Inspect">
    <actions>
     <set_value name="$Request" exact="event.param3"/>
     <set_value name="$Nonce" exact="@$Request.$nonce"/>
@@ -114,7 +114,7 @@
    </actions>
   </library>
 
-  <library name="InspectDock" purpose="run_actions">
+  <library name="InspectDock">
    <actions>
     <set_value name="$Usable" exact="false"/>
     <do_if value="@$Candidate.isclass.station and $Candidate.isoperational and @$Candidate.sector.isclass.sector and @$Candidate.idcode">
@@ -126,7 +126,7 @@
    </actions>
   </library>
 
-  <library name="SelectFallback" purpose="run_actions">
+  <library name="SelectFallback">
    <actions>
     <set_value name="$SectorMacro" exact="@$Request.$fallback_sector"/>
     <set_value name="$Codes" exact="@$Request.$fallback_codes"/>
@@ -182,7 +182,7 @@
    </actions>
   </library>
 
-  <library name="Reply" purpose="run_actions">
+  <library name="Reply">
    <actions>
     <do_if value="typeof $Nonce == datatype.string and $Nonce">
      <set_value name="$StationRef" exact="if $Target then '%s'.[$Target] else '0'"/>
