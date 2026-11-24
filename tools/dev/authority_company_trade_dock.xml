@@ -10,6 +10,7 @@
     <set_value name="$Args" exact="event.param3"/>
     <set_value name="$Nonce" exact="@$Args.$nonce"/>
     <set_value name="$Epoch" exact="@$Args.$epoch"/>
+    <set_value name="$PrepareBerth" exact="@$Args.$prepare_berth == true"/>
     <set_value name="$Avatar" exact="player.entity"/>
     <set_value name="$AvatarStation" exact="player.station"/>
     <set_value name="$AvatarRoom" exact="player.room"/>
@@ -79,6 +80,19 @@
       <do_if value="not $Safe or $Ship.assignedaipilot != $Captain or $Ship.pilot != $Captain or $Ship.orders.count or ($Ship.defaultorder and $Ship.defaultorder.id != 'Wait') or $Ship.dock or $Ship.assigneddock or $Ship.isinternallystored or not @$Station.isoperational or not $Station.dockingallowed.{$Ship} or not @$Bay.isdockingallowed or not $Bay.istradingallowed or $Bay.container != $Station">
        <set_value name="$Status" exact="'DOCK_PREFLIGHT_FAILED'"/>
       </do_if>
+      <do_elseif value="$PrepareBerth">
+       <do_if value="not $Bay.isclass.dockingbay or $Bay.isstorage or @$Bay.assignedship.exists or $Bay.docked.count != 0">
+        <set_value name="$Status" exact="'BERTH_UNAVAILABLE'"/>
+       </do_if>
+       <do_else>
+        <!-- This fixture places the remote ship directly. The avatar stays at XPJ-169. -->
+        <set_value name="$FirstObservationAfter" exact="player.age + 0.5s"/>
+        <set_value name="$Deadline" exact="player.age + 20s"/>
+        <set_value name="$Status" exact="'DOCKING'"/>
+        <spawn_docked ship="$Ship" dock="$Bay"/>
+        <debug_text text="'[X4LAN] AUTH_TRADE_DOCK_STAGE %s|BERTH_DISPATCHED|age=%s|deadline=%s|ship=%s|station=%s|bay=%s'.[$Nonce,player.age,$Deadline,$Ship,$Station,$Bay]" chance="100"/>
+       </do_else>
+      </do_elseif>
       <do_else>
        <create_order name="$DockOrder" object="$Ship" id="'DockAt'" immediate="true">
         <param name="destination" value="$Station"/>
@@ -106,7 +120,7 @@
       <cue name="FirstObservation" checkinterval="1s">
        <conditions>
         <check_value value="@Prepare.$Status == 'DOCKING'"/>
-        <check_value value="player.age ge $Deadline or not @$Ship.isoperational or $Ship.orders.count == 0"/>
+        <check_value value="player.age ge $Deadline or not @$Ship.isoperational or ($Ship.orders.count == 0 and (not $PrepareBerth or (player.age ge $FirstObservationAfter and @$Ship.dock.dockstate == dockstate.default and $Ship.pilot == $Captain)))"/>
        </conditions>
        <actions>
         <include_actions ref="CheckDocked"/>
@@ -158,7 +172,7 @@
     <set_value name="$ParkingCode" exact="@$AvatarStation.idcode"/>
     <set_value name="$ParkingSector" exact="@$AvatarStation.sector.macro.id"/>
     <set_value name="$NonceOK" exact="$Nonce != null and $Nonce != ''"/>
-    <set_value name="$EpochOK" exact="$Epoch != null and $Epoch != '' and $Epoch == $RegistryEpoch"/>
+    <set_value name="$EpochOK" exact="$Epoch != null and $Epoch != '' and $Epoch == $RegistryEpoch and (not $PrepareBerth or ($Epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and @md.X4AuthorityShipRegistry.State.$last == 10082))"/>
     <set_value name="$ShipClassOK" exact="@$Ship.isclass.ship"/>
     <set_value name="$ShipOperational" exact="@$Ship.isoperational"/>
     <set_value name="$ShipOwnerOK" exact="@$Ship.owner == faction.player"/>
@@ -178,6 +192,9 @@
    <actions>
     <include_actions ref="CheckAvatarAndShip"/>
     <set_value name="$Docked" exact="$Safe and $Ship.dock == $Bay and not $Ship.isinternallystored and $Ship.orders.count == 0 and (not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait') and $Ship.pilot == $Captain and $Ship.assignedaipilot == $Captain and @$Captain.owner == faction.player and @$Station.isoperational and $Station.owner == faction.teladi and $Station.trueowner == faction.teladi and $Station != $AvatarStation and $Bay.container == $Station and $Bay.istradingallowed"/>
+    <do_if value="$Docked and $PrepareBerth">
+     <set_value name="$Docked" exact="$Bay.isclass.dockingbay and not $Bay.isstorage and $Bay.dockstate == dockstate.default"/>
+    </do_if>
    </actions>
   </library>
   <library name="ReportFailure" purpose="include_actions">
