@@ -654,7 +654,7 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             try:
                 if address[0] != '127.0.0.1':
                     raise ValueError('non-loopback peer')
-                host.adopt(conn)
+                host.adopt(conn, defer_attach=True)
                 accepted += 1
             except ValueError:
                 conn.close()

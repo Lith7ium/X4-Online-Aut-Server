@@ -53,15 +53,15 @@ class ExperimentalLocalHost:
             self._failed = True
             raise RuntimeError('file service stopped; fence all components')
 
-    def adopt(self, conn):
-        """Adopt an accepted loopback IPv4 connection; caller owns rejection."""
+    def adopt(self, conn, *, defer_attach=False):
+        """Adopt a loopback socket; with deferred attach, wait for its offer request."""
         self._check()
         if (type(conn) is not socket.socket or conn.family != socket.AF_INET or
                 conn.getpeername()[0] != '127.0.0.1'):
             raise ValueError('connected loopback socket required')
         self._busy = True
         try:
-            return self._control.adopt(conn)
+            return self._control.adopt(conn, defer_attach=defer_attach)
         except BaseException:
             if self._control._failed:
                 self._failed = True
