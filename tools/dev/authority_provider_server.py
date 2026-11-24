@@ -81,8 +81,21 @@ def main(argv=None):
     parser.add_argument('--registry-status', action='store_true', help='verify saved registry status')
     parser.add_argument('--require-registry-snapshot', action='store_true',
                         help='require and verify format-3 saved registry snapshots')
+    tls = parser.add_argument_group('optional TLS gateway')
+    tls.add_argument('--tls-bind', help='IPv4 address for the TLS listener')
+    tls.add_argument('--tls-port', type=int, help='TLS listener port; 0 selects an available port')
+    tls.add_argument('--tls-advertise', help='client-reachable IPv4 address or DNS name')
+    tls.add_argument('--tls-advertise-port', type=int, help='client-reachable port, if different')
+    tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
+    tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
+    tls.add_argument('--tls-shared-key-file', type=Path, help='private file containing the shared key')
     args = parser.parse_args(argv)
     server_flags = []
+    for flag in ('bind', 'port', 'advertise', 'advertise-port', 'certificate',
+                 'private-key', 'shared-key-file'):
+        value = getattr(args, 'tls_' + flag.replace('-', '_'))
+        if value is not None:
+            server_flags.extend(('--tls-' + flag, str(value)))
     if args.registry_status:
         server_flags.append('--registry-status')
     if args.require_registry_snapshot:
