@@ -50,7 +50,7 @@
                   and $bay.dockstate == dockstate.default and $bay.container == $station
                   and not $ship.isinternallystored and $ship.trueowner == faction.player
                   and $station.owner and $station.trueowner == $station.owner and $ship.sector == $station.sector
-                  and ($idle_captain or ($captainless and $bay.docked.indexof.{$ship}))
+                  and ($idle_captain or ($captainless and $bay.docked.indexof.{$ship} and $ship.tradeorders.count == 0))
                   and $ship.orders.count == 0 and (not $ship.defaultorder or $ship.defaultorder.id == 'Wait')"/>
               <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.pilot and $ship.pilot != player.entity
                   and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169'
@@ -136,30 +136,52 @@
                           <set_value name="State.$before_player_money" exact="player.money"/>
                           <set_value name="State.$before_faction_has_account" exact="faction.player.hasownaccount"/>
                           <set_value name="State.$before_faction_money" exact="if State.$before_faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
-                          <do_if value="$live">
-                            <raise_lua_event name="'X4AuthorityCompanyStockTrade.Before'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$request,$v.$epoch,$ship,$station,$bay,$ware.id,$quantity,$quote,State.$before_ship_cargo,(State.$before_player_money / 1ct)L,State.$before_faction_money,$fresh_quote_time]"/>
-                          </do_if>
-                          <signal_cue_instantly cue="Monitor"/>
-                          <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
-                          <set_value name="State.$deal" exact="@State.$order.trade"/>
-                          <set_value name="$status" exact="if @State.$deal then 'submitted' else 'order_refused'"/>
+                          <set_value name="$status" exact="'order_refused'"/>
                           <do_if value="$captainless">
-                            <!-- The stock trade computer runs the first ready trade for the docked container. -->
-                            <set_value name="$computer_ready" exact="@State.$deal.isorder and State.$order.state == orderstate.ready
-                                and $ship.orders.count == 1 and $ship.orders.{1} == State.$order
-                                and $ship.tradeorders.count == 1 and $ship.tradeorders.{1} == State.$order
-                                and State.$deal.exchangepartner.{$ship} == $station and State.$deal.seller == $station
-                                and (not @State.$deal.buyer.exists or State.$deal.buyer == $ship)
-                                and State.$deal.ware == $ware and State.$deal.amount == $quantity and State.$deal.unitprice == $price
+                            <!-- Supply the temporary trade entity before creating the order, in the same cue. -->
+                            <create_trade_computer object="$ship" result="$tradecomputer"/>
+                            <set_value name="$computer_ready" exact="@$tradecomputer.exists and @$ship.tradecomputer == $tradecomputer
+                                and $ship.orders.count == 0 and $ship.tradeorders.count == 0
                                 and $ship.dock == $bay and $bay.container == $station and $bay.docked.indexof.{$ship}
                                 and $bay.dockstate == dockstate.default and not $ship.isinternallystored
-                                and not @$ship.pilot.exists and not @$ship.assignedpilot.exists and not @$ship.aipilot.exists
-                                and not @$ship.assignedaipilot.exists and not @$ship.tradecomputer.exists
+                                and (not @$ship.pilot.exists or $ship.pilot == $tradecomputer)
+                                and (not @$ship.assignedpilot.exists or $ship.assignedpilot == $tradecomputer)
+                                and (not @$ship.aipilot.exists or $ship.aipilot == $tradecomputer)
+                                and (not @$ship.assignedaipilot.exists or $ship.assignedaipilot == $tradecomputer)
                                 and not player.controlled and not player.occupiedship"/>
-                            <do_if value="not $computer_ready">
-                              <!-- Queue creation may already have had an effect. Reuse the existing uncertain result. -->
-                              <set_value name="$status" exact="'order_refused'"/>
-                              <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|order_unverified|orders=%s|tradeorders=%s|state=%s|deal=%s'.[$request,$ship.orders.count,$ship.tradeorders.count,@State.$order.state,@State.$deal.exists]" chance="100"/>
+                            <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|%s|orders=%s|tradeorders=%s'.[$request,if $computer_ready then 'precreated' else 'precreate_unverified',$ship.orders.count,$ship.tradeorders.count]" chance="100"/>
+                            <do_if value="not $computer_ready and not @$tradecomputer.exists and not @$ship.tradecomputer.exists
+                                and $ship.orders.count == 0 and $ship.tradeorders.count == 0
+                                and State.$before_ship_cargo ge 0 and State.$before_station_cargo ge 0
+                                and State.$before_player_money ge 0Cr and State.$before_faction_has_account
+                                and $ship.cargo.{$ware}.count == State.$before_ship_cargo
+                                and $station.cargo.{$ware}.count == State.$before_station_cargo
+                                and $ship.money == State.$before_ship_money and $station.money == State.$before_station_money
+                                and player.money == State.$before_player_money and faction.player.hasownaccount
+                                and (faction.player.money / 1ct)L == State.$before_faction_money and faction.player.money == player.money">
+                              <set_value name="$status" exact="'not_tradeable'"/>
+                              <set_value name="State.$attempted" exact="false"/>
+                            </do_if>
+                          </do_if>
+                          <do_if value="not $captainless or $computer_ready">
+                            <do_if value="$live">
+                              <raise_lua_event name="'X4AuthorityCompanyStockTrade.Before'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$request,$v.$epoch,$ship,$station,$bay,$ware.id,$quantity,$quote,State.$before_ship_cargo,(State.$before_player_money / 1ct)L,State.$before_faction_money,$fresh_quote_time]"/>
+                            </do_if>
+                            <signal_cue_instantly cue="Monitor"/>
+                            <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
+                            <set_value name="State.$deal" exact="@State.$order.trade"/>
+                            <set_value name="$status" exact="if @State.$deal then 'submitted' else 'order_refused'"/>
+                            <do_if value="$captainless">
+                              <set_value name="$deal_bound" exact="@State.$deal.isorder and $ship.orders.count == 1 and $ship.orders.{1} == State.$order
+                                  and $ship.tradeorders.count == 1 and $ship.tradeorders.{1} == State.$order
+                                  and State.$deal.exchangepartner.{$ship} == $station and State.$deal.seller == $station
+                                  and (not @State.$deal.buyer.exists or State.$deal.buyer == $ship)
+                                  and State.$deal.ware == $ware and State.$deal.amount == $quantity and State.$deal.unitprice == $price"/>
+                              <do_if value="not $deal_bound">
+                                <!-- Queue creation may already have had an effect. Keep the attempt unresolved. -->
+                                <set_value name="$status" exact="'order_refused'"/>
+                                <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|order_unverified|orders=%s|tradeorders=%s|state=%s|deal=%s'.[$request,$ship.orders.count,$ship.tradeorders.count,@State.$order.state,@State.$deal.exists]" chance="100"/>
+                              </do_if>
                             </do_if>
                           </do_if>
                         </do_else>
@@ -170,11 +192,6 @@
               </do_if>
             </do_elseif>
             <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|%s|%s'.[$request,$status,$quote]"/>
-            <do_if value="$status == 'submitted' and @$computer_ready">
-              <!-- Publish submitted before the stock executor can emit the trade completion. -->
-              <create_trade_computer object="$ship" result="$tradecomputer"/>
-              <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|%s'.[$request,if @$tradecomputer.exists then 'started' else 'unconfirmed']" chance="100"/>
-            </do_if>
           </actions>
         </cue>
         <cue name="Monitor">

@@ -253,24 +253,39 @@ class NativePurchaseProviderTests(unittest.TestCase):
         for property_name in ('pilot', 'assignedpilot', 'aipilot', 'assignedaipilot', 'tradecomputer'):
             self.assertIn(f'not @$ship.{property_name}.exists', captainless)
         self.assertIn('$live and $owned_docked', captainless)
-        self.assertIn('$idle_captain or ($captainless and $bay.docked.indexof.{$ship})',
+        self.assertIn('$idle_captain or ($captainless and $bay.docked.indexof.{$ship} and $ship.tradeorders.count == 0)',
                       request.find(".//set_value[@name='$live_dock']").attrib['exact'])
 
-        order_arm = request.find(".//do_if[@value='$captainless']")
-        queued = order_arm.find("set_value[@name='$computer_ready']").attrib['exact']
-        for condition in ('orderstate.ready', '$ship.orders.count == 1', '$ship.orders.{1} == State.$order',
+        precreate = request.find(".//do_if[@value='$captainless']")
+        computer, = request.iter('create_trade_computer')
+        self.assertIs(computer, precreate.find('create_trade_computer'))
+        self.assertEqual(computer.attrib, {'object': '$ship', 'result': '$tradecomputer'})
+        ready = precreate.find("set_value[@name='$computer_ready']").attrib['exact']
+        for condition in ('@$tradecomputer.exists', '@$ship.tradecomputer == $tradecomputer',
+                          '$ship.orders.count == 0', '$ship.tradeorders.count == 0',
+                          '$bay.docked.indexof.{$ship}', 'not player.occupiedship'):
+            self.assertIn(condition, ready)
+        self.assertIsNone(precreate.find('.//create_trade_order'))
+
+        clean, = precreate.findall('do_if')
+        for before in ('before_ship_cargo', 'before_station_cargo', 'before_ship_money',
+                       'before_station_money', 'before_player_money', 'before_faction_money'):
+            self.assertIn('State.$' + before, clean.attrib['value'])
+        for condition in ('not $computer_ready', 'not @$tradecomputer.exists', 'not @$ship.tradecomputer.exists',
+                          '$ship.orders.count == 0', '$ship.tradeorders.count == 0'):
+            self.assertIn(condition, clean.attrib['value'])
+        self.assertEqual(clean.find("set_value[@name='$status']").attrib['exact'], "'not_tradeable'")
+
+        order_arm = request.find(".//do_if[@value='not $captainless or $computer_ready']")
+        booked, = request.iter('create_trade_order')
+        self.assertIs(booked, order_arm.find('create_trade_order'))
+        queued = order_arm.find(".//set_value[@name='$deal_bound']").attrib['exact']
+        for condition in ('$ship.orders.count == 1', '$ship.orders.{1} == State.$order',
                           '$ship.tradeorders.count == 1', 'State.$deal.exchangepartner.{$ship} == $station',
                           'State.$deal.ware == $ware', 'State.$deal.amount == $quantity',
-                          'State.$deal.unitprice == $price', '$bay.docked.indexof.{$ship}'):
+                          'State.$deal.unitprice == $price'):
             self.assertIn(condition, queued)
-        rejected = order_arm.find("do_if[@value='not $computer_ready']/set_value")
+        rejected = order_arm.find(".//do_if[@value='not $deal_bound']/set_value")
         self.assertEqual(rejected.attrib['exact'], "'order_refused'")
-        executor = request.find("./do_if[@value=\"$status == 'submitted' and @$computer_ready\"]")
-        computer, = request.iter('create_trade_computer')
-        self.assertIs(computer, executor.find('create_trade_computer'))
-        self.assertEqual(computer.get('object'), '$ship')
         ordered = list(request.iter())
-        booked, = request.iter('create_trade_order')
-        receipt = request.find("./raise_lua_event[@name=\"'X4AuthorityCompanyStockTrade.Result'\"]")
-        self.assertLess(ordered.index(booked), ordered.index(order_arm))
-        self.assertLess(ordered.index(receipt), ordered.index(computer))
+        self.assertLess(ordered.index(computer), ordered.index(booked))
