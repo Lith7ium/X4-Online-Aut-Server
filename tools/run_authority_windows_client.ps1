@@ -6,10 +6,18 @@ param(
     [string] $Python = 'python',
     [string] $NetworkDll,
     [ValidatePattern('^[0-9a-fA-F]{64}$')] [string] $NetworkDllSha256,
+    [ValidateRange(1, 3600)] [int] $TimeoutSeconds = 1800,
+    [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
     [switch] $ChooseCompanyShip
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ChooseCompanyShip -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
+    $ObserveSeconds = 900
+}
+if ($ObserveSeconds -ge $TimeoutSeconds) {
+    throw 'Allow time for the initial join before the observation window.'
+}
 $packageRoot = Split-Path -Parent $PSScriptRoot
 $gameDirectory = Get-Item -LiteralPath $Game
 $connection = Get-Item -LiteralPath $ConnectionFile
@@ -46,6 +54,8 @@ $runId = 'x4-authority-' + [guid]::NewGuid().ToString('N')
 $client = Join-Path $PSScriptRoot 'dev/authority_windows_fixture_client.py'
 $clientArgs = @(
     '--isolated-fixture-test',
+    '--timeout', [string]$TimeoutSeconds,
+    '--observe-seconds', [string]$ObserveSeconds,
     '--game', $gameDirectory.FullName,
     '--connection-file', $connection.FullName,
     '--view-container', (Join-Path $parent.FullName "$runId-view"),

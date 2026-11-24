@@ -56,7 +56,10 @@ and preserves them after the run.
 
 Add `-ChooseCompanyShip` when the operator confirms that the packaged client
 and server both support company ship selection. Use an interactive PowerShell
-terminal so the Python client can read the choice. Omit the flag for the
+terminal so the Python client can read the choice. This mode holds the client
+for 15 minutes after admission by default, allowing time for a second player
+to join. Use `-ObserveSeconds` and `-TimeoutSeconds` to set the test duration
+and the overall limit (up to one hour). Omit the flag for the
 ordinary fixture join. For a source-only package, add `-NetworkDll` with the
 trusted Windows UDP module path and `-NetworkDllSha256` with the hash supplied
 by its trusted builder. The [fixture guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md)
