@@ -55,7 +55,9 @@ def source_expected(choice, checkpoint, source_result):
 def install(case, nonce, choice, expected):
     if not re.fullmatch('[a-f0-9]{32}', nonce) or choice not in ('prepare', 'verify'):
         raise ValueError('invalid shuttle overlay configuration')
-    config = dict(nonce=nonce, epoch=EPOCH, mode=choice)
+    loadout = ET.parse(LOADOUT).find('./add/loadout')
+    config = dict(nonce=nonce, epoch=EPOCH, mode=choice,
+                  software=[node.attrib['ware'] for node in loadout.find('software')])
     if choice == 'verify':
         config['codes'] = [ship['code'] for ship in _checked(expected)['ships']]
     lab = Path(case) / 'extensions/x4_lan_lab'
@@ -74,20 +76,21 @@ def install(case, nonce, choice, expected):
         files[lab/'libraries/loadouts.xml'] = LOADOUT
         text = text.replace(gate, gate + '   company_shuttle_seed=true,\n')
         completion = "  assert(registry_checkpoint:accept_company_shuttle_pair(), 'registry append refused')\n"
-    hook = f''' if not activated then
+    hook = f''' if not activated and not shuttle_checked then
   if not shuttle_pair then
    shuttle_pair=X4LAN_COMPANY_SHUTTLE_PAIR.new_x4({_lua(config)},function()
     return registry_checkpoint:ready() and C.IsGamePaused() and engine.game_time() == registry_checkpoint_pause_time
    end)
   end
   if not shuttle_pair() then return end
-{completion} end
+{completion}  shuttle_checked=true
+ end
 '''
     for target, source in files.items():
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open('xb') as output:
             output.write(source.read_bytes())
-    probe.write_text(text.replace(DECLARATION, DECLARATION + 'local shuttle_pair\n').replace(
+    probe.write_text(text.replace(DECLARATION, DECLARATION + 'local shuttle_pair, shuttle_checked\n').replace(
         ACTIVATION, hook + ACTIVATION), 'ascii')
     manifest.write_text(ui.replace(marker, ''.join(f'    <file name="ui/{name}" />\n' for name in UI)
                                    + marker), 'ascii')
@@ -165,7 +168,12 @@ def verify_saved(checkpoint, pair):
             or avatars != ['player']):
         raise ValueError('saved format-3 shuttle identities or parked avatar differ')
     for index, ship in ships.items():
-        if ship['mounts'] != mounts or ship['software'] != software:
+        # Stock saves can omit factory-default software. The native inspection
+        # reads the current version of every slot, including both hull defaults.
+        recorded = ship['software']
+        defaults = {'software_flightassistmk1', 'software_targetmk1'}
+        if (ship['mounts'] != mounts or recorded is None or len(set(recorded)) != len(recorded)
+                or set(recorded) - set(software) or set(software) - set(recorded) - defaults):
             raise ValueError(f'saved shuttle equipment differs at {index}: {ship!r}')
     return {'ships': [ships[index] for index in INDICES], 'sector': SECTOR, 'parked_station': 'XPJ-169'}
 

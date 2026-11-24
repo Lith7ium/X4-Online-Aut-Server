@@ -8,7 +8,12 @@ function M.new_x4(config, guard)
     if not pcall(ffi.typeof, 'UIPosRot') then
         ffi.cdef('typedef struct {float x,y,z,yaw,pitch,roll;} UIPosRot;')
     end
+    if not pcall(ffi.typeof, 'SoftwareSlot') then
+        ffi.cdef('typedef struct {const char* max; const char* current;} SoftwareSlot;')
+    end
     ffi.cdef[[
+        uint32_t GetNumSoftwareSlots(UniverseID,const char*);
+        uint32_t GetSoftwareSlots(SoftwareSlot*,uint32_t,UniverseID,const char*);
         bool IsValidComponent(UniverseID); bool IsComponentOperational(UniverseID);
         bool IsComponentClass(UniverseID,const char*); const char* GetObjectIDCode(UniverseID);
         UniverseID GetContextByClass(UniverseID,const char*,bool); UIPosRot GetObjectPositionInSector(UniverseID);
@@ -53,6 +58,19 @@ function M.new_x4(config, guard)
         if not ref or X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(ref)) ~= id then return refuse('LOCAL_ID') end
         local owner, docked, docking, stored = GetComponentData(ref,'owner','isdocked','isdocking','isinternallystored')
         if owner ~= 'player' or docked ~= false or docking ~= false or stored ~= false then return refuse('LOCAL_SEAT') end
+        local count = tonumber(C.GetNumSoftwareSlots(id, ''))
+        if count ~= #config.software then return refuse('SOFTWARE_SLOT_COUNT_' .. tostring(count)) end
+        local slots = ffi.new('SoftwareSlot[?]', count)
+        if C.GetSoftwareSlots(slots, count, id, '') ~= count then return refuse('SOFTWARE_READ') end
+        local current_wares = {}
+        for i = 0, count - 1 do
+            local ware = slots[i].current
+            if ware == nil or ware == ffi.NULL then return refuse('SOFTWARE_EMPTY') end
+            current_wares[ffi.string(ware)] = true
+        end
+        for _, required in ipairs(config.software) do
+            if not current_wares[required] then return refuse('SOFTWARE_MISSING_' .. required) end
+        end
         local pose = C.GetObjectPositionInSector(id)
         local slot = current - 10082
         if config.codes and config.codes[slot] ~= shipcode then return refuse('COLD_IDENTITY') end
