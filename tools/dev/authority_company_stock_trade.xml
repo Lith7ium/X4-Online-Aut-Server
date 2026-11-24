@@ -17,7 +17,9 @@
             <set_value name="$request" exact="@$v.$request_id"/>
             <set_value name="$status" exact="'invalid_registry'"/>
             <set_value name="$quote" exact="0"/>
-            <do_if value="typeof $request == datatype.string and $request and @$v.$epoch and md.X4AuthorityShipRegistry.State.$epoch? and $v.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+            <set_value name="$trial" exact="if @$v.$trial then $v.$trial else 'one_unit'"/>
+            <set_value name="$quantity" exact="if $trial == 'six_unit' then 6 else 1"/>
+            <do_if value="typeof $request == datatype.string and $request and ($trial == 'one_unit' or $trial == 'six_unit') and @$v.$epoch and md.X4AuthorityShipRegistry.State.$epoch? and $v.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
               <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
               <set_value name="$station" exact="@$ship.dock.container"/>
               <set_value name="$parking" exact="player.station"/>
@@ -33,18 +35,20 @@
                   <do_if value="$offers.count == 1">
                     <set_value name="$offer" exact="$offers.{1}"/>
                     <set_value name="$price" exact="$offer.unitprice"/>
-                    <clamp_trade_amount result="$amount" trade="$offer" amount="1" buyer="$ship" seller="$station" unbundle="false"/>
+                    <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" unbundle="false"/>
                     <set_value name="$status" exact="'not_tradeable'"/>
-                    <do_if value="$price gt 0Cr and $amount == 1 and $offer.offeramount.{$ship} ge 1 and $ship.money ge $price and player.money ge $price">
+                    <do_if value="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity and $ship.money ge ($price * $quantity) and player.money ge ($price * $quantity)">
                       <set_value name="$quote" exact="($price / 1ct)L"/>
                       <set_value name="$status" exact="'quote'"/>
                       <do_if value="event.param2 == 'Quote'">
                         <set_value name="State.$quoted_request" exact="$request"/>
                         <set_value name="State.$quoted_epoch" exact="$v.$epoch"/>
                         <set_value name="State.$quoted_price" exact="$price"/>
+                        <set_value name="State.$quoted_trial" exact="$trial"/>
+                        <set_value name="State.$quoted_at" exact="player.age / 1s"/>
                       </do_if>
                       <do_else>
-                        <do_if value="@State.$quoted_request != $request or @State.$quoted_epoch != $v.$epoch">
+                        <do_if value="@State.$quoted_request != $request or @State.$quoted_epoch != $v.$epoch or @State.$quoted_trial != $trial">
                           <set_value name="$status" exact="'quote_required'"/>
                         </do_if>
                         <do_elseif value="State.$quoted_price != $price or not @$v.$price_cents or $v.$price_cents * 1ct != $price">
@@ -53,6 +57,10 @@
                         <do_else>
                           <set_value name="State.$attempted" exact="true"/>
                           <set_value name="State.$request" exact="$request"/>
+                          <set_value name="State.$epoch" exact="$v.$epoch"/>
+                          <set_value name="State.$trial" exact="$trial"/>
+                          <set_value name="State.$quantity" exact="$quantity"/>
+                          <set_value name="State.$quote_time" exact="State.$quoted_at"/>
                           <set_value name="State.$ship" exact="$ship"/>
                           <set_value name="State.$station" exact="$station"/>
                           <set_value name="State.$parking" exact="$parking"/>
@@ -63,8 +71,10 @@
                           <set_value name="State.$ship_money" exact="$ship.money"/>
                           <set_value name="State.$station_money" exact="$station.money"/>
                           <set_value name="State.$player_money" exact="player.money"/>
+                          <set_value name="State.$faction_has_account" exact="faction.player.hasownaccount"/>
+                          <set_value name="State.$faction_money" exact="if State.$faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
                           <signal_cue_instantly cue="Monitor"/>
-                          <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="1" price="$price" bundle="false" unbundle="false" immediate="true"/>
+                          <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
                           <set_value name="State.$deal" exact="@State.$order.trade"/>
                           <set_value name="$status" exact="if @State.$deal then 'submitted' else 'order_refused'"/>
                         </do_else>
@@ -94,6 +104,13 @@
                 <set_value name="$player_money" exact="((player.money - State.$player_money) / 1ct)L"/>
                 <set_value name="$docked" exact="@State.$ship.dock.container == State.$station"/>
                 <set_value name="$parked" exact="player.station == State.$parking and not player.controlled and not player.occupiedship and @player.room.exists"/>
+                <do_if value="event.param == State.$deal and event.param.buyer == State.$ship and event.param.seller == State.$station and event.param.ware == State.$ware">
+                  <set_value name="$completed" exact="event.param"/>
+                  <set_value name="$player_after" exact="(player.money / 1ct)L"/>
+                  <set_value name="$faction_has_account" exact="faction.player.hasownaccount"/>
+                  <set_value name="$faction_after" exact="if $faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
+                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.Deal'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,State.$epoch,State.$trial,State.$quantity,(State.$price / 1ct)L,State.$quote_time,player.age / 1s,$completed.buyer,$completed.seller,$completed.ware.id,$completed.transferredamount,$completed.destroyedamount,($completed.unitprice / 1ct)L,(($completed.unitprice * $completed.transferredamount) / 1ct)L,(State.$player_money / 1ct)L,$player_after,if State.$faction_has_account then 1 else 0,if $faction_has_account then 1 else 0,State.$faction_money,$faction_after]"/>
+                </do_if>
                 <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)L,$ship_cargo,$station_cargo,$ship_money,$station_money,$player_money,$docked,$parked]"/>
               </actions>
             </cue>
