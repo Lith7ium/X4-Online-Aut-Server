@@ -34,7 +34,8 @@
       <do_elseif value="not @$first.sector.isclass.sector or not @$candidate.sector.isclass.sector">
        <set_value name="$reply" exact="'SECTOR_INVALID'"/>
       </do_elseif>
-      <do_elseif value="$first.sector.macro != macro.cluster_14_sector001_macro or $candidate.sector.macro != macro.cluster_01_sector001_macro">
+      <do_elseif value="$first.sector.macro.id != 'cluster_14_sector001_macro' or $candidate.sector.macro.id != 'cluster_01_sector001_macro'">
+       <debug_text text="'[X4LAN] AUTH_COMPANY_FIXTURE_SECTORS %s|%s'.[$first.sector.macro.id,$candidate.sector.macro.id]"/>
        <set_value name="$reply" exact="'SECTOR_CHANGED'"/>
       </do_elseif>
       <do_elseif value="$candidate.owner != faction.ownerless or not $candidate.isoperational">
