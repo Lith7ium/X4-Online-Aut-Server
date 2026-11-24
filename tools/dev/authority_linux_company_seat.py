@@ -7,7 +7,7 @@ import shutil
 from authority.checkpoints import Checkpoint
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
-    COMPANY_MOTION_MD, COMPANY_MOTION_UI, company_motion_config, extend_seat_gate,
+    COMPANY_MOTION_MD, company_motion_config, company_motion_ui, export_motion_buffer, extend_seat_gate,
 )
 from authority.load_observations import BoundReceiptStream, MAX_LOG
 from authority.registry_availability_evidence import verify_join_snapshot
@@ -37,6 +37,7 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, s
     status = ('ready', saved['epoch'], saved['issued_count'], saved['mapping_sha256'])
     nonce = secrets.token_hex(16)
     full = validate_full_snapshot(saved, status, nonce, bound.marker)
+    suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
     paths = registry.install(case, nonce, status, load_gate='marker')
 
     lab = case / 'extensions/x4_lan_lab'
@@ -51,7 +52,7 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, s
     hook = '    <file name="ui/recovery_registry_status.lua" />\n'
     if body.count(hook) != 1:
         raise ValueError('unexpected registry module insertion point')
-    ui_sources = _UI if company_motion is None else _UI | COMPANY_MOTION_UI
+    ui_sources = _UI if company_motion is None else _UI | company_motion_ui(company_motion)
     md_sources = _MD if company_motion is None else _MD | COMPANY_MOTION_MD
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     manifest.write_text(body.replace(hook, modules + hook), encoding='utf-8')
@@ -59,14 +60,16 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, s
     for folder, sources in ((ui, ui_sources), (md, md_sources)):
         for name, original in sources.items():
             target_file = folder / name
-            shutil.copyfile(ROOT / original, target_file)
+            if name == 'motion_buffer.lua':
+                target_file.write_bytes(export_motion_buffer((ROOT / original).read_bytes()))
+            else:
+                shutil.copyfile(ROOT / original, target_file)
             paths.append(target_file)
     config = ui / 'config.lua'
     text = config.read_text(encoding='ascii')
     if not text.endswith('}\n'):
         raise ValueError('unexpected seat configuration')
     settings = ','.join(f'{key}={json.dumps(value, ensure_ascii=True)}' for key, value in full.items())
-    suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
     config.write_text(text[:-2] + ',authority_registry_snapshot={' + settings + '}' + suffix + '}\n',
                       encoding='ascii')
     return paths, SeatWatch(profile / 'engine-output.log', bound, status, nonce, index)

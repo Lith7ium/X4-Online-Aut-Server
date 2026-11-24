@@ -24,6 +24,7 @@ import tempfile
 
 sys.path.insert(0, str(Path.cwd() / 'src'))
 from authority.client_motion_overlay import RECOVERY_APPLY_EPOCH, RECOVERY_APPLY_FIXTURE
+from authority.client_seat_overlay import COMPANY_PLAYBACK_UI
 from authority.company_motion_source import CompanyMotionSource
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from authority.load_messages import Offer
@@ -78,6 +79,34 @@ with tempfile.TemporaryDirectory() as directory:
         assert 'md/client_seat.xml' in manifest
     assert 'ui/company_motion_source.lua' in manifest
     assert 'md/authority_job_descriptor_probe.xml' in manifest
+
+    for playback_index in (None, 1317):
+        private = view / ('observer' if playback_index is None else 'playback')
+        (private / 'extensions').mkdir(parents=True)
+        (private / '.x4ls-view').touch()
+        source = CompanyMotionSource(playback_index=playback_index)
+        try:
+            assets = install_fixture_overlay(
+                private, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
+                save_path=r'C:\private\45841\save', participant_port=20123,
+                participant_lease='f' * 32, windows_dll=dll, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
+                registry_status=ready, registry_nonce='3' * 32, registry_snapshot=snapshot,
+                seat_index=1318, company_motion=source,
+            )
+        finally:
+            source.close()
+        lab = private / 'extensions/x4_lan_lab'
+        config = (lab / 'ui/config.lua').read_text()
+        order = (lab / 'ui.xml').read_text()
+        for name in COMPANY_PLAYBACK_UI:
+            assert ('ui/' + name in assets) == (playback_index is not None)
+            assert (lab / 'ui' / name).is_file() == (playback_index is not None)
+            if playback_index is not None:
+                assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
+        assert ('playback_index=' in config) == (playback_index is not None)
+        if playback_index is not None:
+            assert 'playback_index=1317' in config
+            assert 'X4LAN_MOTION_BUFFER=M' in (lab / 'ui/motion_buffer.lua').read_text()
 """
 
 
@@ -132,6 +161,8 @@ class WindowsClientPackageTest(unittest.TestCase):
                         check=True, timeout=10,
                     )
                     self.assertIn('--connection-file', result.stdout)
+                    if entry == 'authority_windows_fixture_client.py':
+                        self.assertIn('--company-hull-playback-index', result.stdout)
             subprocess.run([sys.executable, '-c', OVERLAY_SMOKE], cwd=extracted, env=environment,
                            check=True, timeout=10)
 

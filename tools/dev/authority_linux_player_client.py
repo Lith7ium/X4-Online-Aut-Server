@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 
+from authority.company_motion_source import validate_playback_index
+
 import authority_client_native as native
 from authority_client_options import prompt_company_ship, read_connection_settings
 
@@ -21,11 +23,18 @@ def main(argv=None):
                         help='choose a specific free index instead of prompting')
     parser.add_argument('--company-motion', action='store_true',
                         help='opt into the server’s separate authenticated company motion channel')
+    parser.add_argument('--company-hull-playback-index', type=int,
+                        help='isolated test only: follow another company ship in the same cockpit sector')
     parser.add_argument('--timeout', type=float, default=3600,
                         help='total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
     if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
         parser.error('--company-ship-index must be between 1 and 200000')
+    try:
+        validate_playback_index(args.company_hull_playback_index,
+                                company_motion=args.company_motion, own_index=args.company_ship_index)
+    except ValueError as error:
+        parser.error(str(error))
     if not args.display:
         parser.error('a local X11 or Xwayland DISPLAY is required')
 
@@ -46,6 +55,8 @@ def main(argv=None):
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = prompt_company_ship if args.company_ship_index is None else selected_index
         motion_options = {'company_motion': True} if args.company_motion else {}
+        if args.company_hull_playback_index is not None:
+            motion_options['company_hull_playback_index'] = args.company_hull_playback_index
         result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined,
                             **motion_options)
     except (OSError, ValueError, RuntimeError, RecursionError, KeyboardInterrupt) as error:

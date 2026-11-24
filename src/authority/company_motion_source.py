@@ -12,10 +12,19 @@ from .experimental_tcp_motion import check_motion_progress, motion_value
 _MAX_SAMPLER_DATAGRAM = 512
 
 
+def validate_playback_index(index, *, company_motion, own_index=None):
+    if index is not None and (
+        company_motion is not True or type(index) is not int or not 1 <= index <= 200000 or index == own_index
+    ):
+        raise ValueError('hull playback requires company motion and a different valid registry index')
+
+
 class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
-    def __init__(self):
+    def __init__(self, *, playback_index=None):
+        validate_playback_index(playback_index, company_motion=True)
+        self._playback_index = playback_index
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -44,6 +53,10 @@ class CompanyMotionSource:
         return self._generation
 
     @property
+    def playback_index(self):
+        return self._playback_index
+
+    @property
     def registry(self):
         """Verified (registry epoch, selected index), populated by the installer."""
         return self._registry
@@ -52,7 +65,7 @@ class CompanyMotionSource:
         if threading.get_ident() != self._thread:
             raise RuntimeError('exclusive company motion owner thread required')
 
-    def configure(self, epoch, index):
+    def configure(self, epoch, index, *, operational_bits=None):
         """Bind this source once to the installed overlay's verified selection."""
         self._owner()
         if (self._registry is not None or self._socket.fileno() < 0 or
@@ -61,9 +74,19 @@ class CompanyMotionSource:
             raise ValueError('invalid selected company motion configuration')
         if len({epoch, self._generation, self._lease, self._nonce}) != 4:
             raise RuntimeError('company motion tokens overlap')
+        playback_index = self._playback_index
+        validate_playback_index(playback_index, company_motion=True, own_index=index)
+        if playback_index is not None and (
+            type(operational_bits) is not str or playback_index > len(operational_bits)
+            or operational_bits[playback_index - 1] != '1'
+        ):
+            raise ValueError('hull playback target is unavailable in the verified register')
         self._registry = (epoch, index)
-        return {'port': self._socket.getsockname()[1], 'lease': self._lease,
-                'generation': self._generation, 'nonce': self._nonce, 'index': index}
+        config = {'port': self._socket.getsockname()[1], 'lease': self._lease,
+                  'generation': self._generation, 'nonce': self._nonce, 'index': index}
+        if playback_index is not None:
+            config['playback_index'] = playback_index
+        return config
 
     def _prefix(self):
         return f'C|{self._lease}|{self._generation}|'.encode('ascii')

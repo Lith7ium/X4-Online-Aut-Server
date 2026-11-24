@@ -14,6 +14,11 @@ COMPANY_MOTION_UI = {
     'company_observer_stream.lua': 'src/authority/lua/company_observer_stream.lua',
     'company_motion_source.lua': 'src/authority/lua/company_motion_source.lua',
 }
+COMPANY_PLAYBACK_UI = {
+    f'{name}.lua': f'src/authority/lua/{name}.lua'
+    for name in ('motion_buffer', 'motion_playback', 'company_hull_playback',
+                 'company_hull_playback_x4', 'company_hull_trial')
+}
 COMPANY_MOTION_MD = {
     'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml',
     'company_observer_target.xml': 'src/authority/md/company_observer_target.xml',
@@ -39,11 +44,23 @@ def seat_prefix(index, nonce, status):
     return f'{nonce}|{status[1]}|{index}|'.encode('ascii')
 
 
+def company_motion_ui(source):
+    if source.playback_index is not None:
+        return COMPANY_PLAYBACK_UI | COMPANY_MOTION_UI
+    return COMPANY_MOTION_UI
+
+
+def export_motion_buffer(data):
+    if data.count(b'return M\n') != 1:
+        raise ValueError('unexpected motion buffer module')
+    return data.replace(b'return M\n', b'X4LAN_MOTION_BUFFER=M\nreturn M\n')
+
+
 def company_motion_config(source, index, full_registry):
     """Hand an installed, verified registry selection to the local IPC owner."""
     if type(source) is not CompanyMotionSource or full_registry is None or index is None:
         raise ValueError('company motion requires a verified selected seat and local source owner')
-    settings = source.configure(full_registry['epoch'], index)
+    settings = source.configure(full_registry['epoch'], index, operational_bits=full_registry['operational_bits'])
     return ',authority_company_motion={' + ','.join(
         f'{key}={json.dumps(value, ensure_ascii=True)}' for key, value in settings.items()
     ) + '}'

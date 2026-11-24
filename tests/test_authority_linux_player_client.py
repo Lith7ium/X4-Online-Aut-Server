@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from authority.client_seat_overlay import COMPANY_PLAYBACK_UI
+from authority.company_motion_source import CompanyMotionSource
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
 import authority_client_native as native
@@ -70,6 +72,51 @@ class SeatLogTests(unittest.TestCase):
             self.assertIn('authority_registry_snapshot={', (lab / 'ui/config.lua').read_text())
             watch.path.write_bytes(b'\n'.join(receipt_lines()) + b'\n')
             watch.verify()
+
+    def test_company_playback_modules_only_in_opted_in_private_overlay(self):
+        bound = MarkerBoundOffer(OFFER, MARKER)
+        snapshot = {'format': 3, 'source_registry_checked': True,
+                    'evidence_scope': 'saved checkpoint bytes only', 'run_id': MARKER,
+                    'epoch': STATUS[1], 'issued_count': STATUS[2], 'mapping_sha256': STATUS[3],
+                    'availability_bits': '1' * STATUS[2], 'operational_bits': '1' * STATUS[2],
+                    'available_count': STATUS[2], 'unavailable_count': 0, 'operational_count': STATUS[2]}
+        for target in (None, INDEX + 1):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / 'game/extensions').mkdir(parents=True)
+                (root / 'home').mkdir()
+                case, profile, _, _ = native.snapshot.prepare_case(root / 'run', root / 'game', root / 'home')
+                native.download.install_probe(case, profile, native.ticket_for(bound))
+                native.marked.install_marked_load_probe(case)
+                source = CompanyMotionSource(playback_index=target)
+                self.addCleanup(source.close)
+                with patch.object(company_seat, 'verify_join_snapshot', return_value=snapshot):
+                    paths, _ = company_seat.install(case, profile, bound, profile / 'save/save_009.xml.gz',
+                                                    INDEX, Mock(), company_motion=source)
+                lab = case / 'extensions/x4_lan_lab'
+                config = (lab / 'ui/config.lua').read_text()
+                manifest = (lab / 'ui.xml').read_text()
+                self.assertEqual('playback_index=' in config, target is not None)
+                self.assertIn('ui/company_observer_stream.lua', manifest)
+                for name in COMPANY_PLAYBACK_UI:
+                    asset = lab / 'ui' / name
+                    self.assertEqual(asset.exists(), target is not None)
+                    self.assertEqual(asset in paths, target is not None)
+                    if target is not None:
+                        self.assertLess(manifest.index('ui/' + name), manifest.index('ui/company_motion_source.lua'))
+                if target is not None:
+                    self.assertIn(f'playback_index={target}', config)
+                    self.assertIn('X4LAN_MOTION_BUFFER=M', (lab / 'ui/motion_buffer.lua').read_text())
+
+    def test_playback_target_must_be_operational_and_distinct_in_verified_register(self):
+        for target, bits in ((INDEX, '1' * STATUS[2]), (INDEX + 1, '1' * INDEX),
+                             (INDEX + 1, '1' * INDEX + '0')):
+            with self.subTest(target=target, count=len(bits)):
+                source = CompanyMotionSource(playback_index=target)
+                self.addCleanup(source.close)
+                with self.assertRaises(ValueError):
+                    source.configure(STATUS[1], INDEX, operational_bits=bits)
+                self.assertIsNone(source.registry)
 
     def test_no_admission_receipt_until_exact_same_offer_seat_and_pause(self):
         lines = receipt_lines()
@@ -160,6 +207,17 @@ class PlayerClientTests(unittest.TestCase):
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion']), 0)
             self.assertTrue(run.call_args.kwargs['company_motion'])
+            self.assertNotIn('company_hull_playback_index', run.call_args.kwargs)
+            option = ['--company-hull-playback-index', str(INDEX + 1)]
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', *option]), 0)
+            self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
+            with patch.object(native, 'run') as run, redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    cli.main([*args, *option])
+                with self.assertRaises(SystemExit):
+                    cli.main([*args, '--company-motion', '--company-hull-playback-index', str(INDEX)])
+            run.assert_not_called()
 
             connection.chmod(0o644)
             with self.assertRaisesRegex(ValueError, 'owner-only'):

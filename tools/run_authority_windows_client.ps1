@@ -9,10 +9,14 @@ param(
     [ValidateRange(1, 3600)] [int] $TimeoutSeconds = 1800,
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
     [switch] $ChooseCompanyShip,
-    [switch] $CompanyMotion
+    [switch] $CompanyMotion,
+    [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
+    throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
+}
 if (($ChooseCompanyShip -or $CompanyMotion) -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
 }
@@ -66,6 +70,9 @@ $clientArgs = @(
 )
 if ($CompanyMotion) {
     $clientArgs += '--company-motion'
+    if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {
+        $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)
+    }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'
 }

@@ -58,6 +58,8 @@ def parser():
                         help='optional private JSON for an existing server motion stream; one attempt only')
     motion.add_argument('--company-motion', action='store_true',
                         help='choose a company ship and use the separate authenticated motion channel')
+    result.add_argument('--company-hull-playback-index', type=int,
+                        help='isolated test only: follow another company ship in the same cockpit sector')
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
@@ -76,6 +78,9 @@ def parser():
 def run(args):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
+    from authority.company_motion_source import validate_playback_index
+    validate_playback_index(args.company_hull_playback_index,
+                            company_motion=args.company_motion, own_index=args.company_ship_index)
     for value, maximum in ((args.timeout, 3600), (args.observe_seconds, args.timeout),
                            (args.keepalive_seconds, 300)):
         if not math.isfinite(value) or not 0 < value <= maximum:
@@ -107,6 +112,8 @@ def run(args):
 
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out)
     motion_options = {'company_motion': True} if args.company_motion else {}
+    if args.company_hull_playback_index is not None:
+        motion_options['company_hull_playback_index'] = args.company_hull_playback_index
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
         windows_dll=args.network_dll, dll_sha256=args.network_dll_sha256,

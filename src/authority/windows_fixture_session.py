@@ -11,6 +11,7 @@ import socket
 import time
 
 from .checkpoints import Checkpoint
+from .company_motion_source import validate_playback_index
 from .company_ship_selection import reserve_company_ship
 from .experimental_client_owner import CompanyShipChoiceDenied
 from .experimental_client_session import client_connection
@@ -103,7 +104,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         server_fingerprint, shared_key, file_token, file_slot,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
-                        require_registry_snapshot=False, select_ship=None, company_motion=False):
+                        require_registry_snapshot=False, select_ship=None, company_motion=False,
+                        company_hull_playback_index=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -138,6 +140,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('company ship choice requires full registry inspection and a selector')
     if type(company_motion) is not bool or (company_motion and (select_ship is None or motion_request is not None)):
         raise ValueError('company motion requires a seat selection and its own transport')
+    validate_playback_index(company_hull_playback_index, company_motion=company_motion)
     validate_motion_request(motion_request, participant_timeout)
 
     outer_error = None
@@ -161,6 +164,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace unavailable')
                 bound = owner.request_offer()
                 seat_index = None if select_ship is None else reserve_company_ship(owner, select_ship)
+                validate_playback_index(company_hull_playback_index,
+                                        company_motion=company_motion, own_index=seat_index)
                 if company_motion:
                     owner.request_ship_motion()
                 download = owner.download(workspace.download_dir)
@@ -194,7 +199,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 source_options = {}
                 if company_motion:
                     from .company_motion_source import CompanyMotionSource
-                    company_source = CompanyMotionSource()
+                    company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
                     source_options['company_motion'] = company_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],

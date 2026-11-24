@@ -23,7 +23,7 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
-    COMPANY_MOTION_MD, COMPANY_MOTION_UI, company_motion_config, extend_seat_gate,
+    COMPANY_MOTION_MD, company_motion_config, company_motion_ui, export_motion_buffer, extend_seat_gate,
 )
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
@@ -223,11 +223,15 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             'ui/authority_registry_resolve_string.lua', 'ui/client_seat.lua']
     if company_motion is not None:
         config = config[:-2] + company_motion_config(company_motion, seat_index, full_registry) + '}\n'
+        ui_sources = company_motion_ui(company_motion)
+        if company_motion.playback_index is not None and motion_settings is not None:
+            raise ValueError('company hull playback requires its exclusive motion overlay')
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
-        ui_files[insertion:insertion] = ['ui/' + name for name in COMPANY_MOTION_UI]
-        for folder, sources in (('ui', COMPANY_MOTION_UI), ('md', COMPANY_MOTION_MD)):
+        ui_files[insertion:insertion] = ['ui/' + name for name in ui_sources]
+        for folder, sources in (('ui', ui_sources), ('md', COMPANY_MOTION_MD)):
             for name, source in sources.items():
-                files[folder + '/' + name] = _source(ROOT / source, 1024 * 1024)
+                data = _source(ROOT / source, 1024 * 1024)
+                files[folder + '/' + name] = export_motion_buffer(data) if name == 'motion_buffer.lua' else data
     if motion_settings is not None:
         selection = validate_motion_settings(registry_status, motion_settings)
         motion_settings = selection.settings
@@ -247,9 +251,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         for source, name in modules:
             data = _source(ROOT / source, 1024 * 1024)
             if name == 'motion_buffer.lua':
-                if data.count(b'return M\n') != 1:
-                    raise ValueError('unexpected motion buffer module')
-                data = data.replace(b'return M\n', b'X4LAN_MOTION_BUFFER=M\nreturn M\n')
+                data = export_motion_buffer(data)
             files['ui/' + name] = data
         for name in md_names:
             files['md/' + name] = _source(ROOT / 'tools/dev' / name, 1024 * 1024)

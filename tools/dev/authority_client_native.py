@@ -27,6 +27,7 @@ from authority.company_ship_selection import reserve_company_ship
 from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
+from authority.company_motion_source import CompanyMotionSource, validate_playback_index
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
 import authority_load_live as load
@@ -225,10 +226,11 @@ def error_code(error):
 
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
-        company_motion=False, software_vulkan_icd=None):
+        company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
+    validate_playback_index(company_hull_playback_index, company_motion=company_motion)
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
     if software_vulkan_icd is not None and (
@@ -295,6 +297,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     result['phase'] = 'choose_company_ship'
                     index = reserve_company_ship(owner, select_ship)
+                    validate_playback_index(company_hull_playback_index,
+                                            company_motion=company_motion, own_index=index)
                     if company_motion:
                         owner.request_ship_motion()
                 result['phase'] = 'download'
@@ -361,8 +365,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     source_options = dict(software_rendered=software_vulkan_icd is not None)
                     if company_motion:
-                        from authority.company_motion_source import CompanyMotionSource
-                        company_source = CompanyMotionSource()
+                        company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
                         source_options['company_motion'] = company_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)
