@@ -24,8 +24,8 @@ def world_fixture(test):
              for h in (1, 2)}
     reservations = {h: Ns(ship_index=7353+h, code=code)
                     for h, code in ((1, 'WRN-302'), (2, 'ABC-123'))}
-    session = Ns(_peer=lambda conn: conn, _admitted_ships=reservations)
-    host = Ns(_control=Ns(_session=session, _peers=peers),
+    session = Ns(_peer=lambda conn: conn, _admitted_ships=reservations, _live=Mock())
+    host = Ns(_check=Mock(), _control=Ns(_session=session, _peers=peers, _reader_free=Mock()),
               _world=Ns(session=Ns(state='running', pending=None, world_epoch='world',
                                     ready_players=[(1, None), (2, None)])))
     participants = Ns(_host=host)
@@ -56,7 +56,7 @@ def world_fixture(test):
         schedule.step()
 
     return Ns(step=step, schedule=schedule, outcomes=outcomes, received=received,
-              native=native, now=now, peers=peers, reservations=reservations)
+              native=native, now=now, peers=peers, reservations=reservations, host=host)
 
 
 class SchedulerTests(unittest.TestCase):
@@ -155,3 +155,12 @@ class SchedulerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'effect is indeterminate'):
             world.schedule.before_world_transition()
         world.native.begin.assert_called_once()
+
+    def test_host_ownership_failure_prevents_queued_native_dispatch(self):
+        world = world_fixture(self)
+        world.outcomes[1].append(order(1))
+        world.step(0)
+        world.host._check.side_effect = RuntimeError('host faulted')
+        with self.assertRaisesRegex(RuntimeError, 'host faulted'):
+            world.step(.5)
+        world.native.begin.assert_not_called()

@@ -54,6 +54,7 @@ class CompanyPurchaseScheduler:
         self._fenced = False
 
     def _check(self):
+        self._participants._host._check()
         if self._guard is not None and self._guard() is not True:
             raise RuntimeError('company purchase world guard failed')
 
@@ -63,7 +64,9 @@ class CompanyPurchaseScheduler:
         if world.state != 'running' or world.pending is not None:
             raise RuntimeError('company purchases require an idle running world')
         control = host._control
+        control._reader_free()
         session = control._session
+        session._live()
         ready = {handle for handle, _ in world.ready_players}
         bindings = {}
         for conn, peer in control._peers.items():
