@@ -54,7 +54,7 @@ def output_path(path):
     return out
 
 
-def prepare_case(out, game, home):
+def prepare_case(out, game, home, *, base_game_only=False):
     case = out / 'case'
     profile = case / 'home/.config/EgoSoft/X4/45841'
     for path in (profile / 'save', case / 'tmp', case / 'cache', case / 'data', case / 'runtime',
@@ -74,7 +74,8 @@ def prepare_case(out, game, home):
             (case / 'home/.steam' / name).symlink_to(source)
     (case / 'home/.steam/steam').symlink_to('root')
     binds = []
-    for dlc in sorted((game / 'extensions').glob('ego_dlc_*')):
+    dlcs = () if base_game_only else sorted((game / 'extensions').glob('ego_dlc_*'))
+    for dlc in dlcs:
         if dlc.is_dir() and re.fullmatch(r'ego_dlc_[a-z0-9_]+', dlc.name):
             view = case / 'dlc-source' / dlc.name
             view.mkdir(parents=True)
