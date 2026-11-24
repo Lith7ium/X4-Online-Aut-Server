@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026, 14:00 Berlin check-in.** Astra is active and leads Lith7ium's
+**24 November 2026, 15:00 Berlin check-in.** Astra is active and leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -52,16 +52,19 @@ Neon acknowledged the assignment from a separate Windows PC. His port is on
 based on `519cd0f1`. Astra ran
 `EnhancedNpc870ReacquisitionLoopback.test_enh_870_reacquisition_cancel_and_fresh_alignment_with_other_observer`
 once on Linux. It passed with real loopback TCP/UDP, a synthetic NPC source and
-simulated visibility and game callbacks. The Windows test command, evidence
-table and any native game observations are due at an hourly check.
+simulated visibility and game callbacks. Neon subsequently published his Windows
+harness and report at `4b181f5f`. His native game used newly enrolled YDA-317
+in a private creative start. After reacquisition, a requested 20 m/s yielded
+31.766 m in 1.588 s. ENH-870 remained the loopback case.
+[Neon's Windows measurements](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/4b181f5f/reports/AUTHORITY-NPC-REACQUISITION-WINDOWS-20261124.md)
 
-One review point is open. After a participant confirms preparation, a delayed
-fresh sample can occupy that participant’s movement lane until its deadline.
-The control loop then drops the connection. The passing test gives the other
-observer a separate connection. A focused case with two tracks on the same
-participant would tell us whether that pilot can keep observing and stay
-admitted when a fresh sample is delayed. The port remains on Neon's branch.
-[14:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795525263969899)
+For the next check, Neon owns the delayed or absent fresh sample after
+preparation. Test two tracks on the same admitted participant and record
+control, pause/save/resume and continued delivery to the other track.
+Cobalt owns the ordinary Windows company-player preflight on the observer
+branch ahead of a coordinated Internet test. The matching Linux and Windows
+observer builds use code `cf57d0b1`. Exchange session settings privately.
+[15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
 
 ## What changed since the previous handover
 
