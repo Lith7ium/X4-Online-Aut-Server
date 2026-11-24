@@ -857,6 +857,14 @@ def run(args):
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
     parking = getattr(args, 'park_server_avatar', None)
+    trade_mode = getattr(args, 'company_trade_trial', None)
+    if trade_mode:
+        if (trade_mode not in ('buy', 'inspect') or not require_snapshot or parking is not None
+                or require_company_ship or company_motion or tls is not None
+                or getattr(args, 'company_pose_trial', False) or getattr(args, 'verify_company_pose', False)):
+            raise ValueError('company trade trial requires an isolated recovered provider')
+        import authority_company_trade_trial as trade_probe
+        trade_nonce = secrets.token_hex(16)
     if parking is not None:
         import authority_station_parking as parking_probe
         parking_probe.mode(args, require_snapshot=require_snapshot, tls=tls,
@@ -1029,6 +1037,10 @@ def run(args):
         registry_snapshot_state = None
         if require_snapshot:
             fixture, saved_evidence = fixture
+            if trade_mode:
+                if trade_mode == 'buy' and checkpoint.sha256 != trade_probe.SOURCE_DIGEST:
+                    raise ValueError('stock purchase trial requires its original private two-ship world')
+                result['company_trade_trial'] = {'mode': trade_mode}
             if pose_live or pose_cold:
                 if pose_live and checkpoint.sha256 != company_pose.PARKED_SAVE:
                     raise ValueError('company pose trial requires the pinned parked source')
@@ -1060,6 +1072,8 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if trade_mode:
+                protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce))
             if pose_channel is not None:
                 protected.extend(pose_overlay.install(case, profile, port=pose_channel.port,
                                                       lease=pose_channel.lease, epoch=pose_channel.epoch,
@@ -1309,6 +1323,19 @@ def run(args):
                 witness_diagnostic={'phase':witness_phase,'epoch':registry_expected[1],
                     'count':registry_expected[2],'no_client_admission':True,
                     'historical_identity_proven':False,'exact_loaded_file_proven':False})
+            raise _WitnessFinished()
+        if trade_mode:
+            log = profile / 'engine-output.log'
+            trial_result = result['company_trade_trial']
+            trial_result['loaded_observation'] = trade_probe.loaded_observation(log, read_evidence)
+            if trade_mode == 'buy':
+                check()
+                adapter.resume()
+                trial_result['settlement'] = trade_probe.await_settlement(log, trade_nonce, deadline, check)
+                saved = capture_first_registry_snapshot(adapter, store, verify)
+                witness_pending = saved
+                result.update(final_checkpoint_id=saved.checkpoint_id, final_checkpoint_sha256=saved.sha256)
+            result.update(success=True, final_world_state='paused')
             raise _WitnessFinished()
         if bootstrap_snapshot:
             # The ordinary control bridge owns pause, marker receipt, native save,
@@ -1970,6 +1997,8 @@ def run(args):
                                            require_registry_snapshot=True)
                 if pose_channel is not None:
                     pose_overlay.archive_cue(case, out)
+                if trade_mode:
+                    trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:
                     if parking_probe.verify_log(profile/'engine-output.log', parking_nonce, read_evidence) != parking_location:
                         raise ValueError('final parking receipt changed')
@@ -2046,6 +2075,8 @@ def main(argv=None):
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
                         help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
+    parser.add_argument('--company-trade-trial', choices=('buy', 'inspect'),
+                        help='isolated two-ship stock trade experiment without network clients')
     parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
                         help='isolated private station parking fixture and read-only cold verification')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')

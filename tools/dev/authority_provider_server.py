@@ -92,6 +92,8 @@ def main(argv=None):
                       help='run the isolated two-ship pose trial with authenticated company motion')
     mode.add_argument('--verify-company-pose', action='store_true',
                       help='cold-check the saved company pose in an isolated run with no clients')
+    parser.add_argument('--company-trade-trial', choices=('buy', 'inspect'),
+                        help='isolated two-ship stock trade experiment')
     tls = parser.add_argument_group('optional TLS gateway')
     tls.add_argument('--tls-bind', help='IPv4 address for the TLS listener')
     tls.add_argument('--tls-port', type=int, help='TLS listener port; 0 selects an available port')
@@ -116,8 +118,10 @@ def main(argv=None):
     require_ship = args.require_company_ship or company_motion
     if args.registry_status:
         server_flags.append('--registry-status')
-    if args.require_registry_snapshot or require_ship or args.park_server_avatar or args.verify_company_pose:
+    if args.require_registry_snapshot or require_ship or args.park_server_avatar or args.verify_company_pose or args.company_trade_trial:
         server_flags.append('--require-registry-snapshot')
+    if args.company_trade_trial:
+        server_flags.extend(('--company-trade-trial', args.company_trade_trial))
     if args.park_server_avatar:
         server_flags.extend(('--park-server-avatar', args.park_server_avatar))
     if require_ship:
