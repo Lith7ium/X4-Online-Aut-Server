@@ -159,7 +159,7 @@ def main(argv=None):
     for flag in ('game', 'store', 'out'):
         parser.add_argument('--' + flag, type=Path, required=True)
     parser.add_argument('--prepare-berth', action='store_true',
-                        help='After a piloted approach and stock docking request, place the ship on its verified assigned trading bay.')
+                        help='Place the controlled ship near a trading bay and request a berth through the stock cockpit.')
     parser.add_argument('--xvfb', default='Xvfb')
     parser.add_argument('--vulkan-icd', type=Path)
     parser.add_argument('--timeout', type=float, default=1200)

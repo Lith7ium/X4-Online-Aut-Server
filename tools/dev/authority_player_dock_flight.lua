@@ -192,6 +192,26 @@ local function on_berth_result(_, row)
     end
 end
 
+-- The placement receipt comes from a separate MD readback in this disposable profile.
+local function on_placed(_, row)
+    assert(phase == 'placing' and type(row) == 'string' and #row < 512, 'placement_reply')
+    log('PLACEMENT|' .. row)
+    local status, ship, station, bay, station_m, bay_m, age = row:match(
+        '^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
+    assert(status == 'PLACED', 'placement_' .. tostring(status or row))
+    local parse = X4LAN_RESOLVE_STRING.parse_hex
+    local selected_bay = parse(bay)
+    assert(control_matches() and parse(ship) == binding.ship and parse(station) == binding.station
+        and selected_bay and C.GetContextByClass(selected_bay, 'station', true) == binding.station,
+        'placement_binding')
+    station_m, bay_m, age = tonumber(station_m), tonumber(bay_m), tonumber(age)
+    assert(station_m and station_m >= 0 and station_m < binding.start_distance
+        and bay_m and bay_m >= 0 and bay_m < binding.start_distance and age and age >= start_time,
+        'placement_readback')
+    local now = GetCurRealTime()
+    phase, deadline, next_range = 'nearby_request', now + 10, now
+end
+
 local function frame(registry)
     local now = GetCurRealTime()
     if phase == 'init' then
@@ -206,6 +226,8 @@ local function frame(registry)
         if use_berth then
             assert(RegisterEvent(berth_screen .. '.Result', function(...) guarded(on_berth_result, ...) end) ~= false,
                 'berth_register')
+            assert(RegisterEvent(berth_screen .. '.Placed', function(...) guarded(on_placed, ...) end) ~= false,
+                'placement_register')
         end
         phase, deadline = 'initial_observation', now + 8
         observe(now)
@@ -226,11 +248,37 @@ local function frame(registry)
     elseif phase == 'await_unpause' then
         assert(now < deadline and control_matches(), 'unpause_or_control')
         if not C.IsGamePaused() and tonumber(C.GetCurrentGameTime()) > start_time then
-            local accepted = StartAutoPilot(binding.station_lua)
-            assert(accepted ~= false, 'autopilot_refused')
-            autopilot = true
-            phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
-            log('AUTOPILOT|started|' .. tostring(accepted))
+            if use_berth then
+                phase, deadline = 'placing', now + 20
+                log('ROUTE|nearby_berth')
+                assert(AddUITriggeredEvent(berth_screen, 'Position', {
+                    ship = binding.ship_hex, station = binding.station_hex,
+                }) ~= false, 'position_dispatch')
+            else
+                local accepted = StartAutoPilot(binding.station_lua)
+                assert(accepted ~= false, 'autopilot_refused')
+                autopilot = true
+                phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
+                log('AUTOPILOT|started|' .. tostring(accepted))
+            end
+        end
+    elseif phase == 'nearby_request' then
+        assert(control_matches(), 'player_control_changed')
+        if now >= next_range then
+            next_range = now + 0.25
+            local reason = C.RequestDockAtReason(binding.station, true)
+            reason = reason ~= nil and ffi.string(reason)
+            if reason == 'granted' or reason == 'queued' then
+                assert(C.RequestDockAt(binding.station, true) and C.RequestDockAt(binding.station, false),
+                    'player_dock_request_refused')
+                log('PLAYER_DOCK_REQUEST|' .. reason)
+                phase, deadline, next_sample, berth_stage = 'berth_wait', now + 35, now + 5, 'START'
+                assert(AddUITriggeredEvent(berth_screen, 'Prepare', {
+                    ship = binding.ship_hex, station = binding.station_hex,
+                }) ~= false, 'berth_dispatch')
+            else
+                assert(now < deadline, 'player_dock_reason_' .. tostring(reason))
+            end
         end
     elseif phase == 'berth_wait' then
         assert(now < deadline and control_matches(), 'berth_timeout_or_control_lost')
@@ -253,22 +301,9 @@ local function frame(registry)
                 autopilot = false
                 assert(C.SetSofttarget(binding.station, '') and C.GetSofttarget2().softtargetID == binding.station
                     and C.RequestDockAt(binding.station, true), 'dock_target_or_range_changed')
-                if use_berth then
-                    local reason = C.RequestDockAtReason(binding.station, true)
-                    reason = reason ~= nil and ffi.string(reason)
-                    assert(reason == 'granted' or reason == 'queued', 'player_dock_reason_' .. tostring(reason))
-                    assert(control_matches() and C.RequestDockAt(binding.station, false), 'player_dock_request_refused')
-                    log('PLAYER_DOCK_REQUEST|' .. reason)
-                    phase, deadline, next_sample, berth_stage = 'berth_wait', now + 35, now + 5, 'START'
-                    log('ROUTE|berth')
-                    assert(AddUITriggeredEvent(berth_screen, 'Prepare', {
-                        ship = binding.ship_hex, station = binding.station_hex,
-                    }) ~= false, 'berth_dispatch')
-                else
-                    assert(control_matches() and C.QuickDock(), 'quickdock_refused')
-                    phase, deadline = 'dock_wait', now + docking_timeout
-                    log('QUICKDOCK|dispatched')
-                end
+                assert(control_matches() and C.QuickDock(), 'quickdock_refused')
+                phase, deadline = 'dock_wait', now + docking_timeout
+                log('QUICKDOCK|dispatched')
             end
         end
     elseif phase == 'begin_capture' then
