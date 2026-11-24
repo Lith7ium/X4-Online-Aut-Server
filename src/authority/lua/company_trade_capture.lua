@@ -35,7 +35,7 @@ local function stock_order(menu, data, o)
     local offer = offer_id and menu.getTradeOfferByID(offer_id)
     if type(offer) ~= 'table' or type(offer.ware) ~= 'string' or offer.ware == ''
             or o.offer_station(offer_id) ~= o.station or offer.ismissionoffer or offer.isbuyoffer
-            or offer.isselloffer ~= true or offer.active ~= true then
+            or offer.isselloffer ~= true or offer.active ~= true or offer.stale == true then
         return nil, 'stale_offer'
     end
     local price_cents = cents(offer.price)
@@ -72,6 +72,14 @@ function M.install(o)
     end
     local original = menu.buttonConfirmTrade
     local phase = 'ready'
+    local active_attempt, price_retry
+
+    local function show_price_change(previous, current, reopen)
+        phase = 'reporting_price_change'
+        o.notice('refused', nil, {reason = 'price_changed', price_cents = previous,
+            current_price_cents = current, reopen = reopen})
+        phase = 'ready'
+    end
 
     local function confirm(...)
         local data = menu.contextMenuData
@@ -84,6 +92,10 @@ function M.install(o)
         if ship ~= o.ship or station ~= o.station then return original(...) end
         if phase ~= 'ready' then
             o.notice('already_attempted')
+            return
+        end
+        if price_retry and (data == price_retry.rejected_context or data.orders == price_retry.rejected_orders) then
+            o.notice('fresh_offer_required')
             return
         end
         if data.immediate ~= true or o.identity(data.immediateObject) ~= ship then
@@ -102,16 +114,31 @@ function M.install(o)
             return
         end
         intent.sector, intent.station_code = dock.sector, dock.station_code
+        if price_retry then
+            if intent.ware ~= price_retry.ware then
+                o.notice('fresh_offer_required')
+                return
+            end
+            if intent.price_cents ~= price_retry.current_price then
+                local previous = price_retry.current_price
+                price_retry.current_price = intent.price_cents
+                show_price_change(previous, intent.price_cents, false)
+                return
+            end
+        end
 
-        phase = 'dispatching'
+        local attempt = {}
+        local submitted_orders = data.orders
+        active_attempt, price_retry, phase = attempt, nil, 'dispatching'
         local answered, early_receipt
         local function settle(receipt)
+            if active_attempt ~= attempt then return end
             if phase == 'dispatching' then
                 if not answered then answered, early_receipt = true, receipt end
                 return
             end
             if phase ~= 'pending' then return end
-            phase = 'finished'
+            active_attempt, phase = nil, 'finished'
             if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt)
                     and exact_cents(receipt.settled_total_cents) and receipt.settled_total_cents > 0 then
                 local snapshot = resulting_snapshot(intent, receipt, o.ship_code)
@@ -123,8 +150,9 @@ function M.install(o)
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
                 local price = receipt.current_price_cents
                 if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
-                    o.notice('refused', nil, {reason = 'price_changed',
-                        price_cents = intent.price_cents, current_price_cents = price})
+                    price_retry = {rejected_context = data, rejected_orders = submitted_orders,
+                        ware = intent.ware, current_price = price}
+                    show_price_change(intent.price_cents, price, true)
                 else
                     o.notice('refused')
                 end
@@ -141,7 +169,7 @@ function M.install(o)
             phase = 'pending'
             if answered then settle(early_receipt) else o.notice('pending') end
         else
-            phase = 'finished'
+            active_attempt, phase = nil, 'finished'
             o.notice(sent and accepted == false and not answered and 'refused' or 'uncertain')
         end
     end
@@ -149,7 +177,8 @@ function M.install(o)
     menu.buttonConfirmTrade = confirm
     return {
         detach = function()
-            if phase == 'dispatching' or phase == 'pending' or menu.buttonConfirmTrade ~= confirm then return false end
+            if phase == 'dispatching' or phase == 'pending' or phase == 'reporting_price_change'
+                    or menu.buttonConfirmTrade ~= confirm then return false end
             menu.buttonConfirmTrade = original
             return true
         end,
@@ -167,6 +196,7 @@ local trade_notices = {
     unsupported_trade = 'Company purchase does not support this trade.',
     single_buy_required = 'Company purchase requires a single buy.',
     stale_offer = 'Company purchase refused: offer changed.',
+    fresh_offer_required = 'Reopen the stock trade offer and select the item again.',
     ambiguous_price = 'Company purchase refused: invalid quote.',
 }
 
@@ -248,7 +278,12 @@ function M.install_x4(o)
             end
         elseif status == 'refused' and details then
             text = 'Company purchase refused. Unit price changed from ' .. format_credits(details.price_cents)
-                .. ' to ' .. format_credits(details.current_price_cents) .. '. Review the fresh stock offer.'
+                .. ' to ' .. format_credits(details.current_price_cents) .. '.'
+            if details.reopen then
+                text = text .. ' Reopen the stock offer and confirm the new price.'
+            else
+                text = text .. ' Review the updated price and confirm again.'
+            end
         end
         if text then C.ShowInfoLine(text, 4) end
     end

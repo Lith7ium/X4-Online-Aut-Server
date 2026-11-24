@@ -181,7 +181,7 @@ for _, fields in ipairs({
 end
 report('refused', nil, 'Company purchase refused.')
 report('refused', nil,
-    'Company purchase refused. Unit price changed from 58.19 Cr to 58.77 Cr. Review the fresh stock offer.',
+    'Company purchase refused. Unit price changed from 58.19 Cr to 58.77 Cr. Reopen the stock offer and confirm the new price.',
     {reason = 'price_changed', current_price_cents = 5877})
 report('refused', nil, 'Company purchase refused.', {reason = 'price_changed'})
 for _, invalid in ipairs({'5877', 0, 5819, 5877.5, math.huge, 2147483648}) do
@@ -195,5 +195,76 @@ report('confirmed', 34900, uncertain,
     {company_balance_cents = 965100, ship_code = 'WRN-302', cargo_units = 6, price_cents = 5818})
 for _, malformed in ipairs({'34900', -34900, 0, 34900.5, math.huge, 0 / 0, 9007199254740992}) do
     report('confirmed', malformed, uncertain)
+end
+assert(native_calls == 4)
+
+local function fresh_context(orders)
+    return {component = station_id, currentShip = ship_id, immediate = true, immediateObject = ship_id,
+        orders = orders or {[order_id] = -6}}
+end
+
+local function reply(attempt, outcome, fields)
+    local receipt = {outcome = outcome}
+    for key, value in pairs(attempt.intent) do receipt[key] = value end
+    for key, value in pairs(fields) do receipt[key] = value end
+    attempt.settle(receipt)
+end
+
+for _, case in ipairs({{5800, false}, {5877, false}, {5877, true}}) do
+    local new_price, cycle = case[1], case[2]
+    offer.price = 58.19
+    menu.contextMenuData = fresh_context()
+    local rejected = menu.contextMenuData
+    local attempts = {}
+    local adapter
+    options.request = function(intent, settle)
+        attempts[#attempts + 1] = {intent = intent, settle = settle}
+        if #attempts == 2 then
+            -- A's duplicate arrives synchronously while B is dispatching.
+            reply(attempts[1], 'confirmed', {settled_total_cents = 34900})
+            menu.buttonConfirmTrade()
+        end
+        return true
+    end
+    options.notice = function(status, _, details)
+        notices[#notices + 1] = status
+        if details and details.reason == 'price_changed' then
+            menu.contextMenuData = fresh_context()
+            offer.price = details.current_price_cents / 100
+            -- Notification callbacks may be reentrant. They cannot act as the user.
+            menu.buttonConfirmTrade()
+            assert(not adapter.detach())
+        end
+    end
+    adapter = assert(module.install_x4(options))
+    menu.buttonConfirmTrade()
+    reply(attempts[1], 'refused', {reason = 'price_changed', current_price_cents = new_price})
+    assert(#attempts == 1)
+    menu.contextMenuData = rejected
+    menu.buttonConfirmTrade()
+    assert(notices[#notices] == 'fresh_offer_required' and #attempts == 1)
+    menu.contextMenuData = fresh_context(rejected.orders)
+    menu.buttonConfirmTrade()
+    assert(notices[#notices] == 'fresh_offer_required' and #attempts == 1)
+    menu.contextMenuData = fresh_context()
+    offer.stale = true
+    menu.buttonConfirmTrade()
+    assert(notices[#notices] == 'stale_offer' and #attempts == 1)
+    offer.stale = false
+    if cycle then
+        -- The price can legitimately return to A's quote after reopening.
+        offer.price = 58.19
+        menu.buttonConfirmTrade()
+        assert(#attempts == 1)
+    end
+    menu.buttonConfirmTrade()
+    assert(#attempts == 2 and attempts[2].intent.price_cents == (cycle and 5819 or new_price))
+    assert(notices[#notices] == 'pending')
+    reply(attempts[1], 'refused', {reason = 'price_changed', current_price_cents = 6000})
+    menu.buttonConfirmTrade()
+    assert(#attempts == 2 and notices[#notices] == 'already_attempted')
+    reply(attempts[2], 'confirmed', {settled_total_cents = 34900})
+    assert(notices[#notices] == 'confirmed')
+    assert(adapter.detach())
 end
 assert(native_calls == 4)

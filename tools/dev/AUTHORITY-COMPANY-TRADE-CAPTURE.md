@@ -35,15 +35,19 @@ For a matching refused receipt, `reason = "price_changed"` and a valid
 `current_price_cents` different from the original quote enable a notice with
 both unit prices. The custom notice still receives status `refused`, with
 no settled total and an optional third argument carrying the reason,
-`price_cents` and `current_price_cents`. The stock notice asks the player to
-review the fresh offer. A missing or invalid price uses the generic refusal.
+`price_cents`, `current_price_cents` and a boolean `reopen`. Close and reopen
+the stock trade context, then reselect the ware and explicitly confirm. A
+further price change in the fresh context prompts for another explicit
+confirmation at the newly displayed price. A missing or invalid price uses
+the generic refusal. Callbacks are scoped to their original submission.
 
 A missing, malformed or mismatched receipt is uncertain. Call `settle(nil)`
 if the request owner reaches its deadline. Pending or refused notices have
 no settled total. The adapter leaves the menu open and suppresses local stock
 booking for the covered selection.
-It suppresses further confirmations after dispatch even if the outcome is
-uncertain. Close the menu before removing the hook. The returned `detach`
+It suppresses further confirmations after dispatch while the result is
+pending, after an uncertain result or after any refusal other than a verified
+price change. Close the menu before removing the hook. The returned `detach`
 function restores the stock handler when no dispatch or reply is outstanding.
 
 The earlier native Linux LAN experiment verified `MapMenu.buttonConfirmTrade`
