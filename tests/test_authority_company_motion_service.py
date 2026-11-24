@@ -4,7 +4,8 @@ import socket
 import unittest
 from unittest.mock import patch
 
-from authority.company_motion_service import CompanyMotionService
+from authority.company_motion_frames import MAX_PEERS
+from authority.company_motion_service import CompanyMotionService, MAX_SAMPLE_AGE
 
 
 class CompanyMotionServiceTests(unittest.TestCase):
@@ -132,3 +133,115 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(stream.readline()), {
             'kind': 'motion_bound', 'window': 1, 'running': True, 'last_sequence': 0,
         })
+
+    def test_application_is_latest_per_ship_without_starving_the_waiting_ship(self):
+        self.service.set_running(True)
+        fast, fast_stream = self.bind(self.first)
+        slow, _ = self.bind(self.second)
+        self.publish(fast, self.first, 1)
+        self.publish(slow, self.second, 1)
+        velocity = {'x': 10, 'y': 0, 'z': 0}
+        for sequence in range(2, 5):
+            self.publish(fast, self.first, sequence, velocity=velocity)
+        for sequence in range(1, 5):
+            # TCP acknowledgement requires no application consumer at all.
+            self.assertEqual(json.loads(fast_stream.readline()), {
+                'kind': 'motion_sampled', 'window': 1, 'sequence': sequence,
+            })
+        first, = self.service.take_application_batch()
+        self.assertEqual((first.handle, first.window, first.sample),
+                         (1, 1, self.sample(self.first, 4, velocity=velocity)))
+        first.sample['real_velocity']['x'] = -50
+        self.assertEqual(first.sample['real_velocity'], velocity)
+        self.assertTrue(self.service.is_application_current(first))
+        self.publish(fast, self.first, 5, velocity=velocity)
+        self.publish(fast, self.first, 6, velocity=velocity)
+        second, = self.service.take_application_batch()
+        self.assertEqual((second.index, second.sample['sequence']), (2, 1))
+        self.assertFalse(self.service.is_application_current(first))
+        latest, = self.service.take_application_batch()
+        self.assertEqual((latest.index, latest.sample['sequence']), (1, 6))
+        self.assertEqual(self.service.take_application_batch(), ())
+
+    def test_freeze_keeps_only_accepted_data_from_the_closed_window(self):
+        self.service.set_running(True)
+        departed, _ = self.bind(self.first)
+        remaining, _ = self.bind(self.second)
+        self.publish(departed, self.first, 1)
+        self.publish(remaining, self.second, 1)
+        for socket_, grant in ((departed, self.first), (remaining, self.second)):
+            socket_.sendall(json.dumps({'kind': 'motion_sample', 'window': 1,
+                                        'sample': self.sample(grant, 2)}).encode() + b'\n')
+        self.service.revoke(1)
+        first, second = self.service.freeze_application()
+        self.assertEqual([(record.index, record.sample['sequence']) for record in (first, second)],
+                         [(1, 1), (2, 1)])
+        self.service.poll()
+        self.assertEqual(self.service.accepted_samples, 2)
+        self.assertFalse(self.service.running)
+        self.assertTrue(self.service.is_application_current(first))
+        self.assertTrue(self.service.is_application_current(second))
+        self.assertEqual(self.service.take_application_batch(), ())
+        self.assertEqual(self.service.freeze_application(), ())
+
+        replacement = self.service.admit(3, '3' * 32, 1, 'sector_a', 'a' * 32, 'b' * 32)
+        self.assertFalse(self.service.is_application_current(first))
+        self.assertTrue(self.service.is_application_current(second))
+        self.service.set_running(True)
+        self.assertFalse(self.service.is_application_current(second))
+        self.assertEqual(self.service.take_application_batch(), ())
+        source, stream = self.bind(replacement)
+        self.publish(source, replacement, 1)
+        current, = self.service.take_application_batch()
+        self.assertEqual((current.handle, current.window, current.sample['generation']),
+                         (3, 3, replacement['generation']))
+        self.assertTrue(self.service.is_application_current(current))
+        self.assertEqual(json.loads(stream.readline())['sequence'], 1)
+
+    def test_regrant_removes_an_undelivered_retired_sample(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        self.publish(source, self.first, 1)
+        self.service.revoke(1)
+        self.service.admit(3, '3' * 32, 1, 'sector_a', 'a' * 32, 'b' * 32)
+        self.assertEqual(self.service.freeze_application(), ())
+
+    def test_old_data_expires_with_server_age_including_frozen_batch(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0):
+            self.publish(source, self.first, 1)
+            record, = self.service.take_application_batch()
+            self.publish(source, self.first, 2)
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0 + MAX_SAMPLE_AGE):
+            self.assertFalse(self.service.is_application_current(record))
+            self.assertEqual(self.service.freeze_application(), ())
+
+    def test_reconnect_cannot_reinsert_a_regressed_capture_clock(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        self.publish(source, self.first, 4)
+        source.shutdown(socket.SHUT_RDWR)
+        self.service.poll()
+        reconnect, replies = self.bind(self.first)
+        stale = self.sample(self.first, 5)
+        stale['capture_time'] = 2.0
+        self.send(reconnect, {'kind': 'motion_sample', 'window': 1, 'sample': stale})
+        self.assertEqual(replies.readline(), b'')
+        self.assertEqual(self.service.accepted_samples, 1)
+        accepted, = self.service.take_application_batch()
+        self.assertEqual(accepted.sample['sequence'], 4)
+
+    def test_departed_grants_cannot_grow_the_application_queue(self):
+        self.service.set_running(True)
+        for index in range(3, MAX_PEERS + 6):
+            grant = self.grant(index)
+            source, _ = self.bind(grant)
+            self.publish(source, grant, 1)
+            self.service.revoke(index)
+        active, _ = self.bind(self.first)
+        self.publish(active, self.first, 1)
+        batch = self.service.freeze_application()
+        self.assertEqual(len(batch), MAX_PEERS)
+        self.assertEqual(batch[-1].index, 1)
+        self.assertEqual(batch[0].index, 7)
