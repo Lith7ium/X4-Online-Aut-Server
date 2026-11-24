@@ -211,8 +211,9 @@ function M.install_x4(o)
                 or not C.IsComponentClass(station, 'station') or not C.IsComponentOperational(station) then return end
         local ship_id, station_id = lua_id(ship), lua_id(station)
         if not ship_id or not station_id then return end
-        local owner, docked, docking, stored = GetComponentData(ship_id, 'owner', 'isdocked', 'isdocking', 'isinternallystored')
-        if owner ~= 'player' or docked ~= true or docking ~= false or stored ~= false then return end
+        local owner, docked, stored = GetComponentData(ship_id, 'owner', 'isdocked', 'isinternallystored')
+        -- Stock can keep isdocking true after a ship reaches the trading bay.
+        if owner ~= 'player' or docked ~= true or stored ~= false then return end
         local station_owner = GetComponentData(station_id, 'owner')
         if not station_owner or station_owner == 'player' then return end
         local count = tonumber(C.GetNumDockedShips(station, nil))

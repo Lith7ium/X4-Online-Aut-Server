@@ -70,17 +70,24 @@ local function external_dock(report)
     local parent = C.GetContextByClass(binding.dock, 'station', true)
     local owner, docked, docking, stored = GetComponentData(binding.ship_lua,
         'owner', 'isdocked', 'isdocking', 'isinternallystored')
-    if report then
-        log(('DOCK|owner=%s|docked=%s|docking=%s|stored=%s|parent=%s|expected=%s'):format(
-            tostring(owner), tostring(docked), tostring(docking), tostring(stored), tostring(parent), tostring(station)))
-    end
-    if owner ~= 'player' or docked ~= true or docking ~= false or stored ~= false or parent ~= station then return false end
     local count = tonumber(C.GetNumDockedShips(station, nil))
-    if not count or count < 1 or count > 4096 then return false end
-    local ships = ffi.new('UniverseID[?]', count)
-    if tonumber(C.GetDockedShips(ships, count, station, nil)) ~= count then return false end
-    for i = 0, count - 1 do if ships[i] == ship then return true end end
-    return false
+    local returned, listed
+    if count and count >= 1 and count <= 4096 then
+        local ships = ffi.new('UniverseID[?]', count)
+        returned = tonumber(C.GetDockedShips(ships, count, station, nil))
+        if returned == count then
+            listed = false
+            for i = 0, count - 1 do
+                if ships[i] == ship then listed = true; break end
+            end
+        end
+    end
+    if report then
+        log(('DOCK|owner=%s|docked=%s|docking=%s|stored=%s|parent=%s|expected=%s|count=%s|returned=%s|listed=%s'):format(
+            tostring(owner), tostring(docked), tostring(docking), tostring(stored), tostring(parent),
+            tostring(station), tostring(count), tostring(returned), tostring(listed)))
+    end
+    return owner == 'player' and docked == true and stored == false and parent == station and listed == true
 end
 
 local function controlled()

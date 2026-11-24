@@ -8,6 +8,7 @@ local lua_ids = {}
 for _, id in ipairs({ship_id, other_ship_id, station_id, other_station_id, sector_id, order_id}) do
     lua_ids[tostring(id)] = {id = id}
 end
+local docked, docking = true, true
 local live, native_calls, requests, notices, lines = true, 0, {}, {}, {}
 local offer = {ware = 'water', price = 58.77, isselloffer = true, active = true}
 local offer_station = lua_ids[tostring(station_id)]
@@ -58,9 +59,13 @@ function ConvertIDTo64Bit(value)
     return value.id
 end
 function ConvertStringToLuaID(value) return lua_ids[value] end
-function GetComponentData(ref, key)
+function GetComponentData(ref, key, ...)
     local id = ref.id
-    if id == ship_id then assert(key == 'owner'); return 'player', true, false, false end
+    if id == ship_id then
+        local values = {owner = 'player', isdocked = docked, isdocking = docking, isinternallystored = false}
+        local second, third, fourth = ...
+        return values[key], values[second], values[third], values[fourth]
+    end
     if id == station_id then assert(key == 'owner'); return 'teladi' end
     assert(id == sector_id and key == 'macro')
     return 'cluster_01_sector001_macro'
@@ -96,6 +101,13 @@ assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'immediate_trad
 menu.contextMenuData.immediate, menu.contextMenuData.immediateObject = true, station_id
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'immediate_trade_required')
 menu.contextMenuData.immediateObject = ship_id
+-- A ship merely approaching must fail even if the station lists it.
+docked = false
+assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'stale_dock')
+docked, docking = nil, false
+assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'stale_dock')
+-- Native X4 can report both docked and docking on the completed berth.
+docked, docking = true, true
 live = false
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'stale_dock')
 live = true
