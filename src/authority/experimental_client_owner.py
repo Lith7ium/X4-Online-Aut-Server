@@ -174,7 +174,8 @@ class ExperimentalClientOwner:
 
     def activate(self, attempt, controller, *, participant_timeout=30,
                  authority_grant=None, authority_guard=None, pull_authority_motion=None,
-                 apply_motion=None, company_purchase_exchange=None):
+                 apply_motion=None, company_purchase_exchange=None, company_purchase_statement=None,
+                 company_purchase_statement_result=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
@@ -193,12 +194,20 @@ class ExperimentalClientOwner:
             if apply_motion is not None and not callable(apply_motion):
                 raise ValueError('motion consumer must be callable')
             purchase_options = {}
-            if company_purchase_exchange is not None:
+            statement_callbacks = (company_purchase_statement, company_purchase_statement_result)
+            if any(value is not None for value in (company_purchase_exchange, *statement_callbacks)):
                 if (getattr(self, '_company_purchases_enabled', False) is not True
-                        or not callable(company_purchase_exchange) or self._load._chosen_ship_index is None):
+                        or self._load._chosen_ship_index is None
+                        or (company_purchase_exchange is not None and not callable(company_purchase_exchange))):
                     raise ValueError('company purchase exchange requires negotiated capability and a chosen ship')
+                statement_version = getattr(self, '_company_purchase_statement_version', None)
+                if any(value is not None and (not callable(value) or type(statement_version) is not int
+                                             or statement_version != 1) for value in statement_callbacks):
+                    raise ValueError('company purchase statement requires negotiated version 1')
                 purchase_options = {
                     'company_purchase_exchange': company_purchase_exchange,
+                    'company_purchase_statement': company_purchase_statement,
+                    'company_purchase_statement_result': company_purchase_statement_result,
                     'company_purchase_attempt': self._offer.offer.attempt_id,
                     'company_purchase_ship_index': self._load._chosen_ship_index,
                 }

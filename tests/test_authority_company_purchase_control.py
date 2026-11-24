@@ -7,6 +7,7 @@ import unittest
 import test_authority_experimental_tcp_participants as fixtures
 from authority.company_purchase_control import (
     ClientPurchaseControl, CompanyPurchasePeerLost, poll_company_purchase, purchase_receipt,
+    deliver_company_purchase_statement_result, request_company_purchase_statement,
 )
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
 from authority.experimental_tcp_control import offer_request
@@ -19,6 +20,11 @@ PURCHASE = {'purchase_id': 'b' * 32, 'sector': 'cluster_01_sector001_macro',
             'station_code': 'BIM-169', 'ware': 'water', 'quantity': 6, 'price_cents': 5877}
 CONFIRMED = dict(PURCHASE, outcome='confirmed', settled_total_cents=35200,
                  company_balance_cents=964800, cargo_units=6, ship_code='WRN-302')
+
+PENDING = dict(PURCHASE, outcome='accepted_pending_statement')
+REPORTED = dict(PURCHASE, outcome='pilot_reported', settled_total_cents=35200)
+STATEMENT = {'purchase_id': PURCHASE['purchase_id'], 'ware': 'water', 'quantity': 6,
+             'settled_total_cents': 35200}
 
 
 class Controller:
@@ -63,6 +69,45 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             owner.reply(dict(command, request_id=2, receipt=CONFIRMED), lambda: None)
 
+    def test_statement_replay_and_foreign_bindings_do_not_call_client(self):
+        seen = []
+        owner = ClientPurchaseControl('epoch', 1, 'a' * 32, 7, None,
+                                      lambda value: seen.append(value) or STATEMENT)
+        command = {'version': 1, 'kind': 'company_purchase_statement', 'session_epoch': 'epoch',
+                   'connection_handle': 1, 'attempt_id': 'a' * 32, 'ship_index': 7,
+                   'request_id': 1, 'purchase_id': PURCHASE['purchase_id'],
+                   'statement_version': 1, 'challenge': 'e' * 32}
+        for change in ({'ship_index': 8}, {'statement_version': True}, {'statement_version': 2},
+                       {'challenge': 'E' * 32}, {'request_id': 2}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                owner.reply(dict(command, **change), lambda: None)
+        self.assertEqual(seen, [])
+        answer = json.loads(owner.reply(command, lambda: None))
+        self.assertEqual(answer, dict(command, kind='company_purchase_statement_result',
+                                      statement=STATEMENT))
+        for replay in (command, dict(command, request_id=2)):
+            with self.assertRaises(ValueError):
+                owner.reply(replay, lambda: None)
+        self.assertEqual(seen, [PURCHASE['purchase_id']])
+        owner.statement = lambda value: dict(STATEMENT, purchase_id='c' * 32)
+        with self.assertRaises(ValueError):
+            owner.reply(dict(command, request_id=2, challenge='f' * 32), lambda: None)
+
+    def test_new_connection_can_acknowledge_but_does_not_invent_delivery(self):
+        callback = lambda receipt: False
+        owner = ClientPurchaseControl('epoch', 1, 'a' * 32, 7, None, statement_result=callback)
+        command = {'version': 1, 'kind': 'company_purchase_statement_delivery',
+                   'session_epoch': 'epoch', 'connection_handle': 1, 'attempt_id': 'a' * 32,
+                   'ship_index': 7, 'request_id': 1, 'statement_version': 1, 'receipt': REPORTED}
+        with self.assertRaises(ValueError):
+            owner.reply(command, lambda: None)
+        owner.statement_result = lambda receipt: receipt == REPORTED
+        answer = json.loads(owner.reply(command, lambda: None))
+        self.assertEqual(answer['purchase_id'], PURCHASE['purchase_id'])
+        self.assertEqual(answer['kind'], 'company_purchase_statement_ack')
+        with self.assertRaises(ValueError):
+            owner.reply(command, lambda: None)
+
     def test_admitted_socket_binds_real_reservation_and_delivers_once(self):
         case = fixtures.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
         self.addCleanup(case.doCleanups)
@@ -98,11 +143,22 @@ class CompanyPurchaseTests(unittest.TestCase):
             peer = next(peer for peer in case.control._peers.values() if peer['handle'] == offer.connection_handle)
             # The capability layer owns these flags, independently of reservation.
             peer['company_purchase_ship'], peer['company_purchase_epoch'] = ship_index, 'd' * 32
+            if ship_index == 7:
+                peer['company_purchase_statement_version'] = 1
             return offer
 
         offer, other_offer = admit(client, 7), admit(second, 8)
         guard_calls, callback_receipts, other_receipts, errors = [], [], [], []
         disconnect = threading.Event()
+        statements, deliveries = [], []
+
+        def statement_result(receipt):
+            deliveries.append(receipt)
+            return True
+
+        def statement(purchase_id):
+            statements.append(purchase_id)
+            return STATEMENT if purchase_id == PURCHASE['purchase_id'] else None
 
         def callback(receipt):
             callback_receipts.append(receipt)
@@ -118,7 +174,9 @@ class CompanyPurchaseTests(unittest.TestCase):
                     owner = ExperimentalTCPParticipantClient(
                         conn, Controller(), enabled=True, epoch=bound.world_epoch,
                         handle=bound.connection_handle, timeout=1, company_purchase_exchange=callback,
-                        company_purchase_attempt=bound.attempt_id, company_purchase_ship_index=index)
+                        company_purchase_attempt=bound.attempt_id, company_purchase_ship_index=index,
+                        company_purchase_statement=statement if index == 7 else None,
+                        company_purchase_statement_result=statement_result if index == 7 else None)
                     started.set()
                     while not stop.is_set():
                         owner.poll(.02)
@@ -159,12 +217,27 @@ class CompanyPurchaseTests(unittest.TestCase):
         self.assertEqual(poll_company_purchase(*args, guard=guard), PURCHASE)
         with self.assertRaises(ValueError):
             poll_company_purchase(*args)
+        request_statement = request_company_purchase_statement
+        purchase_id = PURCHASE['purchase_id']
+        self.assertEqual(request_statement(*args, purchase_id, '1' * 32), STATEMENT)
+        with self.assertRaises(ValueError):
+            request_statement(*args, purchase_id, '1' * 32)
+        self.assertEqual(request_statement(*args, purchase_id, '2' * 32), STATEMENT)
+        self.assertIsNone(request_statement(*args, '0' * 32, '3' * 32))
+        self.assertEqual(statements, [purchase_id, purchase_id, '0' * 32])
+        with self.assertRaises(ValueError):
+            request_statement(case.participants, other_offer.connection_handle, other_offer.attempt_id,
+                              8, purchase_id, '4' * 32)
         with self.assertRaises(ValueError):
             poll_company_purchase(*args, dict(CONFIRMED, ship_code='ABC-123'))
         self.assertIsNone(poll_company_purchase(*args, CONFIRMED, guard=guard))
         with self.assertRaises(ValueError):
             poll_company_purchase(*args, CONFIRMED)
         self.assertEqual(callback_receipts, [None, CONFIRMED])
+        self.assertIsNone(deliver_company_purchase_statement_result(*args, REPORTED))
+        self.assertEqual(deliveries, [REPORTED])
+        with self.assertRaises(ValueError):
+            deliver_company_purchase_statement_result(*args, CONFIRMED)
         self.assertGreater(len(guard_calls), 2)
 
         disconnect.set()

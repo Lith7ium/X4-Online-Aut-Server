@@ -17,6 +17,11 @@ _WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
 _REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
 _POLL = 'company_purchase_poll'
 _RESULT = 'company_purchase_result'
+_STATEMENT = 'company_purchase_statement'
+_STATEMENT_RESULT = 'company_purchase_statement_result'
+_STATEMENT_DELIVERY = 'company_purchase_statement_delivery'
+_STATEMENT_ACK = 'company_purchase_statement_ack'
+_STATEMENT_VERSION = 1
 _MAX_PURCHASES = 4096
 
 
@@ -69,11 +74,46 @@ def purchase_receipt(value):
             keys.add('current_price_cents')
             if not _int(value.get('current_price_cents')) or value['current_price_cents'] == value['price_cents']:
                 raise ValueError('invalid changed company purchase quote')
-    elif outcome != 'unknown':
+    elif outcome == 'pilot_reported':
+        keys.add('settled_total_cents')
+        if not _int(value.get('settled_total_cents')):
+            raise ValueError('invalid pilot-reported total')
+    elif outcome not in ('unknown', 'accepted_pending_statement'):
         raise ValueError('unknown company purchase outcome')
     if set(value) != keys:
         raise ValueError('unexpected company purchase receipt fields')
     return dict(value)
+
+
+def _statement_value(value, purchase_id):
+    if value is None:
+        return None
+    if (type(value) is not dict
+            or set(value) != {'purchase_id', 'ware', 'quantity', 'settled_total_cents'}
+            or value['purchase_id'] != purchase_id or not _matches(value['ware'], _WARE)
+            or not _int(value['quantity'], maximum=2147483647)
+            or not _int(value['settled_total_cents'])):
+        raise ValueError('invalid company purchase statement')
+    return dict(value)
+
+
+def _statement_envelope(envelope, purchase_id, challenge):
+    if not _matches(purchase_id, _TOKEN) or not _matches(challenge, _TOKEN):
+        raise ValueError('invalid company purchase statement challenge')
+    return dict(envelope, statement_version=_STATEMENT_VERSION,
+                purchase_id=purchase_id, challenge=challenge)
+
+
+def _reported_receipt(value):
+    result = purchase_receipt(value)
+    if result['outcome'] != 'pilot_reported':
+        raise ValueError('pilot-reported purchase receipt required')
+    return result
+
+
+def _statement_version_current(peer):
+    version = peer.get('company_purchase_statement_version')
+    return type(version) is int and version == _STATEMENT_VERSION
 
 
 def _envelope(epoch, handle, attempt, index, sequence):
@@ -85,7 +125,8 @@ def _envelope(epoch, handle, attempt, index, sequence):
 
 
 def _bound(value, envelope, kind, payload):
-    return (type(value) is dict and set(value) == set(envelope) | {'kind', payload}
+    fields = {'kind'} if payload is None else {'kind', payload}
+    return (type(value) is dict and set(value) == set(envelope) | fields
             and value['kind'] == kind
             and all(type(value[key]) is type(expected) and value[key] == expected
                     for key, expected in envelope.items()))
@@ -103,12 +144,22 @@ class _PurchaseWindow:
         self.sequence = 0
         self.pending = None
         self.seen = set()
+        self.challenges = set()
+
+    def check_challenge(self, challenge):
+        if challenge in self.challenges or len(self.challenges) >= _MAX_PURCHASES:
+            raise ValueError('reused or exhausted company purchase statement challenge')
+
+    def advance_challenge(self, challenge):
+        self.challenges.add(challenge)
+        self.sequence += 1
 
     def receipt(self, value):
         if value is None and self.pending is None:
             return None
         result = purchase_receipt(value)
-        if self.pending is None or any(result[key] != self.pending[key] for key in _PURCHASE):
+        if (result['outcome'] == 'pilot_reported' or self.pending is None
+                or any(result[key] != self.pending[key] for key in _PURCHASE)):
             raise ValueError('company purchase receipt does not match the outstanding request')
         return result
 
@@ -130,17 +181,25 @@ class _PurchaseWindow:
 class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
-    def __init__(self, epoch, handle, attempt, ship_index, exchange):
+    def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None):
         _envelope(epoch, handle, attempt, ship_index, 1)
-        if not callable(exchange):
-            raise ValueError('company purchase exchange must be callable')
+        callbacks = (exchange, statement, statement_result)
+        if all(value is None for value in callbacks) or any(
+                value is not None and not callable(value) for value in callbacks):
+            raise ValueError('invalid company purchase callbacks')
         self.binding = (epoch, handle, attempt, ship_index)
         self.exchange = exchange
+        self.statement = statement
+        self.statement_result = statement_result
         self.window = _PurchaseWindow()
 
     def reply(self, command, check):
         envelope = _envelope(*self.binding, self.window.sequence + 1)
-        if not _bound(command, envelope, _POLL, 'receipt'):
+        if type(command) is dict and command.get('kind') == _STATEMENT:
+            return self._reply_statement(command, envelope, check)
+        if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
+            return self._reply_statement_delivery(command, envelope, check)
+        if self.exchange is None or not _bound(command, envelope, _POLL, 'receipt'):
             raise ValueError('unexpected or stale company purchase poll')
         receipt = self.window.receipt(command['receipt'])
         check()
@@ -148,6 +207,33 @@ class ClientPurchaseControl:
         check()
         reply = _frame(dict(envelope, kind=_RESULT, purchase=purchase))
         self.window.advance(purchase)
+        return reply
+
+
+    def _reply_statement(self, command, envelope, check):
+        purchase_id, challenge = command.get('purchase_id'), command.get('challenge')
+        envelope = _statement_envelope(envelope, purchase_id, challenge)
+        if self.statement is None or not _bound(command, envelope, _STATEMENT, None):
+            raise ValueError('unexpected or stale company purchase statement request')
+        self.window.check_challenge(challenge)
+        check()
+        statement = _statement_value(self.statement(purchase_id), purchase_id)
+        check()
+        reply = _frame(dict(envelope, kind=_STATEMENT_RESULT, statement=statement))
+        self.window.advance_challenge(challenge)
+        return reply
+
+    def _reply_statement_delivery(self, command, envelope, check):
+        envelope = dict(envelope, statement_version=_STATEMENT_VERSION)
+        if self.statement_result is None or not _bound(command, envelope, _STATEMENT_DELIVERY, 'receipt'):
+            raise ValueError('unexpected or stale company purchase statement delivery')
+        receipt = _reported_receipt(command['receipt'])
+        check()
+        if self.statement_result(dict(receipt)) is not True:
+            raise ValueError('pilot-reported purchase was not acknowledged by client')
+        check()
+        reply = _frame(dict(envelope, kind=_STATEMENT_ACK, purchase_id=receipt['purchase_id']))
+        self.window.sequence += 1
         return reply
 
 
@@ -159,6 +245,61 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
     Local preflight errors leave the connection idle. Transport failure retires
     only this peer. Loss of host or world ownership faults the adapter and host.
     """
+    def prepare(peer, window, reservation, envelope):
+        result = window.receipt(receipt)
+        if (result is not None and result['outcome'] == 'accepted_pending_statement'
+                and not _statement_version_current(peer)):
+            raise ValueError('pending statement requires negotiated version 1')
+        if result is not None and result['outcome'] == 'confirmed' and result['ship_code'] != reservation.code:
+            raise ValueError('company purchase receipt names a different ship')
+        return (_frame(dict(envelope, kind=_POLL, receipt=result)), envelope,
+                _RESULT, 'purchase', window.next, window.advance)
+
+    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard)
+
+
+def request_company_purchase_statement(participants, handle, attempt_id, ship_index,
+                                       purchase_id, challenge, *, guard=None):
+    """Ask an admitted pilot for one statement, with a fresh caller-issued challenge.
+
+    A response is the pilot's statement. The caller binds it to persisted purchase
+    provenance and compares independent responses before adopting any claim.
+    """
+    def prepare(peer, window, reservation, envelope):
+        envelope = _statement_envelope(envelope, purchase_id, challenge)
+        window.check_challenge(challenge)
+        return (_frame(dict(envelope, kind=_STATEMENT)), envelope,
+                _STATEMENT_RESULT, 'statement', lambda value: _statement_value(value, purchase_id),
+                lambda _value: window.advance_challenge(challenge))
+
+    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
+                              peer_supports=_statement_version_current)
+
+
+def deliver_company_purchase_statement_result(participants, handle, attempt_id, ship_index,
+                                              receipt, *, guard=None):
+    """Deliver an adopted pilot statement and wait for a correlated acknowledgement."""
+    receipt = _reported_receipt(receipt)
+
+    def parse(purchase_id):
+        if purchase_id != receipt['purchase_id']:
+            raise ValueError('pilot-reported purchase acknowledgement differs')
+
+    def prepare(peer, window, reservation, envelope):
+        envelope = dict(envelope, statement_version=_STATEMENT_VERSION)
+
+        def advance(_value):
+            window.sequence += 1
+
+        return (_frame(dict(envelope, kind=_STATEMENT_DELIVERY, receipt=receipt)), envelope,
+                _STATEMENT_ACK, 'purchase_id', parse, advance)
+
+    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
+                              peer_supports=_statement_version_current)
+
+
+def _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard, *,
+                       peer_supports=None):
     if not isinstance(participants, ExperimentalTCPParticipants) or (guard is not None and not callable(guard)):
         raise ValueError('owned company purchase participants and optional guard required')
     host = participants._host
@@ -194,6 +335,7 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
                 and peer['stage'] == 'admitted' and peer['attempt_id'] == attempt_id
                 and type(peer.get('company_purchase_ship')) is int and peer['company_purchase_ship'] == ship_index
                 and peer.get('company_purchase_epoch') == registry_epoch
+                and (peer_supports is None or peer_supports(peer))
                 and not peer['in'] and not peer['out'] and control._session is session
                 and session._peer(conn) == owner and session._admitted_ships.get(owner) is reservation)
 
@@ -201,10 +343,7 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
         raise ValueError('company purchase participant binding unavailable')
     window = peer.setdefault('company_purchase', _PurchaseWindow())
     envelope = _envelope(epoch, handle, attempt_id, reservation.ship_index, window.sequence + 1)
-    result = window.receipt(receipt)
-    if result is not None and result['outcome'] == 'confirmed' and result['ship_code'] != reservation.code:
-        raise ValueError('company purchase receipt names a different ship')
-    raw = _frame(dict(envelope, kind=_POLL, receipt=result))
+    raw, envelope, kind, payload, parse, advance = prepare(peer, window, reservation, envelope)
 
     lease = object()
     control._reader_lease = lease
@@ -222,9 +361,9 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
             raise ParticipantGuardFailure('company purchase participant binding changed')
 
     def validate(answer):
-        if not _bound(answer, envelope, _RESULT, 'purchase'):
+        if not _bound(answer, envelope, kind, payload):
             return False
-        window.next(answer['purchase'])
+        parse(answer[payload])
         return True
 
     loss = None
@@ -244,9 +383,9 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
             loss = error
         if loss is None:
             check()
-            purchase = window.next(answer['purchase'])
-            window.advance(purchase)
-            return None if purchase is None else dict(purchase)
+            result = parse(answer[payload])
+            advance(result)
+            return result
     except BaseException:
         if started:
             participants._failed = host._failed = True

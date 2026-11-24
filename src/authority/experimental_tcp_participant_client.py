@@ -39,15 +39,18 @@ class ExperimentalTCPParticipantClient:
     adapter checks its deadline after a call but cannot interrupt that call.
     """
     def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None, company_purchase_exchange=None,
-                 company_purchase_attempt=None, company_purchase_ship_index=None):
+                 company_purchase_attempt=None, company_purchase_ship_index=None, company_purchase_statement=None,
+                 company_purchase_statement_result=None):
         validate_participant_connection(conn, controller, enabled=enabled,
                                         epoch=epoch, handle=handle, timeout=timeout)
         self._company_purchase = None
         if any(value is not None for value in (company_purchase_exchange, company_purchase_attempt,
-                                                company_purchase_ship_index)):
+                                                company_purchase_ship_index, company_purchase_statement,
+                                                company_purchase_statement_result)):
             from .company_purchase_control import ClientPurchaseControl
             self._company_purchase = ClientPurchaseControl(
-                epoch, handle, company_purchase_attempt, company_purchase_ship_index, company_purchase_exchange)
+                epoch, handle, company_purchase_attempt, company_purchase_ship_index,
+                company_purchase_exchange, company_purchase_statement, company_purchase_statement_result)
         conn.setblocking(False)
         self._conn, self._controller, self._epoch, self._handle = conn, controller, epoch, handle
         self._timeout = float(timeout)
@@ -116,7 +119,8 @@ class ExperimentalTCPParticipantClient:
             return self._motion_preflight_command(command)
         if type(command) is dict and command.get('kind')=='authority_motion_pull':
             return self._authority_motion_pull(command)
-        if type(command) is dict and command.get('kind') == 'company_purchase_poll':
+        if type(command) is dict and command.get('kind') in (
+                'company_purchase_poll', 'company_purchase_statement', 'company_purchase_statement_delivery'):
             if self._company_purchase is None:
                 raise ValueError('company purchase polling is disabled')
             self._out = self._company_purchase.reply(command, self._quiet)
