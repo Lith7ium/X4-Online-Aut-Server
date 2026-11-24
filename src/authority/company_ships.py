@@ -20,8 +20,21 @@ class CompanyShip:
     code: str | None
 
 
+@dataclass(frozen=True)
+class CompanyShipCatalogue:
+    """Ships and registry epoch jointly verified from the same checkpoint."""
+
+    registry_epoch: str
+    ships: tuple[CompanyShip, ...]
+
+
 def read_company_ships(checkpoint, *, pump=None):
-    """Return saved operational player-faction ships ordered by issued index.
+    """Return saved operational player-faction ships ordered by issued index."""
+    return read_company_ship_catalogue(checkpoint, pump=pump).ships
+
+
+def read_company_ship_catalogue(checkpoint, *, pump=None):
+    """Return the verified registry epoch and operational company ships.
 
     The format-3 verifier checks the checkpoint digest, available bindings and
     source registry. The caller owns separate MD marker checks. This inventory
@@ -47,5 +60,5 @@ def read_company_ships(checkpoint, *, pump=None):
         raw_id = _COMPONENT.fullmatch(attrs['id']).group(1)
         candidates.append(CompanyShip(ship_index, f'[0x{int(raw_id, 16):x}]', sectors[0][1], name, code))
 
-    verify_join_snapshot(checkpoint, pump=pump, observe_universe=observe)
-    return tuple(sorted(candidates, key=lambda ship: ship.ship_index))
+    snapshot = verify_join_snapshot(checkpoint, pump=pump, observe_universe=observe)
+    return CompanyShipCatalogue(snapshot['epoch'], tuple(sorted(candidates, key=lambda ship: ship.ship_index)))

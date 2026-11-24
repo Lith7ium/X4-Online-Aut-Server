@@ -11,6 +11,9 @@ from .load_messages import (MAX_MESSAGE, Offer, Receipt, _pairs, _reject_constan
                             decode_offer, decode_receipt, encode_offer, encode_receipt)
 from .trusted_marker_load_session import MarkerBoundOffer
 
+MOTION_CLAIM_KIND = 'marked_motion_claim'
+
+_TICKET = re.compile(r'[0-9a-f]{64}\Z')
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
 
 
@@ -34,11 +37,11 @@ def encode_bound_offer(bound):
     return _encode('marked_offer', bound.marker, encode_offer(bound.offer))
 
 
-def encode_load_claim(claim):
+def encode_load_claim(claim, *, ship_motion=False):
     if (type(claim) is not HonestClientLoadClaim or type(claim.receipt) is not Receipt
             or claim.load_event_observed is not True or claim.paused_observed is not True):
         raise ValueError('complete cooperative load claim required')
-    return _encode('marked_claim', claim.marker, encode_receipt(claim.receipt),
+    return _encode(_claim_kind(ship_motion), claim.marker, encode_receipt(claim.receipt),
                    load_event_observed=True, paused_observed=True)
 
 
@@ -65,6 +68,25 @@ def decode_bound_offer(raw):
     return MarkerBoundOffer(decode_offer(payload), marker)
 
 
-def decode_load_claim(raw):
-    marker, payload = _decode(raw, 'marked_claim', ('load_event_observed', 'paused_observed'))
+def _claim_kind(ship_motion):
+    if type(ship_motion) is not bool:
+        raise ValueError('invalid ship motion claim mode')
+    return MOTION_CLAIM_KIND if ship_motion else 'marked_claim'
+
+
+def decode_load_claim(raw, *, ship_motion=False):
+    marker, payload = _decode(raw, _claim_kind(ship_motion), ('load_event_observed', 'paused_observed'))
     return HonestClientLoadClaim(decode_receipt(payload), marker, True, True)
+
+
+def validate_ship_motion_credential(value, *, index, session_epoch, registry_epoch=None):
+    """Return a detached credential for the selected ship and acknowledged session."""
+    if (type(value) is not dict or set(value) != {'ticket', 'generation', 'epoch', 'index', 'session_epoch'}
+            or type(value['ticket']) is not str or not _TICKET.fullmatch(value['ticket'])
+            or any(type(value[key]) is not str or not _MARKER.fullmatch(value[key])
+                   for key in ('generation', 'epoch', 'session_epoch'))
+            or type(value['index']) is not int or not 1 <= value['index'] <= 200000
+            or value['index'] != index or value['session_epoch'] != session_epoch
+            or (registry_epoch is not None and value['epoch'] != registry_epoch)):
+        raise ValueError('invalid ship motion credential')
+    return dict(value)

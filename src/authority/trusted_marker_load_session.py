@@ -12,6 +12,7 @@ from itertools import islice
 import re
 import threading
 
+from .company_ships import CompanyShip, CompanyShipCatalogue, read_company_ship_catalogue
 from .experimental_load_session import ExperimentalLoadSession
 from .experimental_client_load import HonestClientLoadClaim
 from .load_messages import MAX_INTEGER, Offer, Receipt
@@ -46,6 +47,8 @@ class MarkerLoadOutcome:
     ready_under_trusted_client_assumption: bool = True
     exact_loaded_bytes_proven: bool = False
     client_authenticated: bool = False
+    motion_ship: CompanyShip | None = None
+    registry_epoch: str | None = None
 
 
 class TrustedMarkerLoadSession:
@@ -180,13 +183,17 @@ class TrustedMarkerLoadSession:
         # An admitted peer keeps its allocation across subsequent saves. A
         # pending peer can block only a still-usable offer for this generation.
         if self._ship_catalog is None or self._ship_catalog[0] != checkpoint:
-            reader = self._company_ship_reader
-            if reader is None:
-                from .company_ships import read_company_ships
-                reader = read_company_ships
+            reader = self._company_ship_reader or read_company_ship_catalogue
             try:
-                ships = tuple(sorted(reader(checkpoint), key=lambda ship: ship.ship_index))
-                self._ship_catalog = (checkpoint, ships, tuple(ship.ship_index for ship in ships))
+                catalogue = reader(checkpoint)
+                epoch = None
+                if isinstance(catalogue, CompanyShipCatalogue):
+                    epoch = catalogue.registry_epoch
+                    if type(epoch) is not str or not _MARKER.fullmatch(epoch):
+                        raise ValueError('invalid catalogue registry epoch')
+                    catalogue = catalogue.ships
+                ships = tuple(sorted(catalogue, key=lambda ship: ship.ship_index))
+                self._ship_catalog = (checkpoint, ships, tuple(ship.ship_index for ship in ships), epoch)
             except (ValueError, OSError):
                 raise CompanyShipCatalogUnavailable('company ship catalogue unavailable') from None
 
@@ -200,7 +207,7 @@ class TrustedMarkerLoadSession:
                 occupied.append(ship)
         occupied_indices = {ship.ship_index for ship in occupied}
         occupied_components = {ship.component_ref for ship in occupied}
-        _, ships, indices = self._ship_catalog
+        _, ships, indices, _ = self._ship_catalog
         admitted = self._admitted_ships.get(peer)
         for offset in range(bisect_right(indices, after_index), len(ships)):
             ship = ships[offset]
@@ -231,15 +238,16 @@ class TrustedMarkerLoadSession:
             ship = next(self._available_ships(peer, checkpoint, ship_index - 1), None)
             if ship is None or ship.ship_index != ship_index:
                 raise CompanyShipUnavailable('company ship unavailable')
-            if peer not in self._admitted_ships:
-                self._pending_ships[peer] = ship
+            self._pending_ships[peer] = ship
             return ship
 
-    def accept(self, connection, claim, *, pre_accept=None):
+    def accept(self, connection, claim, *, pre_accept=None, ship_motion=False):
         """Accept one trusted claim; an optional side-effect-free guard runs last.
 
         The guard runs under this wrapper's lock after checkpoint checks and
         must return exactly True. It must not call back into this wrapper.
+        Ship motion requires a reservation for this attempt and catalogue
+        evidence from the same confirmed checkpoint.
         """
         with self._lock:
             self._live()
@@ -248,12 +256,22 @@ class TrustedMarkerLoadSession:
                     or type(claim.marker) is not str or not _MARKER.fullmatch(claim.marker)
                     or claim.load_event_observed is not True or claim.paused_observed is not True):
                 raise ValueError('invalid trusted marker claim')
-            offer, message = self._inner._current(peer, claim.receipt)
+            if type(ship_motion) is not bool:
+                raise ValueError('invalid ship motion admission mode')
+            _, message = self._inner._current(peer, claim.receipt)
             bound = self._markers.get(peer)
             if bound is None or bound[0] != message.attempt_id or claim.marker != bound[1].marker:
                 raise ValueError('marker does not match current attempt')
             if self._require_company_ship and peer not in self._pending_ships and peer not in self._admitted_ships:
                 raise CompanyShipUnavailable('choose a free company ship before admission')
+            motion_ship = registry_epoch = None
+            if ship_motion:
+                motion_ship = self._pending_ships.get(peer)
+                if motion_ship is None:
+                    raise CompanyShipUnavailable('ship motion requires a reserved company ship')
+                if self._ship_catalog is None or self._ship_catalog[0] != bound[1] or self._ship_catalog[3] is None:
+                    raise CompanyShipCatalogUnavailable('motion registry epoch unavailable for the offered checkpoint')
+                registry_epoch = self._ship_catalog[3]
             # No mutation has occurred yet. The store's manifest/digest and
             # confirmed pointer must still describe the same checkpoint. The
             # caller owns the store exclusively throughout this operation.
@@ -274,4 +292,4 @@ class TrustedMarkerLoadSession:
             except BaseException:
                 self._failed = True
                 raise
-            return MarkerLoadOutcome(message.attempt_id)
+            return MarkerLoadOutcome(message.attempt_id, motion_ship=motion_ship, registry_epoch=registry_epoch)

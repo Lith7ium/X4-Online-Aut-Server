@@ -45,6 +45,7 @@ class ExperimentalClientOwner:
         self._socket = conn
         self._participant = None
         self._offer = None
+        self._ship_motion_credential = None
         self._thread = threading.current_thread()
         self._phase = 'loading'
         self._motion_port = motion_port
@@ -59,6 +60,7 @@ class ExperimentalClientOwner:
         return self._motion_port
 
     def _close_owned(self):
+        self._ship_motion_credential = None
         try:
             if self._participant is not None:
                 try:
@@ -122,6 +124,20 @@ class ExperimentalClientOwner:
             raise CompanyShipChoiceDenied(result)
         return result
 
+    def request_ship_motion(self):
+        """Request a separate motion credential for the chosen offered ship."""
+        with self._operation('loading'):
+            self._load.request_ship_motion()
+
+    @property
+    def ship_motion_credential(self):
+        """Return a copy after acknowledged admission, or None before it or after close."""
+        if threading.current_thread() is not self._thread:
+            raise RuntimeError('exclusive owner thread required')
+        if self._phase != 'active' or self._ship_motion_credential is None:
+            return None
+        return dict(self._ship_motion_credential)
+
     def download(self, new_directory):
         with self._operation('loading'):
             return self._load.download(new_directory)
@@ -180,7 +196,7 @@ class ExperimentalClientOwner:
                 timeout=participant_timeout)
             if self._invalidated:
                 raise RuntimeError('client owner changed during participant validation')
-            self._load.claim(attempt)
+            credential = self._load.claim(attempt)
             conn = self._load.take_connection()
             try:
                 self._participant = ExperimentalTCPParticipantClient(
@@ -193,6 +209,7 @@ class ExperimentalClientOwner:
                 raise
             self._load.close()
             self._load = None
+            self._ship_motion_credential = credential
             self._phase = 'active'
 
     def poll(self, timeout=0):

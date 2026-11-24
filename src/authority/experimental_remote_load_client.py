@@ -19,7 +19,7 @@ from .client_save_staging import copy_offered_save
 from .experimental_tcp_control import offer_request
 from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 from .save_transfer import SaveOffer, receive
-from .trusted_load_messages import decode_bound_offer, encode_load_claim
+from .trusted_load_messages import decode_bound_offer, encode_load_claim, validate_ship_motion_credential
 
 
 _COMPANY_SHIP_MAX_INDEX = 200_000
@@ -84,6 +84,8 @@ class ExperimentalRemoteLoadClient:
         self._deadline = float(deadline); self._io_timeout = float(io_timeout)
         self._thread = threading.get_ident(); self._state = 'new'; self._busy = False
         self._bound = self._load = None
+        self._chosen_ship_index = None
+        self._ship_motion_requested = False
         self._keepalive_interval = keepalive_interval
         self._next_keepalive = None
         self._keepalive_sequence = 1
@@ -271,6 +273,8 @@ class ExperimentalRemoteLoadClient:
         with self._operation('offered'):
             if not _company_ship_index(ship_index):
                 raise ValueError('invalid company ship index')
+            if self._ship_motion_requested and ship_index != self._chosen_ship_index:
+                raise ValueError('ship selection is fixed for the motion claim')
             reply = self._company_ship_exchange('choose_company_ship', ship_index=ship_index)
             if type(reply) is str:
                 return reply
@@ -279,7 +283,19 @@ class ExperimentalRemoteLoadClient:
             ship = _company_ship(reply['ship'])
             if ship['ship_index'] != ship_index:
                 raise ValueError('company ship choice differs from requested index')
+            self._chosen_ship_index = ship_index
             return ship
+
+    def request_ship_motion(self):
+        """Opt in locally for the chosen ship; the claim will carry the request."""
+        with self._operation(self._state):
+            if self._state not in ('offered', 'downloaded', 'staged', 'requested', 'loaded', 'paused'):
+                raise ValueError('ship motion requires an outstanding offer')
+            if self._chosen_ship_index is None:
+                raise ValueError('ship motion requires a chosen company ship')
+            if not re.fullmatch(r'[0-9a-f]{32}', self._bound.offer.world_epoch):
+                raise ValueError('ship motion requires a hex session epoch')
+            self._ship_motion_requested = True
 
     def download(self, new_directory):
         """Download to a new exclusively owned directory; no retry or load."""
@@ -340,15 +356,25 @@ class ExperimentalRemoteLoadClient:
             # Refuse an already queued response, EOF, or exceptional socket.
             readable, _, exceptional = select.select([self._conn], [], [self._conn], 0)
             if readable or exceptional: raise ConnectionError('unexpected input before claim')
-            payload = encode_load_claim(self._load.make_claim(attempt, pump=self._pump if self._keepalive_interval is not None else None))
+            claim = self._load.make_claim(attempt, pump=self._pump if self._keepalive_interval is not None else None)
+            payload = encode_load_claim(claim, ship_motion=self._ship_motion_requested)
             self._send(payload+b'\n')
             try: ack = json.loads(self._read_frame(use_overall_deadline=True).decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
             except (UnicodeError,json.JSONDecodeError,RecursionError) as error: raise ValueError('invalid accepted frame') from error
-            if (type(ack) is not dict or set(ack) != {'version','kind','attempt_id'} or
+            fields = {'version', 'kind', 'attempt_id'}
+            if self._ship_motion_requested:
+                fields.add('ship_motion')
+            offer = self._bound.offer
+            if (type(ack) is not dict or set(ack) != fields or
                     type(ack['version']) is not int or ack['version'] != 1 or ack['kind'] != 'accepted' or
-                    ack['attempt_id'] != self._bound.offer.attempt_id):
+                    ack['attempt_id'] != offer.attempt_id):
                 raise ValueError('accepted frame differs from current attempt')
+            credential = None
+            if self._ship_motion_requested:
+                credential = validate_ship_motion_credential(ack['ship_motion'],
+                    index=self._chosen_ship_index, session_epoch=offer.world_epoch)
             self._state = 'accepted'
+            return credential
 
     def take_connection(self):
         """Transfer exclusive socket ownership once after successful admission."""

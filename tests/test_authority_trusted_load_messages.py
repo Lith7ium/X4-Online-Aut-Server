@@ -20,6 +20,16 @@ class TrustedLoadMessagesTest(unittest.TestCase):
         self.bound = MarkerBoundOffer(Offer(**BASE, name='j1.xml.gz'), 'd'*32)
         self.claim = HonestClientLoadClaim(Receipt(**BASE), 'd'*32, True, True)
 
+    def test_motion_claim_uses_only_distinct_opt_in_envelope_kind(self):
+        old = encode_load_claim(self.claim)
+        motion = encode_load_claim(self.claim, ship_motion=True)
+        self.assertEqual(motion, old.replace(b'"marked_claim"', b'"marked_motion_claim"'))
+        self.assertEqual(decode_load_claim(motion, ship_motion=True), self.claim)
+        with self.assertRaises(ValueError):
+            decode_load_claim(motion)
+        with self.assertRaises(ValueError):
+            decode_load_claim(old, ship_motion=True)
+
     def test_round_trip(self):
         self.assertEqual(decode_bound_offer(encode_bound_offer(self.bound)), self.bound)
         self.assertEqual(decode_load_claim(encode_load_claim(self.claim)), self.claim)

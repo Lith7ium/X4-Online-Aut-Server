@@ -14,7 +14,9 @@ import time
 
 from .company_ship_protocol import company_ship_reply
 from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
-from .trusted_load_messages import decode_load_claim, encode_bound_offer
+from .trusted_load_messages import (
+    MOTION_CLAIM_KIND, decode_load_claim, encode_bound_offer, validate_ship_motion_credential,
+)
 from .trusted_marker_load_session import TrustedMarkerLoadSession
 
 _REQUEST = b'{"version":1,"kind":"offer_request"}\n'
@@ -47,8 +49,12 @@ class ExperimentalTCPControl:
     claim is only a trusted-client assertion, not proof that X4 consumed bytes.
     This prototype has only been exercised on loopback; it is not a complete
     Internet protocol or a decision about the eventual transport policy.
+    A motion service is for an authenticated transport. Its admit operation
+    returns a credential for one admitted handle. Revoke must be idempotent
+    and accept an attached handle even if admission never allocated a grant.
     """
-    def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8, keepalive_enabled=False):
+    def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8, keepalive_enabled=False,
+                 motion_service=None):
         if enabled is not True or type(session) is not TrustedMarkerLoadSession:
             raise ValueError('explicitly enabled trusted session required')
         if type(idle_timeout) not in (int, float) or not math.isfinite(idle_timeout) or not 0 < idle_timeout <= 300:
@@ -57,6 +63,11 @@ class ExperimentalTCPControl:
             raise ValueError('invalid peer limit')
         if type(keepalive_enabled) is not bool:
             raise ValueError('invalid keepalive option')
+        if motion_service is not None and any(
+                not callable(getattr(motion_service, name, None)) for name in ('admit', 'revoke')):
+            raise ValueError('invalid ship motion service')
+        # The caller exposes this option only on authenticated control sockets.
+        self._motion_service = motion_service
         self._keepalive_enabled = keepalive_enabled
         self._session = session
         self._timeout = float(idle_timeout)
@@ -108,9 +119,14 @@ class ExperimentalTCPControl:
 
     def _fatal(self, error):
         self._failed = True
-        for conn in tuple(self._peers):
-            try: conn.close()
-            except BaseException: pass
+        for conn, peer in tuple(self._peers.items()):
+            try:
+                self._revoke_ship_motion(peer['handle'])
+            except BaseException:
+                pass
+            finally:
+                try: conn.close()
+                except BaseException: pass
         self._peers.clear()
         raise RuntimeError('control channel faulted; fence coordinator and service') from error
 
@@ -163,14 +179,24 @@ class ExperimentalTCPControl:
             peer['deadline'] += credit
             peer['host_blocked_grace'] += credit
 
+    def _revoke_ship_motion(self, handle):
+        if self._motion_service is not None and handle is not None:
+            try:
+                self._motion_service.revoke(handle)
+            except Exception:
+                raise RuntimeError('ship motion revocation failed') from None
+
     def _drop(self, conn):
         try:
-            peer = self._peers.pop(conn)
-            if peer['handle'] is not None:
+            peer = self._peers[conn]
+            handle = peer['handle']
+            self._revoke_ship_motion(handle)
+            self._peers.pop(conn)
+            if handle is not None:
                 self._session.disconnect(conn)
                 delivery = self._job_delivery_owner
                 if delivery is not None:
-                    delivery._peer_disconnected(peer['handle'])
+                    delivery._peer_disconnected(handle)
             conn.close()
         except BaseException as error:
             try:
@@ -251,16 +277,35 @@ class ExperimentalTCPControl:
                          'sequence': message['sequence']}
                 peer['out'] += json.dumps(reply, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
                 return
-            claim = decode_load_claim(raw)
+            ship_motion = message.get('kind') == MOTION_CLAIM_KIND
+            if ship_motion and self._motion_service is None:
+                raise ValueError('ship motion service unavailable')
+            claim = decode_load_claim(raw, ship_motion=ship_motion)
             started = time.monotonic()
             def pre_accept():
                 self._account_host_blocked(started, time.monotonic())
                 return self._current_socket(conn, peer)
-            outcome = self._session.accept(conn, claim, pre_accept=pre_accept)
+            options = {'ship_motion': True} if ship_motion else {}
+            outcome = self._session.accept(conn, claim, pre_accept=pre_accept, **options)
             if not self._current_socket(conn, peer):
                 self._drop(conn)
                 return
             reply = {'version': 1, 'kind': 'accepted', 'attempt_id': outcome.attempt_id}
+            if ship_motion:
+                ship = outcome.motion_ship
+                epoch = claim.receipt.world_epoch
+                try:
+                    value = self._motion_service.admit(peer['handle'], outcome.attempt_id, ship.ship_index,
+                        ship.sector_macro, epoch, outcome.registry_epoch)
+                except ValueError:
+                    raise ValueError('ship motion admission refused') from None
+                except Exception:
+                    raise RuntimeError('ship motion admission failed') from None
+                reply['ship_motion'] = validate_ship_motion_credential(value, index=ship.ship_index,
+                    session_epoch=epoch, registry_epoch=outcome.registry_epoch)
+                if not self._current_socket(conn, peer):
+                    self._drop(conn)
+                    return
             peer['out'] += json.dumps(reply, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n'
             peer['stage'] = 'admitted'
         except ValueError as error:

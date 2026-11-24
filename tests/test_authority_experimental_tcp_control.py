@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 from authority.checkpoints import CheckpointStore
-from authority.company_ships import CompanyShip
+from authority.company_ships import CompanyShip, CompanyShipCatalogue
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.save_transfer import SaveOffers
@@ -27,7 +27,7 @@ class TCPControlTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name); (root / 'store').mkdir()
         self.service = FakeService(); self.store = CheckpointStore(root / 'store')
-        self.world = WorldCoordinator('epoch-1', FakeEngine(root), self.store, SaveOffers(self.service, self.store))
+        self.world = WorldCoordinator('1' * 32, FakeEngine(root), self.store, SaveOffers(self.service, self.store))
         self.read_company_ships = Mock(return_value=(
             CompanyShip(7, '[0x345]', 'sector_01_macro', 'Scout', 'ABC-123'),
         ))
@@ -197,6 +197,145 @@ class TCPControlTest(unittest.TestCase):
         self.deliver(peer, encode_load_claim(claim_for(bound.offer)) + b'\n')
         self.assertEqual(self.world.session.players, ())
         self.assertEqual(peer.recv(1), b'')
+
+    def setup_motion(self):
+        service = Mock()
+        service.admit.return_value = {'ticket': 'f' * 64, 'generation': 'b' * 32,
+            'epoch': 'e' * 32, 'index': 7, 'session_epoch': '1' * 32}
+        self.read_company_ships.return_value = CompanyShipCatalogue(
+            'e' * 32, self.read_company_ships.return_value)
+        self.owner = ExperimentalTCPControl(self.session, enabled=True, idle_timeout=3, motion_service=service)
+        return service
+
+    def choose_motion_ship(self, peer, offer):
+        self.deliver(peer, self.company_request('choose_company_ship', offer, ship_index=7))
+        self.assertEqual(json.loads(self.output(peer))['kind'], 'company_ship_chosen')
+
+    def test_opt_in_motion_is_bound_to_reserved_ship_and_registry_epoch(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        bound = self.offer(peer)
+        offer = bound.offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(json.loads(self.output(peer)), {'version': 1, 'kind': 'accepted',
+            'attempt_id': offer.attempt_id, 'ship_motion': service.admit.return_value})
+        service.admit.assert_called_once_with(offer.connection_handle, offer.attempt_id,
+            7, 'sector_01_macro', offer.world_epoch, 'e' * 32)
+        self.read_company_ships.assert_called_once()
+        service.revoke.assert_not_called()
+        peer.close()
+        self.owner.poll(.1)
+        service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_plain_claim_with_motion_service_keeps_exact_ack(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer)) + b'\n')
+        old_frame = ('{"attempt_id":"' + offer.attempt_id + '","kind":"accepted","version":1}').encode()
+        self.assertEqual(self.output(peer), old_frame)
+        service.admit.assert_not_called()
+        self.owner.close()
+        service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_motion_requires_reservation_on_the_current_offer(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        first = self.offer(peer).offer
+        self.choose_motion_ship(peer, first)
+        current = self.offer(peer).offer
+        # The renewed offer does not carry over the old attempt's reservation.
+        self.deliver(peer, encode_load_claim(claim_for(current), ship_motion=True) + b'\n')
+        self.assertEqual(peer.recv(1), b'')
+        self.assertEqual(self.world.session.ready_players, ())
+        service.admit.assert_not_called()
+        service.revoke.assert_called_once_with(current.connection_handle)
+
+    def test_motion_requires_catalogue_with_verified_registry_epoch(self):
+        service = Mock()
+        self.owner = ExperimentalTCPControl(self.session, enabled=True, idle_timeout=3, motion_service=service)
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(peer.recv(1), b'')
+        self.assertEqual(self.world.session.ready_players, ())
+        service.admit.assert_not_called()
+        service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_motion_opt_in_is_denied_when_service_disabled(self):
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(peer.recv(1), b'')
+        self.assertEqual(self.world.session.ready_players, ())
+
+    def test_service_returning_wrong_epoch_revokes_grant_without_ack(self):
+        service = self.setup_motion()
+        service.admit.return_value['epoch'] = '0' * 32
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(peer.recv(1), b'')
+        service.admit.assert_called_once()
+        service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_closed_control_during_motion_allocation_revokes_before_ack(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+
+        def close_during_admit(*_args):
+            peer.shutdown(socket.SHUT_WR)
+            return service.admit.return_value
+
+        service.admit.side_effect = close_during_admit
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(peer.recv(1), b'')
+        service.revoke.assert_called_once_with(offer.connection_handle)
+        self.assertEqual(self.world.session.ready_players, ())
+
+    def test_motion_grants_are_revoked_when_control_faults(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(json.loads(self.output(peer))['kind'], 'accepted')
+        with patch('authority.experimental_tcp_control.select.select', side_effect=OSError('failed select')):
+            with self.assertRaisesRegex(RuntimeError, 'control channel faulted'):
+                self.owner.poll(.1)
+        self.assertEqual(peer.recv(1), b'')
+        service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_revocation_failure_fences_control_and_retries_the_affected_handle(self):
+        service = self.setup_motion()
+        peer = self.connect()
+        self.ready_world()
+        offer = self.offer(peer).offer
+        self.choose_motion_ship(peer, offer)
+        self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+        self.assertEqual(json.loads(self.output(peer))['kind'], 'accepted')
+        service.revoke.side_effect = [RuntimeError('private service detail'), None]
+        peer.close()
+        with self.assertRaisesRegex(RuntimeError, 'control channel faulted') as fault:
+            self.owner.poll(.1)
+        self.assertNotIn('private service detail', str(fault.exception.__cause__))
+        self.assertEqual([item.args for item in service.revoke.call_args_list],
+                         [(offer.connection_handle,), (offer.connection_handle,)])
 
     def test_early_request_reports_not_ready_then_can_retry(self):
         peer = self.connect()

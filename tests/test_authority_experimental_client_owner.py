@@ -1,5 +1,6 @@
 """One owner, real wire/file protocols and simulated X4 observations."""
 import copy
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -55,7 +56,7 @@ class ClientOwnerTests(unittest.TestCase):
         self.service.offer('j1.xml.gz', source)
 
     def connect(self, *, accepted_attempt=None, send_command=True, host='127.0.0.1',
-                authority_commands=None, company_exchanges=()):
+                authority_commands=None, company_exchanges=(), motion_claim=False, motion_ack=None):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind((host, 0))
         listener.listen(1)
@@ -80,9 +81,11 @@ class ClientOwnerTests(unittest.TestCase):
                     line = stream.readline()
                     if not line:
                         return
-                    claims.append(decode_load_claim(line.rstrip(b'\n')))
+                    claims.append(decode_load_claim(line.rstrip(b'\n'), ship_motion=motion_claim))
                     accepted = {'version': 1, 'kind': 'accepted',
                                 'attempt_id': accepted_attempt or self.offer.attempt_id}
+                    if motion_ack is not None:
+                        accepted['ship_motion'] = motion_ack
                     conn.sendall(json.dumps(accepted).encode() + b'\n')
                     if authority_commands is not None:
                         for command in authority_commands:
@@ -180,6 +183,83 @@ class ClientOwnerTests(unittest.TestCase):
         path = owner.download(self.root / 'company-download')
         self.assertEqual(path.read_bytes(), self.content)
         owner.close()
+        thread.join(3)
+        self.assertEqual(errors, [])
+
+    def observe_motion_choice(self, owner):
+        bound = owner.request_offer()
+        index = 1970
+        owner.choose_company_ship(index)
+        owner.request_ship_motion()
+        self.assertIsNone(owner.ship_motion_credential)
+        self.download_count += 1
+        path = owner.download(self.root / ('motion-' + str(self.download_count)))
+        owner.verify_staged(path)
+        owner.load_requested(bound.offer.attempt_id)
+        owner.loaded_marker(bound.offer.attempt_id, bound.marker)
+        owner.paused(bound.offer.attempt_id, True)
+        self.assertIsNone(owner.ship_motion_credential)
+        return bound
+
+    def test_motion_credential_is_visible_only_after_admission_and_removed_on_close(self):
+        self.offer = replace(self.offer, world_epoch='1' * 32)
+        public = self.company_ship(1970)
+        credential = {'ticket': 'f' * 64, 'generation': 'e' * 32, 'epoch': 'd' * 32,
+                      'index': 1970, 'session_epoch': '1' * 32}
+        owner, _, thread, errors, claims, _ = self.connect(send_command=False, company_exchanges=(
+            ({'kind': 'choose_company_ship', 'ship_index': 1970}, self.company_reply('company_ship_chosen', ship=public)),
+        ), motion_claim=True, motion_ack=credential)
+        bound = self.observe_motion_choice(owner)
+        owner.activate(bound.offer.attempt_id, Controller())
+        self.assertEqual(owner.ship_motion_credential, credential)
+        copy_credential = owner.ship_motion_credential
+        copy_credential.clear()
+        self.assertEqual(owner.ship_motion_credential, credential)
+        owner.close()
+        self.assertIsNone(owner.ship_motion_credential)
+        thread.join(3)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(claims), 1)
+
+    def test_missing_or_wrong_motion_credential_prevents_handoff(self):
+        self.offer = replace(self.offer, world_epoch='1' * 32)
+        public = self.company_ship(1970)
+        good = {'ticket': 'f' * 64, 'generation': 'e' * 32, 'epoch': 'd' * 32,
+                'index': 1970, 'session_epoch': '1' * 32}
+        for credential in (None, dict(good, index=1971), dict(good, session_epoch='0' * 32),
+                           dict(good, ticket='F' * 64), dict(good, unexpected='secret')):
+            with self.subTest(credential=credential):
+                owner, client, thread, errors, _, _ = self.connect(send_command=False, company_exchanges=(
+                    ({'kind': 'choose_company_ship', 'ship_index': 1970}, self.company_reply('company_ship_chosen', ship=public)),
+                ), motion_claim=True, motion_ack=credential)
+                bound = self.observe_motion_choice(owner)
+                with self.assertRaises(ValueError):
+                    owner.activate(bound.offer.attempt_id, Controller())
+                self.assertEqual(client.fileno(), -1)
+                self.assertIsNone(owner.ship_motion_credential)
+                thread.join(3)
+                self.assertEqual(errors, [])
+
+    def test_motion_cannot_be_enabled_without_successful_choice(self):
+        owner, client, thread, errors, claims, _ = self.connect(send_command=False)
+        owner.request_offer()
+        with self.assertRaisesRegex(ValueError, 'requires a chosen company ship'):
+            owner.request_ship_motion()
+        self.assertIsNone(owner.ship_motion_credential)
+        self.assertEqual(client.fileno(), -1)
+        thread.join(3)
+        self.assertEqual(errors, [])
+        self.assertEqual(claims, [])
+
+    def test_legacy_admission_rejects_unsolicited_motion_credential(self):
+        credential = {'ticket': 'f' * 64, 'generation': 'e' * 32, 'epoch': 'd' * 32,
+                      'index': 1970, 'session_epoch': '1' * 32}
+        owner, client, thread, errors, _, _ = self.connect(send_command=False, motion_ack=credential)
+        bound = self.observe(owner)
+        with self.assertRaisesRegex(ValueError, 'accepted frame differs'):
+            owner.activate(bound.offer.attempt_id, Controller())
+        self.assertIsNone(owner.ship_motion_credential)
+        self.assertEqual(client.fileno(), -1)
         thread.join(3)
         self.assertEqual(errors, [])
 

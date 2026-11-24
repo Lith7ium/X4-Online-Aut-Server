@@ -5,9 +5,9 @@ import tempfile
 import unittest
 
 from authority.checkpoints import Checkpoint
-from authority.company_ships import CompanyShip, read_company_ships
+from authority.company_ships import CompanyShip, CompanyShipCatalogue, read_company_ship_catalogue, read_company_ships
 from authority.registry_availability_evidence import RegistryAvailabilityEvidenceError
-from test_authority_registry_availability_evidence import RUN, build_xml
+from test_authority_registry_availability_evidence import EPOCH, RUN, build_xml
 
 
 def sector(components, macro='cluster_14_sector001_macro'):
@@ -17,14 +17,14 @@ def sector(components, macro='cluster_14_sector001_macro'):
 
 
 class CompanyShipTests(unittest.TestCase):
-    def read(self, data, *, marker=RUN, digest=None):
+    def read(self, data, *, marker=RUN, digest=None, reader=read_company_ships):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'checkpoint.gz'
             compressed = gzip.compress(data)
             path.write_bytes(compressed)
             checkpoint = Checkpoint('checkpoint-' + 'a' * 32, path,
                                     digest or hashlib.sha256(compressed).hexdigest(), len(compressed), marker)
-            return read_company_ships(checkpoint)
+            return reader(checkpoint)
 
     def test_only_verified_operational_company_ships_are_listed(self):
         components = (
@@ -39,6 +39,12 @@ class CompanyShipTests(unittest.TestCase):
             CompanyShip(1, '[0x101]', 'cluster_14_sector001_macro', 'Survey Ship', 'ABC-123'),
             CompanyShip(4, '[0x104]', 'cluster_14_sector001_macro', None, 'XYZ-246'),
         ))
+
+    def test_catalogue_reads_verified_epoch_and_ships_from_same_snapshot(self):
+        xml = build_xml((1,), definitions=sector(
+            '<component id="[0x101]" class="ship_s" owner="player" code="ABC-123"/>'))
+        self.assertEqual(self.read(xml, reader=read_company_ship_catalogue), CompanyShipCatalogue(
+            EPOCH, (CompanyShip(1, '[0x101]', 'cluster_14_sector001_macro', None, 'ABC-123'),)))
 
     def test_unusable_labels_are_omitted(self):
         xml = build_xml((1,), definitions=sector(
