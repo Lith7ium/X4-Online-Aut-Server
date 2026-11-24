@@ -22,7 +22,8 @@ ffi.cdef[[
 local C = ffi.C
 local screen = 'X4AuthorityTradeCockpit'
 local quantity = 6
-local phase, deadline, take_time = 'init'
+local phase, deadline, take_time, next_verify = 'init'
+local last_md_seat
 local binding, menu, hook, captured, parked
 local failed = false
 
@@ -88,6 +89,12 @@ local function external_dock(report)
             tostring(station), tostring(count), tostring(returned), tostring(listed)))
     end
     return owner == 'player' and docked == true and stored == false and parent == station and listed == true
+end
+
+local function seat_state()
+    return table.concat({last_md_seat or 'unobserved|unknown|unknown|unknown',
+        tostring(C.GetPlayerControlledShipID()), tostring(C.GetPlayerOccupiedShipID()),
+        tostring(C.GetPlayerContainerID())}, '|')
 end
 
 local function controlled()
@@ -240,6 +247,7 @@ local function capture_menu(data)
 end
 
 local function seat_unavailable(reason)
+    if take_time then log('SEAT_LAST|' .. seat_state()) end
     log('SEAT|unavailable|' .. reason)
     map_unavailable('seat_transition_unverified')
 end
@@ -258,8 +266,18 @@ local function on_result(_, row)
         phase = 'read_offer'
         return
     end
-    assert(parse(ship) == binding.ship and parse(station) == binding.station and parse(dock) == binding.dock
-        and parse(captain) == binding.captain, 'md_binding_changed')
+    if phase == 'verify_reply' and action == 'VERIFY' then
+        last_md_seat = table.concat({status, control, occupied, container}, '|')
+        log('SEAT_STATE|' .. seat_state())
+        if parse(ship) ~= binding.ship or parse(station) ~= binding.station or parse(dock) ~= binding.dock
+                or parse(captain) ~= binding.captain then
+            seat_unavailable('md_binding_changed')
+            return
+        end
+    else
+        assert(parse(ship) == binding.ship and parse(station) == binding.station and parse(dock) == binding.dock
+            and parse(captain) == binding.captain, 'md_binding_changed')
+    end
     if phase == 'take_reply' then
         assert(action == 'TAKE', 'take_result_kind')
         if status ~= 'DISPATCHED' then seat_unavailable(status); return end
@@ -271,11 +289,17 @@ local function on_result(_, row)
         assert(action == 'VERIFY', 'verify_result_kind')
         if status == 'CONTROLLED' and parse(control) == binding.ship and parse(occupied) == binding.ship
                 and parse(container) == binding.ship and controlled() then
+            log('SEAT_LAST|' .. seat_state())
             log('SEAT|controlled')
             phase = 'begin_map'
             return
         end
-        seat_unavailable(status == 'CONTROLLED' and 'control_binding' or status)
+        if status == 'CONTROLLED' or status == 'CONTROL_MISSING' then
+            next_verify = GetCurRealTime() + 0.5
+            phase = 'verify'
+        else
+            seat_unavailable(status)
+        end
     else
         error('unexpected_md_result', 0)
     end
@@ -291,12 +315,12 @@ local function frame()
         read_offer()
     elseif phase == 'resume_seat' then
         if C.IsGamePaused() then Unpause() end
-        deadline = now + 8
+        deadline, next_verify = now + 8, now
         phase = 'verify'
     elseif phase == 'take_reply' or phase == 'verify' or phase == 'verify_reply' then
         if now >= deadline then
             seat_unavailable('control_timeout')
-        elseif phase == 'verify' and tonumber(C.GetCurrentGameTime()) > take_time and controlled() then
+        elseif phase == 'verify' and now >= next_verify and tonumber(C.GetCurrentGameTime()) > take_time then
             issue('Verify', {}, 'verify_reply')
         end
     elseif phase == 'begin_map' then
