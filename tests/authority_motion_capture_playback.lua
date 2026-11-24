@@ -190,3 +190,142 @@ for _,change in ipairs({
  assert(not motion:push(value,1.2) and motion:state()=='failed' and environment.writes==0)
 end
 print('capture-clock buffer and playback checks passed')
+
+do
+ local hull_playback = assert(loadfile('src/authority/lua/company_hull_playback.lua'))()
+ local epoch, generation = string.rep('a', 32), string.rep('b', 32)
+ local function trial(change)
+  local binding = {slot='cockpit', serial=7, epoch=epoch, generation=generation, index=7354,
+   sector_macro='sector_a', actor='0x123456789abcdef', code='WRN-302'}
+  local e = {now=2, game=10, visible=true, paused=false, point={x=0,y=0,z=0},
+   writes=0, reads=0, records={}, fault=nil}
+  local options = {enabled=true, own_index=1970, binding=binding, buffer=buffer,
+   clock=function() return e.now end,
+   game=function() return e.game end,
+   paused=function() return e.paused end,
+   guard=function(expected)
+    return e.visible and expected.actor==binding.actor and expected.serial==binding.serial
+   end,
+   read=function(expected)
+    assert(expected.index==7354)
+    e.reads=e.reads+1
+    return e.point
+   end,
+   write=function(expected, target, before)
+    assert(expected.index==7354 and expected.generation==generation and expected.slot=='cockpit')
+    assert(before.x==e.point.x and before.y==e.point.y and before.z==e.point.z)
+    assert(target.yaw==nil and target.pitch==nil and target.roll==nil)
+    if not e.ignore_write then e.point=target end
+    e.writes=e.writes+1
+    return true
+   end,
+   record=function(event) e.records[#e.records+1]=event; return true end,
+   fault=function(reason, uncertain) e.fault=reason; e.uncertain=uncertain end,
+  }
+  if change then change(options) end
+  return hull_playback.new(options), e, binding
+ end
+ local function hull_sample(sequence, capture, x, y, z, rate)
+  return {version=3, epoch=epoch, generation=generation, index=7354, sector_macro='sector_a',
+   sequence=sequence, source_time=42 + sequence / 4, capture_time=capture,
+   x=x, y=y, z=z, real_velocity=rate}
+ end
+ local zero = {x=0,y=0,z=0}
+ local rate = {x=50,y=25,z=-10}
+
+ assert(hull_playback.new({enabled=false}) == nil)
+ assert(trial(function(o) o.binding.slot='map' end) == nil)
+ assert(trial(function(o) o.own_index=7354 end) == nil)
+ assert(trial(function(o) o.binding.actor='0x0' end) == nil)
+
+ -- Large unrelated clock origins, bounded XYZ interpolation and delayed, independently read proof.
+ do
+  local hull, e, binding = trial()
+  assert(hull:push(binding, hull_sample(1, 9000, 0, 0, 0, zero), e.now))
+  assert(hull:tick() and e.writes==0)
+  e.now=2.2
+  assert(hull:push(binding, hull_sample(2, 9000.2, 10, 5, -2, rate), e.now))
+  assert(hull:tick() and e.writes==1)
+  near(e.point.x, 2.5); near(e.point.y, 1.25); near(e.point.z, -.5)
+  assert(e.records[#e.records].kind=='observation' and e.reads==2)
+  e.now=2.25
+  assert(hull:tick() and e.writes==2 and e.reads==3)
+  local result=e.records[#e.records-1]
+  assert(result.kind=='readback' and result.source_sequence==2 and result.capture_time==9000.2
+   and result.source_time==42.5 and result.slot=='cockpit' and result.error==0)
+  near(result.actual.x, 2.5); near(result.target.y, 1.25); near(result.elapsed, .05)
+  e.now=2.6
+  assert(hull:tick() and e.writes==3)
+  near(e.point.x, 20); near(e.point.y, 10); near(e.point.z, -4)
+  e.now=2.96
+  assert(not hull:tick() and hull:state()=='stale' and e.writes==3)
+ end
+
+ -- The target can be based on an older buffered sample than the newest arrival.
+ do
+  local hull,e,binding=trial()
+  assert(hull:push(binding,hull_sample(10,9000,3,0,0,zero),e.now))
+  e.now=2.02
+  assert(hull:push(binding,hull_sample(11,9000.02,4,0,0,zero),e.now))
+  assert(hull:tick() and e.writes==1)
+  e.now=2.04
+  assert(hull:tick() and e.writes==1)
+  local readback=e.records[#e.records-1]
+  assert(readback.kind=='readback' and readback.source_sequence==10
+   and readback.source_time==44.5 and readback.capture_time==9000)
+ end
+
+ -- Missing rates cannot move the hull or extend a running track.
+ do
+  local hull,e,binding=trial()
+  local ok,why=hull:push(binding,hull_sample(1,9000,20,0,0),e.now)
+  assert(not ok and why=='waiting_for_velocity' and hull:tick() and e.writes==0)
+  assert(hull:push(binding,hull_sample(2,9000.1,4,0,0,zero),e.now))
+  assert(hull:tick() and e.writes==1)
+  assert(not hull:push(binding,hull_sample(3,9000.2,5,0,0),e.now))
+  assert(not hull:tick() and e.writes==1)
+ end
+
+ for _, case in ipairs({
+  {'capture_gap', 2.1, 9001, 1},
+  {'arrival_gap', 2.8, 9000.1, 1},
+  {'source_discontinuity', 2.1, 9000.1, 51},
+ }) do
+  local hull,e,binding=trial()
+  assert(hull:push(binding,hull_sample(1,9000,0,0,0,zero),e.now))
+  e.now=case[2]
+  assert(not hull:push(binding,hull_sample(2,case[3],case[4],0,0,zero),e.now))
+  assert(hull:state()==case[1] and not hull:tick() and e.writes==0)
+ end
+
+ for _, value in ipairs({50,50.001}) do
+  local hull,e,binding=trial()
+  assert(hull:push(binding,hull_sample(1,9000,value,0,0,zero),e.now))
+  assert(hull:tick()==(value==50))
+  assert(e.writes==(value==50 and 1 or 0))
+ end
+
+ for _, lose in ipairs({'paused','binding_lost','binding_changed','sample_identity_changed',
+                        'readback_out_of_bounds','readback_not_later'}) do
+  local hull,e,binding=trial()
+  e.ignore_write=lose=='readback_out_of_bounds'
+  assert(hull:push(binding,hull_sample(1,9000,5,0,0,zero),e.now))
+  assert(hull:tick() and e.writes==1)
+  if lose~='readback_not_later' then e.now=2.1 end
+  if lose=='paused' then e.paused=true
+  elseif lose=='binding_lost' then e.visible=false
+  elseif lose=='binding_changed' then
+   binding.serial=8
+   assert(not hull:push(binding,hull_sample(2,9000.1,5,0,0,zero),e.now))
+  elseif lose=='sample_identity_changed' then
+   local foreign=hull_sample(2,9000.1,5,0,0,zero)
+   foreign.generation=string.rep('c',32)
+   assert(not hull:push(binding,foreign,e.now))
+  end
+  assert(not hull:tick() and hull:state()==lose and e.writes==1 and hull:outcome_uncertain())
+  assert(#e.records==1 and e.records[1].kind=='observation')
+  e.visible=true; e.paused=false
+  assert(not hull:tick() and e.writes==1)
+ end
+end
+print('company hull playback checks passed')
