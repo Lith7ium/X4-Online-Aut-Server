@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Read-only opt-in cockpit Company observer supporting selected HUD targets and nearby radar-visible pilots without a target lock. -->
+<!-- Read-only opt-in cockpit Company observer supporting selected HUD targets and up to 3 nearby radar-visible pilots without a target lock. -->
 <mdscript name="X4AuthorityCompanyCockpitObserver" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
   <cue name="Read" instantiate="true">
@@ -9,54 +9,118 @@
    <actions>
     <set_value name="$args" exact="event.param3"/>
     <set_value name="$mode" exact="@$args.$mode"/>
-    <set_value name="$status" exact="'UNAVAILABLE'"/>
-    <set_value name="$index" exact="0"/>
-    <set_value name="$actor" exact="'0'"/>
-    <set_value name="$sector" exact="'0'"/>
-    <set_value name="$code" exact="'0'"/>
-    <set_value name="$resolved_mode" exact="'none'"/>
-    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch and md.X4AuthorityShipRegistry.State.$last == $args.$count and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container and @player.sector.isclass.sector">
-     <set_value name="$target" exact="null"/>
-     <do_if value="$mode == 'hud' or $mode == 'hudmap'">
-      <set_value name="$target" exact="@player.target"/>
+    <do_if value="$mode == 'multi'">
+     <set_value name="$limit" exact="3"/>
+     <do_if value="$args.$max_pilots? and $args.$max_pilots ge 1 and $args.$max_pilots le 3 and $args.$max_pilots == ($args.$max_pilots)i">
+      <set_value name="$limit" exact="$args.$max_pilots"/>
      </do_if>
-     <do_elseif value="$mode == 'radar'">
-      <do_if value="$args.$target_index? and $args.$target_index ge 1 and $args.$target_index le md.X4AuthorityShipRegistry.State.$last and $args.$target_index == ($args.$target_index)i and $args.$target_index != $args.$own">
-       <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$target_index}"/>
+     <set_value name="$selected" exact="[]"/>
+     <set_value name="$modes" exact="[]"/>
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch and md.X4AuthorityShipRegistry.State.$last == $args.$count and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container and @player.sector.isclass.sector">
+      <set_value name="$hud_mode" exact="@$args.$hud_mode"/>
+      <set_value name="$target" exact="@player.target"/>
+      <do_if value="($hud_mode == 'hud' or $hud_mode == 'hudmap') and @$target.isclass.ship and $target.isoperational and $target.owner == faction.player and $target != player.ship and $target != player.occupiedship and $target != player.controlled and $target != player.container and not $target.dock.exists and not $target.isinternallystored and not $target.pilot.exists and not $target.assignedpilot.exists and @$target.sector.isclass.sector and $target.sector == player.sector and $target.attention ge attention.visible and $target.isphysicsready">
+       <set_value name="$withinradar" exact="$hud_mode == 'hud' or (@player.controlled.currentradarrange gt 0m and $target.distanceto.{player.controlled} le player.controlled.currentradarrange)"/>
+       <set_value name="$reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
+       <do_if value="$withinradar and $reg ge 1 and $reg le md.X4AuthorityShipRegistry.State.$last and $reg == ($reg)i and $reg != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$reg} == $target">
+        <append_to_list name="$selected" exact="$target"/>
+        <append_to_list name="$modes" exact="$hud_mode"/>
+       </do_if>
       </do_if>
-      <do_else>
+      <do_if value="$selected.count lt $limit and @player.controlled.currentradarrange gt 0m">
        <find_ship name="$nearby" space="player.sector" owner="faction.player" multiple="true"/>
-       <set_value name="$best_dist" exact="0m"/>
-       <do_for_each name="$cand" in="$nearby">
-        <do_if value="@$cand.isclass.ship and $cand.isoperational and $cand.owner == faction.player and $cand != player.ship and $cand != player.occupiedship and $cand != player.controlled and $cand != player.container and not $cand.dock.exists and not $cand.isinternallystored and not $cand.pilot.exists and not $cand.assignedpilot.exists and $cand.sector == player.sector and $cand.attention ge attention.visible and $cand.isphysicsready and @player.controlled.currentradarrange gt 0m">
-         <set_value name="$dist" exact="$cand.distanceto.{player.controlled}"/>
-         <set_value name="$reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$cand}"/>
-         <do_if value="$dist le player.controlled.currentradarrange and $reg ge 1 and $reg le md.X4AuthorityShipRegistry.State.$last and $reg == ($reg)i and $reg != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$reg} == $cand">
-          <do_if value="not @$target.exists or $dist lt $best_dist">
-           <set_value name="$target" exact="$cand"/>
-           <set_value name="$best_dist" exact="$dist"/>
+       <do_while value="$selected.count lt $limit">
+        <set_value name="$best" exact="null"/>
+        <set_value name="$best_dist" exact="0m"/>
+        <do_for_each name="$cand" in="$nearby">
+         <do_if value="@$cand.isclass.ship and $cand.isoperational and $cand.owner == faction.player and $cand != player.ship and $cand != player.occupiedship and $cand != player.controlled and $cand != player.container and not $cand.dock.exists and not $cand.isinternallystored and not $cand.pilot.exists and not $cand.assignedpilot.exists and $cand.sector == player.sector and $cand.attention ge attention.visible and $cand.isphysicsready and $selected.indexof.{$cand} == 0">
+          <set_value name="$dist" exact="$cand.distanceto.{player.controlled}"/>
+          <set_value name="$reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$cand}"/>
+          <do_if value="$dist le player.controlled.currentradarrange and $reg ge 1 and $reg le md.X4AuthorityShipRegistry.State.$last and $reg == ($reg)i and $reg != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$reg} == $cand">
+           <do_if value="not @$best.exists or $dist lt $best_dist">
+            <set_value name="$best" exact="$cand"/>
+            <set_value name="$best_dist" exact="$dist"/>
+           </do_if>
           </do_if>
          </do_if>
+        </do_for_each>
+        <do_if value="@$best.exists">
+         <append_to_list name="$selected" exact="$best"/>
+         <append_to_list name="$modes" exact="'radar'"/>
         </do_if>
-       </do_for_each>
+        <do_else>
+         <break/>
+        </do_else>
+       </do_while>
+      </do_if>
+     </do_if>
+     <set_value name="$entries" exact="''"/>
+     <do_all exact="$selected.count" counter="$i">
+      <set_value name="$s" exact="$selected.{$i}"/>
+      <set_value name="$s_reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$s}"/>
+      <set_value name="$entry" exact="'%s,%s,%s,%s,%s'.[$s_reg,$s,$s.sector.macro.id,$s.idcode,$modes.{$i}]"/>
+      <do_if value="$i == 1">
+       <set_value name="$entries" exact="$entry"/>
+      </do_if>
+      <do_else>
+       <set_value name="$entries" exact="'%s;%s'.[$entries,$entry]"/>
       </do_else>
-     </do_elseif>
-     <do_if value="@$target.isclass.ship and $target.isoperational and $target.owner == faction.player and $target != player.ship and $target != player.occupiedship and $target != player.controlled and $target != player.container and not $target.dock.exists and not $target.isinternallystored and not $target.pilot.exists and not $target.assignedpilot.exists">
-      <do_if value="@$target.sector.isclass.sector and $target.sector == player.sector and $target.attention ge attention.visible and $target.isphysicsready">
-       <set_value name="$withinradar" exact="$mode == 'hud' or (@player.controlled.currentradarrange gt 0m and $target.distanceto.{player.controlled} le player.controlled.currentradarrange)"/>
-       <set_value name="$registered" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
-       <do_if value="$withinradar and $registered ge 1 and $registered le md.X4AuthorityShipRegistry.State.$last and $registered == ($registered)i and $registered != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$registered} == $target">
-        <set_value name="$status" exact="'OBSERVED'"/>
-        <set_value name="$index" exact="$registered"/>
-        <set_value name="$actor" exact="'%s'.[$target]"/>
-        <set_value name="$sector" exact="$target.sector.macro.id"/>
-        <set_value name="$code" exact="$target.idcode"/>
-        <set_value name="$resolved_mode" exact="$mode"/>
+     </do_all>
+     <do_if value="$selected.count == 0">
+      <set_value name="$entries" exact="'-'"/>
+     </do_if>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitObserver.Result'" param="'%s|%s|MULTI|%s|%s'.[$args.$request_id,$args.$epoch,$selected.count,$entries]"/>
+    </do_if>
+    <do_else>
+     <set_value name="$status" exact="'UNAVAILABLE'"/>
+     <set_value name="$index" exact="0"/>
+     <set_value name="$actor" exact="'0'"/>
+     <set_value name="$sector" exact="'0'"/>
+     <set_value name="$code" exact="'0'"/>
+     <set_value name="$resolved_mode" exact="'none'"/>
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch and md.X4AuthorityShipRegistry.State.$last == $args.$count and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container and @player.sector.isclass.sector">
+      <set_value name="$target" exact="null"/>
+      <do_if value="$mode == 'hud' or $mode == 'hudmap'">
+       <set_value name="$target" exact="@player.target"/>
+      </do_if>
+      <do_elseif value="$mode == 'radar'">
+       <do_if value="$args.$target_index? and $args.$target_index ge 1 and $args.$target_index le md.X4AuthorityShipRegistry.State.$last and $args.$target_index == ($args.$target_index)i and $args.$target_index != $args.$own">
+        <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$target_index}"/>
+       </do_if>
+       <do_else>
+        <find_ship name="$nearby" space="player.sector" owner="faction.player" multiple="true"/>
+        <set_value name="$best_dist" exact="0m"/>
+        <do_for_each name="$cand" in="$nearby">
+         <do_if value="@$cand.isclass.ship and $cand.isoperational and $cand.owner == faction.player and $cand != player.ship and $cand != player.occupiedship and $cand != player.controlled and $cand != player.container and not $cand.dock.exists and not $cand.isinternallystored and not $cand.pilot.exists and not $cand.assignedpilot.exists and $cand.sector == player.sector and $cand.attention ge attention.visible and $cand.isphysicsready and @player.controlled.currentradarrange gt 0m">
+          <set_value name="$dist" exact="$cand.distanceto.{player.controlled}"/>
+          <set_value name="$reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$cand}"/>
+          <do_if value="$dist le player.controlled.currentradarrange and $reg ge 1 and $reg le md.X4AuthorityShipRegistry.State.$last and $reg == ($reg)i and $reg != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$reg} == $cand">
+           <do_if value="not @$target.exists or $dist lt $best_dist">
+            <set_value name="$target" exact="$cand"/>
+            <set_value name="$best_dist" exact="$dist"/>
+           </do_if>
+          </do_if>
+         </do_if>
+        </do_for_each>
+       </do_else>
+      </do_elseif>
+      <do_if value="@$target.isclass.ship and $target.isoperational and $target.owner == faction.player and $target != player.ship and $target != player.occupiedship and $target != player.controlled and $target != player.container and not $target.dock.exists and not $target.isinternallystored and not $target.pilot.exists and not $target.assignedpilot.exists">
+       <do_if value="@$target.sector.isclass.sector and $target.sector == player.sector and $target.attention ge attention.visible and $target.isphysicsready">
+        <set_value name="$withinradar" exact="$mode == 'hud' or (@player.controlled.currentradarrange gt 0m and $target.distanceto.{player.controlled} le player.controlled.currentradarrange)"/>
+        <set_value name="$registered" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
+        <do_if value="$withinradar and $registered ge 1 and $registered le md.X4AuthorityShipRegistry.State.$last and $registered == ($registered)i and $registered != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$registered} == $target">
+         <set_value name="$status" exact="'OBSERVED'"/>
+         <set_value name="$index" exact="$registered"/>
+         <set_value name="$actor" exact="'%s'.[$target]"/>
+         <set_value name="$sector" exact="$target.sector.macro.id"/>
+         <set_value name="$code" exact="$target.idcode"/>
+         <set_value name="$resolved_mode" exact="$mode"/>
+        </do_if>
        </do_if>
       </do_if>
      </do_if>
-    </do_if>
-    <raise_lua_event name="'X4AuthorityCompanyCockpitObserver.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$status,$index,$actor,$sector,$code,$resolved_mode]"/>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitObserver.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$status,$index,$actor,$sector,$code,$resolved_mode]"/>
+    </do_else>
    </actions>
   </cue>
  </cues>

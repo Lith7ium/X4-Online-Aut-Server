@@ -5,7 +5,7 @@ import select
 import socket
 import threading
 
-from .company_motion_observer import MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
+from .company_motion_observer import MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
 from .experimental_tcp_motion import check_motion_progress, motion_value
 
 
@@ -13,8 +13,10 @@ _MAX_SAMPLER_DATAGRAM = 512
 
 
 def validate_playback_index(index, *, company_motion, own_index=None, cockpit_radar_playback=False):
-    if type(cockpit_radar_playback) is not bool or (cockpit_radar_playback and index is None):
-        raise ValueError('cockpit radar playback requires an explicit playback index')
+    if type(cockpit_radar_playback) is not bool:
+        raise ValueError('cockpit_radar_playback must be a boolean')
+    if cockpit_radar_playback and company_motion is not True:
+        raise ValueError('cockpit playback requires company motion')
     if index is not None and (
         company_motion is not True or type(index) is not int or not 1 <= index <= 200000 or index == own_index
     ):
@@ -24,15 +26,27 @@ def validate_playback_index(index, *, company_motion, own_index=None, cockpit_ra
 class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
-    def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False):
+    def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
+        if cockpit_radar_playback:
+            if cockpit_max_pilots is None:
+                cockpit_max_pilots = 1 if playback_index is not None else MAX_COCKPIT_PILOTS
+            if type(cockpit_max_pilots) is not int or not 1 <= cockpit_max_pilots <= MAX_COCKPIT_PILOTS:
+                raise ValueError('cockpit_max_pilots must be between 1 and 3')
+            if playback_index is not None and cockpit_max_pilots != 1:
+                raise ValueError('single playback_index requires cockpit_max_pilots=1')
+        else:
+            if cockpit_max_pilots is not None:
+                raise ValueError('cockpit_max_pilots requires cockpit_radar_playback')
+            cockpit_max_pilots = 0
         if on_stage is not None and not callable(on_stage):
             raise ValueError('invalid company motion stage reporter')
         self._on_stage = on_stage
         self._reported_stages = set()
         self._playback_index = playback_index
         self._cockpit_radar_playback = cockpit_radar_playback
+        self._cockpit_max_pilots = cockpit_max_pilots
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -69,6 +83,10 @@ class CompanyMotionSource:
         return self._cockpit_radar_playback
 
     @property
+    def cockpit_max_pilots(self):
+        return self._cockpit_max_pilots
+
+    @property
     def registry(self):
         """Verified (registry epoch, selected index), populated by the installer."""
         return self._registry
@@ -100,6 +118,7 @@ class CompanyMotionSource:
             config['playback_index'] = playback_index
         if self._cockpit_radar_playback:
             config['cockpit_radar_playback'] = True
+            config['cockpit_max_pilots'] = self._cockpit_max_pilots
         return config
 
     def _prefix(self):
@@ -122,7 +141,9 @@ class CompanyMotionSource:
             except Exception:
                 return False  # An unavailable native observer cannot stop cockpit publication.
 
-        self._observer = CompanyMotionObserver(self._registry, send, trial_index=self.playback_index)
+        cockpit_slots = self._cockpit_max_pilots if self._cockpit_radar_playback and self._playback_index is None else 0
+        self._observer = CompanyMotionObserver(self._registry, send, trial_index=self.playback_index,
+                                               cockpit_playback_slots=cockpit_slots)
         return self._observer
 
     def observer_stats(self):
@@ -146,7 +167,8 @@ class CompanyMotionSource:
         if self._observer is not None:
             self._observer.expire()
             packet_limit = MAX_OBSERVER_DATAGRAM
-        for _ in range(32):
+        drain_limit = 64 if self._cockpit_max_pilots > 1 else 32
+        for _ in range(drain_limit):
             try:
                 raw, address = self._socket.recvfrom(packet_limit + 1)
             except BlockingIOError:

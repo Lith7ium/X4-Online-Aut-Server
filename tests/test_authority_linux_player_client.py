@@ -251,9 +251,17 @@ class PlayerClientTests(unittest.TestCase):
                 self.assertEqual(cli.main([*args, '--company-motion', *cockpit]), 0)
             self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
             self.assertIs(run.call_args.kwargs['cockpit_radar_playback'], True)
+            multi = ['--company-cockpit-playback']
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', *multi]), 0)
+            self.assertNotIn('company_hull_playback_index', run.call_args.kwargs)
+            self.assertIs(run.call_args.kwargs['cockpit_radar_playback'], True)
             with patch.object(native, 'run') as run, redirect_stderr(io.StringIO()):
                 for invalid in (
-                    option, cockpit, ['--company-motion', *option, *cockpit],
+                    option, cockpit, multi,
+                    ['--company-motion', *option, *cockpit],
+                    ['--company-motion', *option, *multi],
+                    ['--company-motion', *cockpit, *multi],
                     ['--company-motion', '--company-hull-playback-index', str(INDEX)],
                     ['--company-motion', '--company-cockpit-playback-index', str(INDEX)],
                 ):

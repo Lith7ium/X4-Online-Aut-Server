@@ -16,12 +16,19 @@ class CompanyMotionClient:
 
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
                  on_view_reset=None, on_transport_lost=None, on_clock=None, trial_index=None,
-                 resume_route=None, _latest_seen=None):
+                 resume_route=None, cockpit_playback_limit=None, resume_routes=None, _latest_seen=None):
         epoch, index = source.registry
         if any(callback is not None and not callable(callback)
                for callback in (on_view_reset, on_transport_lost, on_clock)):
             raise ValueError('invalid movement observation callback')
-        if (trial_index is not None or on_transport_lost is not None) and (
+        if (trial_index is not None or resume_route is not None) and (
+                cockpit_playback_limit is not None or resume_routes is not None):
+            raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
+        if cockpit_playback_limit is not None:
+            if (on_transport_lost is None or type(cockpit_playback_limit) is not int
+                    or not 1 <= cockpit_playback_limit <= 3):
+                raise ValueError('invalid cockpit playback limit')
+        elif (trial_index is not None or on_transport_lost is not None) and (
                 on_transport_lost is None or type(trial_index) is not int
                 or not 1 <= trial_index <= 200000 or trial_index == index):
             raise ValueError('invalid movement trial index')
@@ -29,6 +36,19 @@ class CompanyMotionClient:
                 trial_index is None or type(resume_route) is not tuple or len(resume_route) != 3
                 or resume_route[0] != trial_index):
             raise ValueError('movement resume route does not match trial index')
+        normalized_resume_routes = None
+        if resume_routes is not None:
+            if cockpit_playback_limit is None or type(resume_routes) not in (list, tuple) or len(resume_routes) > cockpit_playback_limit:
+                raise ValueError('invalid cockpit resume routes')
+            seen_r = set()
+            normalized_resume_routes = []
+            for item in resume_routes:
+                if (type(item) not in (list, tuple) or len(item) != 3
+                        or type(item[0]) is not int or not 1 <= item[0] <= 200000
+                        or item[0] == index or item[0] in seen_r):
+                    raise ValueError('invalid cockpit resume route entry')
+                seen_r.add(item[0])
+                normalized_resume_routes.append(tuple(item))
         if type(credential) is not dict or not callable(validate_peer):
             raise ValueError('movement admission and local source validator required')
         credential = validate_ship_motion_credential(credential, index=index, registry_epoch=epoch,
@@ -44,6 +64,10 @@ class CompanyMotionClient:
                 bind.update(loss_notifications=True, trial_index=trial_index)
             if resume_route is not None:
                 bind['resume_route'] = resume_route
+            if cockpit_playback_limit is not None:
+                bind.update(loss_notifications=True, cockpit_playback_limit=cockpit_playback_limit)
+            if normalized_resume_routes:
+                bind['resume_routes'] = [list(item) for item in normalized_resume_routes]
             self._outgoing = encode_frame(bind)
         except BaseException:
             self._connection.close()
@@ -57,6 +81,8 @@ class CompanyMotionClient:
         self._on_clock = on_clock
         self._trial_index = trial_index
         self._resume_route = resume_route
+        self._cockpit_playback_limit = cockpit_playback_limit
+        self._resume_routes = normalized_resume_routes if normalized_resume_routes else None
         self._generation = credential['generation']
         self._incoming = bytearray()
         self._bind_deadline = time.monotonic() + BIND_TIMEOUT
@@ -117,7 +143,7 @@ class CompanyMotionClient:
             del self._visible[index]
             self._hidden.discard(index)
             self._stats['visibility_ends'] += 1
-            if transport_lost and self._trial_index == index:
+            if transport_lost and (self._trial_index == index or getattr(self, '_cockpit_playback_limit', None) is not None):
                 self._on_transport_lost(index, generation)
             else:
                 self._on_end(index, generation)
@@ -149,6 +175,17 @@ class CompanyMotionClient:
                 fields.add('resume_valid')
                 if type(message.get('resume_valid')) is not bool:
                     raise ValueError('movement bind lacks a resume verdict')
+            if self._cockpit_playback_limit is not None:
+                fields.update(('loss_notifications', 'cockpit_playback_limit'))
+                if (message.get('loss_notifications') is not True
+                        or type(message.get('cockpit_playback_limit')) is not int
+                        or message['cockpit_playback_limit'] != self._cockpit_playback_limit):
+                    raise ValueError('movement bind lacks negotiated cockpit playback capability')
+            if self._resume_routes is not None:
+                fields.add('resume_valid_indices')
+                valid_indices = message.get('resume_valid_indices')
+                if type(valid_indices) is not list or any(type(item) is not int for item in valid_indices):
+                    raise ValueError('movement bind lacks cockpit resume verdicts')
         window = message.get('window')
         if (set(message) != fields or type(window) is not int or not 0 <= window <= MAX_COUNTER or
                 type(message['running']) is not bool or binding != (self._window is None)):
@@ -176,6 +213,15 @@ class CompanyMotionClient:
                     self._visible[index] = sector, generation
             else:
                 self._on_end(index, generation)
+        if binding and self._resume_routes is not None:
+            routes, self._resume_routes = self._resume_routes, None
+            valid_set = set(message['resume_valid_indices'])
+            for index, generation, sector in routes:
+                if index in valid_set and self._running:
+                    if view_matches(self._desired_view or {}, index, sector):
+                        self._visible[index] = sector, generation
+                else:
+                    self._on_end(index, generation)
         if not binding and self._on_view_reset is not None:
             self._on_view_reset()
 
@@ -214,14 +260,15 @@ class CompanyMotionClient:
                 self._snapshot(sample)
             self._receipt = {'kind': 'motion_received', 'view_id': view_id, 'index': sample['index'],
                              'sequence': sample['sequence'], 'generation': sample['generation']}
-        elif (kind == 'motion_end' or (kind == 'motion_hidden' and self._trial_index is not None)) and (
+        elif (kind == 'motion_end' or (kind == 'motion_hidden' and (
+                self._trial_index is not None or self._cockpit_playback_limit is not None))) and (
                 set(message) == {'kind', 'window', 'view_id', 'index', 'generation'}
         ):
             index, generation = message['index'], message['generation']
             if (type(index) is not int or not 1 <= index <= 200000 or
                     type(generation) is not str or not _HEX32.fullmatch(generation)):
                 raise ValueError('invalid movement visibility end')
-            if kind == 'motion_hidden' and index != self._trial_index:
+            if kind == 'motion_hidden' and self._trial_index is not None and index != self._trial_index:
                 raise ValueError('remote disappearance outside trial index')
             visible = self._visible.get(index)
             if (visible is not None and visible[1] == generation

@@ -150,7 +150,10 @@ the target once movement is visible and check that playback continues within
 radar range. The map remains separately selectable. The game log records
 `AUTH_COMPANY_COCKPIT_READBACK` with the active HUD or radar mode. On Linux, use
 `--base-game-only --company-motion --company-ship-index 1073
---company-cockpit-playback-index 1074`. If the other pilot disconnects during
+--company-cockpit-playback-index 1074`. To follow up to three visible other
+Company pilots in one cockpit without fixing one index, pass
+`-CompanyCockpitPlayback` (Windows) or `--company-cockpit-playback` (Linux)
+with `-CompanyMotion` / `--company-motion`. If the other pilot disconnects during
 steady flight, check that the visible ship stops receiving corrections within
 five real seconds of the last usable sample. Two-machine validation is pending.
 

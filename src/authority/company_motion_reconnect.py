@@ -39,11 +39,19 @@ class ReconnectingCompanyMotionClient:
     same thread. An explicit view survives a link reset without retaining poses.
     """
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
-                 on_transport_lost=None, on_world_reset=None, trial_index=None, resume_route=None):
+                 on_transport_lost=None, on_world_reset=None, trial_index=None, resume_route=None,
+                 cockpit_playback_limit=None, resume_routes=None):
         if ((on_snapshot is not None or on_end is not None)
                 and not (callable(on_snapshot) and callable(on_end))):
             raise ValueError('an observed view needs snapshot and visibility callbacks')
-        if (trial_index is not None or on_transport_lost is not None) and (
+        if (trial_index is not None or resume_route is not None) and (
+                cockpit_playback_limit is not None or resume_routes is not None):
+            raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
+        if cockpit_playback_limit is not None:
+            if (type(cockpit_playback_limit) is not int or not 1 <= cockpit_playback_limit <= 3
+                    or not callable(resume_routes) or not callable(on_transport_lost)):
+                raise ValueError('cockpit playback needs recovery callbacks')
+        elif (trial_index is not None or on_transport_lost is not None) and (
                 trial_index is None or not callable(resume_route) or not callable(on_transport_lost)):
             raise ValueError('a movement trial needs recovery callbacks')
         self._port = port
@@ -55,7 +63,10 @@ class ReconnectingCompanyMotionClient:
         self._on_world_reset = on_world_reset
         self._trial_index = trial_index
         self._resume_route = resume_route
-        self._initial_bind_until = None if trial_index is None else time.monotonic() + BIND_TIMEOUT
+        self._cockpit_playback_limit = cockpit_playback_limit
+        self._resume_routes = resume_routes
+        self._initial_bind_until = (None if trial_index is None and cockpit_playback_limit is None
+                                    else time.monotonic() + BIND_TIMEOUT)
         self._clock = None
         self._view = None
         self._latest_seen = {}
@@ -164,6 +175,11 @@ class ReconnectingCompanyMotionClient:
                     if self._trial_index is not None:
                         observer['trial_index'] = self._trial_index
                         observer['resume_route'] = self._resume_route()
+                    elif self._cockpit_playback_limit is not None:
+                        observer['cockpit_playback_limit'] = self._cockpit_playback_limit
+                        routes = self._resume_routes()
+                        if routes:
+                            observer['resume_routes'] = routes
                 self._client = CompanyMotionClient(self._port, self._credential,
                                                    self._source, self._validate_peer, **observer)
                 self._apply_view()
@@ -183,9 +199,14 @@ class ReconnectingCompanyMotionClient:
         observer = source.observe(validate_peer)
         trial = {}
         trial_index = getattr(source, 'playback_index', None)
+        cockpit_radar = getattr(source, 'cockpit_radar_playback', False)
         if trial_index is not None:
             trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
                          trial_index=trial_index, resume_route=observer.resume_route)
+        elif cockpit_radar:
+            trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
+                         cockpit_playback_limit=getattr(source, 'cockpit_max_pilots', 3),
+                         resume_routes=observer.resume_routes)
         client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end, **trial)
         observer.bind_views(client.set_views)
         return client

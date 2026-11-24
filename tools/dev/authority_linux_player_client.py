@@ -28,6 +28,8 @@ def main(argv=None):
     parser.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
     playback = parser.add_mutually_exclusive_group()
+    playback.add_argument('--company-cockpit-playback', action='store_true',
+                          help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-cockpit-playback-index', type=int,
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
@@ -37,8 +39,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
         parser.error('--company-ship-index must be between 1 and 200000')
-    cockpit_radar_playback = args.company_cockpit_playback_index is not None
-    playback_index = args.company_cockpit_playback_index if cockpit_radar_playback else args.company_hull_playback_index
+    cockpit_radar_playback = args.company_cockpit_playback or args.company_cockpit_playback_index is not None
+    playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
     try:
         validate_playback_index(playback_index, company_motion=args.company_motion,
                                 own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)

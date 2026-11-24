@@ -242,7 +242,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if company_motion is not None:
         config = config[:-2] + company_motion_config(company_motion, seat_index, full_registry) + '}\n'
         ui_sources = company_motion_ui(company_motion)
-        if company_motion.playback_index is not None and motion_settings is not None:
+        if (company_motion.playback_index is not None or company_motion.cockpit_radar_playback) and motion_settings is not None:
             raise ValueError('company hull playback requires its exclusive motion overlay')
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
         ui_files[insertion:insertion] = ['ui/' + name for name in ui_sources]

@@ -13,6 +13,7 @@ param(
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
     [switch] $CompanyPurchases,
+    [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
@@ -23,6 +24,14 @@ if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) 
 }
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
+}
+if ($CompanyCockpitPlayback) {
+    if (-not $CompanyMotion) {
+        throw 'CompanyCockpitPlayback requires CompanyMotion.'
+    }
+    if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -or $PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
+        throw 'Choose only one cockpit playback mode.'
+    }
 }
 if ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
     if (-not $CompanyMotion) {
@@ -114,6 +123,8 @@ if ($CompanyMotion) {
         $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)
     } elseif ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
         $clientArgs += @('--company-cockpit-playback-index', [string]$CompanyCockpitPlaybackIndex)
+    } elseif ($CompanyCockpitPlayback) {
+        $clientArgs += '--company-cockpit-playback'
     }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'

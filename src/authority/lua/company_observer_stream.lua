@@ -39,10 +39,20 @@ local function valid_sample(row)
 end
 
 function M.new(readers, epoch, net, prefix, clock, playback_trial)
+    local slot_names = {'cockpit'}
+    local playback_slots = {cockpit = true}
+    for _, extra in ipairs({'cockpit2', 'cockpit3'}) do
+        if readers[extra] ~= nil then
+            slot_names[#slot_names + 1] = extra
+            playback_slots[extra] = true
+        end
+    end
+    slot_names[#slot_names + 1] = 'map'
     local slots = {}
-    for _, name in ipairs(SLOT_NAMES) do
+    for _, name in ipairs(slot_names) do
         slots[name] = {reader = assert(readers[name]), serial = 0, next_heartbeat = 0}
     end
+    local receive_budget = 8 * #slot_names
     local api = {}
 
     local function publish_view(slot, name, binding, now, running)
@@ -72,17 +82,17 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
         end
-        if playback_trial and #row == 7 and row[1] == 'END' and row[2] == 'cockpit' then
-            local slot = slots.cockpit
-            if slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
+        if playback_trial and #row == 7 and row[1] == 'END' and playback_slots[row[2]] then
+            local slot = slots[row[2]]
+            if slot and slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
                     and counter(row[5]) == slot.binding.index and row[7] == slot.binding.sector_macro
                     and #row[6] == 32 and row[6]:match('^[0-9a-f]+$') then
-                playback_trial:end_track(slot.binding, slot.serial, row[6])
+                playback_trial:end_track(slot.binding, slot.serial, row[6], row[2])
             end
             return
         end
         local received_at
-        if #row == 17 and row[2] == 'cockpit' and playback_trial then
+        if #row == 17 and playback_slots[row[2]] and playback_trial then
             -- Both clocks here belong to the receiving machine. Field 16 is
             -- the original capture clock on the remote pilot's machine.
             received_at = coordinate(row[17], 1e12)
@@ -109,13 +119,13 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
                 generation = row[6], sequence = tonumber(row[7]), x = tonumber(row[9]),
                 y = tonumber(row[10]), z = tonumber(row[11]), real_velocity = velocity,
                 source_time = tonumber(row[15]), capture_time = tonumber(row[16]),
-            }, received_at)
+            }, received_at, row[2])
         end
     end
 
     function api:tick(running)
         local now = clock()
-        for _, name in ipairs(SLOT_NAMES) do
+        for _, name in ipairs(slot_names) do
             local slot = slots[name]
             local binding
             if running then
@@ -123,8 +133,14 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
             end
             publish_view(slot, name, binding, now, running)
         end
-        if playback_trial then playback_trial:view(slots.cockpit.binding, slots.cockpit.serial) end
-        for _ = 1, 8 do
+        if playback_trial then
+            for _, name in ipairs(slot_names) do
+                if playback_slots[name] then
+                    playback_trial:view(slots[name].binding, slots[name].serial, name)
+                end
+            end
+        end
+        for _ = 1, receive_budget do
             local packet = net:receive()
             if packet == nil then break end
             if running then observe(packet) end
@@ -134,7 +150,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
 
     function api:close()
         if playback_trial then playback_trial:close() end
-        for _, name in ipairs(SLOT_NAMES) do slots[name].reader:close() end
+        for _, name in ipairs(slot_names) do slots[name].reader:close() end
     end
     return api
 end

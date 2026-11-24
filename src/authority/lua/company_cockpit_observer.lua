@@ -1,8 +1,13 @@
--- Opt-in read-only cockpit Company observer: selected HUD target first, then nearby radar-visible Company pilot without target lock.
+-- Opt-in read-only cockpit Company observer: selected HUD target first, then up to 3 nearby radar-visible Company pilots without target lock.
 local M = {}
 local SCREEN = 'X4AuthorityCompanyCockpitObserver'
 local INTERVAL, FRESHNESS = 0.15, 0.45
 local MAX_INDEX = 200000
+local MAX_PILOTS = 3
+local COCKPIT_SLOTS = {'cockpit', 'cockpit2', 'cockpit3'}
+
+M.MAX_PILOTS = MAX_PILOTS
+M.COCKPIT_SLOTS = COCKPIT_SLOTS
 
 local function token(value)
     return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
@@ -23,6 +28,14 @@ end
 local function same_hull(a, b)
     return a ~= nil and b ~= nil and a.actor == b.actor and a.space == b.space
         and a.sector_macro == b.sector_macro and a.code == b.code
+end
+
+local function clone_row(row)
+    if not row then return nil end
+    return {
+        epoch = row.epoch, sector_macro = row.sector_macro, index = row.index,
+        code = row.code, actor = row.actor, mode = row.mode,
+    }
 end
 
 function M.new(pinned, own_index, engine)
@@ -114,15 +127,6 @@ function M.new(pinned, own_index, engine)
         }
     end
 
-    local function current_binding()
-        if not observed then return nil end
-        local row = observed.row
-        return {
-            epoch = row.epoch, sector_macro = row.sector_macro, index = row.index,
-            code = row.code, actor = row.actor, mode = row.mode,
-        }
-    end
-
     function api:tick()
         local probe, now = inspect()
         if probe and not pending and (not next_poll or now >= next_poll) then
@@ -137,12 +141,12 @@ function M.new(pinned, own_index, engine)
             })
             if not ok or issued ~= true then pending, observed = nil, nil end
         end
-        return current_binding()
+        return clone_row(observed and observed.row)
     end
 
     function api:current()
         inspect()
-        return current_binding()
+        return clone_row(observed and observed.row)
     end
 
     function api:mode()
@@ -165,14 +169,261 @@ function M.new(pinned, own_index, engine)
     return api
 end
 
-function M.new_x4(pinned, own_index, registry_ready, options)
-    assert(type(registry_ready) == 'function')
-    options = options or {}
-    local radar_fallback = options.radar_fallback ~= false
-    local target_index = options.target_index
-    if target_index ~= nil then
-        assert(index_in(target_index, pinned.issued_count) and target_index ~= own_index, 'invalid radar target index')
+function M.new_multi(pinned, own_index, max_pilots, engine)
+    local epoch, nonce, count = pinned.epoch, pinned.nonce, pinned.issued_count
+    assert(token(epoch) and token(nonce) and index_in(count, MAX_INDEX) and index_in(own_index, count))
+    max_pilots = max_pilots or MAX_PILOTS
+    assert(type(max_pilots) == 'number' and max_pilots % 1 == 0 and max_pilots >= 1 and max_pilots <= MAX_PILOTS,
+        'invalid max_pilots')
+    local slot_names = {}
+    for k = 1, max_pilots do slot_names[k] = COCKPIT_SLOTS[k] end
+
+    local pending, last, next_poll
+    local slots = {}
+    local sequence = 0
+    local closed = false
+
+    local function clear_all()
+        for k = 1, max_pilots do slots[k] = nil end
     end
+
+    local function inspect()
+        if closed then return nil end
+        local now = engine.clock()
+        if type(now) ~= 'number' or not (now >= 0 and now < math.huge)
+                or (last ~= nil and now < last) then
+            pending, closed = nil, true
+            clear_all()
+            return nil
+        end
+        last = now
+        local ok, probe = pcall(engine.probe)
+        if not ok then probe = nil end
+        if pending and (now >= pending.deadline or probe == nil) then
+            pending = nil
+        end
+        if probe == nil then
+            clear_all()
+            return nil, now
+        end
+        for k = 1, max_pilots do
+            local entry = slots[k]
+            if entry then
+                local still_valid = false
+                if now < entry.deadline then
+                    if probe.hud_hull and same_hull(entry.hull, probe.hud_hull) then
+                        still_valid = true
+                    elseif engine.validate_actor == nil then
+                        still_valid = true
+                    else
+                        local vok, res = pcall(engine.validate_actor, entry.hull)
+                        still_valid = vok and res == true
+                    end
+                end
+                if not still_valid then
+                    slots[k] = nil
+                end
+            end
+        end
+        return probe, now
+    end
+
+    local function receive(_, row)
+        if not pending or type(row) ~= 'string' or row:sub(1, #pending.id + 1) ~= pending.id .. '|' then return end
+        local request = pending
+        local probe = inspect()
+        local eligible = pending == request and probe ~= nil
+        pending = nil
+        if not eligible or #row > 1024 then clear_all(); return end
+        local id, actual_epoch, status, count_text, entries_text =
+            row:match('^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]*)$')
+        local reported = tonumber(count_text)
+        if id ~= request.id or actual_epoch ~= epoch or status ~= 'MULTI'
+                or type(reported) ~= 'number' or reported % 1 ~= 0 or reported < 0 or reported > max_pilots
+                or tostring(reported) ~= count_text then
+            clear_all()
+            return
+        end
+        local candidates = {}
+        local seen_index, seen_actor = {}, {}
+        if reported > 0 and entries_text ~= '' and entries_text ~= '-' then
+            for chunk in (entries_text .. ';'):gmatch('([^;]*);') do
+                if chunk ~= '' and #candidates < max_pilots then
+                    local index_text, actor_text, sector, code, rmode =
+                        chunk:match('^([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)$')
+                    local index = tonumber(index_text)
+                    local actor_id = actor_text and engine.parse_actor(actor_text) or nil
+                    local actor_key = actor_id ~= nil and tostring(actor_id) or nil
+                    if index_in(index, count) and index ~= own_index and tostring(index) == index_text
+                            and valid_sector(sector) and valid_code(code) and actor_id and actor_key
+                            and not seen_index[index] and not seen_actor[actor_key]
+                            and (rmode == 'hud' or rmode == 'hudmap' or rmode == 'radar') then
+                        local hull, final_mode
+                        if (rmode == 'hud' or rmode == 'hudmap') and probe.hud_hull
+                                and probe.hud_hull.actor == actor_id
+                                and probe.hud_hull.sector_macro == sector
+                                and probe.hud_hull.code == code then
+                            hull = probe.hud_hull
+                            final_mode = rmode
+                            if engine.confirm then engine.confirm(hull, rmode) end
+                        elseif engine.verify_radar_actor then
+                            hull = engine.verify_radar_actor(actor_id, sector, code)
+                            final_mode = hull and 'radar' or nil
+                        end
+                        if hull and final_mode then
+                            seen_index[index] = true
+                            seen_actor[actor_key] = true
+                            candidates[#candidates + 1] = {
+                                hull = hull,
+                                mode = final_mode,
+                                deadline = request.deadline,
+                                row = {
+                                    epoch = epoch, sector_macro = sector, index = index,
+                                    code = code, actor = actor_text, mode = final_mode,
+                                },
+                            }
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Sticky slot assignment: key by Lua integer index (never uint64_t cdata, which LuaJIT hashes by identity)
+        -- and verify exact actor/sector/code value equality so slots never churn when distances cross or another pilot leaves.
+        local by_index = {}
+        for _, cand in ipairs(candidates) do
+            by_index[cand.row.index] = cand
+        end
+        for k = 1, max_pilots do
+            local existing = slots[k]
+            if existing then
+                local matched = by_index[existing.row.index]
+                if matched and matched.hull.actor == existing.hull.actor
+                        and matched.row.sector_macro == existing.row.sector_macro
+                        and matched.row.code == existing.row.code then
+                    slots[k] = matched
+                    matched.assigned = true
+                else
+                    slots[k] = nil
+                end
+            end
+        end
+        for _, cand in ipairs(candidates) do
+            if not cand.assigned then
+                local placed = false
+                for k = 1, max_pilots do
+                    if slots[k] == nil then
+                        slots[k] = cand
+                        cand.assigned = true
+                        placed = true
+                        break
+                    end
+                end
+                if not placed and (cand.mode == 'hud' or cand.mode == 'hudmap') then
+                    for k = max_pilots, 1, -1 do
+                        if slots[k] and slots[k].mode == 'radar' then
+                            slots[k] = cand
+                            cand.assigned = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function poll_shared()
+        local probe, now = inspect()
+        if probe and not pending and (not next_poll or now >= next_poll) then
+            if sequence >= 4294967295 then
+                closed, pending = true, nil
+                clear_all()
+                return
+            end
+            sequence = sequence + 1
+            next_poll = now + INTERVAL
+            local id = nonce .. '-m-' .. tostring(sequence)
+            pending = {id = id, probe = probe, deadline = now + FRESHNESS}
+            local ok, issued = pcall(engine.issue, {
+                request_id = id, epoch = epoch, count = count, own = own_index,
+                mode = 'multi', max_pilots = max_pilots, hud_mode = probe.hud_mode or 'none',
+            })
+            if not ok or issued ~= true then
+                pending = nil
+                clear_all()
+            end
+        end
+    end
+
+    local readers = {}
+    for k = 1, max_pilots do
+        local slot_name = slot_names[k]
+        local slot_idx = k
+        local reader = {}
+        function reader:tick()
+            poll_shared()
+            local entry = slots[slot_idx]
+            return clone_row(entry and entry.row)
+        end
+        function reader:current()
+            inspect()
+            local entry = slots[slot_idx]
+            return clone_row(entry and entry.row)
+        end
+        function reader:mode()
+            inspect()
+            local entry = slots[slot_idx]
+            return entry and entry.mode or nil
+        end
+        function reader:matches(wanted_epoch, sector, index, actor, code)
+            inspect()
+            local entry = slots[slot_idx]
+            local row = entry and entry.row
+            return row ~= nil and row.epoch == wanted_epoch and row.sector_macro == sector
+                and row.index == index and row.actor == actor and row.code == code
+        end
+        function reader:close()
+            slots[slot_idx] = nil
+            local any_open = false
+            for j = 1, max_pilots do
+                if slots[j] ~= nil then any_open = true; break end
+            end
+            if not any_open then pending = nil end
+        end
+        readers[slot_name] = reader
+    end
+
+    local multi = {
+        slot_names = slot_names,
+        readers = readers,
+        close = function()
+            closed, pending = true, nil
+            clear_all()
+        end,
+        mode = function(_, slot_name)
+            inspect()
+            for k = 1, max_pilots do
+                if slot_names[k] == (slot_name or 'cockpit') then
+                    return slots[k] and slots[k].mode or nil
+                end
+            end
+            return nil
+        end,
+        bindings = function()
+            inspect()
+            local out = {}
+            for k = 1, max_pilots do
+                local name = slot_names[k]
+                out[name] = clone_row(slots[k] and slots[k].row)
+            end
+            return out
+        end,
+    }
+    assert(engine.register(receive) == true, 'company cockpit multi-observer event unavailable')
+    return multi
+end
+
+local function make_x4_helpers(registry_ready)
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
     if not pcall(ffi.typeof, 'ScreenPos') then
@@ -262,10 +513,7 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         return {actor = actor, space = space, sector_macro = sector, code = code}
     end
 
-    local function probe()
-        local cockpit, map_open = cockpit_view()
-        if not cockpit then last_hud_target = nil; return nil end
-        -- 1. Selected HUD target takes priority when eligible.
+    local function probe_hud(cockpit, map_open)
         local locked = hud_target()
         if locked then
             local mode = map_open and 'hudmap' or 'hud'
@@ -286,7 +534,7 @@ function M.new_x4(pinned, own_index, registry_ready, options)
                             last_hud_target = nil
                         else
                             hull.mode = mode
-                            return hull
+                            return hull, mode
                         end
                     end
                 end
@@ -295,11 +543,7 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         if last_hud_target and (not locked or last_hud_target.actor ~= locked) then
             last_hud_target = nil
         end
-        -- 2. Opt-in nearby radar-visible Company pilot without requiring a HUD target lock.
-        if radar_fallback then
-            return {mode = 'radar', target_index = target_index}
-        end
-        return nil
+        return nil, 'none'
     end
 
     local function verify_radar_actor(actor_id, expected_sector, expected_code)
@@ -320,15 +564,68 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         return checked ~= nil and same_hull(checked, hull)
     end
 
-    return M.new(pinned, own_index, {
-        clock = options.clock or GetCurRealTime,
-        probe = probe,
-        parse_actor = resolve.parse_hex,
+    return {
+        resolve = resolve,
+        cockpit_view = cockpit_view,
+        probe_hud = probe_hud,
         verify_radar_actor = verify_radar_actor,
         validate_actor = validate_actor,
+        clear_hud = function() last_hud_target = nil end,
         confirm = function(hull, mode)
             if mode == 'hud' then last_hud_target = hull end
         end,
+    }
+end
+
+function M.new_x4(pinned, own_index, registry_ready, options)
+    assert(type(registry_ready) == 'function')
+    options = options or {}
+    local radar_fallback = options.radar_fallback ~= false
+    local target_index = options.target_index
+    if target_index ~= nil then
+        assert(index_in(target_index, pinned.issued_count) and target_index ~= own_index, 'invalid radar target index')
+    end
+    local h = make_x4_helpers(registry_ready)
+    local function probe()
+        local cockpit, map_open = h.cockpit_view()
+        if not cockpit then h.clear_hud(); return nil end
+        local hull = h.probe_hud(cockpit, map_open)
+        if hull then return hull end
+        if radar_fallback then
+            return {mode = 'radar', target_index = target_index}
+        end
+        return nil
+    end
+    return M.new(pinned, own_index, {
+        clock = options.clock or GetCurRealTime,
+        probe = probe,
+        parse_actor = h.resolve.parse_hex,
+        verify_radar_actor = h.verify_radar_actor,
+        validate_actor = h.validate_actor,
+        confirm = h.confirm,
+        register = function(callback) return RegisterEvent(SCREEN .. '.Result', callback) ~= false end,
+        issue = function(args) return AddUITriggeredEvent(SCREEN, 'Read', args) ~= false end,
+    })
+end
+
+function M.new_multi_x4(pinned, own_index, registry_ready, options)
+    assert(type(registry_ready) == 'function')
+    options = options or {}
+    local max_pilots = options.max_pilots or MAX_PILOTS
+    local h = make_x4_helpers(registry_ready)
+    local function probe()
+        local cockpit, map_open = h.cockpit_view()
+        if not cockpit then h.clear_hud(); return nil end
+        local hud_hull, hud_mode = h.probe_hud(cockpit, map_open)
+        return {mode = 'multi', hud_hull = hud_hull, hud_mode = hud_mode}
+    end
+    return M.new_multi(pinned, own_index, max_pilots, {
+        clock = options.clock or GetCurRealTime,
+        probe = probe,
+        parse_actor = h.resolve.parse_hex,
+        verify_radar_actor = h.verify_radar_actor,
+        validate_actor = h.validate_actor,
+        confirm = h.confirm,
         register = function(callback) return RegisterEvent(SCREEN .. '.Result', callback) ~= false end,
         issue = function(args) return AddUITriggeredEvent(SCREEN, 'Read', args) ~= false end,
     })

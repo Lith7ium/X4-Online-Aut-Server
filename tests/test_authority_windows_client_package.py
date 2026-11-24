@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert 'ui/company_motion_source.lua' in manifest
     assert 'md/authority_job_descriptor_probe.xml' in manifest
 
-    for playback_index, radar in ((None, False), (1317, False), (1317, True)):
+    for playback_index, radar in ((None, False), (1317, False), (1317, True), (None, True)):
         private = view / f'playback-{playback_index}-{radar}'
         (private / 'extensions').mkdir(parents=True)
         (private / '.x4ls-view').touch()
@@ -98,22 +98,27 @@ with tempfile.TemporaryDirectory() as directory:
         lab = private / 'extensions/x4_lan_lab'
         config = (lab / 'ui/config.lua').read_text()
         order = (lab / 'ui.xml').read_text()
+        has_playback = playback_index is not None or radar
         for name in COMPANY_PLAYBACK_UI:
-            assert ('ui/' + name in assets) == (playback_index is not None)
-            assert (lab / 'ui' / name).is_file() == (playback_index is not None)
-            if playback_index is not None:
+            assert ('ui/' + name in assets) == has_playback
+            assert (lab / 'ui' / name).is_file() == has_playback
+            if has_playback:
                 assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
         assert ('playback_index=' in config) == (playback_index is not None)
         assert ('cockpit_radar_playback=true' in config) == radar
+        if radar:
+            expected_max = 1 if playback_index is not None else 3
+            assert f'cockpit_max_pilots={expected_max}' in config
         assert ('md/company_cockpit_observer.xml' in assets) == radar
         for name in ('company_cockpit_observer.lua', 'company_cockpit_playback.lua'):
             assert ('ui/' + name in assets) == radar
             assert (lab / 'ui' / name).is_file() == radar
             if radar:
                 assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
+        if has_playback:
+            assert 'X4LAN_MOTION_BUFFER=M' in (lab / 'ui/motion_buffer.lua').read_text()
         if playback_index is not None:
             assert 'playback_index=1317' in config
-            assert 'X4LAN_MOTION_BUFFER=M' in (lab / 'ui/motion_buffer.lua').read_text()
 """
 
 
@@ -171,6 +176,7 @@ class WindowsClientPackageTest(unittest.TestCase):
                     if entry == 'authority_windows_fixture_client.py':
                         self.assertIn('--company-hull-playback-index', result.stdout)
                         self.assertIn('--company-cockpit-playback-index', result.stdout)
+                        self.assertIn('--company-cockpit-playback', result.stdout)
             subprocess.run([sys.executable, '-c', OVERLAY_SMOKE], cwd=extracted, env=environment,
                            check=True, timeout=10)
 
