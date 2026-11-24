@@ -92,7 +92,10 @@ with tempfile.TemporaryDirectory() as scratch:
             '    <file name="ui/authority_world_bridge_probe.lua" />\n', encoding='ascii')
         location = dict(kind='FALLBACK', code=parking.FALLBACK_CODES[0],
                         sector=parking.FALLBACK_SECTOR, room='room_macro')
-        paths = parking.install(case, 'a' * 32, mode, location if mode == 'verify' else None)
+        sites = [dict(code=code, source_entry=entry, sector_macro=parking.FALLBACK_SECTOR)
+                 for code, entry in zip(parking.FALLBACK_CODES, parking.FALLBACK_ENTRIES, strict=True)]
+        paths = parking.install(case, 'a' * 32, mode, location if mode == 'verify' else None,
+                                fallback_sites=sites)
         assert len(paths) == 6 and all(path.is_file() for path in paths)
         station = (lab / 'md' / parking.STATION_SCRIPT).read_bytes()
         assert (b'<teleport_player ' in station) == (mode == 'prepare')
