@@ -7,11 +7,12 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 from authority.checkpoints import CheckpointStore
+from authority.company_ships import CompanyShip
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.save_transfer import SaveOffers
@@ -27,7 +28,12 @@ class TCPControlTest(unittest.TestCase):
         root = Path(self.temp.name); (root / 'store').mkdir()
         self.service = FakeService(); self.store = CheckpointStore(root / 'store')
         self.world = WorldCoordinator('epoch-1', FakeEngine(root), self.store, SaveOffers(self.service, self.store))
-        self.session = TrustedMarkerLoadSession(self.world, enabled=True)
+        self.read_company_ships = Mock(return_value=(
+            CompanyShip(7, '[0x345]', 'sector_01_macro', 'Scout', 'ABC-123'),
+        ))
+        self.session = TrustedMarkerLoadSession(
+            self.world, enabled=True, company_ship_reader=self.read_company_ships,
+        )
         self.owner = ExperimentalTCPControl(self.session, enabled=True, idle_timeout=3)
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.bind(('127.0.0.1', 0)); self.listener.listen(8)
@@ -55,13 +61,77 @@ class TCPControlTest(unittest.TestCase):
 
     def output(self, peer):
         self.owner.poll(.1)
-        value = peer.recv(8192)
+        with peer.makefile('rb') as reader:
+            value = reader.readline(8193)
         self.assertTrue(value.endswith(b'\n'))
         return value[:-1]
 
     def offer(self, peer):
         self.deliver(peer, offer_request())
         return decode_bound_offer(self.output(peer))
+
+    @staticmethod
+    def company_request(kind, offer, **fields):
+        request = {'version': 1, 'kind': kind, 'attempt_id': offer.attempt_id, **fields}
+        return json.dumps(request).encode('ascii') + b'\n'
+
+    def test_company_ship_choice_is_exclusive_and_released_on_disconnect(self):
+        alice, bob = self.connect(), self.connect()
+        self.ready_world()
+        offers = {alice: self.offer(alice).offer, bob: self.offer(bob).offer}
+        public_ship = {'ship_index': 7, 'sector_macro': 'sector_01_macro',
+                       'name': 'Scout', 'code': 'ABC-123'}
+
+        for peer, offer in offers.items():
+            self.deliver(peer, self.company_request('list_company_ships', offer, after_index=0))
+            self.assertEqual(json.loads(self.output(peer)), {
+                'version': 1, 'kind': 'company_ships', 'attempt_id': offer.attempt_id,
+                'ships': [public_ship], 'next_index': None,
+            })
+        self.read_company_ships.assert_called_once_with(self.store.latest_marked_confirmed())
+
+        self.deliver(bob, self.company_request('choose_company_ship', offers[alice], ship_index=7))
+        self.assertEqual(json.loads(self.output(bob)), {
+            'version': 1, 'kind': 'stale_ship_choice', 'attempt_id': offers[alice].attempt_id,
+        })
+
+        # Queue both requests on different live sockets before pumping the host.
+        for peer, offer in offers.items():
+            peer.sendall(self.company_request('choose_company_ship', offer, ship_index=7))
+        self.owner.poll(.1)
+        replies = {peer: json.loads(self.output(peer)) for peer in offers}
+        self.assertCountEqual([reply['kind'] for reply in replies.values()],
+                              ['company_ship_chosen', 'company_ship_unavailable'])
+        winner = next(peer for peer, reply in replies.items() if reply['kind'] == 'company_ship_chosen')
+        waiting = bob if winner is alice else alice
+        winner_offer, waiting_offer = offers[winner], offers[waiting]
+        self.assertEqual(replies[winner], {
+            'version': 1, 'kind': 'company_ship_chosen', 'attempt_id': winner_offer.attempt_id,
+            'ship': public_ship,
+        })
+        unavailable = {'version': 1, 'kind': 'company_ship_unavailable',
+                       'attempt_id': waiting_offer.attempt_id}
+        self.assertEqual(replies[waiting], unavailable)
+        self.assertEqual(self.world.session.ready_players, ())
+
+        self.deliver(winner, encode_load_claim(claim_for(winner_offer)) + b'\n')
+        self.assertEqual(json.loads(self.output(winner)), {
+            'version': 1, 'kind': 'accepted', 'attempt_id': winner_offer.attempt_id,
+        })
+        self.assertEqual([handle for handle, _ in self.world.session.ready_players],
+                         [winner_offer.connection_handle])
+        choose = self.company_request('choose_company_ship', waiting_offer, ship_index=7)
+        self.deliver(waiting, choose)
+        self.assertEqual(json.loads(self.output(waiting)), unavailable)
+
+        winner.shutdown(socket.SHUT_WR)
+        self.owner.poll(.1)
+        self.assertEqual(winner.recv(1), b'')
+        self.deliver(waiting, choose)
+        self.assertEqual(json.loads(self.output(waiting)), {
+            'version': 1, 'kind': 'company_ship_chosen', 'attempt_id': waiting_offer.attempt_id,
+            'ship': public_ship,
+        })
 
     def test_opt_in_keepalive_ack_is_bound_to_attempt_and_sequence(self):
         self.owner._keepalive_enabled = True
@@ -122,6 +192,7 @@ class TCPControlTest(unittest.TestCase):
         ack = json.loads(self.output(peer))
         self.assertEqual(ack, {'version': 1, 'kind': 'accepted', 'attempt_id': bound.offer.attempt_id})
         self.assertEqual(len(self.world.session.ready_players), 1)
+        self.read_company_ships.assert_not_called()
         # Duplicate claims cannot add another player and disconnect the context.
         self.deliver(peer, encode_load_claim(claim_for(bound.offer)) + b'\n')
         self.assertEqual(self.world.session.players, ())
