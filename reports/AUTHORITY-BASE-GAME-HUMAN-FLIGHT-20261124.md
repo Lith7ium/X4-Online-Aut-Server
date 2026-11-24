@@ -19,6 +19,12 @@ human-test integration branch through `9e431c7a`.
 | Outbound movement | 392 server acknowledgements, including 391 samples with velocity | No confirmed publications |
 | Inbound movement | Zero snapshots | No confirmed receipt |
 
+Fedora accepted five control connections. Two distinct control handles reached
+server-side admission after a successful load claim. The host report did not
+identify the seat for each handle or show that Windows received its acceptance.
+Bazzite recorded one resume acknowledgement. Its launcher selected ship 1074
+for cockpit playback. The delivered Windows starter selects 1073 for playback.
+
 Fedora independently recorded 392 accepted movement samples, 391 with velocity.
 Its last accepted sample belonged to ship 1073. Its totals match Bazzite's
 outbound acknowledgements. Acceptance records arrival at the server. The human
