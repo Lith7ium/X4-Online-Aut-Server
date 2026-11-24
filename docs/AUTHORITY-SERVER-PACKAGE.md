@@ -135,6 +135,15 @@ load, the native MD and UI readers both returned the requested position with
 160 m move in the opposite direction. The run recorded no cause for the
 missing second move.
 
+A follow-up on `3d103f8a` recorded both native server phases with the
+same two synthetic pilots. The first KHI-630 sample expired in the queue
+after 3.145 seconds while X4 inspected, moved and verified HVC-420. With
+continuing flight samples, HVC-420 finished 480 m and KHI-630 finished
+520 m from their respective starting positions. After a cold load of
+checkpoint `5bbb18fafd344559b8e32c79cfe93809`, MD and UI independently
+reported zero metres of error for both. This measured server persistence.
+Movement on a human pilot's screen still needs an independent client test.
+
 For new pose trials, `company_pose_trial.application_drops` in `result.json`
 counts observed discards and keeps the latest ship index, source sequence and
 seconds since server acceptance under `by_reason`. The `last_reason` field
