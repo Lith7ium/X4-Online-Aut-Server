@@ -100,8 +100,10 @@ For a world that should still accept pilots the next day, add
 saves the world. The provider then waits for the next connection. In this
 mode `--timeout` bounds startup. To shut down the provider, send SIGTERM
 to its process or use Ctrl+C in its foreground terminal. Before restarting,
-use the successful provider run's `checkpoints` directory as `--store`
-and choose a fresh `--out` directory.
+check the successful run's `result.json` for its `final_checkpoint_id`. If
+present, use that run's `checkpoints` directory as `--store`. An empty run
+that produced no checkpoint uses the previous source again. Always choose a
+fresh `--out` directory.
 
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
@@ -252,11 +254,26 @@ python3 tools/dev/authority_portable_seed.py export \
 
 ## Join the two-ship Company test
 
-Use matching server and client sources and the separate private format-3 seed
-with two Company ships. Start the provider with `--require-registry-snapshot`,
-the TLS settings above and `--company-motion`. The control, file and
-authenticated movement channels use the same advertised TCP port. Supply
-`connection.json` to the testers over a private channel.
+Use matching server and client builds. For the base-game flight world,
+start the provider with ship positions enabled. Substitute the server's LAN
+address and public hostname, the private TLS files, and the ports from your
+router's forwarding rule. The example forwards external TCP 47001 to 47448
+on the server.
+
+```sh
+tools/run_authority_server.sh --game '/path/to/X4 Foundations' \
+  --store "$PWD/.local/source-run/checkpoints" --out .local/flight-01 \
+  --persistent --base-game-only --company-ship-positions \
+  --tls-bind SERVER_LAN_IPV4 --tls-port 47448 \
+  --tls-advertise PUBLIC_HOSTNAME --tls-advertise-port 47001 \
+  --tls-certificate /path/to/server-cert.pem --tls-private-key /path/to/server-key.pem \
+  --tls-shared-key-file /path/to/shared-key.hex
+```
+
+Control, save downloads and movement use the same advertised TCP port.
+Supply `connection.json` to the testers over a private channel. Once this run has saved a confirmed
+checkpoint and shut down cleanly, start the next one with
+`--store "$PWD/.local/flight-01/checkpoints" --out .local/flight-02`.
 
 On the Linux player machine, use the pinned X4 installation and matching DLC.
 Start from a local X11 or Xwayland display with readable Xauthority. The
