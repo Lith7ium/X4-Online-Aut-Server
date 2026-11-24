@@ -155,6 +155,11 @@ class PlayerClientTests(unittest.TestCase):
             self.assertEqual(options['player_settings']['server_fingerprint'], 'a' * 64)
             self.assertEqual(options['select_ship']([], None), INDEX)
             self.assertNotIn('b' * 64, stdout.getvalue())
+            self.assertNotIn('company_motion', options)
+            with patch.object(native, 'run', return_value={'success': True}) as run, \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion']), 0)
+            self.assertTrue(run.call_args.kwargs['company_motion'])
 
             connection.chmod(0o644)
             with self.assertRaisesRegex(ValueError, 'owner-only'):
@@ -163,6 +168,18 @@ class PlayerClientTests(unittest.TestCase):
                 self.assertEqual(cli.main(args), 1)
             run.assert_not_called()
             self.assertNotIn('b' * 64, stdout.getvalue())
+
+    def test_player_polls_company_client_only_during_the_active_run(self):
+        calls = []
+        owner = Mock()
+        owner.poll.side_effect = lambda _: calls.append('control')
+        process = Mock()
+        process.poll.side_effect = [None, 0]
+        company_client = Mock()
+        company_client.poll.side_effect = lambda: calls.append('motion')
+        self.assertEqual(native.poll_player(owner, process, Mock(), float('inf'), lambda: False,
+                                             company_client=company_client), 'game_closed')
+        self.assertEqual(calls, ['control', 'motion'])
 
     def test_player_loop_closes_only_its_confirmed_process_and_propagates_unrelated_errors(self):
         owner = Mock()

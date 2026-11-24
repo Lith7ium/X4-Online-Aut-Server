@@ -8,11 +8,12 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{64}$')] [string] $NetworkDllSha256,
     [ValidateRange(1, 3600)] [int] $TimeoutSeconds = 1800,
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
-    [switch] $ChooseCompanyShip
+    [switch] $ChooseCompanyShip,
+    [switch] $CompanyMotion
 )
 
 $ErrorActionPreference = 'Stop'
-if ($ChooseCompanyShip -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
+if (($ChooseCompanyShip -or $CompanyMotion) -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
 }
 if ($ObserveSeconds -ge $TimeoutSeconds) {
@@ -63,7 +64,9 @@ $clientArgs = @(
     '--network-dll', $dll.FullName,
     '--network-dll-sha256', $NetworkDllSha256.ToLowerInvariant()
 )
-if ($ChooseCompanyShip) {
+if ($CompanyMotion) {
+    $clientArgs += '--company-motion'
+} elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'
 }
 & $Python $client @clientArgs

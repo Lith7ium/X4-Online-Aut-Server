@@ -23,6 +23,11 @@ correlated cockpit-control receipt for the chosen ship and a paused-state
 receipt. Close the game window or press Ctrl-C in the client terminal to leave.
 The default one-hour run limit includes joining.
 
+Add `--company-motion` when the server operator has enabled company motion.
+After admission, the launcher opens a separate stream to the same pinned TLS
+endpoint and publishes samples for the reserved ship. The run result records
+movement counts. The temporary motion credential stays in memory.
+
 The client uses the current authenticated X11 or Xwayland `DISPLAY` by default.
 Use `--display :N` when launching on another authenticated local display.
 The launcher isolates the game's file lock and profile from any local server

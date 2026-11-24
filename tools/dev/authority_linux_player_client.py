@@ -19,6 +19,8 @@ def main(argv=None):
                         help='local X11 or Xwayland display, defaults to DISPLAY')
     parser.add_argument('--company-ship-index', type=int,
                         help='choose a specific free index instead of prompting')
+    parser.add_argument('--company-motion', action='store_true',
+                        help='opt into the server’s separate authenticated company motion channel')
     parser.add_argument('--timeout', type=float, default=3600,
                         help='total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
@@ -43,7 +45,9 @@ def main(argv=None):
     try:
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = prompt_company_ship if args.company_ship_index is None else selected_index
-        result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined)
+        motion_options = {'company_motion': True} if args.company_motion else {}
+        result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined,
+                            **motion_options)
     except (OSError, ValueError, RuntimeError, RecursionError, KeyboardInterrupt) as error:
         known = {'explicit_unprivileged_linux_opt_in_required', 'native_main_thread_required',
                  'pinned_game_or_namespace_unavailable', 'local_x11_display_required',

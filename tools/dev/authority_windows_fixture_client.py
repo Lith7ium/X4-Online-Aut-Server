@@ -53,8 +53,11 @@ def parser():
     result.add_argument('--network-dll', type=Path, required=True)
     result.add_argument('--network-dll-sha256', required=True,
                         help='independently verified SHA-256 of the Windows network DLL')
-    result.add_argument('--motion-config', type=Path,
+    motion = result.add_mutually_exclusive_group()
+    motion.add_argument('--motion-config', type=Path,
                         help='optional private JSON for an existing server motion stream; one attempt only')
+    motion.add_argument('--company-motion', action='store_true',
+                        help='choose a company ship and use the separate authenticated motion channel')
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
@@ -94,7 +97,7 @@ def run(args):
     from authority.windows_fixture_session import run_fixture_session
     from authority.windows_fixture_workspace import WindowsFixtureWorkspace
 
-    select_ship = prompt_company_ship if args.choose_company_ship else None
+    select_ship = prompt_company_ship if args.choose_company_ship or args.company_motion else None
     if args.company_ship_index is not None:
         if not 1 <= args.company_ship_index <= 200000:
             raise ValueError('company ship index outside the registry range')
@@ -103,6 +106,7 @@ def run(args):
         select_ship = select_requested_index
 
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out)
+    motion_options = {'company_motion': True} if args.company_motion else {}
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
         windows_dll=args.network_dll, dll_sha256=args.network_dll_sha256,
@@ -111,7 +115,7 @@ def run(args):
         stop_requested=ObservationWindow(args.observe_seconds),
         motion_request=motion_request,
         require_registry_snapshot=args.require_registry_snapshot or select_ship is not None,
-        select_ship=select_ship,
+        select_ship=select_ship, **motion_options,
     )
 
 

@@ -224,8 +224,11 @@ def error_code(error):
     return code if code in known_codes else 'operation_failed'
 
 
-def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None):
+def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
+        company_motion=False):
     player_mode = player_settings is not None
+    if type(company_motion) is not bool or (company_motion and not player_mode):
+        raise ValueError('company motion requires player mode')
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
     playback_scripts = native_playback.read_config(
@@ -250,6 +253,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = seat_watch = None
+    company_source = company_client = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -274,8 +278,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
             result['phase'] = 'connect'
         else:
             download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
+        motion_options = {'motion_enabled': True} if company_motion else {}
         with client_connection(**connection_settings, deadline=deadline,
-                keepalive_interval=args.keepalive_interval) as owner:
+                keepalive_interval=args.keepalive_interval, **motion_options) as owner:
             try:
                 case, profile, binds, lock = snapshot.prepare_case(out, game, home)
                 if any((profile/'save').iterdir()):
@@ -286,6 +291,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     result['phase'] = 'choose_company_ship'
                     index = reserve_company_ship(owner, select_ship)
+                    if company_motion:
+                        owner.request_ship_motion()
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
                 stage_offered_save(owner, out/'download', target)
@@ -348,7 +355,13 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 paths += [lab/'ui'/name for name in
                     ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
                 if player_mode:
-                    seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index, owner.poll)
+                    source_options = {}
+                    if company_motion:
+                        from authority.company_motion_source import CompanyMotionSource
+                        company_source = CompanyMotionSource()
+                        source_options['company_motion'] = company_source
+                    seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
+                        owner.poll, **source_options)
                     paths.extend(seat_paths)
                 if fixture_path is not None:
                     paths.append(fixture_path)
@@ -387,9 +400,19 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         if type(playback_driver) is native_playback.LiveSourceInput else None))
                 if player_mode:
                     result['controlled_company_ship_index'] = index
+                    if company_source is not None:
+                        from authority.company_motion_client import CompanyMotionClient
+
+                        def validate_peer(peer):
+                            guard(full=True)
+                            return participant.process is not None and socket_owner(
+                                peer, company_source.socket.getsockname(), participant.process)
+
+                        company_client = CompanyMotionClient(owner.motion_port, owner.ship_motion_credential,
+                                                             company_source, validate_peer)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
-                                                        deadline, lambda: stop_requested)
+                        deadline, lambda: stop_requested, company_client=company_client)
                 else:
                     active_until = time.monotonic()+args.active_seconds
                     if active_until >= deadline:
@@ -418,6 +441,17 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 # Native ownership is fenced before owner/tunnel/thread release.
                 for number in handlers:
                     signal.signal(number, signal.SIG_IGN)
+                if company_client is not None:
+                    try:
+                        company_client.close()
+                        result['company_motion'] = company_client.stats()
+                    except BaseException:
+                        cleanup_errors.append('company_motion_client_cleanup_failed')
+                if company_source is not None:
+                    try:
+                        company_source.close()
+                    except BaseException:
+                        cleanup_errors.append('company_motion_source_cleanup_failed')
                 resources_stopped = download.stop_owned_resources([], processes, result, cleanup_errors)
                 cleanup_attempted = True
                 if watch is not None and ticket is not None:
@@ -499,7 +533,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
     return result
 
 
-def poll_player(owner, process, guard, deadline, stop_requested):
+def poll_player(owner, process, guard, deadline, stop_requested, *, company_client=None):
     """Serve the admitted client until its own game exits or the user leaves."""
     while time.monotonic() < deadline:
         if stop_requested():
@@ -518,6 +552,8 @@ def poll_player(owner, process, guard, deadline, stop_requested):
                 pass
             raise
         owner.poll(.1)
+        if company_client is not None:
+            company_client.poll()
     return 'session_limit'
 
 

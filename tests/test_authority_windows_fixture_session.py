@@ -81,7 +81,8 @@ class FixtureSessionTests(unittest.TestCase):
         self.inspect_registry = inspect_registry
 
         @contextmanager
-        def connection(**_options):
+        def connection(**options):
+            test.connection_options = options
             test.calls.append('tls_enter')
             try: yield test.owner
             finally: test.calls.append('tls_exit')
@@ -135,6 +136,7 @@ class FixtureSessionTests(unittest.TestCase):
         def install(view, **options):
             test.assertEqual(options['registry_status'], test.registry_status)
             test.assertEqual(options['registry_nonce'], test.registry_nonce)
+            test.installed_company_source = options.get('company_motion')
             test.installed_seat = options.get('seat_index')
             test.installed_registry_snapshot = options.get('registry_snapshot')
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
@@ -187,6 +189,55 @@ class FixtureSessionTests(unittest.TestCase):
             result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
         self.assertEqual(result['controlled_company_ship_index'], 2)
         self.assertEqual(self.installed_seat, 2)
+
+    def test_company_motion_starts_only_after_admission_and_cleans_up_before_x4(self):
+        ship = {'ship_index': 2, 'sector_macro': 'sector_b', 'code': 'ABC-123', 'name': None}
+        snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
+                    'mapping_sha256': self.registry_status[3], 'operational_bits': '11'}
+        inspection = f'[X4LAN] AUTH_REGISTRY_FULL_INSPECT {self.bound.marker} 2\n'.encode()
+        seat = f'[X4LAN] AUTH_CLIENT_SEAT {self.registry_nonce}|{snapshot["epoch"]}|2|controlled\n'.encode()
+        self.log = self.log.replace(self.registry_log, inspection + self.registry_log + seat)
+        self.owner.list_company_ships = lambda: (ship,)
+        self.owner.choose_company_ship = lambda index: ship
+        self.owner.request_ship_motion = lambda: self.calls.append('request_ship_motion')
+        self.owner.motion_port = 4567
+        self.owner.ship_motion_credential = {'ticket': 'synthetic in-memory token'}
+        source = SimpleNamespace(socket=object(), close=lambda: self.calls.append('source_close'))
+        validate_peer = object()
+        counts = dict(samples_acknowledged=2, velocity_samples_acknowledged=1,
+                      snapshots_received=0, visibility_ends=0)
+
+        def stats():
+            self.assertIn('motion_close', self.calls)
+            return counts
+
+        def start_motion(port, credential, source_for_client, validator):
+            self.assertIn('session_start', self.calls)
+            self.assertEqual(port, self.owner.motion_port)
+            self.assertIs(credential, self.owner.ship_motion_credential)
+            self.assertIs(source_for_client, source)
+            self.assertIs(validator, validate_peer)
+            self.calls.append('motion_start')
+            return SimpleNamespace(poll=lambda: self.calls.append('motion_poll'),
+                                   close=lambda: self.calls.append('motion_close'), stats=stats)
+
+        motion_module = SimpleNamespace(CompanyMotionClient=start_motion)
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
+             patch.object(subject, 'WindowsMotionPeer', return_value=validate_peer) as peer_factory, \
+             patch('authority.company_motion_source.CompanyMotionSource', return_value=source), \
+             patch.dict(sys.modules, {'authority.company_motion_client': motion_module}):
+            result = self.run_session(require_registry_snapshot=True,
+                                      select_ship=lambda ships, pump: 2, company_motion=True)
+        self.assertTrue(self.connection_options['motion_enabled'])
+        self.assertIs(self.installed_company_source, source)
+        self.assertEqual(result['company_motion'], counts)
+        self.assertNotIn(self.owner.ship_motion_credential['ticket'], str(result))
+        self.assertIs(peer_factory.call_args.args[1], source.socket)
+        first_download = self.calls.index(('download', self.workspace.download_dir))
+        self.assertLess(self.calls.index('request_ship_motion'), first_download)
+        order = ['session_start', 'motion_start', ('session_poll', .1), 'motion_poll',
+                 'motion_close', 'source_close', 'process_close', 'tls_exit']
+        self.assertEqual([call for call in self.calls if call in order], order)
 
     def test_race_refreshes_available_company_ships_without_choosing_for_the_player(self):
         first = {'ship_index': 1}

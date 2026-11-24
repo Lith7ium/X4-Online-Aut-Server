@@ -64,3 +64,10 @@ ordinary fixture join. For a source-only package, add `-NetworkDll` with the
 trusted Windows UDP module path and `-NetworkDllSha256` with the hash supplied
 by its trusted builder. The [fixture guide](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md)
 covers the current-source DLL build, connection file, and retained artifacts.
+
+
+For servers with company motion enabled, add `-CompanyMotion` to the same
+PowerShell invocation. This opens the terminal ship selection and uses the
+separate stream through the same pinned TLS endpoint once the ship is admitted.
+The run result records movement counts. The temporary motion credential stays
+in memory.
