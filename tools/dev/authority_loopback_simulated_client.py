@@ -60,7 +60,7 @@ class SimulatedController:
     def resume(self, handles): self.calls.append(('resume',handles)); return True
 
 
-def attempt(config, directory, deadline):
+def attempt(config, directory, deadline, *, hold_seconds=.5):
     """Download real save bytes, then send labeled synthetic X4 observations."""
     conn=socket.create_connection((config['control_host'],config['control_port']),
                                   timeout=min(5,max(.01,deadline-time.monotonic())))
@@ -87,14 +87,19 @@ def attempt(config, directory, deadline):
         else: raise TimeoutError('simulated participant resume timed out')
         # Give the host time to validate its receipt before deliberately
         # disconnecting; EOF concurrent with its validation must fail closed.
-        until=time.monotonic()+.5
-        while time.monotonic()<until:
-            if time.monotonic()>=deadline: raise TimeoutError('participant hold timed out')
-            participant.poll(min(.1,until-time.monotonic(),deadline-time.monotonic()))
+        hold_started = time.monotonic()
+        until = hold_started + hold_seconds
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                raise TimeoutError('participant hold timed out')
+            if now >= until:
+                break
+            participant.poll(min(.1, until - now, deadline - now))
         return {'checkpoint_id':offer.checkpoint_id,'sha256':offer.sha256,'size':offer.size,
                 'marker':bound.marker,'session_epoch':offer.world_epoch,
                 'transfer_verified':True,'client_x4_load_simulated':True,
-                'participant_controls_simulated':True}
+                'participant_controls_simulated':True, 'hold_seconds': now - hold_started}
     finally:
         if participant is not None:
             try: participant.close()
@@ -105,13 +110,15 @@ def attempt(config, directory, deadline):
         else: conn.close()
 
 
-def run(config, out, *, count, timeout):
+def run(config, out, *, count, timeout, hold_seconds=.5):
     if type(count) is not int or count not in (1,2) or not math.isfinite(timeout) or not 0<timeout<=1800:
         raise ValueError('invalid probe count or timeout')
+    if type(hold_seconds) not in (float, int) or not math.isfinite(hold_seconds) or not .5 <= hold_seconds <= 600:
+        raise ValueError('hold seconds must be between 0.5 and 600')
     deadline=time.monotonic()+timeout
     rows=[]
     for number in range(1,count+1):
-        row=attempt(config,Path(out)/('download-'+str(number)),deadline)
+        row=attempt(config,Path(out)/('download-'+str(number)),deadline,hold_seconds=hold_seconds)
         if rows and (row['checkpoint_id']==rows[-1]['checkpoint_id'] or row['marker']==rows[-1]['marker']):
             raise ValueError('later offer did not use a newly marked checkpoint')
         rows.append(row)
@@ -124,11 +131,13 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--endpoint',type=Path,required=True); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--count',type=int,choices=(1,2),default=2); parser.add_argument('--timeout',type=float,default=600)
+    parser.add_argument('--hold-seconds', type=float, default=.5,
+                        help='remain connected after server resume so its simulation can be measured')
     args=parser.parse_args()
     try:
         config=endpoint(args.endpoint); out=snapshot.output_path(args.out); out.mkdir(mode=0o700,parents=True)
     except (OSError,ValueError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
-    try: result=run(config,out,count=args.count,timeout=args.timeout)
+    try: result=run(config,out,count=args.count,timeout=args.timeout,hold_seconds=args.hold_seconds)
     except (Exception,KeyboardInterrupt) as error:
         result={'success':False,'client_x4_load_simulated':True,'error':str(error) or type(error).__name__}
     (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
