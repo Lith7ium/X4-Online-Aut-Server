@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One-time private docked cockpit diagnostic. Inspect performs no game action. -->
+<mdscript name="X4AuthorityTradeCockpit" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Inspect" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityTradeCockpit'" control="'Inspect'"/></conditions>
+   <actions>
+    <set_value name="$Phase" exact="'INSPECT'"/>
+    <include_actions ref="ReadFixture"/>
+    <include_actions ref="ReadParking"/>
+    <do_if value="$Status == 'READY' and not $Parked">
+     <set_value name="$Status" exact="'AVATAR_NOT_PARKED'"/>
+    </do_if>
+    <set_value name="$Identified" exact="$Status == 'READY'"/>
+    <include_actions ref="Reply"/>
+   </actions>
+  </cue>
+
+  <cue name="Take" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityTradeCockpit'" control="'Take'"/></conditions>
+   <actions>
+    <set_value name="$Phase" exact="'TAKE'"/>
+    <set_value name="$Args" exact="event.param3"/>
+    <set_value name="$Sent" exact="false"/>
+    <include_actions ref="ReadFixture"/>
+    <include_actions ref="ReadParking"/>
+    <do_if value="$Status == 'READY'">
+     <do_if value="not @Inspect.$Identified or $Ship != @Inspect.$Ship or $Station != @Inspect.$Station or $Bay != @Inspect.$Bay">
+      <set_value name="$Status" exact="'INSPECTION_REQUIRED'"/>
+     </do_if>
+     <do_elseif value="not $Parked or player.entity != @Inspect.$Avatar or player.room != @Inspect.$Room">
+      <set_value name="$Status" exact="'AVATAR_NOT_PARKED'"/>
+     </do_elseif>
+     <do_elseif value="$Captain != @Inspect.$Captain">
+      <set_value name="$Status" exact="'CAPTAIN_CHANGED'"/>
+     </do_elseif>
+     <do_elseif value="@$Args.$available != true or @$Args.$ship != '%s'.[$Ship] or @$Args.$station != '%s'.[$Station]">
+      <set_value name="$Status" exact="'API_APPROVAL_REQUIRED'"/>
+     </do_elseif>
+     <do_else>
+      <set_value name="$Sent" exact="true"/>
+      <set_value name="$Age" exact="player.age"/>
+      <teleport_player object="$Ship" control="true" instant="true" force="true"/>
+      <set_value name="$Status" exact="'DISPATCHED'"/>
+     </do_else>
+    </do_if>
+    <include_actions ref="Reply"/>
+   </actions>
+  </cue>
+
+  <cue name="Verify" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityTradeCockpit'" control="'Verify'"/></conditions>
+   <actions>
+    <set_value name="$Phase" exact="'VERIFY'"/>
+    <include_actions ref="ReadFixture"/>
+    <do_if value="$Status == 'READY'">
+     <do_if value="not @Take.$Sent or $Ship != @Take.$Ship or $Station != @Take.$Station or $Bay != @Take.$Bay or player.entity != @Inspect.$Avatar">
+      <set_value name="$Status" exact="'TAKE_NOT_CONFIRMED'"/>
+     </do_if>
+     <do_elseif value="player.age le Take.$Age">
+      <set_value name="$Status" exact="'TOO_EARLY'"/>
+     </do_elseif>
+     <do_elseif value="$Captain != @Take.$Captain">
+      <set_value name="$Status" exact="'CAPTAIN_CHANGED'"/>
+     </do_elseif>
+     <do_elseif value="player.controlled == $Ship and player.occupiedship == $Ship and player.container == $Ship">
+      <set_value name="$Status" exact="'CONTROLLED'"/>
+     </do_elseif>
+     <do_else>
+      <set_value name="$Status" exact="'CONTROL_MISSING'"/>
+     </do_else>
+    </do_if>
+    <include_actions ref="Reply"/>
+   </actions>
+  </cue>
+
+  <library name="ReadFixture" purpose="include_actions">
+   <actions>
+    <set_value name="$Status" exact="'REGISTRY_INVALID'"/>
+    <do_if value="@md.X4AuthorityShipRegistry.State.$epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and @md.X4AuthorityShipRegistry.State.$last == 10082 and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+     <set_value name="$Status" exact="'SHIP_IDENTITY_INVALID'"/>
+     <do_if value="@$Ship.isclass.ship and $Ship.isoperational and $Ship.owner == faction.player and $Ship.idcode == 'WRN-302' and $Ship.macro.id == 'ship_arg_s_fighter_02_a_macro' and @$Ship.sector.macro.id == 'cluster_01_sector001_macro' and @md.X4AuthorityShipRegistry.State.$byship.{$Ship} == 7354">
+      <set_value name="$Bay" exact="@$Ship.dock"/>
+      <set_value name="$Station" exact="@$Bay.container"/>
+      <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+      <set_value name="$Status" exact="'DOCK_INVALID'"/>
+      <do_if value="@$Bay.isclass.dockingbay and not $Bay.isstorage and $Bay.dockstate == dockstate.default and $Bay.istradingallowed and not $Ship.isinternallystored and @$Station.isclass.station and $Station.isoperational and $Station.idcode == 'BIM-169' and $Station.owner == faction.teladi and $Station.trueowner == faction.teladi and $Station.macro.id == 'station_gen_factory_base_01_macro' and $Station.sector == $Ship.sector">
+       <set_value name="$Status" exact="'READY'"/>
+      </do_if>
+     </do_if>
+    </do_if>
+   </actions>
+  </library>
+
+  <library name="ReadParking" purpose="include_actions">
+   <actions>
+    <set_value name="$Avatar" exact="player.entity"/>
+    <set_value name="$Room" exact="player.room"/>
+    <set_value name="$Parking" exact="player.station"/>
+    <set_value name="$Parked" exact="@$Avatar.exists and @$Parking.isclass.station and $Parking.idcode == 'XPJ-169' and $Parking.owner == faction.argon and @$Parking.sector.macro.id == 'cluster_06_sector002_macro' and $Avatar.hascontext.{$Parking} and @$Room.exists and @$Room.macro.id == 'dockingbay_arg_s_01_macro' and not player.controlled and not player.occupiedship"/>
+   </actions>
+  </library>
+
+  <library name="Reply" purpose="include_actions">
+   <actions>
+    <set_value name="$Receipt" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$Phase,$Status,if @$Ship.exists then $Ship else '0',if @$Station.exists then $Station else '0',if @$Bay.exists then $Bay else '0',if @$Captain.exists then $Captain else '0',if player.controlled then player.controlled else '0',if player.occupiedship then player.occupiedship else '0',if player.container then player.container else '0']"/>
+    <debug_text text="'[X4LAN] AUTH_TRADE_COCKPIT %s'.[$Receipt]" chance="100"/>
+    <raise_lua_event name="'X4AuthorityTradeCockpit.Result'" param="$Receipt"/>
+   </actions>
+  </library>
+ </cues>
+</mdscript>
