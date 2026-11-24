@@ -115,7 +115,8 @@ class FixtureSessionTests(unittest.TestCase):
 
         class Session:
             def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                         registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control):
+                         registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control, seat_index=None):
+                test.assertEqual(seat_index, test.installed_seat)
                 test.assertEqual(require_full_inspection, test.installed_registry_snapshot is not None)
                 test.assertIsNone(apply_motion)
                 test.assertIsNone(motion_control)
@@ -134,6 +135,7 @@ class FixtureSessionTests(unittest.TestCase):
         def install(view, **options):
             test.assertEqual(options['registry_status'], test.registry_status)
             test.assertEqual(options['registry_nonce'], test.registry_nonce)
+            test.installed_seat = options.get('seat_index')
             test.installed_registry_snapshot = options.get('registry_snapshot')
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
                                options['participant_port'], options['participant_lease']))
@@ -171,6 +173,38 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertTrue(result['client_admitted'])
         reader.assert_called_once()
         self.assertIs(self.installed_registry_snapshot, snapshot)
+
+    def test_selected_ship_reaches_overlay_live_gate_and_final_audit(self):
+        ship = {'ship_index': 2, 'sector_macro': 'sector_b', 'code': 'ABC-123', 'name': None}
+        snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
+                    'mapping_sha256': self.registry_status[3], 'operational_bits': '11'}
+        inspection = f'[X4LAN] AUTH_REGISTRY_FULL_INSPECT {self.bound.marker} 2\n'.encode()
+        seat = f'[X4LAN] AUTH_CLIENT_SEAT {self.registry_nonce}|{snapshot["epoch"]}|2|controlled\n'.encode()
+        self.log = self.log.replace(self.registry_log, inspection + self.registry_log + seat)
+        self.owner.list_company_ships = lambda: (ship,)
+        self.owner.choose_company_ship = lambda index: ship
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
+            result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
+        self.assertEqual(result['controlled_company_ship_index'], 2)
+        self.assertEqual(self.installed_seat, 2)
+
+    def test_race_refreshes_available_company_ships_without_choosing_for_the_player(self):
+        first = {'ship_index': 1}
+        second = {'ship_index': 2}
+        catalogues = iter(((first, second), (second,)))
+        self.owner.list_company_ships = lambda: next(catalogues)
+        def choose(index):
+            if index == 1:
+                raise subject.CompanyShipChoiceDenied('company_ship_unavailable')
+            return second
+        self.owner.choose_company_ship = choose
+        prompts = []
+        def select(choices, keepalive):
+            prompts.append(choices)
+            keepalive()
+            return choices[0]['ship_index']
+        self.assertEqual(subject.reserve_company_ship(self.owner, select), 2)
+        self.assertEqual(prompts, [(first, second), (second,)])
 
     def test_snapshot_refusal_or_ineligible_motion_prevents_launch(self):
         snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,

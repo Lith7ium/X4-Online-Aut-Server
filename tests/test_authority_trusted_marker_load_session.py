@@ -81,6 +81,24 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         self.catalogue_reads.append(checkpoint)
         return self.catalogue
 
+    def test_required_ship_rejects_unselected_claim_until_this_connection_selects(self):
+        root = self.root / 'required'
+        root.mkdir()
+        (root / 'checkpoints').mkdir()
+        store = CheckpointStore(root / 'checkpoints')
+        world = WorldCoordinator('epoch-2', FakeEngine(root), store, SaveOffers(FakeService(), store))
+        adapter = TrustedMarkerLoadSession(world, enabled=True, require_company_ship=True,
+                                           company_ship_reader=lambda checkpoint: self.catalogue)
+        client = object()
+        adapter.attach(client)
+        world.step()
+        world.step()
+        offer = adapter.begin(client).offer
+        with self.assertRaisesRegex(CompanyShipUnavailable, 'choose a free company ship'):
+            adapter.accept(client, claim_for(offer))
+        adapter.choose_company_ship(client, offer.attempt_id, 1)
+        self.assertEqual(adapter.accept(client, claim_for(offer)).attempt_id, offer.attempt_id)
+
     def test_shared_ship_reservations_retry_switch_and_reoffer(self):
         attempt_a = self.adapter.begin(self.a).offer.attempt_id
         attempt_b = self.adapter.begin(self.b).offer.attempt_id

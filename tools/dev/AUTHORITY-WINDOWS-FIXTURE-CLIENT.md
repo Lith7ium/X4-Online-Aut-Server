@@ -92,6 +92,27 @@ artifact digest are in the [build record](../../reports/AUTHORITY-WINDOWS-NETWOR
 The separate [no-game module probe](AUTHORITY-WINDOWS-NETWORK-SMOKE.md) can check
 these prerequisites before arranging a game test.
 
+## Choose a company ship
+
+For a company-ship session, start the Linux provider launcher with
+`--require-company-ship` and a confirmed format-3 checkpoint. Add
+`--choose-company-ship` to the normal Windows invocation below. The terminal
+lists the available registry indices, ship codes, names and sectors. Enter
+the index of the ship you want to fly. If another player has just reserved
+it, the client requests a new list. You can also pass `--company-ship-index N`
+when you already know the exact ship to reserve. Both options enable the full
+checkpoint registry inspection. Allow time for the host to pause and save and
+for the client to inspect the registry before the session deadline.
+
+The server holds the choice from the offer through admission and releases it
+on disconnect. On the client, the loaded registry must resolve the chosen
+index to an operational company ship. The local player must occupy and control
+that ship before the client acknowledges readiness. The current transfer path
+can take an undocked, unstored, pilotless ship, or verify the ship already
+under the player's control. Docked ships and takeovers from an NPC pilot
+need further native testing. The catalogue lists operational company assets
+as recorded at the offer. The local seat check can still refuse an entry.
+
 ## Invocation
 
 Place the supervisor-generated private `connection.json` outside the new

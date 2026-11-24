@@ -5,8 +5,10 @@ import math
 import os
 from pathlib import Path
 import re
+from queue import Empty, Queue
 import stat
 import sys
+from threading import Thread
 import time
 import traceback
 
@@ -84,6 +86,38 @@ class ObservationWindow:
         return now - self.started >= self.seconds
 
 
+def prompt_company_ship(ships, keepalive):
+    """Read a terminal selection while the owning thread keeps the offer alive."""
+    print("Available company ships", file=sys.stderr)
+    indices = {ship['ship_index'] for ship in ships}
+    for ship in ships:
+        label = ' '.join(value for value in (ship['code'], ship['name']) if value)
+        print(f"  {ship['ship_index']:>6}  {label}  {ship['sector_macro']}", file=sys.stderr)
+
+    def read_line(reply):
+        try:
+            reply.put(input())
+        except (EOFError, OSError):
+            reply.put(None)
+
+    while True:
+        print("Enter a listed ship index, or q to leave: ", file=sys.stderr, end='', flush=True)
+        reply = Queue(maxsize=1)
+        Thread(target=read_line, args=(reply,), daemon=True).start()
+        while True:
+            keepalive()
+            try:
+                line = reply.get(timeout=.25)
+                break
+            except Empty:
+                continue
+        if line is None or line.strip().lower() == 'q':
+            raise KeyboardInterrupt
+        value = line.strip()
+        if re.fullmatch(r'[0-9]{1,6}', value) and int(value) in indices:
+            return int(value)
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument('--isolated-fixture-test', action='store_true',
@@ -102,6 +136,11 @@ def parser():
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
+    selection = result.add_mutually_exclusive_group()
+    selection.add_argument('--choose-company-ship', action='store_true',
+                           help='list free company ships and choose one in the terminal before joining')
+    selection.add_argument('--company-ship-index', type=int,
+                           help='select this exact free registry index before joining')
     result.add_argument('--observe-seconds', type=float, default=30,
                         help='time to poll after admission; does not request a server resume')
     result.add_argument('--keepalive-seconds', type=float, default=5,
@@ -133,6 +172,14 @@ def run(args):
     from authority.windows_fixture_session import run_fixture_session
     from authority.windows_fixture_workspace import WindowsFixtureWorkspace
 
+    select_ship = prompt_company_ship if args.choose_company_ship else None
+    if args.company_ship_index is not None:
+        if not 1 <= args.company_ship_index <= 200000:
+            raise ValueError('company ship index outside the registry range')
+        def select_requested_index(_ships, _keepalive):
+            return args.company_ship_index
+        select_ship = select_requested_index
+
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out)
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
@@ -140,7 +187,9 @@ def run(args):
         deadline=time.monotonic() + args.timeout,
         keepalive_interval=args.keepalive_seconds,
         stop_requested=ObservationWindow(args.observe_seconds),
-        motion_request=motion_request, require_registry_snapshot=args.require_registry_snapshot,
+        motion_request=motion_request,
+        require_registry_snapshot=args.require_registry_snapshot or select_ship is not None,
+        select_ship=select_ship,
     )
 
 
@@ -156,6 +205,11 @@ def main(argv=None):
         report = {'status': 'failed', 'error_type': type(error).__name__,
                   'failure_site': f'{Path(site.filename).name}:{site.lineno}' if site else None,
                   'run_directory': str(args.out)}
+        from authority.experimental_client_owner import CompanyShipChoiceDenied
+        if isinstance(error, CompanyShipChoiceDenied) and error.reason in (
+                'no_free_company_ships', 'company_ship_unavailable', 'stale_ship_choice',
+                'company_ship_catalog_unavailable'):
+            report['reason'] = error.reason
         print(json.dumps(report), file=sys.stderr)
         return 1
     print(json.dumps({'status': 'fixture_observation_complete', **result,

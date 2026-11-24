@@ -225,8 +225,10 @@ class ExperimentalRemoteLoadClient:
         request = {'version': 1, 'kind': kind, 'attempt_id': attempt, **fields}
         self._send(json.dumps(request, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n')
         try:
-            reply = json.loads(self._read_frame().decode('utf-8'), object_pairs_hook=_pairs,
-                               parse_constant=_reject_constant)
+            # A first lookup may verify every ship in a large checkpoint before replying.
+            first_lookup = kind == 'choose_company_ship' or fields.get('after_index') == 0
+            frame = self._read_frame(use_overall_deadline=first_lookup)
+            reply = json.loads(frame.decode('utf-8'), object_pairs_hook=_pairs, parse_constant=_reject_constant)
         except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
             raise ValueError('invalid company ship response') from error
         if (type(reply) is not dict or type(reply.get('version')) is not int or reply['version'] != 1

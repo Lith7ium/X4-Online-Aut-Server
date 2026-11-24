@@ -58,7 +58,7 @@ class TrustedMarkerLoadSession:
     operations and retire or safely settle the coordinator and offer service.
     """
     def __init__(self, world, *, enabled=False, marker_script='X4AuthorityCheckpointMarker',
-                 company_ship_reader=None):
+                 company_ship_reader=None, require_company_ship=False):
         if enabled is not True:
             raise ValueError('trusted marker session requires explicit opt-in')
         if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
@@ -74,6 +74,9 @@ class TrustedMarkerLoadSession:
         self._verified_marker_checkpoint = None
         if company_ship_reader is not None and not callable(company_ship_reader):
             raise ValueError('company ship reader must be callable')
+        if type(require_company_ship) is not bool:
+            raise ValueError('invalid company ship admission policy')
+        self._require_company_ship = require_company_ship
         self._company_ship_reader = company_ship_reader
         self._ship_catalog = None
         self._pending_ships = {}
@@ -249,6 +252,8 @@ class TrustedMarkerLoadSession:
             bound = self._markers.get(peer)
             if bound is None or bound[0] != message.attempt_id or claim.marker != bound[1].marker:
                 raise ValueError('marker does not match current attempt')
+            if self._require_company_ship and peer not in self._pending_ships and peer not in self._admitted_ships:
+                raise CompanyShipUnavailable('choose a free company ship before admission')
             # No mutation has occurred yet. The store's manifest/digest and
             # confirmed pointer must still describe the same checkpoint. The
             # caller owns the store exclusively throughout this operation.

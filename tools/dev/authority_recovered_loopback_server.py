@@ -840,6 +840,9 @@ def diagnostic_process_measure_seconds(args):
 
 def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
+    require_company_ship = getattr(args, 'require_company_ship', False)
+    if type(require_company_ship) is not bool or (require_company_ship and not require_snapshot):
+        raise ValueError('company ship admission requires a format-3 checkpoint')
     tls = gateway_settings(args)
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
@@ -1253,7 +1256,8 @@ def run(args):
             raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
-        session = TrustedMarkerLoadSession(world, enabled=True, marker_script=marker_script)
+        session = TrustedMarkerLoadSession(world, enabled=True, marker_script=marker_script,
+                                         require_company_ship=require_company_ship)
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
@@ -1907,6 +1911,8 @@ def main(argv=None):
     tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
     tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
     tls.add_argument('--tls-shared-key-file', type=Path, help='64 lowercase hex characters from 32 random bytes')
+    parser.add_argument('--require-company-ship', action='store_true',
+                        help='require every joining player to reserve a free shared-company ship')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--require-registry-snapshot',action='store_true',
                         help='require confirmed format-3 source and full live registry observations for every save')

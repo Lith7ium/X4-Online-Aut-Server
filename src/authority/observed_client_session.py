@@ -61,7 +61,7 @@ class ObservedClientSession:
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                  apply_motion=None, registry_status=None, registry_nonce=None,
-                 motion_control=None, require_full_inspection=False):
+                 motion_control=None, require_full_inspection=False, seat_index=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -111,7 +111,7 @@ class ObservedClientSession:
             self._snapshot = b''
             self._records = BoundReceiptStream(bound, slot=slot,
                 registry_status=registry_status, registry_nonce=registry_nonce,
-                require_full_inspection=require_full_inspection)
+                require_full_inspection=require_full_inspection, seat_index=seat_index)
         except BaseException as error:
             self._fail(error)
             raise

@@ -11,6 +11,7 @@ import socket
 import time
 
 from .checkpoints import Checkpoint
+from .experimental_client_owner import CompanyShipChoiceDenied
 from .experimental_client_session import client_connection
 from .experimental_windows_fixture_overlay import install_fixture_overlay
 from .load_observations import BoundReceiptStream
@@ -97,11 +98,33 @@ def _motion_settings(request, registry_status, bound, controller, registry_nonce
     return settings
 
 
+def reserve_company_ship(owner, select_ship):
+    """Reserve an explicit choice on the same socket and offer as the download."""
+    while True:
+        ships = owner.list_company_ships()
+        if not ships:
+            raise CompanyShipChoiceDenied('no_free_company_ships')
+        index = select_ship(ships, owner.poll)
+        listed = next((ship for ship in ships if ship['ship_index'] == index), None)
+        if type(index) is not int or listed is None:
+            raise CompanyShipChoiceDenied('company_ship_unavailable')
+        try:
+            selected = owner.choose_company_ship(index)
+        except CompanyShipChoiceDenied as error:
+            if error.reason != 'company_ship_unavailable':
+                raise
+            # Another participant reserved the ship while this player was choosing.
+            continue
+        if selected != listed:
+            raise ValueError('chosen ship differs from the offered catalogue')
+        return index
+
+
 def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         server_fingerprint, shared_key, file_token, file_slot,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
-                        require_registry_snapshot=False):
+                        require_registry_snapshot=False, select_ship=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -132,6 +155,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
             type(file_token) is not str or not re.fullmatch(r'[0-9a-f]{32}', file_token) or
             type(dll_sha256) is not str or not re.fullmatch(r'[0-9a-f]{64}', dll_sha256)):
         raise ValueError('invalid enabled fixture session configuration')
+    if select_ship is not None and (not callable(select_ship) or not require_registry_snapshot):
+        raise ValueError('company ship choice requires full registry inspection and a selector')
     validate_motion_request(motion_request, participant_timeout)
 
     outer_error = None
@@ -152,6 +177,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if time.monotonic() >= deadline or workspace.guard() is not True:
                     raise RuntimeError('fixture workspace unavailable')
                 bound = owner.request_offer()
+                seat_index = None if select_ship is None else reserve_company_ship(owner, select_ship)
                 download = owner.download(workspace.download_dir)
                 staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
                 if time.monotonic() >= deadline or workspace.guard() is not True:
@@ -184,7 +210,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
                     registry_status=registry_status, registry_nonce=registry_nonce, registry_snapshot=registry_snapshot,
-                    motion_settings=motion_settings)
+                    motion_settings=motion_settings, seat_index=seat_index)
                 workspace.register_overlay(hashes)
                 overlay_registered = True
                 def launch_guard():
@@ -208,7 +234,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,
-                    require_full_inspection=require_registry_snapshot,
+                    require_full_inspection=require_registry_snapshot, seat_index=seat_index,
                     apply_motion=motion, motion_control=motion)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
@@ -239,6 +265,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if motion is not None and motion.confirmed_samples == 0:
                     raise RuntimeError('client motion diagnostic consumed no source sample')
                 result = {'client_admitted': True, 'participant_receipts': commands}
+                if seat_index is not None:
+                    result['controlled_company_ship_index'] = seat_index
                 if motion is not None:
                     result['motion_receipts'] = motion.confirmed_samples
             except BaseException as error:
@@ -279,7 +307,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                                 not BoundReceiptStream(bound, slot='save_009',
                                     registry_status=registry_status,
                                     registry_nonce=registry_nonce,
-                                    require_full_inspection=require_registry_snapshot).feed(final_log) or
+                                    require_full_inspection=require_registry_snapshot, seat_index=seat_index).feed(final_log) or
                                 workspace.guard() is not True):
                             raise RuntimeError('final fixture observations incomplete')
                     except BaseException:
