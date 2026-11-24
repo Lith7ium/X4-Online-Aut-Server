@@ -153,7 +153,7 @@ class CompanyPoseTrial:
         self.baselines = {}
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
-                      max_source_speed_mps=0.0, last_verified={}, paused={})
+                      max_source_speed_mps=None, last_verified={}, paused={})
 
     def _start(self, record, service):
         if not service.is_application_current(record):
@@ -167,7 +167,9 @@ class CompanyPoseTrial:
                                                     math.dist(target, base))
         if sample['real_velocity'] is not None:
             speed = math.hypot(*(sample['real_velocity'][key] for key in 'xyz'))
-            self.report['max_source_speed_mps'] = max(self.report['max_source_speed_mps'], speed)
+            peak = self.report['max_source_speed_mps']
+            if peak is None or speed > peak:
+                self.report['max_source_speed_mps'] = speed
         self.report['last_attempt'] = {'index': index, 'sequence': sample['sequence'],
                                        'sector_macro': sample['sector_macro'], 'target': target}
         self.channel.begin('inspect', sample)

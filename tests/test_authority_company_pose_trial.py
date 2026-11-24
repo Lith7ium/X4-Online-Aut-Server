@@ -131,6 +131,13 @@ class CompanyPoseTrialTests(unittest.TestCase):
         service = ApplicationQueue(SimpleNamespace(sample=self.sample))
         return CompanyPoseTrial(self.channel, report), report, service
 
+    def test_missing_velocity_has_no_measured_peak_speed(self):
+        trial, report, service = self.trial()
+        service.current.sample['real_velocity'] = None
+        trial.poll(service)
+        self.assertIsNone(report['max_source_speed_mps'])
+        self.command('inspect')
+
     def assert_no_command(self, peer=None):
         self.assertFalse(select.select([peer or self.peer], [], [], 0)[0])
 
