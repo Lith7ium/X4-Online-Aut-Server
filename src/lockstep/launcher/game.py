@@ -78,7 +78,7 @@ def _junction(target, link):
     _winapi.CreateJunction(str(target), str(link))
 
 
-def create_view(game, view, junction=_junction):
+def create_view(game, view, junction=_junction, *, base_game_only=False):
     """Build a view of `game` at `view` (new directory on the same drive)."""
     game, view = Path(game).resolve(), Path(view)
     if view.exists():
@@ -96,9 +96,10 @@ def create_view(game, view, junction=_junction):
             os.link(entry, view / entry.name)
     extensions = view / 'extensions'
     extensions.mkdir()
-    for dlc in sorted((game / 'extensions').glob('ego_dlc_*')) if (game / 'extensions').is_dir() else []:
-        if dlc.is_dir():
-            junction(dlc, extensions / dlc.name)
+    if not base_game_only and (game / 'extensions').is_dir():
+        for dlc in sorted((game / 'extensions').glob('ego_dlc_*')):
+            if dlc.is_dir():
+                junction(dlc, extensions / dlc.name)
     return view
 
 

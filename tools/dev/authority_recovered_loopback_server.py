@@ -1028,7 +1028,8 @@ def run(args):
                 'exact_loaded_file_proven': False,
                 'metrics': fixture_save_guards.metrics,
             }
-        case, profile, binds, lock = snapshot.prepare_case(out, game, home)
+        case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+        case, profile, binds, lock = snapshot.prepare_case(out, game, home, **case_options)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage, marker_script=marker_script)
         if fixture_mode:
@@ -2163,6 +2164,8 @@ def main(argv=None):
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every joining player to reserve a free shared-company ship')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
+    parser.add_argument('--base-game-only', action='store_true',
+                        help='exclude official DLC from the private game view and profile')
     parser.add_argument('--require-registry-snapshot',action='store_true',
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',

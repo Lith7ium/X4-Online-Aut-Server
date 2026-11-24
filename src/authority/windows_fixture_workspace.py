@@ -177,7 +177,8 @@ def _entry_observation(path):
 class WindowsFixtureWorkspace:
     """Own only the paths and log handle created for one private fixture run."""
 
-    def __init__(self, game_directory, view_directory, run_directory):
+    def __init__(self, game_directory, view_directory, run_directory, *, base_game_only=False):
+        self.base_game_only = base_game_only
         self.game_directory = Path(game_directory)
         self.view_directory = Path(view_directory)
         self.run_directory = Path(run_directory)
@@ -233,7 +234,10 @@ class WindowsFixtureWorkspace:
         _restrict_directory(self.view_directory, sid)
         self.run_directory.mkdir()
         _restrict_directory(self.run_directory, sid)
-        extension_ids = sorted(set(game.dlc_ids(game_root)) | {_EXTENSION_ID})
+        extension_ids = {_EXTENSION_ID}
+        if not self.base_game_only:
+            extension_ids.update(game.dlc_ids(game_root))
+        extension_ids = sorted(extension_ids)
         self.profile_directory = profile.prepare_fresh(PROFILE_ID, extension_ids,
                                                        root=documents_root)
         self.save_dir = self.profile_directory / 'save'
@@ -246,7 +250,8 @@ class WindowsFixtureWorkspace:
             for name in ('config.xml', 'content.xml')
         }
 
-        game.create_view(game_root, self.view)
+        view_options = {'base_game_only': True} if self.base_game_only else {}
+        game.create_view(game_root, self.view, **view_options)
         self.profile_root = documents_root
         self.log_path = self.profile_directory / 'x4authority.log'
         self._sid = sid
@@ -268,8 +273,10 @@ class WindowsFixtureWorkspace:
         for entry in self.view.iterdir():
             if entry.name == 'extensions':
                 children = {child.name: _entry_observation(child) for child in entry.iterdir()}
-                expected_dlcs = {child.name for child in (game_root / 'extensions').glob('ego_dlc_*')
-                                 if child.is_dir()} if (game_root / 'extensions').is_dir() else set()
+                expected_dlcs = set()
+                if not self.base_game_only and (game_root / 'extensions').is_dir():
+                    expected_dlcs.update(child.name for child in (game_root / 'extensions').glob('ego_dlc_*')
+                                         if child.is_dir())
                 allowed = expected_dlcs | ({_EXTENSION_ID} if allow_fixture else set())
                 if set(children) != allowed:
                     raise ValueError('game DLC links differ from source')

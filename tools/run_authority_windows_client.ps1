@@ -8,12 +8,17 @@ param(
     [ValidatePattern('^[0-9a-fA-F]{64}$')] [string] $NetworkDllSha256,
     [ValidateRange(1, 3600)] [int] $TimeoutSeconds = 1800,
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
+    [switch] $BaseGameOnly,
     [switch] $ChooseCompanyShip,
+    [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) {
+    throw 'Choose either an interactive ship prompt or a fixed company ship index.'
+}
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
 }
@@ -78,6 +83,12 @@ $clientArgs = @(
     '--network-dll', $dll.FullName,
     '--network-dll-sha256', $NetworkDllSha256.ToLowerInvariant()
 )
+if ($BaseGameOnly) {
+    $clientArgs += '--base-game-only'
+}
+if ($PSBoundParameters.ContainsKey('CompanyShipIndex')) {
+    $clientArgs += @('--company-ship-index', [string]$CompanyShipIndex)
+}
 if ($CompanyMotion) {
     $clientArgs += '--company-motion'
     if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {

@@ -82,6 +82,10 @@ def main(argv=None):
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every player to select an available company ship; enables full registry checks')
+    parser.add_argument('--base-game-only', action='store_true',
+                        help='exclude official DLC from the private game view and profile')
+    parser.add_argument('--bootstrap-registry-snapshot', action='store_true',
+                        help='capture a format-3 snapshot from a clean ready-registry source')
     parser.add_argument('--registry-status', action='store_true', help='verify saved registry status')
     parser.add_argument('--require-registry-snapshot', action='store_true',
                         help='require and verify format-3 saved registry snapshots')
@@ -122,6 +126,14 @@ def main(argv=None):
             parser.error('--verify-company-pose uses an isolated fixture with no TLS or Company hosting options')
     company_motion = args.company_motion or args.company_pose_trial
     require_ship = args.require_company_ship or company_motion
+    if args.bootstrap_registry_snapshot:
+        if (server_flags or args.registry_status or require_ship or args.require_registry_snapshot
+                or args.company_shuttle_pair or args.park_server_avatar or args.verify_company_pose
+                or args.company_trade_trial or args.company_cockpit_purchase):
+            parser.error('--bootstrap-registry-snapshot requires an isolated provider with no TLS or fixture mode')
+        server_flags.append('--bootstrap-registry-snapshot')
+    if args.base_game_only:
+        server_flags.append('--base-game-only')
     if args.registry_status:
         server_flags.append('--registry-status')
     if (args.require_registry_snapshot or require_ship or args.park_server_avatar or args.company_shuttle_pair

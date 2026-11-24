@@ -60,6 +60,8 @@ def parser():
                         help='choose a company ship and use the separate authenticated motion channel')
     result.add_argument('--company-hull-playback-index', type=int,
                         help='isolated test only: follow another company ship in the same cockpit sector')
+    result.add_argument('--base-game-only', action='store_true',
+                        help='exclude official DLC from the private game view and profile')
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
@@ -110,7 +112,8 @@ def run(args):
             return args.company_ship_index
         select_ship = select_requested_index
 
-    workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out)
+    view_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+    workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
     motion_options = {'company_motion': True} if args.company_motion else {}
     if args.company_hull_playback_index is not None:
         motion_options['company_hull_playback_index'] = args.company_hull_playback_index

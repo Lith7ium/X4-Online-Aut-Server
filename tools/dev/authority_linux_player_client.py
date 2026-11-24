@@ -18,6 +18,8 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, required=True, help='new run directory under .local')
     parser.add_argument('--display', default=os.environ.get('DISPLAY'),
                         help='local X11 or Xwayland display, defaults to DISPLAY')
+    parser.add_argument('--base-game-only', action='store_true',
+                        help='exclude official DLC from the private game view and profile')
     parser.add_argument('--company-ship-index', type=int,
                         help='choose a specific free index instead of prompting')
     parser.add_argument('--company-motion', action='store_true',

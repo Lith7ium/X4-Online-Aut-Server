@@ -288,7 +288,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         with client_connection(**connection_settings, deadline=deadline,
                 keepalive_interval=args.keepalive_interval, **motion_options) as owner:
             try:
-                case, profile, binds, lock = snapshot.prepare_case(out, game, home)
+                case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+                case, profile, binds, lock = snapshot.prepare_case(out, game, home, **case_options)
                 if any((profile/'save').iterdir()):
                     raise ValueError('private_save_directory_not_empty')
                 result['phase'] = 'offer'
