@@ -841,6 +841,8 @@ def diagnostic_process_measure_seconds(args):
 def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
     tls = gateway_settings(args)
+    import authority_company_fixture_prepare as company_fixture
+    prepare_company_fixture = company_fixture.validate_mode(args, require_snapshot=require_snapshot, tls=tls)
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -881,6 +883,7 @@ def run(args):
     watch=target=checkpoint=expected=profile=None
     local_pair=False;source_index=None
     witness_pending=None
+    company_fixture_script = company_fixture_nonce = None
     diagnostics = []
     active_clients = []
     guard_context = []
@@ -1000,6 +1003,10 @@ def run(args):
             fixture, saved_evidence = fixture
             registry_snapshot_state = registry_snapshots.RegistrySnapshotState(checkpoint, saved_evidence)
             result['registry_snapshot'] = registry_snapshot_state.metadata()
+            if prepare_company_fixture:
+                original_fixture_ships = company_fixture.load_source(checkpoint)
+                result['disposable_company_fixture'] = {'source': original_fixture_ships,
+                    'client_endpoint_opened': False}
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -1013,6 +1020,13 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if prepare_company_fixture:
+                company_fixture_nonce = secrets.token_hex(16)
+                while company_fixture_nonce in (lease, epoch, checkpoint.marker,
+                        registry_snapshot_state.nonce, company_fixture.EPOCH):
+                    company_fixture_nonce = secrets.token_hex(16)
+                company_fixture_probe, company_fixture_script = company_fixture.install(case, company_fixture_nonce)
+                protected.extend((company_fixture_probe, company_fixture_script))
         if bootstrap_snapshot:
             protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch),
                                                          read_source=read_evidence, timeout=snapshot_timeout))
@@ -1177,6 +1191,8 @@ def run(args):
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if require_snapshot:
             registry_snapshot_state.verify_initial(profile/'engine-output.log')
+            if prepare_company_fixture:
+                company_fixture.verify_log(profile/'engine-output.log', company_fixture_nonce, read_evidence)
             result['registry_snapshot'] = registry_snapshot_state.metadata()
         if registry_check is not None:
             registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
@@ -1246,6 +1262,16 @@ def run(args):
             # title, publication and VERIFY ordering. No client endpoint exists.
             check()
             saved = capture_first_registry_snapshot(adapter, store, verify)
+            witness_pending = saved
+            result.update(success=True, final_world_state='paused',
+                          final_checkpoint_id=saved.checkpoint_id,
+                          final_checkpoint_sha256=saved.sha256)
+            raise _WitnessFinished()
+        if prepare_company_fixture:
+            # This process serves only its local bridge. No participant or file service is created.
+            check()
+            saved = capture_first_registry_snapshot(adapter, store, verify)
+            result['disposable_company_fixture']['saved'] = company_fixture.verify_saved(saved)
             witness_pending = saved
             result.update(success=True, final_world_state='paused',
                           final_checkpoint_id=saved.checkpoint_id,
@@ -1855,6 +1881,17 @@ def run(args):
                 if require_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            require_registry_snapshot=True)
+                if prepare_company_fixture:
+                    company_fixture.verify_log(profile/'engine-output.log', company_fixture_nonce, read_evidence)
+                    if company_fixture.verify_saved(witness_pending) != result['disposable_company_fixture']['saved']:
+                        raise ValueError('disposable company fixture saved evidence changed')
+                    # Keep the actual script for audit without leaving it in the reusable extension.
+                    archived_script = out / company_fixture_script.name
+                    company_fixture_script.rename(archived_script)
+                    script_digest = live.sha(archived_script)
+                    if script_digest != expected[company_fixture_script]:
+                        raise ValueError('disposable company fixture script changed')
+                    result['disposable_company_fixture']['archived_script_sha256'] = script_digest
                 if bootstrap_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            registry_status=True, return_supervisor_result=True,
@@ -1912,6 +1949,8 @@ def main(argv=None):
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
                         help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
+    parser.add_argument('--prepare-disposable-company-fixture', action='store_true',
+                        help='one-shot private ownership fixture for the pinned format-3 seed; no client endpoint')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')

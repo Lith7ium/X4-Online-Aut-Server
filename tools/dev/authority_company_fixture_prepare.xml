@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Installed only for the private one-shot supplier, never in a playable session. -->
+<mdscript name="X4AuthorityCompanyFixturePrepare" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Prepare">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyFixturePrepare'" control="'Prepare'"/>
+   </conditions>
+   <actions>
+    <set_value name="$reply" exact="'REGISTRY_INVALID'"/>
+    <set_value name="$request" exact="event.param3"/>
+    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch != $request.$epoch or md.X4AuthorityShipRegistry.State.$last != $request.$count">
+      <set_value name="$reply" exact="'REGISTRY_CHANGED'"/>
+     </do_if>
+     <do_else>
+      <set_value name="$first" exact="@md.X4AuthorityShipRegistry.State.$ships.{1970}"/>
+      <set_value name="$candidate" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+      <do_if value="not @$first.isclass.ship or not @$candidate.isclass.ship or $first == $candidate">
+       <set_value name="$reply" exact="'SHIP_INVALID'"/>
+      </do_if>
+      <do_elseif value="@md.X4AuthorityShipRegistry.State.$byship.{$first} != 1970 or @md.X4AuthorityShipRegistry.State.$byship.{$candidate} != 7354">
+       <set_value name="$reply" exact="'REVERSE_BINDING'"/>
+      </do_elseif>
+      <do_elseif value="$first != player.controlled or $first != player.occupiedship or $first.owner != faction.player or not $first.isoperational">
+       <set_value name="$reply" exact="'FIRST_SHIP_CHANGED'"/>
+      </do_elseif>
+      <do_elseif value="$first.idcode != 'WOO-831' or $candidate.idcode != 'WRN-302'">
+       <set_value name="$reply" exact="'SHIP_CODE_CHANGED'"/>
+      </do_elseif>
+      <do_elseif value="$first.macro != macro.ship_arg_s_scout_01_a_macro or $candidate.macro != macro.ship_arg_s_fighter_02_a_macro">
+       <set_value name="$reply" exact="'SHIP_MACRO_CHANGED'"/>
+      </do_elseif>
+      <do_elseif value="not @$first.sector.isclass.sector or not @$candidate.sector.isclass.sector">
+       <set_value name="$reply" exact="'SECTOR_INVALID'"/>
+      </do_elseif>
+      <do_elseif value="$first.sector.macro != macro.cluster_14_sector001_macro or $candidate.sector.macro != macro.cluster_01_sector001_macro">
+       <set_value name="$reply" exact="'SECTOR_CHANGED'"/>
+      </do_elseif>
+      <do_elseif value="$candidate.owner != faction.ownerless or not $candidate.isoperational">
+       <set_value name="$reply" exact="'CANDIDATE_UNAVAILABLE'"/>
+      </do_elseif>
+      <do_elseif value="$candidate.dock.exists or $candidate.isinternallystored or $candidate == player.ship or $candidate == player.container">
+       <set_value name="$reply" exact="'CANDIDATE_CONTEXT'"/>
+      </do_elseif>
+      <do_elseif value="$candidate.pilot.exists or $candidate.assignedpilot.exists">
+       <set_value name="$reply" exact="'PILOT_PRESENT'"/>
+      </do_elseif>
+      <do_else>
+       <set_owner object="$candidate" faction="faction.player" overridenpc="false"/>
+       <do_if value="$candidate.owner == faction.player and $candidate.isoperational and not $candidate.pilot.exists and not $candidate.assignedpilot.exists and $first == player.controlled">
+        <set_value name="$reply" exact="'COMPANY'"/>
+       </do_if>
+       <do_else>
+        <set_value name="$reply" exact="'OWNER_READBACK'"/>
+       </do_else>
+      </do_else>
+     </do_else>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityCompanyFixturePrepare.Result'" param="'%s|%s|7354|%s'.[$request.$nonce,$request.$epoch,$reply]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

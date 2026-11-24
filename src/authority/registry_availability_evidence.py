@@ -67,22 +67,28 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                    verify_source_registry=verify_source_registry, pump=pump)
 
 
-def verify_join_snapshot(checkpoint, *, pump=None):
+def verify_join_snapshot(checkpoint, *, describe_indices=(), pump=None):
     """Verify format-3 saved bytes for admission using the checkpoint's run marker.
 
     Epoch and issued count are discovered from the saved snapshot and checked
     against the source registry. The MD checkpoint marker is a separate check
     owned by the caller; this function only correlates the snapshot run ID.
+    Explicit indices can include saved component and sector descriptions.
     """
     if (not isinstance(checkpoint, Checkpoint) or not isinstance(checkpoint.marker, str)
             or not _HEX32.fullmatch(checkpoint.marker)):
         raise RegistryAvailabilityEvidenceError('join checkpoint requires a run marker')
+    if (type(describe_indices) is not tuple or len(describe_indices) > 32 or
+            any(type(index) is not int or not 1 <= index <= _MAX for index in describe_indices) or
+            len(set(describe_indices)) != len(describe_indices)):
+        raise RegistryAvailabilityEvidenceError('invalid described registry indices')
     return _verify(checkpoint, None, checkpoint.marker, None,
-                   verify_source_registry=True, pump=pump, discover=True)
+                   verify_source_registry=True, pump=pump, discover=True,
+                   describe_indices=describe_indices)
 
 
 def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
-            verify_source_registry, pump, discover=False):
+            verify_source_registry, pump, discover=False, describe_indices=()):
     if (type(verify_source_registry) is not bool or not isinstance(checkpoint, Checkpoint)
             or (discover and verify_source_registry is not True)
             or (not discover and (not isinstance(expected_epoch, str)
@@ -356,10 +362,19 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                                              if i not in available_indices and source_forward[i] != '0'}
         else:
             unavailable_source_components = set()
+        if any(index not in operational_indices for index in describe_indices):
+            raise RegistryAvailabilityEvidenceError('described ship is unavailable or inoperable')
+        selected_indices = {ships[index]: index for index in describe_indices}
+        descriptions = {}
+        ancestors = []
         wanted = set(ships.values())
         found = set()
         unavailable_present = set()
         def components(path, attrs):
+            if selected_indices:
+                del ancestors[len(path) - 1:]
+                ancestors.append((attrs.get('class'), attrs.get('macro'))
+                                 if path[-1] == 'component' else None)
             if len(path) < 3 or path[:2] != ['savegame', 'universe'] or path[-1] != 'component':
                 return
             match = _COMPONENT.fullmatch(attrs.get('id', ''))
@@ -375,6 +390,16 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
             if not attrs.get('class', '').startswith('ship_'):
                 raise RegistryAvailabilityEvidenceError('available component is not a ship')
             found.add(component)
+            if component in selected_indices:
+                parents = [parent for parent in ancestors[:-1] if parent is not None]
+                sectors = [macro for kind, macro in parents if kind == 'sector']
+                descriptions[selected_indices[component]] = {
+                    'id': component, 'macro': attrs.get('macro'), 'class': attrs['class'],
+                    'owner': attrs.get('owner'), 'code': attrs.get('code'),
+                    'connection': attrs.get('connection'),
+                    'parent_class': parents[-1][0] if parents else None,
+                    'sector': sectors[0] if len(sectors) == 1 else None,
+                }
 
         _parse(checkpoint, components, pump=pump)
         if found != wanted:
@@ -390,7 +415,7 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
         availability_digest.update(bits.encode('ascii'))
         operational_digest = hashlib.sha256(b'X4AuthorityRegistryAvailabilitySnapshot operational v3\n')
         operational_digest.update(operational_bits.encode('ascii'))
-        return {'evidence_scope': 'saved checkpoint bytes only', 'format': 3,
+        result = {'evidence_scope': 'saved checkpoint bytes only', 'format': 3,
                 'operational_scope': 'captured saved observation only; commands must recheck live before acting',
                 'epoch': expected_epoch, 'run_id': expected_run_id,
                 'issued_count': expected_count, 'available_count': available_count,
@@ -400,6 +425,9 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                 'availability_sha256': availability_digest.hexdigest(),
                 'operational_sha256': operational_digest.hexdigest(),
                 'source_registry_checked': verify_source_registry}
+        if describe_indices:
+            result['described_ships'] = descriptions
+        return result
     except _PumpCallbackError as error:
         raise error.error
     except RegistryAvailabilityEvidenceError:

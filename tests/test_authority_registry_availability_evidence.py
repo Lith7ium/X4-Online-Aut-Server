@@ -148,6 +148,21 @@ class RegistryAvailabilityEvidenceTests(unittest.TestCase):
         self.assertEqual((result['epoch'], result['run_id'], result['issued_count']), (EPOCH, RUN, 3))
         self.assertTrue(result['source_registry_checked'])
 
+    def test_join_describes_only_operational_selected_ship_and_ancestry(self):
+        definitions = ('<component class="sector" macro="remote_sector">'
+                       '<component class="zone"><component id="[0x101]" class="ship_s" '
+                       'macro="fighter_macro" owner="player" code="ABC-123" connection="space"/>'
+                       '</component></component><component id="[0x103]" class="ship_s"/>')
+        with self.checkpoint(build_xml(operational=(1, 0, 0), definitions=definitions), RUN) as cp:
+            evidence = verify_join_snapshot(cp, describe_indices=(1,))
+            self.assertEqual(evidence['described_ships'], {1: {
+                'id': '101', 'macro': 'fighter_macro', 'class': 'ship_s', 'owner': 'player',
+                'code': 'ABC-123', 'connection': 'space', 'parent_class': 'zone',
+                'sector': 'remote_sector'}})
+            for invalid in ((2,), (3,), (1, 1), (True,)):
+                with self.subTest(invalid=invalid), self.assertRaises(RegistryAvailabilityEvidenceError):
+                    verify_join_snapshot(cp, describe_indices=invalid)
+
     def test_join_requires_marker_and_rejects_mismatched_saved_state(self):
         with self.checkpoint(build_xml()) as cp:
             with self.assertRaisesRegex(RegistryAvailabilityEvidenceError, 'requires a run marker'):
