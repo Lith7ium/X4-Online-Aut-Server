@@ -1122,6 +1122,12 @@ def run(args):
         pos = command.index('--die-with-parent')
         for path in protected:
             command[pos:pos] = ['--ro-bind',str(path),str(path)]; pos += 3
+        software_icd = getattr(args, 'software_vulkan_icd', None)
+        if software_icd is not None:
+            import authority_software_vulkan as software_vulkan
+            command = software_vulkan.constrain(command, display=args.display, authorization=auth,
+                                                icd=software_icd)
+            software_vulkan.verify(command, out/'software-vulkan.log')
         proc, started = owned.spawn_owned_gated(command, out/'process.log', processes)
         identity = None
         watch = recovery.RecoveryWatch(profile/'engine-output.log', checkpoint.marker)
@@ -1848,11 +1854,13 @@ def run(args):
     return result
 
 
-def main():
+def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game',type=Path,required=True); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
+    parser.add_argument('--software-vulkan-icd', type=Path,
+                        help='use this Mesa CPU Vulkan ICD and remove GPU devices from X4')
     parser.add_argument('--seed',type=int,default=276944566)
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
     parser.add_argument('--require-registry-snapshot',action='store_true',
@@ -1904,7 +1912,7 @@ def main():
                         help='start two overlapping private Linux diagnostic clients before serving other peers')
     diagnostic_options.add_argument('--diagnostic-clients', type=int, choices=(2,),
                         help='start two sequential private Linux diagnostic clients before serving other peers')
-    try: result=run(parser.parse_args())
+    try: result=run(parser.parse_args(argv))
     except (OSError,ValueError,RuntimeError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2)); return 0 if result['success'] else 1
 

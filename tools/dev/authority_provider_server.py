@@ -1,0 +1,114 @@
+"""Start one recovered authority server on a private software-rendered display."""
+import argparse
+from contextlib import contextmanager
+import os
+from pathlib import Path
+import secrets
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+import authority_recovered_loopback_server as supervisor
+from linux_gate_live import lavapipe_icd
+
+
+def authorize(tool, path, display, cookie):
+    subprocess.run([tool, '-q', '-f', str(path)], text=True,
+                   input=f'add {display} MIT-MAGIC-COOKIE-1 {cookie}\n',
+                   capture_output=True, timeout=5, check=True)
+
+
+@contextmanager
+def private_display(xvfb, xauth, xdpyinfo):
+    with tempfile.TemporaryDirectory(prefix='x4-authority-display-') as directory:
+        authorization = Path(directory) / 'authority'
+        authorization.touch(mode=0o600, exist_ok=False)
+        cookie = secrets.token_hex(16)
+        # Xvfb loads the cookie regardless of the record's display number.
+        # The client-side record for the allocated display is added below.
+        authorize(xauth, authorization, ':9999', cookie)
+        ready, notify = os.pipe()
+        process = None
+        try:
+            with (Path(directory) / 'xvfb.log').open('wb') as log:
+                process = subprocess.Popen(
+                    [xvfb, '-displayfd', str(notify), '-screen', '0', '800x600x24',
+                     '-nolisten', 'tcp', '-noreset', '-auth', str(authorization)],
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, pass_fds=(notify,),
+                    start_new_session=True)
+        finally:
+            os.close(notify)
+            if process is None:
+                os.close(ready)
+
+        try:
+            if not select.select([ready], [], [], 10)[0]:
+                raise RuntimeError('Xvfb did not allocate a display')
+            number = os.read(ready, 16).strip()
+            if not number.isdigit() or process.poll() is not None:
+                raise RuntimeError('Xvfb failed to initialize')
+            display = ':' + number.decode('ascii')
+            authorize(xauth, authorization, display, cookie)
+            environment = dict(os.environ, DISPLAY=display, XAUTHORITY=str(authorization))
+            subprocess.run([xdpyinfo], env=environment, capture_output=True, check=True, timeout=5)
+            # Reject a display that also accepts clients without the private cookie.
+            environment['XAUTHORITY'] = str(authorization.parent / 'missing')
+            if subprocess.run([xdpyinfo], env=environment, capture_output=True, timeout=5).returncode == 0:
+                raise RuntimeError('Xvfb accepts connections without the private cookie')
+            yield display, authorization
+        finally:
+            os.close(ready)
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument('--game', type=Path, required=True, help='directory containing pinned Linux X4')
+    parser.add_argument('--store', type=Path, required=True, help='verified recovery source under .local')
+    parser.add_argument('--out', type=Path, required=True, help='fresh output directory under .local')
+    parser.add_argument('--xvfb', help='Xvfb executable; defaults to PATH')
+    parser.add_argument('--vulkan-icd', type=Path, help='Mesa lavapipe ICD; defaults to system detection')
+    args, server_flags = parser.parse_known_args(argv)
+    xvfb, xauth, xdpyinfo = (shutil.which(name) for name in (args.xvfb or 'Xvfb', 'xauth', 'xdpyinfo'))
+    icd = args.vulkan_icd or lavapipe_icd()
+    if sys.platform != 'linux' or os.geteuid() == 0:
+        parser.error('run as an unprivileged Linux user')
+    if not all((xvfb, xauth, xdpyinfo, icd, shutil.which('bwrap'), shutil.which('vulkaninfo'))):
+        parser.error('Xvfb, xauth, xdpyinfo, bubblewrap, vulkaninfo and Mesa lavapipe are required')
+    if '--' in server_flags:
+        parser.error('pass recovered server options directly')
+    old_handler = signal.getsignal(signal.SIGTERM)
+
+    def interrupt(_number, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        with private_display(xvfb, xauth, xdpyinfo) as (display, authorization):
+            os.environ['DISPLAY'] = display
+            os.environ['XAUTHORITY'] = str(authorization)
+            return supervisor.main([
+                *server_flags, '--game', str(args.game), '--store', str(args.store),
+                '--out', str(args.out), '--display', display,
+                '--software-vulkan-icd', str(icd.resolve(strict=True)),
+            ])
+    except KeyboardInterrupt:
+        return 130
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f'Provider startup failed: {error}', file=sys.stderr)
+        return 1
+    finally:
+        signal.signal(signal.SIGTERM, old_handler)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
