@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 from authority.local_participant_control import LocalParticipantControl, LocalParticipantGroup
 
@@ -35,6 +36,68 @@ class LocalParticipantControlTest(unittest.TestCase):
         finally:
             controller.close()
             peer.close()
+
+    def test_hello_backlog_does_not_multiply_guard_cost(self):
+        controller = LocalParticipantControl(enabled=True, timeout=1.4)
+        self.addCleanup(controller.close)
+        controller.epoch = 'a' * 32
+        controller.peer = ('127.0.0.1', 1345)
+        hello = f'HELLO|{controller.lease}|{controller.epoch}'.encode()
+        prefix = f'{controller.lease}|{controller.epoch}|1|resume'
+        receipt = f'RECEIPT|{prefix}|confirmed'.encode()
+        now = 10.0
+        guard_checks = []
+
+        def slow_guard():
+            nonlocal now
+            guard_checks.append(now)
+            now += .15
+
+        # Simulate a queued burst, followed by more HELLOs racing the reply.
+        reads = iter([hello] * 20 + [BlockingIOError()] + [hello] * 20 + [receipt])
+
+        def read_datagram(size):
+            nonlocal now
+            now += .015
+            data = next(reads)
+            if isinstance(data, Exception):
+                raise data
+            return data, controller.peer
+
+        sock = Mock(wraps=controller.sock)
+        sock.recvfrom.side_effect = read_datagram
+        sock.sendto = Mock()
+        controller.wait_hook = slow_guard
+        with patch.object(controller, 'sock', sock), patch(
+                'authority.local_participant_control.time.monotonic', side_effect=lambda: now):
+            controller.request('resume')
+
+        sock.sendto.assert_called_once_with(f'CMD|{prefix}'.encode(), controller.peer)
+        self.assertFalse(controller.fault)
+        self.assertGreaterEqual(len(guard_checks), 2)
+        self.assertLess(now, 11.4)
+
+    def test_slow_pre_dispatch_guard_cannot_extend_deadline(self):
+        controller = LocalParticipantControl(enabled=True, timeout=1)
+        self.addCleanup(controller.close)
+        controller.epoch = 'a' * 32
+        controller.peer = ('127.0.0.1', 1345)
+        now = 10.0
+
+        def expire():
+            nonlocal now
+            now += 1.1
+
+        sock = Mock(wraps=controller.sock)
+        sock.recvfrom.side_effect = BlockingIOError()
+        sock.sendto = Mock()
+        controller.wait_hook = expire
+        with patch.object(controller, 'sock', sock), patch(
+                'authority.local_participant_control.time.monotonic', side_effect=lambda: now):
+            with self.assertRaisesRegex(TimeoutError, 'before command'):
+                controller.request('resume')
+        sock.sendto.assert_not_called()
+        self.assertTrue(controller.fault)
 
     def test_timeout_fences_later_commands(self):
         controller = LocalParticipantControl(enabled=True, timeout=.01)

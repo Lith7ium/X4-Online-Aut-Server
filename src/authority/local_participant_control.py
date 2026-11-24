@@ -15,6 +15,7 @@ import time
 _HEX = re.compile(r'[0-9a-f]{32}\Z')
 _MAX_ID = 9007199254740991
 _MAX_QUEUED_PACKETS = 4096
+_WAIT_HOOK_INTERVAL = .25
 
 
 class LocalParticipantControl:
@@ -66,12 +67,23 @@ class LocalParticipantControl:
             self.fault = True
             raise RuntimeError('participant request IDs exhausted')
         self.fault = True
-        deadline = time.monotonic() + self.timeout
+        started = time.monotonic()
+        deadline = started + self.timeout
         number = self.next_id
         self.next_id += 1
         prefix = f'{self.lease}|{self.epoch}|{number}'
         expected = f'RECEIPT|{prefix}|{operation}|confirmed'.encode('ascii')
         hello = f'HELLO|{self.lease}|{self.epoch}'.encode('ascii')
+        # A guard may inspect the whole private workspace. Keep it running
+        # during a wait without paying for that inspection for every HELLO.
+        next_check = started + _WAIT_HOOK_INTERVAL
+
+        def check_while_waiting(*, force=False):
+            nonlocal next_check
+            if self.wait_hook is not None and (force or time.monotonic() >= next_check):
+                self.wait_hook()
+                next_check = time.monotonic() + _WAIT_HOOK_INTERVAL
+
         # The client repeats HELLO even after enrollment. A long idle period
         # can fill the queue and cause the next command's receipt to be lost.
         # This point check rejects non-HELLO traffic already queued from the
@@ -80,7 +92,7 @@ class LocalParticipantControl:
         try:
             self.sock.setblocking(False)
             for _ in range(_MAX_QUEUED_PACKETS):
-                if getattr(self, 'wait_hook', None) is not None: self.wait_hook()
+                check_while_waiting()
                 if time.monotonic() >= deadline:
                     raise TimeoutError('participant deadline expired before command')
                 try:
@@ -93,11 +105,12 @@ class LocalParticipantControl:
                 raise RuntimeError('participant receive queue did not drain')
         finally:
             self.sock.settimeout(previous_timeout)
+        check_while_waiting(force=True)
         if time.monotonic() >= deadline:
             raise TimeoutError('participant deadline expired before command')
         self.sock.sendto(f'CMD|{prefix}|{operation}'.encode('ascii'), self.peer)
         while time.monotonic() < deadline:
-            if getattr(self, 'wait_hook', None) is not None: self.wait_hook()
+            check_while_waiting()
             try:
                 data, peer = self.sock.recvfrom(769)
             except socket.timeout:
