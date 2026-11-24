@@ -10,7 +10,8 @@ from authority.company_motion_service import CompanyMotionService, MAX_SAMPLE_AG
 
 class CompanyMotionServiceTests(unittest.TestCase):
     def setUp(self):
-        self.service = CompanyMotionService()
+        self.application_drops = {}
+        self.service = CompanyMotionService(application_drops=self.application_drops)
         self.addCleanup(self.service.close)
         self.first = self.grant(1)
         self.second = self.grant(2)
@@ -350,6 +351,49 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.service.revoke(1)
         self.service.admit(3, '3' * 32, 1, 'sector_a', 'a' * 32, 'b' * 32)
         self.assertEqual(self.service.freeze_application(), ())
+
+    def test_two_accepted_ships_expire_in_the_queue_and_after_inspect(self):
+        self.service.set_running(True)
+        first, _ = self.bind(self.first)
+        second, _ = self.bind(self.second)
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0):
+            self.publish(first, self.first, 1)
+            self.publish(second, self.second, 7)
+            inspected, = self.service.take_application_batch(1)
+            self.assertTrue(self.service.is_application_current(inspected, after_inspect=False))
+        self.assertEqual(self.service.accepted_samples, 2)
+        self.assertEqual(self.application_drops, {'last_reason': None, 'by_reason': {}})
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0 + MAX_SAMPLE_AGE):
+            self.assertFalse(self.service.is_application_current(inspected, after_inspect=True))
+            self.assertEqual(self.service.freeze_application(), ())
+            self.assertEqual(self.service.freeze_application(), ())
+        self.assertEqual(self.application_drops['last_reason'], 'queued_expired')
+        self.assertEqual(self.application_drops['by_reason'], {
+            'after_inspect_expired': {'count': 1, 'last_ship_index': 1, 'last_sequence': 1,
+                                      'last_age_seconds': MAX_SAMPLE_AGE},
+            'queued_expired': {'count': 1, 'last_ship_index': 2, 'last_sequence': 7,
+                               'last_age_seconds': MAX_SAMPLE_AGE},
+        })
+
+    def test_reassignment_invalidates_the_inspected_ship_and_queued_successor(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0):
+            self.publish(source, self.first, 1)
+            inspected, = self.service.take_application_batch()
+            self.publish(source, self.first, 2)
+            self.service.revoke(1)
+            self.assertTrue(self.service.is_application_current(inspected, after_inspect=False))
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.5):
+            self.service.admit(3, '3' * 32, 1, 'sector_a', 'a' * 32, 'b' * 32)
+            self.assertFalse(self.service.is_application_current(inspected, after_inspect=True))
+        self.assertEqual(self.application_drops['last_reason'], 'after_inspect_invalidated')
+        self.assertEqual(self.application_drops['by_reason'], {
+            'queued_reassigned': {'count': 1, 'last_ship_index': 1, 'last_sequence': 2,
+                                  'last_age_seconds': .5},
+            'after_inspect_invalidated': {'count': 1, 'last_ship_index': 1, 'last_sequence': 1,
+                                          'last_age_seconds': .5},
+        })
 
     def test_old_data_expires_with_server_age_including_frozen_batch(self):
         self.service.set_running(True)

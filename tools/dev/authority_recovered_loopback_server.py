@@ -1446,7 +1446,11 @@ def run(args):
                                          require_company_ship=require_company_ship)
         if company_motion:
             from authority.company_motion_service import CompanyMotionService
-            motion_service = CompanyMotionService()
+            application_drops = None
+            if pose_trial is not None:
+                application_drops = {}
+                pose_trial.report['application_drops'] = application_drops
+            motion_service = CompanyMotionService(application_drops=application_drops)
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
                                          motion_service=motion_service)
         host = ExperimentalLocalHost(world, control, service, enabled=True)

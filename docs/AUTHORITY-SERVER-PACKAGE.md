@@ -120,6 +120,26 @@ A later `--verify-company-pose` checks the saved position on a cold start.
 The ordinary `--company-motion` option alone runs the relay. The human
 flight used that relay. [Two-pilot flight report](../reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
 
+In a separate native Linux trial, two synthetic pilots each sent one position
+sample through the normal admission and motion channels. The provider
+acknowledged both. HVC-420 moved 120 m along the sector X axis. After a cold
+load, the native MD and UI readers both returned the requested position with
+0 m error. KHI-630 remained at its original saved position after a requested
+160 m move in the opposite direction. The run recorded no cause for the
+missing second move.
+
+For new pose trials, `company_pose_trial.application_drops` in `result.json`
+counts observed discards and keeps the latest ship index, source sequence and
+seconds since server acceptance under `by_reason`. The `last_reason` field
+identifies the most recent discard across all reasons. `queued_expired` records
+samples that reached the three-second freshness limit while waiting.
+`queued_reassigned` and `queued_evicted` record removal on ship reassignment
+and queue capacity eviction. Reasons beginning with `before_inspect_` or
+`after_inspect_` distinguish expiry from a batch or running-window
+invalidation at the named check. A disconnect can leave an already accepted
+sample eligible until expiry or reassignment. Routine replacement of a
+pending pose with a newer sample from the same ship is excluded.
+
 ## Starting ships for human flight tests
 
 The base-game test starts two **Pulsar Vanguards** 3 km apart in Black Hole

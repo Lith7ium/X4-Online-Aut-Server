@@ -49,7 +49,8 @@ class ApplicationQueue:
     def take_application_batch(self, limit):
         return [self.queue.popleft() for _ in range(min(limit, len(self.queue)))]
 
-    def is_application_current(self, record):
+    def is_application_current(self, record, *, after_inspect):
+        self.after_inspect = after_inspect
         return self.current is record
 
 
@@ -220,6 +221,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
         service.current = None
         self.reply(inspection, ORIGIN)
         trial.poll(service)
+        self.assertTrue(service.after_inspect)
         self.assertEqual(1, report['expired_before_write'])
         self.assertEqual(0, report['writes_verified'])
         self.assertIsNone(self.channel.pending)

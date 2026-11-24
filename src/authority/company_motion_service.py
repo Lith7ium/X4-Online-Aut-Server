@@ -94,7 +94,10 @@ class CompanyMotionService:
     A source acknowledgement confirms transport acceptance. The world owner
     separately takes and settles samples before any native pause and save.
     """
-    def __init__(self):
+    def __init__(self, *, application_drops=None):
+        self._application_drops = application_drops
+        if application_drops is not None:
+            application_drops.update(last_reason=None, by_reason={})
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.listener.bind(('127.0.0.1', 0))
@@ -133,7 +136,9 @@ class CompanyMotionService:
         self._retire_sample(ship_index)
         grant = _Grant(handle, secrets.token_hex(32), ship_index, registry_epoch, secrets.token_hex(16))
         # A previous grant's sealed sample cannot move a reassigned ship.
-        self._application_pending.pop(ship_index, None)
+        pending = self._application_pending.pop(ship_index, None)
+        if pending is not None:
+            self._record_drop('queued_reassigned', pending, time.monotonic())
         self._application_batch.pop(ship_index, None)
         self._grants[handle] = self._tickets[grant.ticket] = grant
         return {'ticket': grant.ticket, 'epoch': grant.epoch, 'generation': grant.generation,
@@ -248,6 +253,19 @@ class CompanyMotionService:
     def _fresh(record, now):
         return 0 <= now - record.accepted_at < MAX_SAMPLE_AGE
 
+    def _record_drop(self, reason, record, now):
+        """Keep the last receipt and total per reason in the optional provider result."""
+        if self._application_drops is None:
+            return
+        drops = self._application_drops['by_reason']
+        previous = drops.get(reason)
+        self._application_drops['last_reason'] = reason
+        drops[reason] = {
+            'count': previous['count'] + 1 if previous else 1,
+            'last_ship_index': record.index, 'last_sequence': record._sample['sequence'],
+            'last_age_seconds': now - record.accepted_at,
+        }
+
     def _remember_application(self, record):
         pending = self._application_pending
         if record.index not in pending and len(pending) >= MAX_PEERS:
@@ -255,7 +273,7 @@ class CompanyMotionService:
             # with departed grants, so keep active samples ahead of older ones.
             active = {grant.index for grant in self._grants.values()}
             oldest_departed = next(index for index in pending if index not in active)
-            del pending[oldest_departed]
+            self._record_drop('queued_evicted', pending.pop(oldest_departed), record.accepted_at)
         pending[record.index] = record  # Replacement retains the order of waiting ships.
 
     def take_application_batch(self, limit=1):
@@ -274,7 +292,7 @@ class CompanyMotionService:
         batch = {}
         for index, record in tuple(pending.items()):
             if not self._fresh(record, now):
-                del pending[index]
+                self._record_drop('queued_expired', pending.pop(index), now)
             elif len(batch) < limit:
                 batch[index] = pending.pop(index)
         self._application_batch = batch
@@ -295,13 +313,23 @@ class CompanyMotionService:
         self._application_batch = {record.index: record for record in batch}
         return batch
 
-    def is_application_current(self, record):
-        """Check a record from the current running or frozen batch before dispatch."""
+    def is_application_current(self, record, *, after_inspect=None):
+        """Check the running/frozen batch. A pose consumer tags its actual discard point."""
         self._check_owner()
-        return (type(record) is AcceptedCompanyMotion and
-                self._application_batch.get(record.index) is record and
-                record.window == self.window - int(not self.running) and
-                self._fresh(record, time.monotonic()))
+        if type(record) is not AcceptedCompanyMotion:
+            return False
+        now = time.monotonic()
+        if (self._application_batch.get(record.index) is not record or
+                record.window != self.window - int(not self.running)):
+            reason = 'invalidated'
+        elif not self._fresh(record, now):
+            reason = 'expired'
+        else:
+            return True
+        if after_inspect is not None:
+            stage = 'after_inspect' if after_inspect else 'before_inspect'
+            self._record_drop(f'{stage}_{reason}', record, now)
+        return False
 
     def _bind(self, peer, message):
         ticket = message.get('ticket')

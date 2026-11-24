@@ -161,7 +161,7 @@ class CompanyPoseTrial:
                       max_source_speed_mps=None, last_verified={}, paused={})
 
     def _start(self, record, service):
-        if not service.is_application_current(record):
+        if not service.is_application_current(record, after_inspect=False):
             self.report['expired_before_write'] += 1
             return
         sample = record.sample
@@ -185,7 +185,7 @@ class CompanyPoseTrial:
         stage, sample, target = active['stage'], active['sample'], active['target']
         if stage == 'inspect':
             active['before'], active['actor'] = reply['ui'], reply['actor']
-            if not service.is_application_current(active['record']):
+            if not service.is_application_current(active['record'], after_inspect=True):
                 self.report['expired_before_write'] += 1
                 self.active = None
                 return
