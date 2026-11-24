@@ -101,6 +101,30 @@ with tempfile.TemporaryDirectory() as scratch:
         assert (b'<teleport_player ' in station) == (mode == 'prepare')
 '''
 
+POSE_OVERLAY = r'''
+from pathlib import Path
+import sys
+import tempfile
+sys.path.insert(0, 'tools/dev')
+import authority_company_pose_overlay as pose
+import authority_recovery_bridge_live as recovery
+import authority_registry_checkpoint_install as registry
+import linux_snapshot_capture as snapshot
+
+with tempfile.TemporaryDirectory() as work:
+    for writable in (False, True):
+        root = Path(work) / str(writable)
+        case, profile, _, _ = snapshot.prepare_case(root, root / 'game', root / 'home')
+        lab = case / 'extensions/x4_lan_lab'
+        recovery.install_probe(case, profile, 23201, 'a' * 32, 'b' * 32)
+        registry.install(case, 'c' * 32, dict(format=3, epoch='d' * 32, run_id='e' * 32,
+                         issued_count=1, availability_bits='1', operational_bits='1'))
+        paths = pose.install(case, profile, port=23202, lease='f' * 32, epoch='d' * 32,
+                             writable=writable)
+        assert len(paths) == 6 and all(path.is_file() for path in paths)
+        assert (b'<warp ' in (lab / 'md/company_ship_pose.xml').read_bytes()) == writable
+'''
+
 
 class AuthorityServerPackageTest(unittest.TestCase):
     def test_reproducible_archive_contains_only_committed_source(self):
@@ -176,6 +200,8 @@ class AuthorityServerPackageTest(unittest.TestCase):
 
             # Compose both parking variants using only extracted source assets.
             subprocess.run([sys.executable, '-c', PARKING_OVERLAY],
+                           cwd=extracted, env=environment, check=True, timeout=10)
+            subprocess.run([sys.executable, '-c', POSE_OVERLAY],
                            cwd=extracted, env=environment, check=True, timeout=10)
 
             # Assemble the normal Linux player overlay from extracted assets.
