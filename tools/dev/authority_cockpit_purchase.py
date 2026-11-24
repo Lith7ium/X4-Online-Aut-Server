@@ -105,7 +105,8 @@ def _refused_receipt(intent, records, nonce):
             or not _is_amount(before_ware, 0, MAX_PRICE) or before_ware != after_ware
             or not _is_amount(before_balance, 0, MAX_EXACT) or before_balance != after_balance):
         raise ValueError('native stale-price refusal does not establish a clean rejection')
-    return {'outcome': 'refused', **intent, 'native_evidence': {
+    return {'outcome': 'refused', **intent, 'reason': 'price_changed', 'current_price_cents': current,
+            'native_evidence': {
         'reason': 'price_changed', 'quoted_unit_cents': quote_unit, 'current_unit_cents': current,
         'unchanged_water_units': after_ware, 'unchanged_company_balance_cents': after_balance,
         'records': records,

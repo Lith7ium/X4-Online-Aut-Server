@@ -87,6 +87,8 @@ class CockpitPurchaseTest(unittest.TestCase):
         receipt = cockpit_receipt(INTENT, rows, NONCE, REGISTRY_EPOCH)
         self.assertEqual({k: receipt[k] for k in INTENT}, INTENT)
         self.assertEqual(receipt['outcome'], 'refused')
+        self.assertEqual(receipt['reason'], 'price_changed')
+        self.assertEqual(receipt['current_price_cents'], 5820)
         self.assertNotIn('settled_total_cents', receipt)
         self.assertEqual(receipt['native_evidence']['current_unit_cents'], 5820)
         replacement_cases = (

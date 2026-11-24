@@ -121,7 +121,13 @@ function M.install(o)
                     o.notice('confirmed', receipt.settled_total_cents)
                 end
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
-                o.notice('refused')
+                local price = receipt.current_price_cents
+                if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
+                    o.notice('refused', nil, {reason = 'price_changed',
+                        price_cents = intent.price_cents, current_price_cents = price})
+                else
+                    o.notice('refused')
+                end
             else
                 o.notice('uncertain')
             end
@@ -232,14 +238,17 @@ function M.install_x4(o)
             end
         end
     end
-    local function stock_notice(status, settled_total_cents, snapshot)
+    local function stock_notice(status, settled_total_cents, details)
         local text = trade_notices[status]
         if status == 'confirmed' then
             text = 'Company purchase confirmed. Paid ' .. format_credits(settled_total_cents) .. '.'
-            if snapshot then
-                text = text .. ' Company balance ' .. format_credits(snapshot.company_balance_cents)
-                    .. '. ' .. snapshot.ship_code .. ': ' .. snapshot.cargo_units .. ' ' .. snapshot.ware .. '.'
+            if details then
+                text = text .. ' Company balance ' .. format_credits(details.company_balance_cents)
+                    .. '. ' .. details.ship_code .. ': ' .. details.cargo_units .. ' ' .. details.ware .. '.'
             end
+        elseif status == 'refused' and details then
+            text = 'Company purchase refused. Unit price changed from ' .. format_credits(details.price_cents)
+                .. ' to ' .. format_credits(details.current_price_cents) .. '. Review the fresh stock offer.'
         end
         if text then C.ShowInfoLine(text, 4) end
     end

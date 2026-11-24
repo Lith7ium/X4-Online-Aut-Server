@@ -180,6 +180,14 @@ for _, fields in ipairs({
     report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr.', fields)
 end
 report('refused', nil, 'Company purchase refused.')
+report('refused', nil,
+    'Company purchase refused. Unit price changed from 58.19 Cr to 58.77 Cr. Review the fresh stock offer.',
+    {reason = 'price_changed', current_price_cents = 5877})
+report('refused', nil, 'Company purchase refused.', {reason = 'price_changed'})
+for _, invalid in ipairs({'5877', 0, 5819, 5877.5, math.huge, 2147483648}) do
+    report('refused', nil, 'Company purchase refused.', {reason = 'price_changed', current_price_cents = invalid})
+end
+report('refused', nil, 'Company purchase refused.', {reason = 'other', current_price_cents = 5877})
 local uncertain = 'Company purchase status uncertain. Check the authoritative receipt.'
 report(nil, nil, uncertain)
 report('confirmed', nil, uncertain)

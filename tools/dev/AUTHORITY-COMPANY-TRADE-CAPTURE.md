@@ -31,6 +31,13 @@ A complete valid snapshot appears in the stock info line and as the optional
 custom notice argument with the matched `ware`. An incomplete or invalid
 snapshot leaves the paid-only notice. The snapshot only affects display.
 
+For a matching refused receipt, `reason = "price_changed"` and a valid
+`current_price_cents` different from the original quote enable a notice with
+both unit prices. The custom notice still receives status `refused`, with
+no settled total and an optional third argument carrying the reason,
+`price_cents` and `current_price_cents`. The stock notice asks the player to
+review the fresh offer. A missing or invalid price uses the generic refusal.
+
 A missing, malformed or mismatched receipt is uncertain. Call `settle(nil)`
 if the request owner reaches its deadline. Pending or refused notices have
 no settled total. The adapter leaves the menu open and suppresses local stock
