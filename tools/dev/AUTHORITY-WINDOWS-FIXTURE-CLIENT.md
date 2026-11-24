@@ -110,6 +110,31 @@ every placeholder; credentials are deliberately not command-line arguments:
 }
 ```
 
+### Connection check
+
+With the gateway running, use the same private connection file from this
+checkout on Windows or Linux. The check needs only Python 3.11+.
+
+```powershell
+python tools/dev/authority_connection_check.py --connection-file C:\X4Test\connection.json
+```
+
+A `ready` result for both services confirms the pinned certificate, shared key
+and the gateway's TCP connection to both backends. The command sends no
+offer or file request. It leaves the file token and slot untested and does not
+start X4. Use a current recovered server, which waits for an offer request
+before attaching a control connection. The file service may record that the
+connection closed without a request.
+
+A nonzero exit reports the failing phase per service. Check the endpoint and
+network path for `tcp_or_tls_failed`, and verify the certificate fingerprint
+through the trusted channel for `certificate_fingerprint_mismatch`. For
+`authentication_or_backend_failed`, have the operator verify the shared key
+and that the named backend is running. The gateway replies only after both
+steps succeed, so the client cannot distinguish their failures.
+
+### Start the fixture client
+
 From this checkout, in PowerShell, use absolute paths appropriate to that
 machine (the directories below are examples, not created prerequisites):
 

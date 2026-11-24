@@ -257,6 +257,13 @@ def _client_context():
     return context
 
 
+async def _open_client_stream(host, port, context):
+    return await asyncio.wait_for(
+        asyncio.open_connection(host, port, ssl=context,
+                                server_hostname='', ssl_handshake_timeout=_CONNECT_TIMEOUT),
+        _CONNECT_TIMEOUT)
+
+
 async def _server_authenticate(reader, shared_key, services):
     auth = await asyncio.wait_for(reader.readexactly(len(_MAGIC) + 33), _CONNECT_TIMEOUT)
     service = auth[-1]
@@ -267,10 +274,14 @@ async def _server_authenticate(reader, shared_key, services):
     return service
 
 
+class _ServerFingerprintMismatch(ValueError):
+    """The TLS peer failed pin verification before any credential was sent."""
+
+
 async def _client_authenticate(reader, writer, fingerprint, shared_key, service):
     certificate = writer.get_extra_info('ssl_object').getpeercert(binary_form=True)
     if not certificate or not hmac.compare_digest(hashlib.sha256(certificate).hexdigest(), fingerprint):
-        raise ValueError('server fingerprint mismatch')
+        raise _ServerFingerprintMismatch('server fingerprint mismatch')
     writer.write(_MAGIC + shared_key + bytes([service]))
     await asyncio.wait_for(writer.drain(), _CONNECT_TIMEOUT)
     if await asyncio.wait_for(reader.readexactly(1), _CONNECT_TIMEOUT) != b'\x01':
@@ -415,10 +426,7 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
         raw_writer = tls_writer = None
         try:
             raw_reader, raw_writer = await _accepted_stream(conn)
-            tls_reader, tls_writer = await asyncio.wait_for(
-                asyncio.open_connection(server_host, server_port, ssl=context,
-                                        server_hostname='', ssl_handshake_timeout=_CONNECT_TIMEOUT),
-                _CONNECT_TIMEOUT)
+            tls_reader, tls_writer = await _open_client_stream(server_host, server_port, context)
             await _client_authenticate(tls_reader, tls_writer, server_fingerprint, shared_key, service)
             await _relay(raw_reader, raw_writer, tls_reader, tls_writer, idle_timeout)
         finally:
@@ -429,6 +437,38 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
         tunnel._accept_tasks.append(asyncio.create_task(
             tunnel._accept(listener, lambda conn, service=service: handle(conn, service))))
     return tunnel
+
+
+async def check_services(*, server_host, server_port, server_fingerprint, shared_key):
+    """Return the connection phase reached by each gateway service.
+
+    The gateway acknowledges only after authenticating and connecting to the
+    backend. The probe sends a tunnel EOF without any application data.
+    """
+    _validate_options(shared_key, 1, _CONNECT_TIMEOUT)
+    _port(server_port)
+    _validate_server_identity(server_host, server_fingerprint)
+    context = _client_context()
+    results = {}
+    for name, service in (('control', _CONTROL), ('file', _FILE)):
+        writer = None
+        phase = 'tcp_or_tls_failed'
+        try:
+            reader, writer = await _open_client_stream(server_host, server_port, context)
+            phase = 'authentication_or_backend_failed'
+            await _client_authenticate(reader, writer, server_fingerprint, shared_key, service)
+            phase = 'tunnel_close_failed'
+            writer.write(_HEADER.pack(_EOF, 0))
+            await asyncio.wait_for(writer.drain(), _CONNECT_TIMEOUT)
+            results[name] = 'ready'
+        except _ServerFingerprintMismatch:
+            results[name] = 'certificate_fingerprint_mismatch'
+        except (OSError, ValueError, asyncio.IncompleteReadError):
+            results[name] = phase
+        finally:
+            await _close_writer(writer)
+    return results
+
 
 def _bind_listener(host, port):
     ipaddress.IPv4Address(host)
