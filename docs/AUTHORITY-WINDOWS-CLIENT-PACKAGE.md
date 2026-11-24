@@ -77,3 +77,20 @@ A confirmation identifies the remote pilot's sample and the local hull that
 X4 matched. Native Windows flight and visible playback require separate
 gameplay verification. The temporary motion credential stays
 in memory.
+
+### Observe a short cross-sector flight
+
+For the two-ship test world, the Windows observer chooses WOO-831 (1970)
+and the Linux pilot chooses WRN-302 (7354). After both cockpits are admitted
+and the session resumes, the observer opens WRN's sector on the stock map
+and selects WRN. Keep that selection while the pilot flies briefly and stops.
+Allow the player sessions to finish normally.
+
+In the Windows result, `company_observer.slots.map.last_confirmed` shows
+the latest confirmed sample, which may already be stationary. The same
+slot's `last_nonzero_velocity_confirmed` preserves the latest confirmed
+sample that carried a nonzero velocity, including its ship, sector,
+generation, sequence, clocks, position and velocity. It is `null` until a
+matching sample is confirmed in that slot. Compare these fields with the
+Linux pilot's source capture. This measures delivery to the selected local
+hull. Verifying visible motion also requires a later read of its actual pose.

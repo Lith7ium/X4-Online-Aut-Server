@@ -173,8 +173,10 @@ When a remote pilot occupies an observed hull, the movement channel forwards
 its current sample. The receiver records a confirmation after X4 matches the
 same hull again. On exit, `company_observer.slots.cockpit` and
 `company_observer.slots.map` in the player result give the counts and last
-confirmed sample for each view. This stage reads the hull and does not set
-its position on the receiving client.
+confirmed sample for each view. Each slot also retains
+`last_nonzero_velocity_confirmed` after a later stationary sample arrives.
+This stage reads the local hull. See the
+[two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
 
 ## Check the deployment from the host
 
