@@ -54,7 +54,7 @@ class ExperimentalTCPControl:
     and accept an attached handle even if admission never allocated a grant.
     """
     def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8, keepalive_enabled=False,
-                 motion_service=None):
+                 motion_service=None, company_purchases=False):
         if enabled is not True or type(session) is not TrustedMarkerLoadSession:
             raise ValueError('explicitly enabled trusted session required')
         if type(idle_timeout) not in (int, float) or not math.isfinite(idle_timeout) or not 0 < idle_timeout <= 300:
@@ -67,6 +67,9 @@ class ExperimentalTCPControl:
                 not callable(getattr(motion_service, name, None)) for name in ('admit', 'revoke')):
             raise ValueError('invalid ship motion service')
         # The caller exposes this option only on authenticated control sockets.
+        if type(company_purchases) is not bool or (company_purchases and not session._require_company_ship):
+            raise ValueError('purchase control requires company ship admission')
+        self._company_purchases = company_purchases
         self._motion_service = motion_service
         self._keepalive_enabled = keepalive_enabled
         self._session = session
@@ -256,13 +259,31 @@ class ExperimentalTCPControl:
                     self._drop(conn)
                     return
                 peer['out'] += encode_bound_offer(bound) + b'\n'
+                peer.pop('company_purchase_ship', None)
+                peer.pop('company_purchase_epoch', None)
                 peer['stage'] = 'offered'
                 peer['attempt_id'] = bound.offer.attempt_id
                 peer['keepalive_sequence'] = 0
                 return
             if peer['stage'] != 'offered':
                 raise ValueError('unexpected control message')
+            if message.get('kind') == 'enable_company_purchases':
+                if (not self._company_purchases or set(message) != {'version', 'kind', 'attempt_id', 'ship_index'}
+                        or message['attempt_id'] != peer['attempt_id'] or 'company_purchase_ship' in peer):
+                    raise ValueError('invalid purchase control request')
+                started = time.monotonic()
+                registry_epoch = self._session.purchase_reservation(conn, message['attempt_id'], message['ship_index'])
+                self._account_host_blocked(started, time.monotonic())
+                if not self._current_socket(conn, peer):
+                    self._drop(conn)
+                    return
+                peer.update(company_purchase_ship=message['ship_index'], company_purchase_epoch=registry_epoch)
+                reply = dict(message, kind='company_purchases_enabled', registry_epoch=registry_epoch)
+                peer['out'] += json.dumps(reply, separators=(',', ':')).encode('ascii') + b'\n'
+                return
             if message.get('kind') in ('list_company_ships', 'choose_company_ship'):
+                if message['kind'] == 'choose_company_ship' and 'company_purchase_ship' in peer:
+                    raise ValueError('negotiated purchase control fixes the ship choice')
                 started = time.monotonic()
                 response = company_ship_reply(message, self._session, conn)
                 self._account_host_blocked(started, time.monotonic())

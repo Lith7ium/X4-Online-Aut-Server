@@ -241,6 +241,19 @@ class TrustedMarkerLoadSession:
             self._pending_ships[peer] = ship
             return ship
 
+    def purchase_reservation(self, connection, attempt_id, ship_index):
+        """Bind purchases to the selected ship and its checkpoint registry."""
+        with self._lock:
+            self._live()
+            peer, checkpoint = self._ship_offer(connection, attempt_id)
+            ship = self._pending_ships.get(peer)
+            if type(ship_index) is not int or ship is None or ship.ship_index != ship_index:
+                raise CompanyShipUnavailable('purchase control requires the reserved ship')
+            catalog = self._ship_catalog
+            if catalog is None or catalog[0] != checkpoint or catalog[3] is None:
+                raise CompanyShipCatalogUnavailable('purchase control requires a checkpoint registry')
+            return catalog[3]
+
     def accept(self, connection, claim, *, pre_accept=None, ship_motion=False):
         """Accept one trusted claim; an optional side-effect-free guard runs last.
 

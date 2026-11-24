@@ -46,6 +46,7 @@ class ExperimentalClientOwner:
         self._participant = None
         self._offer = None
         self._ship_motion_credential = None
+        self._company_purchases_enabled = False
         self._thread = threading.current_thread()
         self._phase = 'loading'
         self._motion_port = motion_port
@@ -123,6 +124,13 @@ class ExperimentalClientOwner:
         if type(result) is str:
             raise CompanyShipChoiceDenied(result)
         return result
+
+    def enable_company_purchases(self):
+        """Enable authenticated purchase polls for the ship chosen on this offer."""
+        with self._operation('loading'):
+            epoch = self._load.enable_company_purchases()
+            self._company_purchases_enabled = True
+            return epoch
 
     def request_ship_motion(self):
         """Request a separate motion credential for the chosen offered ship."""
