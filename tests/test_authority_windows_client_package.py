@@ -24,6 +24,7 @@ import tempfile
 
 sys.path.insert(0, str(Path.cwd() / 'src'))
 from authority.client_motion_overlay import RECOVERY_APPLY_EPOCH, RECOVERY_APPLY_FIXTURE
+from authority.company_motion_source import CompanyMotionSource
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
@@ -56,13 +57,18 @@ with tempfile.TemporaryDirectory() as directory:
         attempt_id='d' * 32, size=100, name='j1.xml.gz',
     )
     seat = {'seat_index': 1318} if 'seat_index' in signature(install_fixture_overlay).parameters else {}
-    manifest = install_fixture_overlay(
-        view, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
-        save_path=r'C:\private\45841\save', participant_port=20123, participant_lease='f' * 32,
-        windows_dll=dll, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
-        registry_status=ready, registry_nonce='3' * 32, registry_snapshot=snapshot,
-        motion_settings=motion, **seat,
-    )
+    company_motion = CompanyMotionSource()
+    try:
+        manifest = install_fixture_overlay(
+            view, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
+            save_path=r'C:\private\45841\save', participant_port=20123, participant_lease='f' * 32,
+            windows_dll=dll, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
+            registry_status=ready, registry_nonce='3' * 32, registry_snapshot=snapshot,
+            motion_settings=motion, company_motion=company_motion, **seat,
+        )
+        assert company_motion.registry == (ready[1], 1318)
+    finally:
+        company_motion.close()
     assert len([file for file in manifest if file.endswith('.dds')]) == 16
     assert 'ui/client_registry_inspect.lua' in manifest
     assert 'ui/authority_recovered_client_motion.lua' in manifest
@@ -70,6 +76,8 @@ with tempfile.TemporaryDirectory() as directory:
     if seat:
         assert 'ui/client_seat.lua' in manifest
         assert 'md/client_seat.xml' in manifest
+    assert 'ui/company_motion_source.lua' in manifest
+    assert 'md/authority_job_descriptor_probe.xml' in manifest
 """
 
 

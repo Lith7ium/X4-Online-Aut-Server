@@ -117,8 +117,13 @@ function M.new_x4(cfg)
  assert(cfg.include_capture_time==nil or type(cfg.include_capture_time)=='boolean')
  if cfg.include_capture_time then assert(type(cfg.capture_clock)=='function') end
  local saved_baseline=cfg.saved_baseline~=nil
- assert(type(cfg.guard)=='function' and type(cfg.expected_save_path)=='string' and cfg.expected_save_path:sub(1,1)=='/'
-  and cfg.expected_save_path:sub(-11)=='/45841/save')
+ local function posix_path(value)
+  local path=value:gsub('\\','/'):gsub('/+$','')
+  if path:sub(1,1)=='/' and path:sub(-11)=='/45841/save' then return path end
+ end
+ local normalize=cfg.normalize_save_path or posix_path
+ assert(type(cfg.guard)=='function' and type(cfg.expected_save_path)=='string' and type(normalize)=='function')
+ local expected_path=assert(normalize(cfg.expected_save_path))
  for _,n in ipairs({'AddUITriggeredEvent','GetCurRealTime','ConvertIDTo64Bit'}) do assert(type(_G[n])=='function',n..' unavailable') end
  if saved_baseline then assert(type(ConvertStringToLuaID)=='function','ConvertStringToLuaID unavailable') end
  assert(type(X4LAN_RESOLVE_STRING)=='table' and type(X4LAN_RESOLVE_STRING.actor_u64)=='function'
@@ -159,7 +164,7 @@ function M.new_x4(cfg)
  o.clock=GetCurRealTime;o.game_time=function() return tonumber(C.GetCurrentGameTime()) end
  o.guard=function()
   local p=C.GetSaveFolderPath()
-  return cfg.guard()==true and p~=nil and p~=ffi.NULL and ffi.string(p):gsub('\\','/'):gsub('/+$','')==cfg.expected_save_path
+  return cfg.guard()==true and p~=nil and p~=ffi.NULL and normalize(ffi.string(p))==expected_path
    and C.IsPlayerValid() and not C.IsGamePaused()
  end
  o.issue=function(screen,operation,args) return AddUITriggeredEvent(screen,operation,args)~=false end

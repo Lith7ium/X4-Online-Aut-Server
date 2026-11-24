@@ -1,5 +1,16 @@
 """Connect a saved company-ship choice to the paused client load owner."""
+import json
+
 from .client_registry_overlay import registry_receipt
+from .company_motion_source import CompanyMotionSource
+
+COMPANY_MOTION_UI = {
+    'replica_motion_binding.lua': 'src/authority/lua/replica_motion_binding.lua',
+    'authority_job_descriptor_probe.lua': 'tools/dev/authority_job_descriptor_probe.lua',
+    'source_motion_sampler.lua': 'src/authority/lua/source_motion_sampler.lua',
+    'company_motion_source.lua': 'src/authority/lua/company_motion_source.lua',
+}
+COMPANY_MOTION_MD = {'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml'}
 
 SEAT_TAG = b'[X4LAN] AUTH_CLIENT_SEAT '
 SEAT_REFUSED_TAG = b'[X4LAN] AUTH_CLIENT_SEAT_REFUSED '
@@ -21,7 +32,17 @@ def seat_prefix(index, nonce, status):
     return f'{nonce}|{status[1]}|{index}|'.encode('ascii')
 
 
-def extend_seat_gate(text, index, full_registry):
+def company_motion_config(source, index, full_registry):
+    """Hand an installed, verified registry selection to the local IPC owner."""
+    if type(source) is not CompanyMotionSource or full_registry is None or index is None:
+        raise ValueError('company motion requires a verified selected seat and local source owner')
+    settings = source.configure(full_registry['epoch'], index)
+    return ',authority_company_motion={' + ','.join(
+        f'{key}={json.dumps(value, ensure_ascii=True)}' for key, value in settings.items()
+    ) + '}'
+
+
+def extend_seat_gate(text, index, full_registry, *, company_motion=False):
     """Run seat takeover after full inspection and before pause observation."""
     if full_registry is None:
         raise ValueError('client seat requires full registry inspection')
@@ -39,4 +60,6 @@ def extend_seat_gate(text, index, full_registry):
   end
   if not client_seat:tick() or not client_seat:ready() then return end
 '''.replace('INDEX', str(index))
+    if company_motion:
+        gate += '  X4LAN_COMPANY_MOTION_SOURCE.arm(client_seat)\n'
     return text.replace(declaration, declaration + 'local client_seat=nil\n').replace(hook, hook + gate)

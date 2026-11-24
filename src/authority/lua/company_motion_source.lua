@@ -1,0 +1,119 @@
+-- Read-only selected-player source. The existing participant owns the update hook.
+local M = {}
+local seat
+
+function M.arm(verified_seat)
+    assert(seat == nil or seat == verified_seat)
+    seat = verified_seat
+end
+
+function M.new(options)
+    local running, active, reset, failed = false, false, false, false
+    local sampler, actor
+    local api = {}
+
+    local function available()
+        return running and not failed and options.available() == true
+    end
+
+    local function suspend()
+        if not active then return end
+        active, reset = false, true
+        if sampler and sampler:state() == 'pending' then assert(sampler:discard_pending()) end
+        options.send('GAP')
+    end
+
+    function api:set_running(value)
+        running = value
+        if not running then suspend() end
+    end
+
+    function api:event(row)
+        if not sampler or type(row) ~= 'string' then return end
+        local request = sampler:expected_request()
+        if not request or row:sub(1, 33) ~= request .. '|' then return end
+        if not available() then
+            suspend()
+            return
+        end
+        local ok, sample = sampler:event(row)
+        if not ok then failed = true; suspend(); return end
+        if not sample then return end
+        local rate = sample.real_velocity
+        local function number(value) return string.format('%.17g', value) end
+        options.send(table.concat({
+            'SAMPLE3', sample.epoch, tostring(sample.index),
+            string.format('%.0f', sample.sequence), sample.sector_macro,
+            number(sample.source_time), number(sample.capture_time),
+            number(sample.x), number(sample.y), number(sample.z),
+            rate and number(rate.x) or '-', rate and number(rate.y) or '-',
+            rate and number(rate.z) or '-', '',
+        }, '|'))
+    end
+
+    function api:tick()
+        if not available() then suspend(); return end
+        if not sampler then
+            actor = options.actor()
+            if not actor then return end
+            sampler = assert(options.make_sampler(actor, available))
+            if not sampler:register({
+                epoch = options.epoch, index = options.index, classification = 'saved_baseline',
+            }, actor) then failed = true; return end
+        end
+        active = true
+        if reset then
+            if not sampler:reset_baseline(options.index) then failed = true; suspend(); return end
+            reset = false
+        end
+        if not sampler:tick() then failed = true; suspend() end
+    end
+
+    return api
+end
+
+function M.new_x4(config, save_path, pinned, udp)
+    local ffi = require('ffi')
+    ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); const char* GetSaveFolderPath(void);]]
+    local C = ffi.C
+    local net = udp.open('127.0.0.1', config.port)
+    local resolve = X4LAN_RESOLVE_STRING
+    local normalize = X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+    local expected = assert(normalize(save_path))
+    local function actor()
+        local selected = seat and seat:controlled_actor()
+        return selected and resolve.parse_hex(selected) or nil
+    end
+    local function available()
+        if not C.IsPlayerValid() or C.IsGamePaused() or not actor() then return false end
+        local actual = C.GetSaveFolderPath()
+        return actual ~= nil and actual ~= ffi.NULL and normalize(ffi.string(actual)) == expected
+    end
+    local prefix = 'C|' .. config.lease .. '|' .. config.generation .. '|'
+    local source = M.new({
+        epoch = pinned.epoch, index = config.index, available = available, actor = actor,
+        send = function(payload) net:send(prefix .. payload) end,
+        make_sampler = function(selected, guard)
+            return X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({
+                enabled = true, epoch = pinned.epoch, generation = config.generation,
+                nonce = config.nonce, max_tracks = 1, scan_budget = 1,
+                interval = .10, timeout = 1, min_dt = .02, max_dt = 1,
+                real_time_motion = true, capture_clock = udp.monotonic,
+                expected_save_path = expected, normalize_save_path = normalize,
+                guard = guard, binding_guard = function() return false end,
+                saved_baseline_limit = pinned.issued_count,
+                saved_baseline_guard = function(row, entity)
+                    return row.index == config.index and entity == selected and actor() == selected
+                end,
+                descriptor = X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE, resolve = resolve,
+                fault = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED') end,
+            })
+        end,
+    })
+    assert(RegisterEvent('X4AuthorityJobDescriptorProbe.Result',
+                         function(_, row) source:event(row) end) ~= false)
+    return source
+end
+
+X4LAN_COMPANY_MOTION_SOURCE = M
+return M

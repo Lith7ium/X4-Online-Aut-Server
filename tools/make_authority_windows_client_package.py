@@ -58,7 +58,11 @@ REQUIRED = {
     *(f'src/lockstep/base/assets/textures/ui/x4lan/x4lan_player{slot}.dds' for slot in range(1, 17)),
     *DLL_SOURCE,
 }
-COMPANY_SEAT = {'src/authority/lua/client_seat.lua', 'src/authority/md/client_seat.xml'}
+COMPANY_SEAT = {
+    'src/authority/lua/client_seat.lua', 'src/authority/md/client_seat.xml',
+    'src/authority/lua/company_motion_source.lua', 'src/authority/lua/source_motion_sampler.lua',
+    'tools/dev/authority_job_descriptor_probe.lua', 'tools/dev/authority_job_descriptor_probe.xml',
+}
 
 
 def select_paths(commit):

@@ -6,7 +6,9 @@ import shutil
 
 from authority.checkpoints import Checkpoint
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
-from authority.client_seat_overlay import extend_seat_gate
+from authority.client_seat_overlay import (
+    COMPANY_MOTION_MD, COMPANY_MOTION_UI, company_motion_config, extend_seat_gate,
+)
 from authority.load_observations import BoundReceiptStream, MAX_LOG
 from authority.registry_availability_evidence import verify_join_snapshot
 import authority_marked_admission_evidence as files
@@ -27,7 +29,7 @@ _MD = {
 }
 
 
-def install(case, profile, bound, target, index, pump):
+def install(case, profile, bound, target, index, pump, *, company_motion=None):
     """Verify the staged format-3 save and compose the gate before X4 starts."""
     offer = bound.offer
     checkpoint = Checkpoint(offer.checkpoint_id, target, offer.sha256, offer.size, bound.marker)
@@ -41,17 +43,20 @@ def install(case, profile, bound, target, index, pump):
     ui, md = lab / 'ui', lab / 'md'
     owner = ui / 'authority_download_load_probe.lua'
     probe = extend_full_inspect(owner.read_text(encoding='utf-8'))
-    owner.write_text(extend_seat_gate(probe, index=index, full_registry=full), encoding='utf-8')
+    owner.write_text(extend_seat_gate(probe, index=index, full_registry=full,
+                                     company_motion=company_motion is not None), encoding='utf-8')
 
     manifest = lab / 'ui.xml'
     body = manifest.read_text(encoding='utf-8')
     hook = '    <file name="ui/recovery_registry_status.lua" />\n'
     if body.count(hook) != 1:
         raise ValueError('unexpected registry module insertion point')
-    modules = ''.join(f'    <file name="ui/{name}" />\n' for name in _UI)
+    ui_sources = _UI if company_motion is None else _UI | COMPANY_MOTION_UI
+    md_sources = _MD if company_motion is None else _MD | COMPANY_MOTION_MD
+    modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     manifest.write_text(body.replace(hook, modules + hook), encoding='utf-8')
 
-    for folder, sources in ((ui, _UI), (md, _MD)):
+    for folder, sources in ((ui, ui_sources), (md, md_sources)):
         for name, original in sources.items():
             target_file = folder / name
             shutil.copyfile(ROOT / original, target_file)
@@ -61,7 +66,9 @@ def install(case, profile, bound, target, index, pump):
     if not text.endswith('}\n'):
         raise ValueError('unexpected seat configuration')
     settings = ','.join(f'{key}={json.dumps(value, ensure_ascii=True)}' for key, value in full.items())
-    config.write_text(text[:-2] + ',authority_registry_snapshot={' + settings + '}}\n', encoding='ascii')
+    suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
+    config.write_text(text[:-2] + ',authority_registry_snapshot={' + settings + '}' + suffix + '}\n',
+                      encoding='ascii')
     return paths, SeatWatch(profile / 'engine-output.log', bound, status, nonce, index)
 
 

@@ -93,6 +93,12 @@ function M.new(options)
         return state == 'done'
     end
 
+    function api:controlled_actor()
+        if state ~= 'done' then return nil end
+        local ok, refusal = pcall(options.inspect, target, target_owner, true)
+        if ok and refusal == nil then return target end
+    end
+
     local ok, registered = pcall(options.register, function(_, row) api:event(row) end)
     if not ok or registered ~= true then
         fail('REGISTRATION_FAILED')

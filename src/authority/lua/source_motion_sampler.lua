@@ -213,6 +213,16 @@ function M.new(o)
   busy=false;if not ok then return fail('sample')end;return true,result
  end
  function api:state()return state end
+ function api:discard_pending()
+  if busy or state~='pending' then return fail('discard_pending')end
+  busy=true
+  local reader=pending.reader
+  pending=nil;state='ready'
+  local ok,closed=pcall(reader.close,reader)
+  busy=false
+  if not ok or closed~=true or state~='ready' then return fail('discard_pending')end
+  return true
+ end
  function api:reset_baseline(index)
   if busy or state~='ready' or not integer(index) or not entries[index] then return fail('reset')end
   busy=true
@@ -285,7 +295,8 @@ function M.new_x4(c)
  end
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,
-   row=row,actor=actor,expected_save_path=c.expected_save_path,guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
+   row=row,actor=actor,expected_save_path=c.expected_save_path,normalize_save_path=c.normalize_save_path,
+   guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
    include_capture_time=c.real_time_motion,capture_clock=c.capture_clock,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
