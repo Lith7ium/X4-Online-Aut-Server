@@ -93,14 +93,17 @@ X4 matched. Native Windows flight and visible playback require separate
 gameplay verification. The temporary motion credential stays
 in memory.
 
-### Try the opt-in Company water purchase
+### Try an opt-in Company purchase
 
 Use a matching Windows package and a private `connection.json` from a provider
 started with `--company-purchases`. Add `-CompanyPurchases` to the PowerShell
-command above and choose WRN-302 (7354). The experiment supports buying six
-units of water in one immediate purchase while WRN-302 is externally docked
-at Teladi station BIM-169 in Grand Exchange I. Open Trade from the stock
-Docked menu, set the quantity to six, review the offer, and confirm once.
+command above and select your reserved Company ship. Open Trade from the
+stock Docked menu, choose a single ware and quantity, review the offer, and
+confirm once. The server must also see the ship at that station's external
+trading berth with its idle Company captain. The native reference purchase
+was six units of water by WRN-302 (7354) at BIM-169. Other baskets and
+the Windows cockpit flow still need live verification. The provider currently
+accepts one completed purchase per run.
 Reopen and review the stock offer before confirming again after any price
 change, including a lower price.
 

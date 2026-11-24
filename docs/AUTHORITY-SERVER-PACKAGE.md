@@ -170,7 +170,9 @@ native provider verified one transfer to `cluster_06_sector001_macro`.
 After the last pilot left, KHI-630 was at (31520, 115000, -3960). Both
 ships' MD and UI position readings matched the saved coordinates with
 zero measured error. The confirmed checkpoint was
-`checkpoint-90a606d278ee438b9d2d3f9fc63be0c6`. A player flying through
+`checkpoint-90a606d278ee438b9d2d3f9fc63be0c6`. A fresh GPU-free Linux
+X4 process then loaded that checkpoint. Both the UI and Mission Director
+read back each ship in its saved sector with 0 m of position error. A player flying through
 the gate in a real cockpit and an observer seeing the crossing remain to
 be tested.
 
@@ -371,25 +373,27 @@ to your own world if using another test save. The ordinary map observer
 continues to cover the selected remote sector. Both the trial receiver and
 the provider must support the opt-in loss notifications.
 
-## Try the opt-in Company water purchase
+## Try an opt-in Company purchase
 
 Use matching trade-capable server and player packages with the private
 format-3 Company seed. Add `--company-purchases` to the normal provider
 command with `--require-registry-snapshot` and the pinned TLS settings above.
-On Linux, add `--company-purchases --company-ship-index 7354` to the player
-command. The Windows launcher uses `-CompanyPurchases` and prompts for the
-ship. Company motion is optional for this test.
+On Linux, add `--company-purchases` and select the buyer's ship. On Windows,
+add `-CompanyPurchases` and select the same index you reserved for that pilot.
 
-The experimental provider accepts a single immediate purchase of six units
-of water by WRN-302 (7354), externally docked at Teladi station BIM-169 in
-Grand Exchange I. Open the stock Docked menu,
-choose Trade, set the water quantity to six, review the price, and confirm.
-The provider checks the seat, berth and current unit price before dispatch.
+Open the stock Docked menu, choose Trade, select a single ware and quantity,
+review the price, and confirm. The provider checks the reserved ship's
+identity, external berth, idle Company captain, free cargo space, funds and
+current station offer. Its native bridge currently allows one completed order
+per run. A missing receipt after dispatch also closes it to further orders.
+The native reference purchase used WRN-302 (7354) and six units of water at
+BIM-169 in Grand Exchange I. Other purchase baskets have protocol and
+receipt-verification coverage. Live tests must establish their X4 behavior.
 If the price changes in either direction, reopen and review the fresh stock
 offer before confirming again. A pending request needs no second click.
 
 A native confirmation can show the actual debit, Company balance and the
-ship's resulting water count. If the native receipt is missing, the cockpit
+ship's resulting stock of that ware. If the native receipt is missing, the cockpit
 can show **Company purchase accepted. Awaiting reconciliation with your
 purchase record.** The provider queries the original recorded basket with
 fresh challenges and requires two matching reports for the same purchase ID,

@@ -10,7 +10,7 @@ import unittest
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'tools/dev'))
+sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
 from authority_native_purchase import NativePurchaseProvider
 from authority_trade_settlement import purchase_settlement
 
@@ -69,12 +69,28 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertFalse(cue.exists())
             self.assertEqual(other.read_bytes(), b'owned by the registry')
 
-    def test_mismatched_scope_does_not_dispatch_and_id_cannot_change(self):
+    def test_valid_but_unrepresentable_basket_is_refused_before_dispatch(self):
         provider = self.provider()
-        purchase = dict(PURCHASE, station_code='XYZ-999')
-        self.assertEqual(provider.begin(BINDING, purchase)['reason'], 'unsupported_purchase')
+        oversized_orders = [dict(PURCHASE, quantity=65536), dict(PURCHASE, purchase_id='b' * 32, price_cents=2**31)]
+        for purchase in oversized_orders:
+            self.assertEqual(provider.begin(BINDING, purchase)['reason'], 'unsupported_purchase')
+            self.assertIsNone(provider.poll())
+
+    def test_second_company_ship_can_request_other_stock_and_id_binds_the_basket(self):
+        provider = self.provider()
+        binding = dict(BINDING, ship_index=1074, ship_code='KHI-630')
+        purchase = dict(PURCHASE, sector='cluster_06_sector002_macro', station_code='ABC-X1Z',
+                        ware='energycells', quantity=13)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(('127.0.0.1', 0))
+            peer.settimeout(1)
+            peer.sendto(f'PURCHASE_HELLO|{provider._lease}'.encode(), provider._socket.getsockname())
+            self.assertIsNone(provider.begin(binding, purchase))
+            packet, _ = peer.recvfrom(768)
+        self.assertEqual(packet.decode().split('|')[3:], [binding['registry_epoch'], '1074', 'KHI-630',
+                         'cluster_06_sector002_macro', 'ABC-X1Z', 'energycells', '13', '5819'])
         with self.assertRaisesRegex(ValueError, 'already bound'):
-            provider.begin(BINDING, PURCHASE)
+            provider.begin(binding, dict(purchase, quantity=12))
         self.assertIsNone(provider.poll())
 
     def test_lost_receipt_is_unknown_and_poisoned_without_resend(self):
@@ -179,8 +195,8 @@ class NativePurchaseProviderTests(unittest.TestCase):
                                    .replace('LEDGER|observed|-|75|11|', 'LEDGER|observed|-|75|10|')
                                    for row in evidence['rows'])
                 self.assertEqual(purchase_settlement(stale_rows, PURCHASE['purchase_id'],
-                                 BINDING['registry_epoch'], 'six-unit', require_absolute_cargo=True,
-                                 live=True)['reason'], 'ledger_entry_predates_native_binding')
+                                 BINDING['registry_epoch'], 'live_purchase', ware=PURCHASE['ware'],
+                                 quantity=PURCHASE['quantity'])['reason'], 'ledger_entry_predates_native_binding')
                 self.assertIsNone(proc.poll())
             finally:
                 proc.terminate()
@@ -189,13 +205,15 @@ class NativePurchaseProviderTests(unittest.TestCase):
     def test_md_stock_order_requires_physical_dock_binding(self):
         root = ET.parse(STOCK).getroot()
         guards = {node.attrib['name']: node.attrib['exact'] for node in root.iter('set_value')
-                  if node.attrib['name'] in ('$owned_docked', '$live_dock')}
-        for field in ('dockingbay', '$bay.container == $station', 'not $bay.isstorage',
+                  if node.attrib['name'] in ('$owned_docked', '$live_dock', '$fixture_dock')}
+        for field in ('dockingbay', '$bay.external', '$bay.container == $station', 'not $bay.isstorage',
                       'not $ship.isinternallystored', '$ship.orders.count == 0',
                       '$ship.sector == $station.sector', '$ship.trueowner == faction.player'):
             self.assertIn(field, guards['$live_dock'])
-        for field in ("'WRN-302'", "'BIM-169'", '$byship.{$ship} == 7354'):
-            self.assertIn(field, guards['$owned_docked'])
+        self.assertIn('$byship.{$ship} == $index', guards['$owned_docked'])
+        for fixture_code in ("'WRN-302'", "'BIM-169'"):
+            self.assertIn(fixture_code, guards['$fixture_dock'])
+            self.assertNotIn(fixture_code, guards['$owned_docked'] + guards['$live_dock'])
         buys = list(root.iter('create_trade_order'))
         self.assertEqual(len(buys), 1)
         request = root.find(".//cue[@name='Request']")

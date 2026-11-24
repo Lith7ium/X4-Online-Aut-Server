@@ -9,36 +9,31 @@ import secrets
 import socket
 import time
 
+from authority.company_purchase_control import purchase_value
 from authority_trade_settlement import bound_dock, live_purchase_before, purchase_settlement
 
 
 _IDS = re.compile(r'[0-9a-f]{32}')
-_COMPONENT = re.compile(r'[A-Z0-9]{3}-[0-9]{3}')
-_MACRO = re.compile(r'[a-z0-9_]{1,80}')
+_COMPONENT = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _PURCHASE_FIELDS = ('purchase_id', 'sector', 'station_code', 'ware', 'quantity', 'price_cents')
 _BINDING_FIELDS = ('registry_epoch', 'ship_index', 'ship_code')
-_SCOPE = (7354, 'WRN-302', 'cluster_01_sector001_macro', 'BIM-169', 'water', 6)
 _REFUSALS = {'dock_mismatch', 'invalid_registry', 'no_unique_offer',
              'request_binding_invalid', 'provider_limit'}
 _MAX_IDS = 1024
 _MAX_RECEIPTS = 201
 _MAX_PACKET = 768
 _MAX_UNIT_PRICE = 2**31 - 1
+_MAX_NATIVE_QUANTITY = 65535
 _MAX_SAFE_NUMBER = 2**53 - 1
 
 
-def _valid(binding, purchase):
-    def number(value, maximum):
-        return type(value) is int and 0 < value <= maximum
-
-    def text(pattern, value):
-        return type(value) is str and pattern.fullmatch(value) is not None
-
-    return (text(_IDS, binding['registry_epoch']) and number(binding['ship_index'], 2**31 - 1)
-            and text(_COMPONENT, binding['ship_code']) and text(_IDS, purchase['purchase_id'])
-            and text(_MACRO, purchase['sector']) and text(_COMPONENT, purchase['station_code'])
-            and text(_MACRO, purchase['ware']) and number(purchase['quantity'], 65535)
-            and number(purchase['price_cents'], _MAX_SAFE_NUMBER))
+def _valid_binding(binding):
+    epoch = binding['registry_epoch']
+    index = binding['ship_index']
+    code = binding['ship_code']
+    return (type(epoch) is str and _IDS.fullmatch(epoch) is not None
+            and type(index) is int and 0 < index <= 2**31 - 1
+            and type(code) is str and _COMPONENT.fullmatch(code) is not None)
 
 
 @dataclass
@@ -147,10 +142,10 @@ class NativePurchaseProvider:
     def begin(self, binding, purchase):
         try:
             binding = {name: binding[name] for name in _BINDING_FIELDS}
-            purchase = {name: purchase[name] for name in _PURCHASE_FIELDS}
+            purchase = purchase_value({name: purchase[name] for name in _PURCHASE_FIELDS})
         except (TypeError, KeyError):
             raise ValueError('incomplete native purchase binding') from None
-        if not _valid(binding, purchase):
+        if not _valid_binding(binding):
             raise ValueError('invalid native purchase binding')
         attempt = _Attempt(binding, purchase, self._clock() + self._timeout)
         prior = self._history.get(attempt.id)
@@ -162,11 +157,9 @@ class NativePurchaseProvider:
             self._same_request(self._attempt, attempt)
             return self.poll()
 
-        scope = (binding['ship_index'], binding['ship_code'], purchase['sector'],
-                 purchase['station_code'], purchase['ware'], purchase['quantity'])
         if len(self._history) >= _MAX_IDS:
             return dict(purchase, outcome='refused', reason='provider_limit')
-        if scope != _SCOPE or purchase['price_cents'] > _MAX_UNIT_PRICE:
+        if purchase['quantity'] > _MAX_NATIVE_QUANTITY or purchase['price_cents'] > _MAX_UNIT_PRICE:
             return self._record(attempt, 'refused', reason='unsupported_purchase')
         if self._exhausted:
             return self._record(attempt, 'refused', reason='provider_limit')
@@ -194,7 +187,8 @@ class NativePurchaseProvider:
         if len(attempt.rows) >= 3:
             try:
                 parts = [row.split('|') for row in attempt.rows[:3]]
-                before = live_purchase_before(parts, attempt.id, attempt.binding['registry_epoch'])
+                before = live_purchase_before(parts, attempt.id, attempt.binding['registry_epoch'],
+                                              ware=attempt.purchase['ware'], quantity=attempt.purchase['quantity'])
                 if before['price_cents'] != attempt.purchase['price_cents']:
                     before = None
             except ValueError:
@@ -217,7 +211,8 @@ class NativePurchaseProvider:
         try:
             if 'DEAL' in [part[0] for part in parts]:
                 audit = purchase_settlement(attempt.rows, attempt.id, attempt.binding['registry_epoch'],
-                                            'six-unit', require_absolute_cargo=True, live=True)
+                                            'live_purchase', ware=attempt.purchase['ware'],
+                                            quantity=attempt.purchase['quantity'])
                 balances = (audit['settled_total_cents'], audit['deal']['faction_after_ct'],
                             audit['ship_ware_units_after'])
                 if (not audit['verified'] or audit['price_cents'] != attempt.purchase['price_cents']
