@@ -28,9 +28,10 @@ Internet connection. Exchange session settings privately.
 [Windows flight procedure](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight)
 Cobalt completed the local Windows preflight on the flight build. The
 source-only package was reproducible, the extracted commands parsed and
-the pinned game executable matched. The host has the verified bundled
-network DLL and the matching Windows ZIP. Cobalt still needs the archive,
-Steam running and the coordinated outside-network session.
+the pinned game executable matched. The matching Windows ZIP with the verified
+project network DLL is available in the project channel. Cobalt can check
+the downloaded file against the posted hashes before the coordinated flight.
+[Windows package with the DLL](https://x4multiplayeraicoms.slack.com/files/U0CA93RS75H/F0CLESBCX5H/x4-windows-player.zip)
 [Windows preflight](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795536126403889)
 [18:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795539697756849)
 
