@@ -17,6 +17,21 @@ from .load_messages import MAX_INTEGER, MAX_MESSAGE, _pairs, _reject_constant
 from .experimental_tcp_job_delivery import job_event, job_digest
 
 
+_REENTRY_REPLIES = {
+    'motion_reentry_prepare': ('motion_reentry_prepared_receipt', 'prepared'),
+    'motion_reentry_align': ('motion_reentry_aligned_receipt', 'aligned'),
+    'motion_reentry_cancel': ('motion_reentry_canceled_receipt', 'canceled'),
+}
+
+
+def validate_motion_reentry_controller(controller, apply_motion):
+    if controller is not None and (not callable(apply_motion) or
+            not callable(getattr(controller, 'prepare', None)) or
+            not callable(getattr(controller, 'align', None)) or
+            not callable(getattr(controller, 'cancel', None))):
+        raise ValueError('motion reentry requires a motion consumer and prepare, align and cancel callbacks')
+
+
 def validate_participant_connection(conn, controller, *, enabled, epoch, handle, timeout):
     """Validate known participant prerequisites without changing the socket."""
     if (enabled is not True or type(conn) is not socket.socket or conn.family != socket.AF_INET or
@@ -37,8 +52,18 @@ class ExperimentalTCPParticipantClient:
 
     The controller must bound its own synchronous pause/resume calls. This
     adapter checks its deadline after a call but cannot interrupt that call.
+    The optional motion reentry controller also runs synchronously. Its
+    prepare(previous_sector, sample) must check the local identity and target
+    binding without writing. Its align(previous_sector, prepared_sample, sample)
+    must confirm the actual alignment on that same binding from the fresh pose.
+    Its cancel(previous_sector, prepared_sample) must discard a preparation
+    without writing. Each callback returns exactly True on confirmation. Closing
+    or faulting discards protocol state; the caller owns controller cleanup and
+    X4 process fencing.
     """
-    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None):
+    def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None,
+                 motion_reentry_controller=None):
+        validate_motion_reentry_controller(motion_reentry_controller, apply_motion)
         validate_participant_connection(conn, controller, enabled=enabled,
                                         epoch=epoch, handle=handle, timeout=timeout)
         conn.setblocking(False)
@@ -66,10 +91,13 @@ class ExperimentalTCPParticipantClient:
         self._authority_grant=authority_grant;self._authority_guard=authority_guard;self._pull_authority_motion=pull_authority_motion
         self._authority_grant_wire=None if authority_grant is None else json.dumps(authority_grant,sort_keys=True,separators=(',',':'))
         self._authority_request=0;self._authority_sequence=0;self._authority_time=None
+        self._motion_reentry_controller = motion_reentry_controller
+        self._prepared_reentry = None
         self._failed = self._closed = self._busy = False
 
     def _fault(self):
         self._failed = True
+        self._prepared_reentry = None
         try: self._conn.close()
         except BaseException: pass
 
@@ -103,6 +131,8 @@ class ExperimentalTCPParticipantClient:
             return self._job(command)
         if type(command) is dict and command.get('kind') in ('motion_snapshot','motion_despawn'):
             return self._motion(command)
+        if type(command) is dict and type(command.get('kind')) is str and command['kind'] in _REENTRY_REPLIES:
+            return self._motion_reentry(command)
         if type(command) is dict and command.get('kind')=='motion_apply':
             return self._motion_apply(command)
         if type(command) is dict and command.get('kind')=='motion_preflight':
@@ -117,6 +147,8 @@ class ExperimentalTCPParticipantClient:
                 type(command['request_id']) is not int or not self._last < command['request_id'] <= MAX_INTEGER or
                 command['operation'] not in ('pause', 'resume')):
             raise ValueError('unexpected or stale participant command')
+        if self._prepared_reentry is not None:
+            raise RuntimeError('cancel pending motion reentry before participant control')
         self._quiet()
         self._last = command['request_id']  # never dispatch it twice
         confirmed = getattr(self._controller, command['operation'])((self._handle,))
@@ -179,6 +211,8 @@ class ExperimentalTCPParticipantClient:
             raise ValueError('motion request identity mismatch')
         track_key = (sample['epoch'], sample['generation'], sample['index'])
         prior_track = self._motion_tracks.get(track_key)
+        if is_despawn and self._prepared_reentry is not None and self._prepared_reentry['track'] == track_key:
+            raise RuntimeError('cancel pending motion reentry before despawn')
         if prior_track is None:
             if is_despawn or len(self._motion_tracks) >= 100000:
                 raise ValueError('unknown motion lifetime')
@@ -188,9 +222,9 @@ class ExperimentalTCPParticipantClient:
         elif prior_track['closed'] or sample['sequence'] <= prior_track['sequence']:
             raise ValueError('stale motion lifetime')
         if not is_despawn and prior_track:
-            previous = {'version': prior_track['version'], 'source_time': prior_track['time'],
-                        'capture_time': prior_track['capture_time'], 'sector_macro': prior_track['frame']}
-            check_motion_progress(sample, previous)
+            if self._motion_reentry_controller is not None and sample['sector_macro'] != prior_track['frame']:
+                raise ValueError('motion frame changed without alignment')
+            check_motion_progress(sample, self._previous_snapshot(prior_track))
 
         self._quiet()
         self._motion_incarnation = command['incarnation']
@@ -203,17 +237,117 @@ class ExperimentalTCPParticipantClient:
             raise ValueError('motion callback mutated sample')
         if callback_confirmed is not True:
             raise RuntimeError('motion sample not accepted')
-        self._motion_preflight = None
-        self._motion_tracks[track_key] = {'sequence': sample['sequence'], 'closed': is_despawn,
-            'version': None if is_despawn else sample['version'],
-            'capture_time': None if is_despawn else sample.get('capture_time'),
-            'time': None if is_despawn else sample['source_time'],
-            'frame': None if is_despawn else sample['sector_macro'],
-            'digest': None if is_despawn else sample_digest}
-        self._motion_current[(sample['epoch'], sample['index'])] = track_key
+        self._record_motion(track_key, sample, sample_digest, is_despawn)
         receipt = {k: command[k] for k in ('version', 'connection_handle', 'session_epoch', 'incarnation', 'request_id')}
         receipt.update(kind='motion_receipt', status='accepted', sample_sha256=sample_digest)
         self._out = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+
+    @staticmethod
+    def _previous_snapshot(track):
+        return {'version': track['version'], 'source_time': track['time'],
+                'capture_time': track['capture_time'], 'sector_macro': track['frame']}
+
+    def _record_motion(self, key, sample, digest, despawn=False):
+        self._motion_preflight = None
+        track = self._motion_tracks.setdefault(key, {})
+        track.update(sequence=sample['sequence'], closed=despawn, version=None if despawn else sample['version'],
+                     capture_time=sample.get('capture_time'), time=sample.get('source_time'),
+                     frame=sample.get('sector_macro'), digest=None if despawn else digest)
+        self._motion_current[(sample['epoch'], sample['index'])] = key
+
+    def _motion_reentry(self, command):
+        from .experimental_tcp_motion import check_motion_progress, motion_value, motion_digest
+
+        kind = command['kind']
+        prepare = kind == 'motion_reentry_prepare'
+        cancel = kind == 'motion_reentry_cancel'
+        fields = {'version', 'kind', 'connection_handle', 'session_epoch',
+                  'incarnation', 'request_id', 'previous_sector'}
+        extra_fields = {'sample_sha256'} if cancel else {'sample'}
+        if not prepare:
+            extra_fields.add('prepared_sequence')
+        if (self._motion_reentry_controller is None or set(command) != fields | extra_fields or
+                type(command['version']) is not int or command['version'] != 1 or
+                type(command['connection_handle']) is not int or command['connection_handle'] != self._handle or
+                command['session_epoch'] != self._epoch or self._motion_incarnation is None or
+                command['incarnation'] != self._motion_incarnation or type(command['request_id']) is not int or
+                (not prepare and type(command['prepared_sequence']) is not int)):
+            raise ValueError('invalid motion reentry command')
+
+        previous_sector = command['previous_sector']
+        pending = self._prepared_reentry
+        if cancel:
+            if (pending is None or previous_sector != pending['previous_sector'] or
+                    command['request_id'] != command['prepared_sequence'] or
+                    command['prepared_sequence'] != pending['sample']['sequence'] or
+                    command['sample_sha256'] != pending['digest']):
+                raise ValueError('motion reentry cancellation differs from prepare')
+            self._quiet()
+            prepared_candidate = copy.deepcopy(pending['sample'])
+            confirmed = self._motion_reentry_controller.cancel(previous_sector, prepared_candidate)
+            self._within()
+            self._quiet()
+            if confirmed is not True or motion_digest(prepared_candidate) != pending['digest']:
+                raise RuntimeError('motion reentry cancellation not confirmed')
+            self._prepared_reentry = None
+            receipt = dict(command)
+        else:
+            sample = motion_value(command['sample'])
+            key = (sample['epoch'], sample['generation'], sample['index'])
+            prior = self._motion_tracks.get(key)
+            if (prior is None or prior['closed'] or sample['sequence'] != command['request_id'] or
+                    sample['sequence'] <= prior['sequence'] or previous_sector != prior['frame'] or
+                    sample['sector_macro'] == previous_sector):
+                raise ValueError('motion reentry differs from the confirmed track')
+            previous = self._previous_snapshot(prior)
+            if prepare:
+                last_prepared = prior.get('last_prepared')
+                if pending is not None or (last_prepared is not None and
+                        sample['sequence'] <= last_prepared['sequence']):
+                    raise ValueError('stale or overlapping motion reentry prepare')
+                check_motion_progress(sample, previous)
+                check_motion_progress(sample, last_prepared)
+            else:
+                if (pending is None or key != pending['track'] or
+                        command['prepared_sequence'] != pending['sample']['sequence'] or
+                        sample['sequence'] <= command['prepared_sequence'] or
+                        sample['sector_macro'] != pending['sample']['sector_macro']):
+                    raise ValueError('motion reentry alignment differs from prepare')
+                check_motion_progress(sample, pending['sample'])
+                # Check clocks against any confirmed old-sector sample too. Rates in this
+                # sample are measured between observations in the destination sector.
+                check_motion_progress(sample, dict(previous, sector_macro=sample['sector_macro']))
+
+            self._quiet()
+            digest = motion_digest(sample)
+            candidate = copy.deepcopy(sample)
+            controller = self._motion_reentry_controller
+            if prepare:
+                confirmed = controller.prepare(previous_sector, candidate)
+            else:
+                prepared_candidate = copy.deepcopy(pending['sample'])
+                confirmed = controller.align(previous_sector, prepared_candidate, candidate)
+            self._within()
+            self._quiet()
+            if (confirmed is not True or motion_digest(candidate) != digest or
+                    not prepare and motion_digest(prepared_candidate) != pending['digest']):
+                raise RuntimeError('motion reentry not confirmed')
+            if prepare:
+                self._motion_preflight = None
+                self._prepared_reentry = dict(track=key, sample=sample, digest=digest,
+                                              previous_sector=previous_sector)
+                prior['last_prepared'] = {name: sample[name] for name in
+                                          ('sequence', 'version', 'source_time', 'sector_macro')}
+                prior['last_prepared']['capture_time'] = sample.get('capture_time')
+            else:
+                self._record_motion(key, sample, digest)
+                self._prepared_reentry = None
+            receipt = {name: value for name, value in command.items() if name != 'sample'}
+            receipt['sample_sha256'] = digest
+
+        reply_kind, status = _REENTRY_REPLIES[kind]
+        receipt.update(kind=reply_kind, status=status)
+        self._out = json.dumps(receipt, sort_keys=True, separators=(',', ':'), allow_nan=False).encode() + b'\n'
 
     def _motion_apply(self, command):
         from .experimental_tcp_motion import motion_value, motion_digest
@@ -232,6 +366,7 @@ class ExperimentalTCPParticipantClient:
         previous_track = self._motion_tracks.get(track_key)
         digest = motion_digest(sample)
         if (type(command.get('request_id')) is not int or command['request_id'] != sample['sequence'] or
+                self._prepared_reentry is not None and self._prepared_reentry['track'] == track_key or
                 previous_track is None or previous_track['closed'] or previous_track['sequence'] != sample['sequence'] or
                 previous_track['digest'] != digest or self._motion_preflight != (track_key, sample['sequence'], digest)):
             raise ValueError('motion apply differs from last confirmed sample')
@@ -268,6 +403,7 @@ class ExperimentalTCPParticipantClient:
         previous_track = self._motion_tracks.get(track_key)
         digest = motion_digest(sample)
         if (type(command.get('request_id')) is not int or command['request_id'] != sample['sequence'] or
+                self._prepared_reentry is not None and self._prepared_reentry['track'] == track_key or
                 previous_track is None or previous_track['closed'] or previous_track['sequence'] != sample['sequence'] or
                 previous_track['digest'] != digest):
             raise ValueError('motion preflight differs from last confirmed sample')
@@ -388,4 +524,5 @@ class ExperimentalTCPParticipantClient:
     def close(self):
         self._owner()
         self._closed = True
+        self._prepared_reentry = None
         self._conn.close()

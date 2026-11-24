@@ -75,12 +75,14 @@ class ObservedSessionTest(unittest.TestCase):
                     command = participant_command or {
                         'version': 1, 'kind': 'participant_command', 'epoch': self.offer.world_epoch,
                         'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
-                    conn.sendall(json.dumps(command).encode() + b'\n')
-                    reply = stream.readline()
-                    if reply:
-                        self.replies.append(json.loads(reply))
-                    else:
-                        return
+                    commands = command if type(command) is tuple else (command,)
+                    for request in commands:
+                        conn.sendall(json.dumps(request).encode() + b'\n')
+                        reply = stream.readline()
+                        if reply:
+                            self.replies.append(json.loads(reply))
+                        else:
+                            return
                     self.stop.wait(4)
             except BaseException as error:
                 self.errors.append(error)
@@ -319,6 +321,51 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertEqual(len(self.replies), 1)
         self.assertEqual(self.replies[0]['kind'], 'motion_receipt')
         self.assertEqual(self.replies[0]['status'], 'accepted')
+
+    def test_reentry_alignment_is_guarded_through_the_observed_session(self):
+        original = self.motion_command()
+        first_target = dict(original['sample'], sequence=2, source_time=2.0, sector_macro='sector_b')
+        prepared = dict(original, kind='motion_reentry_prepare', request_id=2,
+                        previous_sector='sector_a', sample=first_target)
+        latest_target = dict(first_target, sequence=3, source_time=3.0, x=40.0)
+        aligned = dict(prepared, kind='motion_reentry_align', request_id=3,
+                       prepared_sequence=2, sample=latest_target)
+        owner, client, bound, deadline = self.connect(participant_command=(original, prepared, aligned))
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        self.log = b''.join(self.log_parts())
+        events = []
+
+        class LocalReentry:
+            def prepare(_, previous_sector, sample):
+                events.append(('prepare', previous_sector, sample))
+                return True
+
+            def align(_, previous_sector, prepared_sample, sample):
+                events.append(('align', previous_sector, prepared_sample, sample))
+                self.log += b'[X4LAN] AUTH_PARTICIPANT ERR'
+                return True
+
+            def cancel(_, previous_sector, sample):
+                raise AssertionError('unexpected cancel')
+
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline,
+            apply_motion=lambda sample, despawn: events.append(('snapshot', sample, despawn)) or True,
+            motion_reentry_controller=LocalReentry())
+        self.addCleanup(session.close)
+        self.assertTrue(session.start())
+        with self.assertRaisesRegex(RuntimeError, 'incomplete during motion'):
+            while True:
+                session.poll(.1)
+        self.assertTrue(self.server_done.wait(2))
+        self.assertEqual([receipt['kind'] for receipt in self.replies],
+                         ['motion_receipt', 'motion_reentry_prepared_receipt'])
+        self.assertEqual(events, [('snapshot', original['sample'], False),
+                                  ('prepare', 'sector_a', first_target),
+                                  ('align', 'sector_a', first_target, latest_target)])
+        self.assertEqual(client.fileno(), -1)
 
     def test_log_failure_after_motion_ipc_dispatch_blocks_tcp_receipt(self):
         command = self.motion_command()

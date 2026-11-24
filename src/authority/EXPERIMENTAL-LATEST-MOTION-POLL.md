@@ -33,9 +33,21 @@ it returns true, then run the synchronous operation and finally call
 `control.release_motion_barrier()`. Establish this barrier **before** invoking
 `gate.begin()` or queueing/flush of a lifecycle delivery: a failed flush after
 sending an event to its delivery gate fences the host and cannot be retried.
-The normal reader lease is unavailable while motion is pending or in flight;
-no second reader is started. Changing a recipient's sector frame still requires
-an external resynchronization; that mechanism is not provided here.
+The normal reader lease is unavailable while motion is pending or in flight.
+One reader owns all exchanges.
+
+For a compatible private participant, the host can opt into
+`ExperimentalTCPMotion(..., allow_sector_reentry=True)` on the latest source
+path. The selector must have previously excluded that exact peer incarnation
+from a confirmed source observation in the destination sector. Lifecycle
+fences do not count as exclusion. Prepare carries no rate and must confirm
+destination binding without movement. Align carries a newer sample from a
+PULL dispatched after the prepare receipt. It preserves the sample version
+and destination-frame rate. The host commits the peer frame only on the
+correlated aligned receipt. A visibility loss or lifecycle barrier cancels a
+prepared alignment when its write request is still unsent. If bytes of that
+request have been sent, the owner drains the correlated receipt or fences the
+socket. Other peers retain their own motion queues.
 
 The feature has no integrated interest discovery, authority transfer, remote
 security, Internet or Windows validation. `tests/test_authority_latest_motion_poll.py`

@@ -78,8 +78,10 @@ class LatestMotionPoll:
             self.blocked = True
         try:
             for peer in self.control._peers.values():
+                for cancel in tuple(peer.get('motion_reentry_cancel', {}).values()):
+                    cancel()
                 active = peer.get('motion_active')
-                if active is not None and active['sent'] == 0:
+                if active is not None and active['sent'] == 0 and not active.get('reentry_started'):
                     peer['motion_active'] = None
                     active['discarded']()
                 pending = peer.get('motion_pending', {})
@@ -117,7 +119,7 @@ class LatestMotionPoll:
 
     def receive(self, conn, peer, chunk):
         active = peer.get('motion_active')
-        if active is None or active['sent'] != len(active['data']):
+        if active is None or not active['data'] or active['sent'] != len(active['data']):
             self.control._drop(conn); return
         if active['guard'] is not None: active['guard']()
         active['input'] += chunk
@@ -134,7 +136,8 @@ class LatestMotionPoll:
             if (type(reply) is not dict or set(reply) != set(expected) or
                     any(type(reply.get(k)) is not type(v) or reply[k] != v for k, v in expected.items())):
                 raise ValueError('invalid motion receipt')
-            active['accepted']()
+            keep_active = active['accepted']() is True
         except (ValueError, UnicodeError, RecursionError):
             self.control._drop(conn); return
-        peer['motion_active'] = None
+        if not keep_active:
+            peer['motion_active'] = None

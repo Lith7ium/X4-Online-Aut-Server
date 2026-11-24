@@ -464,10 +464,11 @@ class ExperimentalSourceMotionIPC:
         else:
             selected = self._select(sample, deadline)
         if selected == []:
-            self._motion_call(self._motion.observe_unselected, sample)
+            self._motion_call(self._motion.observe_unselected, sample,
+                              _interest_observed=latest and not fenced and self._select_recipients is not None)
         elif latest:
             if self._motion_call(self._motion.enqueue_latest, sample, recipients=selected,
-                                 _guard=self._latest_guard) is not True:
+                                 _guard=self._latest_guard, _capture_request=int(request)) is not True:
                 selected = []
         elif self._motion_call(self._motion.send, sample, guard=lambda: self._check(deadline, 'pulling') or True,
                                recipients=selected) is not True:

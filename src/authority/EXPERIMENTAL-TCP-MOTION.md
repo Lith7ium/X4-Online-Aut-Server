@@ -18,10 +18,9 @@ is finite X4 source game time in seconds (0..1e12); coordinates are bounded
 finite values (±1e7). Velocity is explicitly null when unknown, or a complete
 finite x/y/z vector (±5000), interpreted as a derivative per source game
 second, not a proven native velocity. No actor or sector handle is transported.
-A source sector change must carry null velocity. A selected peer that already
-received this track in a different sector faults before any send, even with
-null velocity; no per-peer frame reset is implemented. Macro equality does not
-establish cross-process coordinate-frame identity.
+A source sector change must carry null velocity. By default, a selected peer
+that already received this track in a different sector faults before any send.
+Macro equality does not establish cross-process coordinate-frame identity.
 
 Snapshot v2 keeps those fields and adds `orientation` and `angular_rate`,
 each with exactly `yaw`, `pitch` and `roll`. As in LAN NAV2, orientation uses
@@ -67,11 +66,10 @@ client's local actor binding. Leaving interest sends no removal, hiding or
 expiry command; an old held sample can remain indefinitely. On re-entry an
 older client frame may differ from the sender's current frame even if the last
 two source samples match. The sender fences this per peer incarnation and
-track, and the current local X4 binding also faults sector changes;
-there is no general unsubscribe/reset/rejoin or cross-frame reconciliation.
-Callers must fence or separately resolve these cases and cannot infer a safe
-rejoin from a successful targeted send. No choice of recipients proves shared
-checkpoint identity, actor/frame equality or interest correctness.
+track. The opt-in latest-source path can explicitly prepare the destination
+binding and align from a newer source capture with a compatible client. See
+[latest-motion polling](EXPERIMENTAL-LATEST-MOTION-POLL.md). A targeted send
+alone proves neither shared checkpoint identity nor interest correctness.
 
 `ExperimentalTCPParticipantClient` accepts motion only with an explicit
 `apply_motion(sample, despawn)` callback. The callback must verify its actual

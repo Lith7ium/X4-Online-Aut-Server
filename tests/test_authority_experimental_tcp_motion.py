@@ -28,7 +28,8 @@ class MotionTCP(unittest.TestCase):
         self.stop.set()
         for thread in self.threads:thread.join(2)
         self.assertFalse(any(t.is_alive() for t in self.threads));self.assertEqual(self.errors,[])
-    def client(self,conn,handle,*,failure=False,mutate=False,delay=0,despawn_failure=False):
+    def client(self,conn,handle,*,failure=False,mutate=False,delay=0,despawn_failure=False,
+               motion_reentry_controller=None):
         def run():
             try:
                 conn.settimeout(3);frame=b''
@@ -43,7 +44,8 @@ class MotionTCP(unittest.TestCase):
                     if mutate:value['index']+=1
                     return not failure and not (despawn and despawn_failure)
                 app=ExperimentalTCPParticipantClient(conn,Controller(),enabled=True,epoch='a'*32,handle=handle,
-                                                     timeout=1,apply_motion=accept,apply_job=lambda x:True)
+                                                     timeout=1,apply_motion=accept,apply_job=lambda x:True,
+                                                     motion_reentry_controller=motion_reentry_controller)
                 while not self.stop.is_set():app.poll(.05)
                 app.close()
             except BaseException as error:

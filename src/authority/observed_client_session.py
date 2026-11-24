@@ -13,6 +13,7 @@ import threading
 import time
 
 from .experimental_client_owner import ExperimentalClientOwner
+from .experimental_tcp_participant_client import validate_motion_reentry_controller
 from .load_observations import BoundReceiptStream
 from .local_participant_control import LocalParticipantControl
 from .trusted_load_messages import encode_bound_offer
@@ -49,6 +50,23 @@ class _CheckedParticipant:
         return self._call('resume', handles)
 
 
+class _CheckedMotionReentry:
+    def __init__(self, session, controller):
+        self._session = session
+        self._controller = controller
+
+    def prepare(self, previous_sector, sample):
+        return self._session._checked_motion_call(self._controller.prepare, previous_sector, sample)
+
+    def align(self, previous_sector, prepared_sample, sample):
+        return self._session._checked_motion_call(
+            self._controller.align, previous_sector, prepared_sample, sample)
+
+    def cancel(self, previous_sector, prepared_sample):
+        return self._session._checked_motion_call(
+            self._controller.cancel, previous_sector, prepared_sample)
+
+
 class ObservedClientSession:
     """Own one staged client connection and local controller until close.
 
@@ -61,7 +79,8 @@ class ObservedClientSession:
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                  apply_motion=None, registry_status=None, registry_nonce=None,
-                 motion_control=None, require_full_inspection=False, seat_index=None):
+                 motion_control=None, require_full_inspection=False, seat_index=None,
+                 motion_reentry_controller=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -72,6 +91,7 @@ class ObservedClientSession:
         try:
             if apply_motion is not None and not callable(apply_motion):
                 raise ValueError('motion consumer must be callable')
+            validate_motion_reentry_controller(motion_reentry_controller, apply_motion)
             motion_timeout = 0
             if motion_control is not None:
                 motion_timeout = getattr(motion_control, 'timeout', None)
@@ -103,6 +123,8 @@ class ObservedClientSession:
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
             self._apply_motion = apply_motion
             self._motion_control = motion_control
+            self._motion_reentry_controller = (None if motion_reentry_controller is None else
+                _CheckedMotionReentry(self, motion_reentry_controller))
             self._participant_timeout = controller.timeout + 2 * motion_timeout + 1
             self._socket, self._lease = controller.sock, controller.lease
             self._controller_timeout = controller.timeout
@@ -194,12 +216,15 @@ class ObservedClientSession:
             self._check()
 
     def _checked_motion(self, sample, despawn):
+        return self._checked_motion_call(self._apply_motion, sample, despawn)
+
+    def _checked_motion_call(self, callback, *args):
         if (threading.get_ident() != self._thread or self._state != 'active' or
-                not self._busy or self._apply_motion is None):
+                not self._busy or callback is None):
             raise RuntimeError('observed motion callback unavailable')
         if not self._check():
             raise RuntimeError('client log became incomplete during motion')
-        result = self._apply_motion(sample, despawn)
+        result = callback(*args)
         if not self._check():
             raise RuntimeError('client log became incomplete during motion')
         return result
@@ -231,6 +256,8 @@ class ObservedClientSession:
             activate_options = {'participant_timeout': self._participant_timeout}
             if self._apply_motion is not None:
                 activate_options['apply_motion'] = self._checked_motion
+            if self._motion_reentry_controller is not None:
+                activate_options['motion_reentry_controller'] = self._motion_reentry_controller
             self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)
             self._state = 'active'
             if not self._check(): raise RuntimeError('client log became incomplete after claim')
