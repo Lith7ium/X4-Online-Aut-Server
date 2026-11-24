@@ -49,13 +49,22 @@ function M.new(epoch, nonce, trial, optional_request)
         report('DOCK|' .. row)
         if row:match('^[^|]+|([^|]+)|') ~= 'READY' then fail('dock_refused'); return end
         ship, station = row:match('^[^|]+|READY|([^|]+)|([^|]+)|')
-        phase = 'quoting'
-        issue('Quote')
+        if fixed then
+            phase = 'buying'
+            start_time = require('ffi').C.GetCurrentGameTime()
+            issue('Buy')
+        else
+            phase = 'quoting'
+            issue('Quote')
+        end
     end)
 
     local function finish_refusal()
         if not refused or not refusal_price then return end
-        if refused.current ~= refusal_price then fail('refusal_quote_mismatch'); return end
+        if refused.current ~= refusal_price or tonumber(refusal_price) ~= quote then
+            fail('refusal_quote_mismatch')
+            return
+        end
         phase = 'done'
         report('REFUSED|' .. refused.row)
         report('DONE')
@@ -79,7 +88,9 @@ function M.new(epoch, nonce, trial, optional_request)
         if type(row) ~= 'string' or row:match('^([^|]+)') ~= nonce then return end
         local status, price = row:match('^[^|]+|([%w_]+)|(%d+)$')
         report('RESULT|' .. row)
-        if phase == 'quoting' and status == 'quote' and tonumber(price) > 0 then
+        if phase == 'buying' and fixed and status == 'quote' and not quote and tonumber(price) > 0 then
+            quote = tonumber(price)
+        elseif phase == 'quoting' and not fixed and status == 'quote' and tonumber(price) > 0 then
             quote = tonumber(price)
             phase = 'buying'
             start_time = require('ffi').C.GetCurrentGameTime()

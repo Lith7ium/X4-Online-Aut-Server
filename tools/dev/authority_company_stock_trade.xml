@@ -40,8 +40,11 @@
                     <set_value name="$offer" exact="$offers.{1}"/>
                     <set_value name="$price" exact="$offer.unitprice"/>
                     <set_value name="$quote" exact="($price / 1ct)L"/>
-                    <set_value name="$bound_quote" exact="@State.$quoted_request == $request and @State.$quoted_epoch == $v.$epoch and @State.$quoted_trial == $trial and @State.$quoted_fixed == $fixed and (not $fixed or @State.$quoted_requested_cents == $v.$price_cents)"/>
-                    <do_if value="event.param2 == 'Buy' and not $bound_quote">
+                    <set_value name="$fresh_quote_time" exact="player.age / 1s"/>
+                    <do_if value="event.param2 == 'Buy' and $fixed and $quote gt 0">
+                      <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|quote|%s'.[$request,$quote]"/>
+                    </do_if>
+                    <do_if value="event.param2 == 'Buy' and not $fixed and (@State.$quoted_request != $request or @State.$quoted_epoch != $v.$epoch or @State.$quoted_trial != $trial)">
                       <set_value name="$status" exact="'quote_required'"/>
                     </do_if>
                     <do_elseif value="event.param2 == 'Buy' and $fixed and $quote gt 0 and $v.$price_cents * 1ct != $price">
@@ -62,19 +65,17 @@
                       <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" unbundle="false"/>
                       <set_value name="$tradeable" exact="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity and $ship.money ge ($price * $quantity) and player.money ge ($price * $quantity)"/>
                       <set_value name="$status" exact="'not_tradeable'"/>
-                      <do_if value="event.param2 == 'Quote' and ($tradeable or ($fixed and $quote gt 0))">
+                      <do_if value="event.param2 == 'Quote' and not $fixed and $tradeable">
                         <set_value name="$status" exact="'quote'"/>
                         <set_value name="State.$quoted_request" exact="$request"/>
                         <set_value name="State.$quoted_epoch" exact="$v.$epoch"/>
                         <set_value name="State.$quoted_price" exact="$price"/>
                         <set_value name="State.$quoted_trial" exact="$trial"/>
-                        <set_value name="State.$quoted_at" exact="player.age / 1s"/>
-                        <set_value name="State.$quoted_fixed" exact="$fixed"/>
-                        <set_value name="State.$quoted_requested_cents" exact="@$v.$price_cents"/>
+                        <set_value name="State.$quoted_at" exact="$fresh_quote_time"/>
                       </do_if>
                       <do_elseif value="event.param2 == 'Buy' and $tradeable">
-                        <do_if value="State.$quoted_price != $price or not @$v.$price_cents or $v.$price_cents * 1ct != $price">
-                          <set_value name="$status" exact="if $fixed then 'quote_changed' else 'price_changed'"/>
+                        <do_if value="(not $fixed and State.$quoted_price != $price) or not @$v.$price_cents or $v.$price_cents * 1ct != $price">
+                          <set_value name="$status" exact="'price_changed'"/>
                         </do_if>
                         <do_else>
                           <set_value name="State.$attempted" exact="true"/>
@@ -82,7 +83,7 @@
                           <set_value name="State.$epoch" exact="$v.$epoch"/>
                           <set_value name="State.$trial" exact="$trial"/>
                           <set_value name="State.$quantity" exact="$quantity"/>
-                          <set_value name="State.$quote_time" exact="State.$quoted_at"/>
+                          <set_value name="State.$quote_time" exact="if $fixed then $fresh_quote_time else State.$quoted_at"/>
                           <set_value name="State.$ship" exact="$ship"/>
                           <set_value name="State.$station" exact="$station"/>
                           <set_value name="State.$parking" exact="$parking"/>

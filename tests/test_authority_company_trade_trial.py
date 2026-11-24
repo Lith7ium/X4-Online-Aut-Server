@@ -84,3 +84,20 @@ class FixedTradeDriverTests(unittest.TestCase):
         self.assertIn('$ship.orders.count == $refusal_orders_before', proof)
         self.assertIn('$refusal_water_before == $refusal_water_after', proof)
         self.assertIn('$refusal_cash_before == $refusal_cash_after', proof)
+
+
+    def test_fixed_native_quote_and_order_share_the_post_duplicate_lookup(self):
+        source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
+        cue = ET.parse(source).find(".//cue[@name='Request']")
+        fixture = next(node for node in cue.iter('do_if') if '$ship.idcode' in node.attrib['value'])
+        duplicate = fixture.find('do_elseif')
+        self.assertIn('@State.$attempted or @State.$refused', duplicate.attrib['value'])
+        self.assertIsNone(duplicate.find('.//find_sell_offer'))
+        self.assertIsNone(duplicate.find('.//raise_lua_event'))
+        lookup = fixture.find('do_else')
+        self.assertEqual(len(list(lookup.iter('find_sell_offer'))), 1)
+        self.assertEqual(len(list(lookup.iter('create_trade_order'))), 1)
+        fixed_quote = next(node for node in lookup.iter('do_if')
+                           if node.attrib['value'] == "event.param2 == 'Buy' and $fixed and $quote gt 0")
+        self.assertEqual(fixed_quote.find('raise_lua_event').attrib['param'],
+                         "'%s|quote|%s'.[$request,$quote]")
