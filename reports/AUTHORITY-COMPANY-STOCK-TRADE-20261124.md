@@ -153,3 +153,32 @@ eight real seconds the controlled, occupied and container IDs did not all
 match WRN. The target had an assigned NPC captain before dispatch. This
 run did not establish why control was missing. No purchase or player
 confirmation was attempted, and the test left no processes running.
+
+## Flight from the original confirmed world
+
+This single-process Linux diagnostic used the confirmed checkpoint at the
+top of this report. WRN-302 had no assigned pilot, no water, a Mk2 docking
+computer and a Mk3 travel engine. The private client completed the full
+10,082-entry inspection while paused and obtained the ship using the same
+seat code as a joining player. The controlled, occupied and container IDs
+all matched WRN. Original game age was 302.118 s and the distance to
+BIM-169 was 374,528 m.
+
+The stock autopilot flew WRN toward BIM. At game age 521.79 s the stock
+range check succeeded, the pilot stopped autopilot, targeted the station
+and the docking computer accepted QuickDock. Across 66 periodic samples
+the closest recorded distance to the station centre was 2,208 m. The ship
+then held at 2,488 m. A HUD capture showed 0 m/s. One additional Shift+D
+input was sent to the isolated X4 window during this wait. At the
+120-second docking deadline, WRN was still in space. Its physical bay was
+absent, all three control IDs still matched WRN, and the account and cargo
+were unchanged at 10,000 Cr and zero water. No purchase intent was sent.
+Distance to the station centre does not measure alignment with a landing pad.
+
+The original launch using an additional network namespace ended before
+the world loaded. One remaining X4 descendant was verified against the
+private executable, command line, output and session and stopped. The
+completed flight used the working isolated Steam runtime, opened no
+session listener, wrote no new save and left no test processes. Its
+diagnostic result SHA-256 is
+`0537c4c307b43e6870dd7d226836e4a26a9f8d4058bba8f058929ccc834a581d`.
