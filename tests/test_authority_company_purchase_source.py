@@ -95,12 +95,34 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
 
         for fingerprint, epoch, index, expected in (
                 ('b' * 64, 'a' * 32, 7354, statement), ('c' * 64, 'a' * 32, 7354, None),
-                ('b' * 64, 'c' * 32, 7354, None), ('b' * 64, 'a' * 32, 1970, None)):
+                ('b' * 64, 'c' * 32, 7354, None), ('b' * 64, 'a' * 32, 1970, statement)):
             fresh = CompanyPurchaseSource(server_fingerprint=fingerprint, state_dir=self.state_dir)
             self.addCleanup(fresh.close)
             fresh.configure(epoch, index)
             self.assertEqual(fresh.statement(token), expected)
             self.assertIs(fresh.statement_result(result), expected is not None)
+
+        with tempfile.TemporaryDirectory() as other_device:
+            fresh = CompanyPurchaseSource(server_fingerprint='b' * 64, state_dir=other_device)
+            self.addCleanup(fresh.close)
+            fresh.configure('a' * 32, 1970)
+            self.assertIsNone(fresh.statement(token))
+            self.assertFalse(fresh.statement_result(result))
+        other_seat = CompanyPurchaseSource(server_fingerprint='b' * 64, state_dir=self.state_dir)
+        self.addCleanup(other_seat.close)
+        other_seat_settings = other_seat.configure('a' * 32, 1970)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as other_pilot:
+            other_pilot.connect(('127.0.0.1', other_seat_settings['port']))
+            other_seat.bind_validator(lambda peer: peer == other_pilot.getsockname())
+            other_pilot.send(
+                f"T|{other_seat_settings['lease']}|1|cluster_01_sector002_macro|AAA-321|water|6|5819|34914".encode())
+            unrelated = other_seat.exchange(None)
+            self.assertTrue(other_seat.statement_result(result))
+            self.assertEqual(other_seat.exchange(None), unrelated)
+            other_pilot.setblocking(False)
+            with self.assertRaises(BlockingIOError):
+                other_pilot.recv(512)
+
         self.assertTrue(self.source.statement_result(result))
         self.assertTrue(self.source.statement_result(result))
         self.assertEqual(self.receive(), ['RECEIPT', '1', 'pilot_reported', '34914'])

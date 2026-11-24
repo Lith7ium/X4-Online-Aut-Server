@@ -1,4 +1,4 @@
-"""Durable records of exact native cockpit basket totals, scoped to a seat."""
+"""Durable native cockpit basket totals scoped to one device and registry."""
 from contextlib import closing
 import os
 from pathlib import Path
@@ -41,7 +41,8 @@ class CompanyPurchaseStatements:
                 or type(epoch) is not str or not _TOKEN.fullmatch(epoch)
                 or type(index) is not int or not 1 <= index <= 200000):
             raise ValueError('invalid Company purchase statement scope')
-        self._scope = (fingerprint, epoch, index)
+        self._scope = (fingerprint, epoch)
+        self._index = index
         directory = _state_path() if state_dir is None else Path(state_dir)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         _ordinary_owned(directory, directory=True)
@@ -70,17 +71,26 @@ class CompanyPurchaseStatements:
                     PRIMARY KEY (fingerprint, registry_epoch, ship_index, purchase_id)
                 )
             ''')
+            connection.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS cockpit_statement_device_key
+                ON cockpit_statement (fingerprint, registry_epoch, purchase_id)
+            ''')
 
     def _connect(self):
         _ordinary_owned(self._database, directory=False)
         connection = sqlite3.connect(self._database, timeout=0)
-        connection.execute('PRAGMA synchronous=FULL')
+        try:
+            connection.execute('PRAGMA synchronous=FULL')
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     def _read(self, connection, purchase_id):
         return connection.execute('''
-            SELECT sector, station_code, ware, quantity, price_cents, displayed_total_cents FROM cockpit_statement
-            WHERE fingerprint = ? AND registry_epoch = ? AND ship_index = ? AND purchase_id = ?
+            SELECT ship_index, sector, station_code, ware, quantity, price_cents, displayed_total_cents
+            FROM cockpit_statement
+            WHERE fingerprint = ? AND registry_epoch = ? AND purchase_id = ?
         ''', (*self._scope, purchase_id)).fetchone()
 
     def retain(self, intent, displayed_total_cents):
@@ -90,12 +100,12 @@ class CompanyPurchaseStatements:
                 or type(quantity) is not int or not 1 <= quantity <= 2147483647
                 or type(displayed_total_cents) is not int or not 1 <= displayed_total_cents <= _MAX_EXACT):
             raise ValueError('invalid native cockpit basket statement')
-        observed = (intent['sector'], intent['station_code'], ware, quantity, intent['price_cents'],
+        observed = (self._index, intent['sector'], intent['station_code'], ware, quantity, intent['price_cents'],
                     displayed_total_cents)
         with closing(self._connect()) as connection, connection:
             connection.execute('''
                 INSERT INTO cockpit_statement
-                    (fingerprint, registry_epoch, ship_index, purchase_id, sector, station_code,
+                    (fingerprint, registry_epoch, purchase_id, ship_index, sector, station_code,
                      ware, quantity, price_cents, displayed_total_cents)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
@@ -112,11 +122,11 @@ class CompanyPurchaseStatements:
         with closing(self._connect()) as connection, connection:
             observed = self._read(connection, purchase_id)
             if observed is None or any(type(receipt.get(key)) is not type(value) or receipt.get(key) != value
-                                       for key, value in zip(fields, observed)):
+                                       for key, value in zip(fields, observed[1:])):
                 return False
             connection.execute('''
                 UPDATE cockpit_statement SET pilot_reported = 1
-                WHERE fingerprint = ? AND registry_epoch = ? AND ship_index = ? AND purchase_id = ?
+                WHERE fingerprint = ? AND registry_epoch = ? AND purchase_id = ? AND pilot_reported = 0
             ''', (*self._scope, purchase_id))
         return True
 
@@ -127,7 +137,7 @@ class CompanyPurchaseStatements:
             observed = self._read(connection, purchase_id)
         if observed is None:
             return None
-        _, _, ware, quantity, _, total = observed
+        _, _, _, ware, quantity, _, total = observed
         # The wire name is inherited. The value is the displayed basket
         # total attested by this pilot, independently of any native debit.
         return dict(purchase_id=purchase_id, ware=ware, quantity=quantity, settled_total_cents=total)
