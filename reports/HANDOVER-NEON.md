@@ -17,9 +17,12 @@ while another track continues on the same participant. Coordinate a shared
 native run with Astra when the ordinary player path is ready. [Scope and acceptance evidence](NEON-NPC-SHIP-MOTION.md)
 
 **Cobalt owns map-visibility research and the ordinary Windows player
-preflight** ahead of the coordinated Internet test. The matching Linux and
-Windows observer packages use code `cf57d0b1`. Exchange session settings
-privately. [15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
+preflight** ahead of the coordinated Internet test. The initial observer
+build was `cf57d0b1`. For the joint flight, use the matching Linux and
+Windows packages at `2a2b569d`. They retain a confirmed moving sample when
+the observed pilot comes to rest. Exchange session settings privately.
+[Windows flight procedure](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight)
+[15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
 
 Astra owns movement of player ships, the provider and integration on
 `experiment/authoritative-server-20261115`. For read-only contributor

@@ -110,3 +110,23 @@ passed**. The remaining 24 need Windows (12), external reference files (11)
 or the released lane tool (1). The aggregate includes checks run in separate
 environments. A complete strict pass and a live Windows Internet flight
 remain outstanding.
+
+## Packages for the next coordinated flight
+
+The native flight ended with 23 stationary receipts. To retain evidence of
+an earlier moving sample, the ordinary observer now records the last
+validated receipt per slot with at least one nonzero velocity component.
+A focused local UDP regression at `abf76c8a` covered moving, stopped and
+missing-rate samples, a mismatching acknowledgement and a late replay.
+The native Linux runs above used the earlier observer implementation from
+`cf57d0b1`. Retaining a moving receipt during a live Windows session
+still needs verification.
+
+Both internal packages were built from `2a2b569d`. Archive inspection
+confirmed the observer module and operator instructions in both packages,
+and the recorded network DLL in the Windows package.
+
+| Package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux provider and player | 1,359,020 | `8047e7e40c17e390ae7e0335c6d521958ebf946eca5ffed09bb23b4c527b75c5` |
+| Windows player | 2,544,005 | `e4045de4faea6d7bf4d152c303d01b54ef9e66e99d87d5adfd0abfbeb07df0f9` |
