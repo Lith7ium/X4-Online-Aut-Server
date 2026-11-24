@@ -6,11 +6,15 @@ import select
 import socket
 import time
 
+from authority_station_parking import SHIPS
 from authority_tcp_job_client_live import socket_owner
 
 PARKED_SAVE = '68dc79959984dbd3499b7b6360bde5b0e24d5cbc845b49d24a908d043a7612ca'
 # Stable identities of the two ships in the pinned disposable world.
-SHIP_CODES = {1970: 'WOO-831', 7354: 'WRN-302'}
+SHIP_CODES = {ship['index']: ship['code'] for ship in SHIPS}
+_PARKED_SECTORS = {ship['index']: ship['sector'] for ship in SHIPS}
+_SHIP_INDICES = {str(index): index for index in SHIP_CODES}
+_MOVEMENT_PROOF_VERSION = 1
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
 _ACTOR = re.compile(r'0[xX][0-9a-fA-F]{1,16}')
@@ -23,6 +27,22 @@ def _xyz(values):
     if len(xyz) != 3 or not all(math.isfinite(n) and abs(n) <= 1e7 for n in xyz):
         raise ValueError('invalid company ship coordinates')
     return xyz
+
+
+def _report_xyz(values):
+    if type(values) not in (list, tuple) or any(type(value) not in (int, float) for value in values):
+        raise ValueError('invalid reported company ship coordinates')
+    return _xyz(values)
+
+
+def _readback_error(target, md, ui):
+    return max(math.dist(target, md), math.dist(target, ui))
+
+
+def _observed_move(before, target, md, ui):
+    return (min(math.dist(before, point) for point in (target, md, ui)) > READBACK_METRES
+            and _readback_error(target, md, ui) <= READBACK_METRES
+            and math.dist(md, ui) <= READBACK_METRES)
 
 
 class GamePoseChannel:
@@ -129,8 +149,9 @@ class CompanyPoseTrial:
         self.report = report
         self.active = None
         self.last = {}
+        self.window_moves = {}
         self.baselines = {}
-        report.update(writes_verified=0, within_tolerance=0, expired_before_write=0,
+        report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
                       max_source_speed_mps=0.0, last_verified={}, paused={})
 
@@ -161,7 +182,7 @@ class CompanyPoseTrial:
                 self.report['expired_before_write'] += 1
                 self.active = None
                 return
-            if math.dist(reply['ui'], target) > .10:
+            if _readback_error(target, reply['md'], reply['ui']) > READBACK_METRES:
                 active['stage'] = 'apply'
                 self.channel.begin('apply', sample, active['actor'])
                 return
@@ -172,21 +193,22 @@ class CompanyPoseTrial:
             self.channel.begin('verify', sample, active['actor'])
             return
         elif stage == 'verify':
-            if max(math.dist(reply[name], target) for name in ('md', 'ui')) > READBACK_METRES:
+            if not _observed_move(active['before'], target, reply['md'], reply['ui']):
                 if time.monotonic() < active['verify_deadline']:
                     # The stock relocation can become visible several frames after dispatch.
                     self.channel.begin('verify', sample, active['actor'])
                     return
                 self.report['failed_readback'] = {'index': sample['index'], 'target': target, **reply}
-                raise ValueError('server pose did not match the accepted client sample on readback')
+                raise ValueError('server pose did not show the required movement on readback')
             self.report['writes_verified'] += 1
+            move = {'sequence': sample['sequence'], 'code': reply['code'], 'before': active['before'],
+                    'target': target, 'md': reply['md'], 'ui': reply['ui'],
+                    'generation': sample['generation'], 'sector_macro': sample['sector_macro']}
+            self.window_moves[sample['index']] = move
             step = math.dist(reply['ui'], active['before'])
             if step > self.report['max_verified_step_metres']:
                 self.report['max_verified_step_metres'] = step
-                self.report['largest_verified_move'] = {
-                    'sequence': sample['sequence'], 'code': reply['code'], 'before': active['before'],
-                    'target': target, 'md': reply['md'], 'ui': reply['ui'],
-                }
+                self.report['largest_verified_move'] = move
         self.last[sample['index']] = sample
         self.report['last_verified'][str(sample['index'])] = {
             'sequence': sample['sequence'], 'sector_macro': sample['sector_macro'], 'target': target,
@@ -220,15 +242,22 @@ class CompanyPoseTrial:
             self.channel.begin('inspect', sample)
             reply = self.channel.wait()
             target = self.report['last_verified'][str(index)]['target']
-            if math.dist(reply['ui'], target) > READBACK_METRES:
+            if _readback_error(target, reply['md'], reply['ui']) > READBACK_METRES:
                 self.report['failed_pause'] = {'index': index, 'target': target, **reply}
                 raise ValueError('paused server pose diverged before saving')
-            paused[str(index)] = {'code': reply['code'], 'position': reply['ui'],
-                                  'sector_macro': sample['sector_macro'], 'sequence': sample['sequence']}
+            item = {'code': reply['code'], 'position': reply['ui'], 'md_position': reply['md'],
+                    'target': target, 'sector_macro': sample['sector_macro'],
+                    'generation': sample['generation'], 'sequence': sample['sequence']}
+            move = self.window_moves.get(index)
+            if (move is not None and move['generation'] == item['generation']
+                    and move['sector_macro'] == item['sector_macro']):
+                item['movement'] = move
+            paused[str(index)] = item
         self.report['paused'] = paused
 
     def start_window(self):
         self.last.clear()
+        self.window_moves.clear()
         self.report['paused'] = {}
         self.report.pop('saved_checkpoint_id', None)
         self.report.pop('saved_checkpoint_sha256', None)
@@ -239,6 +268,69 @@ class CompanyPoseTrial:
                                saved_checkpoint_sha256=checkpoint.sha256)
 
 
+def _check_movement(move, item):
+    if (type(move) is not dict or move.get('code') != item['code']
+            or type(move.get('sequence')) is not int or not 0 < move['sequence'] <= item['sequence']
+            or not _observed_move(*(_report_xyz(move.get(name)) for name in ('before', 'target', 'md', 'ui')))):
+        raise ValueError('invalid checkpoint movement proof')
+
+
+def _paused_poses(prior, report):
+    legacy = 'movement_proof_version' not in report
+    if legacy:
+        operations = prior.get('engine_operations')
+        if type(operations) is not list or operations.count('resume') != 1:
+            raise ValueError('legacy movement proof requires one resume')
+        largest = report.get('largest_verified_move')
+        if type(largest) is not dict or {'generation', 'sector_macro'} & largest.keys():
+            raise ValueError('missing legacy movement proof')
+    elif (type(report['movement_proof_version']) is not int
+          or report['movement_proof_version'] != _MOVEMENT_PROOF_VERSION):
+        raise ValueError('unsupported checkpoint movement proof')
+
+    poses = {}
+    for key, item in report['paused'].items():
+        index = _SHIP_INDICES.get(key)
+        if index is None:
+            raise ValueError('unexpected saved company ship')
+        if (type(item) is not dict or item.get('code') != SHIP_CODES[index]
+                or type(item.get('sequence')) is not int or item['sequence'] <= 0
+                or type(item.get('sector_macro')) is not str or not _SECTOR.fullmatch(item['sector_macro'])):
+            raise ValueError('invalid saved company ship pose')
+        position = _report_xyz(item.get('position'))
+        movement = False
+        if legacy:
+            latest = report.get('last_verified', {}).get(key)
+            if (type(latest) is not dict
+                    or {'movement', 'generation', 'md_position', 'target'} & item.keys()
+                    or item['sector_macro'] != _PARKED_SECTORS[index]
+                    or latest.get('sequence') != item['sequence']
+                    or latest.get('sector_macro') != item['sector_macro']
+                    or math.dist(_report_xyz(latest.get('target')), position) > READBACK_METRES):
+                raise ValueError('legacy paused pose does not match the pinned ship and sample')
+            if largest.get('code') == item['code']:
+                _check_movement(largest, item)
+                movement = True
+        else:
+            generation = item.get('generation')
+            md_position = _report_xyz(item.get('md_position'))
+            target = _report_xyz(item.get('target'))
+            if (type(generation) is not str or not _TOKEN.fullmatch(generation)
+                    or _readback_error(target, md_position, position) > READBACK_METRES
+                    or math.dist(md_position, position) > READBACK_METRES):
+                raise ValueError('invalid paused checkpoint readback')
+            if 'movement' in item:
+                move = item['movement']
+                _check_movement(move, item)
+                if move.get('generation') != generation or move.get('sector_macro') != item['sector_macro']:
+                    raise ValueError('checkpoint movement proof belongs to another grant or sector')
+                movement = True
+        poses[index] = (item, position, movement)
+    if not any(movement for _, _, movement in poses.values()):
+        raise ValueError('cold pose check requires a checkpoint movement proof')
+    return poses
+
+
 def verify_reloaded(channel, prior, checkpoint):
     """Resolve saved indices afresh: runtime actor handles never cross a cold reload."""
     report = prior.get('company_pose_trial', {})
@@ -246,22 +338,20 @@ def verify_reloaded(channel, prior, checkpoint):
             or prior.get('final_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_sha256') != checkpoint.sha256
-            or report.get('source_sha256') != PARKED_SAVE or not report.get('paused')
-            or not report.get('writes_verified')):
+            or report.get('source_sha256') != PARKED_SAVE or type(report.get('paused')) is not dict
+            or not report['paused'] or type(report.get('writes_verified')) is not int
+            or report['writes_verified'] <= 0):
         raise ValueError('cold pose check requires a confirmed checkpoint with a verified movement write')
     verified = {}
-    for key, item in report['paused'].items():
-        index = int(key)
-        if index not in SHIP_CODES or item['code'] != SHIP_CODES[index]:
-            raise ValueError('unexpected saved company ship')
-        target = _xyz(item['position'])
+    for index, (item, target, movement) in _paused_poses(prior, report).items():
         sample = dict(index=index, epoch=channel.epoch, generation=secrets.token_hex(16),
                       sector_macro=item['sector_macro'], **dict(zip('xyz', target)))
         channel.begin('inspect', sample)
         reply = channel.wait()
-        error = math.dist(reply['ui'], target)
+        error = _readback_error(target, reply['md'], reply['ui'])
         if error > READBACK_METRES:
             raise ValueError(f'cold pose differs for {item["code"]}: {error:.3f} m')
-        verified[key] = dict(code=reply['code'], sector_macro=sample['sector_macro'],
-                             expected=target, ui=reply['ui'], md=reply['md'], error_metres=error)
+        verified[str(index)] = dict(code=reply['code'], sector_macro=sample['sector_macro'],
+                                    expected=target, ui=reply['ui'], md=reply['md'], error_metres=error,
+                                    movement_verified=movement)
     return verified
