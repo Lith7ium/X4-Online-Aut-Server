@@ -61,3 +61,39 @@ to signed 32-bit integers. Those measurements cannot establish the seller's
 proceeds or the settled unit price. The strict check rejected the run and
 published no checkpoint. Both the stock deal and a separately identifiable
 account entry are needed to reconcile the offered and charged amounts.
+
+## Independent six-unit purchase
+
+A fresh copy of the same marked world at `70bba0ca` received a different
+request to buy six units. X4 reported the same unit price, a completed deal
+with the correct buyer and seller, six transferred units and zero destroyed.
+All six arrived on WRN. Station stock decreased by six during this interval.
+The server again refused a duplicate confirmation.
+
+| Native evidence | Result |
+| --- | ---: |
+| Stock offer and completed deal, unit price | 58.19 Cr |
+| Deal's nominal total | 349.14 Cr |
+| Completed purchase entry in WRN's transaction log | −349.00 Cr |
+| Company faction balance before / after | 10,000.00 / 9,651.00 Cr |
+| Final player balance | 9,651.00 Cr |
+
+Rounding six units separately to 58 Cr would have yielded 348 Cr.
+This purchase settled at 349 Cr. These amounts establish the result for
+this purchase. They do not distinguish rounding the total to the nearest
+whole credit from truncating its fraction. A client can show the charge
+from the native transaction log without implementing its own rounding rule.
+
+The first version of the completion cue reused a variable name in an
+inherited MD namespace. Its field for the player's starting balance
+therefore contained the debit instead. The independently read absolute
+Company balances and the matched journal entry agree. The strict check
+refused to publish the trial as a confirmed host checkpoint. Commit
+`37f0f480` gives the starting balances, final balances and deltas
+distinct names. The original log remains available for inspection.
+
+The controlled native save retained the six-unit deal and the player
+faction's account amount of 9,651 Cr. Its SHA-256 is
+`91cc4875213273715f2dc53c63b36a115c54f73ac788a88b5de7c356feefd879`
+and its load marker is `667dc29dbeab841d88bc769c00b31783`. This is a
+private diagnostic save.
