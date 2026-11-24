@@ -142,6 +142,28 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(provider.poll()['outcome'], 'unknown')
             self.assertEqual(provider.evidence(purchase_id)['before'], before)
 
+    def test_unverified_trade_computer_order_is_uncertain_and_never_retried(self):
+        provider = self.provider()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(('127.0.0.1', 0))
+            address = provider._socket.getsockname()
+            lease = provider._lease
+            purchase_id = PURCHASE['purchase_id']
+            peer.sendto(f'PURCHASE_HELLO|{lease}'.encode(), address)
+            self.assertIsNone(provider.begin(BINDING, PURCHASE))
+            rows = (f'DOCK|{purchase_id}|READY|0x10|0x20|0x30|11.000',
+                    f'RESULT|{purchase_id}|quote|5819',
+                    f'BEFORE|{purchase_id}|{BINDING["registry_epoch"]}'
+                    '|0x10|0x20|0x30|water|6|5819|12|1000000|1000000|11.000',
+                    f'RESULT|{purchase_id}|order_refused|5819', 'DONE')
+            for sequence, row in enumerate(rows, 1):
+                peer.sendto(f'RECEIPT|{lease}|{purchase_id}|{sequence}|{row}'.encode(), address)
+            result = dict(PURCHASE, outcome='unknown')
+            self.assertEqual(provider.poll(), result)
+            self.assertEqual(provider.begin(BINDING, PURCHASE), result)
+            self.assertEqual(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32))['reason'],
+                             'provider_limit')
+
     def test_sequence_hole_never_confirms_refusal_or_settlement(self):
         provider = self.provider(timeout=3)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
@@ -224,3 +246,31 @@ class NativePurchaseProviderTests(unittest.TestCase):
         self.assertEqual(buys[0].attrib['immediate'], 'true')
         for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
             self.assertEqual(list(root.iter(action)), [])
+
+    def test_md_trade_computer_runs_only_the_originally_captainless_reserved_order(self):
+        request = ET.parse(STOCK).find(".//cue[@name='Request']/actions")
+        captainless = request.find(".//set_value[@name='$captainless']").attrib['exact']
+        for property_name in ('pilot', 'assignedpilot', 'aipilot', 'assignedaipilot', 'tradecomputer'):
+            self.assertIn(f'not @$ship.{property_name}.exists', captainless)
+        self.assertIn('$live and $owned_docked', captainless)
+        self.assertIn('$idle_captain or ($captainless and $bay.docked.indexof.{$ship})',
+                      request.find(".//set_value[@name='$live_dock']").attrib['exact'])
+
+        order_arm = request.find(".//do_if[@value='$captainless']")
+        queued = order_arm.find("set_value[@name='$computer_ready']").attrib['exact']
+        for condition in ('orderstate.ready', '$ship.orders.count == 1', '$ship.orders.{1} == State.$order',
+                          '$ship.tradeorders.count == 1', 'State.$deal.exchangepartner.{$ship} == $station',
+                          'State.$deal.ware == $ware', 'State.$deal.amount == $quantity',
+                          'State.$deal.unitprice == $price', '$bay.docked.indexof.{$ship}'):
+            self.assertIn(condition, queued)
+        rejected = order_arm.find("do_if[@value='not $computer_ready']/set_value")
+        self.assertEqual(rejected.attrib['exact'], "'order_refused'")
+        executor = request.find("./do_if[@value=\"$status == 'submitted' and @$computer_ready\"]")
+        computer, = request.iter('create_trade_computer')
+        self.assertIs(computer, executor.find('create_trade_computer'))
+        self.assertEqual(computer.get('object'), '$ship')
+        ordered = list(request.iter())
+        booked, = request.iter('create_trade_order')
+        receipt = request.find("./raise_lua_event[@name=\"'X4AuthorityCompanyStockTrade.Result'\"]")
+        self.assertLess(ordered.index(booked), ordered.index(order_arm))
+        self.assertLess(ordered.index(receipt), ordered.index(computer))

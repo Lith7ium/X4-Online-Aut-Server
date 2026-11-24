@@ -37,18 +37,24 @@
               <set_value name="$parking" exact="player.station"/>
               <set_value name="$status" exact="if $live then 'dock_mismatch' else 'invalid_fixture'"/>
               <set_value name="$bay" exact="@$ship.dock"/>
-              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational and $ship.pilot and $ship.pilot != player.entity
+              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational
                   and $ship.owner == faction.player and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index
                   and $ship != player.ship and $ship != player.container and @$station.isclass.station and $station.isoperational
                   and @$parking.isclass.station and player.entity.hascontext.{$parking}
                   and not player.controlled and not player.occupiedship and @player.room.exists and @$bay.istradingallowed"/>
+              <set_value name="$captainless" exact="$live and $owned_docked and not @$ship.pilot.exists and not @$ship.assignedpilot.exists
+                  and not @$ship.aipilot.exists and not @$ship.assignedaipilot.exists and not @$ship.tradecomputer.exists"/>
+              <set_value name="$idle_captain" exact="$owned_docked and $ship.pilot and $ship.pilot != player.entity
+                  and $ship.assignedaipilot == $ship.pilot and @$ship.pilot.owner == faction.player"/>
               <set_value name="$live_dock" exact="$live and $owned_docked and @$bay.isclass.dockingbay and $bay.external and not $bay.isstorage
                   and $bay.dockstate == dockstate.default and $bay.container == $station
                   and not $ship.isinternallystored and $ship.trueowner == faction.player
                   and $station.owner and $station.trueowner == $station.owner and $ship.sector == $station.sector
-                  and $ship.assignedaipilot == $ship.pilot and @$ship.pilot.owner == faction.player
+                  and ($idle_captain or ($captainless and $bay.docked.indexof.{$ship}))
                   and $ship.orders.count == 0 and (not $ship.defaultorder or $ship.defaultorder.id == 'Wait')"/>
-              <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169' and $parking != $station and $parking.idcode == 'XPJ-169'"/>
+              <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.pilot and $ship.pilot != player.entity
+                  and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169'
+                  and $parking != $station and $parking.idcode == 'XPJ-169'"/>
               <do_if value="$live_dock or $fixture_dock">
                 <do_if value="$fixed and (@$v.$sector != @$station.sector.macro.id or @$v.$station_code != $station.idcode or @$v.$ship_code != $ship.idcode or @$v.$ware != $ware.id or @$v.$quantity != $quantity or not @$v.$price_cents or $v.$price_cents le 0 or $v.$price_cents gt 2147483647 or ($v.$price_cents)L != $v.$price_cents)">
                   <set_value name="$status" exact="'request_binding_invalid'"/>
@@ -137,6 +143,25 @@
                           <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
                           <set_value name="State.$deal" exact="@State.$order.trade"/>
                           <set_value name="$status" exact="if @State.$deal then 'submitted' else 'order_refused'"/>
+                          <do_if value="$captainless">
+                            <!-- The stock trade computer runs the first ready trade for the docked container. -->
+                            <set_value name="$computer_ready" exact="@State.$deal.isorder and State.$order.state == orderstate.ready
+                                and $ship.orders.count == 1 and $ship.orders.{1} == State.$order
+                                and $ship.tradeorders.count == 1 and $ship.tradeorders.{1} == State.$order
+                                and State.$deal.exchangepartner.{$ship} == $station and State.$deal.seller == $station
+                                and (not @State.$deal.buyer.exists or State.$deal.buyer == $ship)
+                                and State.$deal.ware == $ware and State.$deal.amount == $quantity and State.$deal.unitprice == $price
+                                and $ship.dock == $bay and $bay.container == $station and $bay.docked.indexof.{$ship}
+                                and $bay.dockstate == dockstate.default and not $ship.isinternallystored
+                                and not @$ship.pilot.exists and not @$ship.assignedpilot.exists and not @$ship.aipilot.exists
+                                and not @$ship.assignedaipilot.exists and not @$ship.tradecomputer.exists
+                                and not player.controlled and not player.occupiedship"/>
+                            <do_if value="not $computer_ready">
+                              <!-- Queue creation may already have had an effect. Reuse the existing uncertain result. -->
+                              <set_value name="$status" exact="'order_refused'"/>
+                              <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|order_unverified|orders=%s|tradeorders=%s|state=%s|deal=%s'.[$request,$ship.orders.count,$ship.tradeorders.count,@State.$order.state,@State.$deal.exists]" chance="100"/>
+                            </do_if>
+                          </do_if>
                         </do_else>
                       </do_elseif>
                     </do_else>
@@ -145,6 +170,11 @@
               </do_if>
             </do_elseif>
             <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|%s|%s'.[$request,$status,$quote]"/>
+            <do_if value="$status == 'submitted' and @$computer_ready">
+              <!-- Publish submitted before the stock executor can emit the trade completion. -->
+              <create_trade_computer object="$ship" result="$tradecomputer"/>
+              <debug_text text="'[X4LAN] AUTH_PURCHASE_TRADE_COMPUTER %s|%s'.[$request,if @$tradecomputer.exists then 'started' else 'unconfirmed']" chance="100"/>
+            </do_if>
           </actions>
         </cue>
         <cue name="Monitor">
