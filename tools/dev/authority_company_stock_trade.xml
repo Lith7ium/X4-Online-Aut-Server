@@ -18,23 +18,27 @@
             <set_value name="$status" exact="'invalid_registry'"/>
             <set_value name="$quote" exact="0"/>
             <set_value name="$trial" exact="if @$v.$trial then $v.$trial else 'one_unit'"/>
-            <set_value name="$quantity" exact="if $trial == 'six_unit' then 6 else 1"/>
             <set_value name="$fixed" exact="@$v.$fixed_request == true"/>
             <set_value name="$live" exact="@$v.$live_request == true"/>
-            <do_if value="typeof $request == datatype.string and $request and ($trial == 'one_unit' or $trial == 'six_unit') and @$v.$epoch and md.X4AuthorityShipRegistry.State.$epoch? and $v.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
-              <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+            <set_value name="$live_request_valid" exact="not $live or ($trial == 'live_purchase' and $fixed and event.param2 == 'Buy' and @$v.$ship_index ge 1 and @$v.$ship_index le 2147483647 and ($v.$ship_index)i == $v.$ship_index and @$v.$quantity ge 1 and @$v.$quantity le 65535 and ($v.$quantity)i == $v.$quantity and typeof @$v.$ware == datatype.string and typeof @ware.{$v.$ware} == datatype.ware)"/>
+            <do_if value="not $live_request_valid">
+              <set_value name="$status" exact="'request_binding_invalid'"/>
+            </do_if>
+            <do_elseif value="typeof $request == datatype.string and $request and ($live or $trial == 'one_unit' or $trial == 'six_unit') and @$v.$epoch and md.X4AuthorityShipRegistry.State.$epoch? and $v.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+              <!-- Retain the original fixed subjects for the isolated quote and purchase diagnostics. -->
+              <set_value name="$index" exact="if $live then $v.$ship_index else 7354"/>
+              <set_value name="$quantity" exact="if $live then $v.$quantity else (if $trial == 'six_unit' then 6 else 1)"/>
+              <set_value name="$ware" exact="if $live then ware.{$v.$ware} else ware.water"/>
+              <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
               <set_value name="$station" exact="@$ship.dock.container"/>
               <set_value name="$parking" exact="player.station"/>
-              <set_value name="$ware" exact="ware.water"/>
-              <set_value name="$status" exact="'invalid_fixture'"/>
+              <set_value name="$status" exact="if $live then 'dock_mismatch' else 'invalid_fixture'"/>
               <set_value name="$bay" exact="@$ship.dock"/>
-              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational and $ship.pilot and $ship.pilot != player.entity and $ship.owner == faction.player and $ship.idcode == 'WRN-302' and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == 7354 and $ship != player.ship and $ship != player.container and @$station.isclass.station and $station.isoperational and $station.owner == faction.teladi and $station.idcode == 'BIM-169' and @$parking.isclass.station and $parking != $station and player.entity.hascontext.{$parking} and not player.controlled and not player.occupiedship and @player.room.exists and @$bay.istradingallowed"/>
-              <set_value name="$live_dock" exact="$live and $owned_docked and @$bay.isclass.dockingbay and not $bay.isstorage and $bay.container == $station and not $ship.isinternallystored and $ship.trueowner == faction.player and $station.trueowner == faction.teladi and $ship.sector == $station.sector and $ship.assignedaipilot == $ship.pilot and @$ship.pilot.owner == faction.player and $ship.orders.count == 0 and (not $ship.defaultorder or $ship.defaultorder.id == 'Wait')"/>
-              <do_if value="$live">
-                <set_value name="$status" exact="'dock_mismatch'"/>
-              </do_if>
-              <do_if value="$live_dock or (not $live and $owned_docked and $parking.idcode == 'XPJ-169')">
-                <do_if value="($live and (not $fixed or event.param2 != 'Buy' or $trial != 'six_unit' or @$v.$ship_index != 7354)) or ($fixed and (@$v.$sector != @$station.sector.macro.id or @$v.$station_code != $station.idcode or @$v.$ship_code != $ship.idcode or @$v.$ware != $ware.id or @$v.$quantity != $quantity or not @$v.$price_cents or $v.$price_cents le 0 or $v.$price_cents gt 2147483647 or ($v.$price_cents)L != $v.$price_cents))">
+              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational and $ship.pilot and $ship.pilot != player.entity and $ship.owner == faction.player and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and $ship != player.ship and $ship != player.container and @$station.isclass.station and $station.isoperational and @$parking.isclass.station and player.entity.hascontext.{$parking} and not player.controlled and not player.occupiedship and @player.room.exists and @$bay.istradingallowed"/>
+              <set_value name="$live_dock" exact="$live and $owned_docked and @$bay.isclass.dockingbay and not $bay.isstorage and $bay.dockstate == dockstate.default and $bay.container == $station and not $ship.isinternallystored and $ship.trueowner == faction.player and $station.owner and $station.trueowner == $station.owner and $ship.sector == $station.sector and $ship.assignedaipilot == $ship.pilot and @$ship.pilot.owner == faction.player and $ship.orders.count == 0 and (not $ship.defaultorder or $ship.defaultorder.id == 'Wait')"/>
+              <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169' and $parking != $station and $parking.idcode == 'XPJ-169'"/>
+              <do_if value="$live_dock or $fixture_dock">
+                <do_if value="$fixed and (@$v.$sector != @$station.sector.macro.id or @$v.$station_code != $station.idcode or @$v.$ship_code != $ship.idcode or @$v.$ware != $ware.id or @$v.$quantity != $quantity or not @$v.$price_cents or $v.$price_cents le 0 or $v.$price_cents gt 2147483647 or ($v.$price_cents)L != $v.$price_cents)">
                   <set_value name="$status" exact="'request_binding_invalid'"/>
                 </do_if>
                 <do_elseif value="event.param2 == 'Buy' and (@State.$attempted or (not $live and @State.$refused))">
@@ -59,22 +63,22 @@
                     </do_if>
                     <do_elseif value="event.param2 == 'Buy' and $fixed and $quote gt 0 and $v.$price_cents * 1ct != $price">
                       <set_value name="$status" exact="'refusal_unverified'"/>
-                      <set_value name="$refusal_water_before" exact="$ship.cargo.{$ware}.count"/>
+                      <set_value name="$refusal_cargo_before" exact="$ship.cargo.{$ware}.count"/>
                       <set_value name="$refusal_cash_before" exact="(player.money / 1ct)L"/>
                       <set_value name="$refusal_faction_before" exact="if faction.player.hasownaccount then (faction.player.money / 1ct)L else -1"/>
                       <set_value name="$refusal_orders_before" exact="$ship.orders.count"/>
                       <do_if value="not $live">
                         <set_value name="State.$refused" exact="true"/>
                       </do_if>
-                      <set_value name="$refusal_water_after" exact="$ship.cargo.{$ware}.count"/>
+                      <set_value name="$refusal_cargo_after" exact="$ship.cargo.{$ware}.count"/>
                       <set_value name="$refusal_cash_after" exact="(player.money / 1ct)L"/>
-                      <do_if value="not @State.$order and not @State.$deal and $ship.orders.count == $refusal_orders_before and $refusal_water_before ge 0 and $refusal_water_before == $refusal_water_after and $refusal_cash_before ge 0 and $refusal_cash_before == $refusal_faction_before and $refusal_cash_before == $refusal_cash_after and faction.player.hasownaccount and faction.player.money == player.money">
+                      <do_if value="not @State.$order and not @State.$deal and $ship.orders.count == $refusal_orders_before and $refusal_cargo_before ge 0 and $refusal_cargo_before == $refusal_cargo_after and $refusal_cash_before ge 0 and $refusal_cash_before == $refusal_faction_before and $refusal_cash_before == $refusal_cash_after and faction.player.hasownaccount and faction.player.money == player.money">
                         <set_value name="$status" exact="'price_changed'"/>
-                        <raise_lua_event name="'X4AuthorityCompanyStockTrade.Refused'" param="'%s|price_changed|%s|%s|%s|%s|%s|%s'.[$request,($v.$price_cents)L,$quote,$refusal_water_before,$refusal_water_after,$refusal_cash_before,$refusal_cash_after]"/>
+                        <raise_lua_event name="'X4AuthorityCompanyStockTrade.Refused'" param="'%s|price_changed|%s|%s|%s|%s|%s|%s'.[$request,($v.$price_cents)L,$quote,$refusal_cargo_before,$refusal_cargo_after,$refusal_cash_before,$refusal_cash_after]"/>
                       </do_if>
                     </do_elseif>
                     <do_else>
-                      <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" unbundle="false"/>
+                      <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" bundle="false" unbundle="false"/>
                       <set_value name="$tradeable" exact="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity and $ship.money ge ($price * $quantity) and player.money ge ($price * $quantity) and (not $live or (faction.player.hasownaccount and faction.player.money == player.money))"/>
                       <set_value name="$status" exact="'not_tradeable'"/>
                       <do_if value="event.param2 == 'Quote' and not $fixed and $tradeable">
@@ -97,7 +101,11 @@
                           <set_value name="State.$quantity" exact="$quantity"/>
                           <set_value name="State.$quote_time" exact="if $fixed then $fresh_quote_time else State.$quoted_at"/>
                           <set_value name="State.$ship" exact="$ship"/>
+                          <set_value name="State.$index" exact="$index"/>
+                          <set_value name="State.$ship_code" exact="$ship.idcode"/>
                           <set_value name="State.$station" exact="$station"/>
+                          <set_value name="State.$station_code" exact="$station.idcode"/>
+                          <set_value name="State.$sector" exact="$station.sector"/>
                           <set_value name="State.$parking" exact="$parking"/>
                           <set_value name="State.$live" exact="$live"/>
                           <set_value name="State.$bay" exact="$bay"/>
@@ -123,7 +131,7 @@
                   </do_if>
                 </do_else>
               </do_if>
-            </do_if>
+            </do_elseif>
             <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|%s|%s'.[$request,$status,$quote]"/>
           </actions>
         </cue>
@@ -143,7 +151,11 @@
                 <set_value name="$delta_ship_money" exact="((State.$ship.money - State.$before_ship_money) / 1ct)L"/>
                 <set_value name="$delta_station_money" exact="((State.$station.money - State.$before_station_money) / 1ct)L"/>
                 <set_value name="$delta_player_money" exact="((player.money - State.$before_player_money) / 1ct)L"/>
-                <set_value name="$docked" exact="@State.$ship.dock.container == State.$station and (not State.$live or (State.$ship.dock == State.$bay and not State.$ship.isinternallystored and State.$bay.istradingallowed and State.$ship.owner == faction.player and State.$ship.trueowner == faction.player and State.$ship.sector == State.$station.sector and @md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and @md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$ships.{7354} == State.$ship and @md.X4AuthorityShipRegistry.State.$byship.{State.$ship} == 7354))"/>
+                <set_value name="$docked" exact="@State.$ship.dock.container == State.$station"/>
+                <do_if value="State.$live and $docked">
+                  <set_value name="$registry_bound" exact="@md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and @md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$ships.{State.$index} == State.$ship and @md.X4AuthorityShipRegistry.State.$byship.{State.$ship} == State.$index"/>
+                  <set_value name="$docked" exact="$registry_bound and State.$ship.isoperational and State.$ship.idcode == State.$ship_code and State.$ship.dock == State.$bay and not State.$ship.isinternallystored and State.$bay.isclass.dockingbay and not State.$bay.isstorage and State.$bay.dockstate == dockstate.default and State.$bay.istradingallowed and State.$ship.owner == faction.player and State.$ship.trueowner == faction.player and State.$station.isoperational and State.$station.idcode == State.$station_code and State.$station.owner and State.$station.trueowner == State.$station.owner and State.$ship.sector == State.$sector and State.$station.sector == State.$sector"/>
+                </do_if>
                 <set_value name="$parked" exact="player.station == State.$parking and not player.controlled and not player.occupiedship and @player.room.exists"/>
                 <do_if value="event.param == State.$deal and event.param.buyer == State.$ship and event.param.seller == State.$station and event.param.ware == State.$ware">
                   <set_value name="$completed" exact="event.param"/>

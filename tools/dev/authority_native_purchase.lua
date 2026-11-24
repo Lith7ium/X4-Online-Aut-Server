@@ -6,6 +6,12 @@ local entry_fields = {'source', 'time', 'buyer_id', 'seller_id', 'partner_id', '
     'quantity', 'complete', 'entry_id', 'trade_id', 'eventtype', 'trade_eventtype',
     'role', 'buyer_matches', 'seller_matches', 'money_cents', 'price_cents', 'linked'}
 
+local function positive_integer(value, maximum)
+    if #value > 10 then return end
+    local number = tonumber(value)
+    if number >= 1 and number <= maximum then return number end
+end
+
 local function field(value)
     if type(value) == 'boolean' then return value and '1' or '0' end
     if type(value) == 'number' then return ('%.17g'):format(value) end
@@ -76,23 +82,24 @@ function M.new(lease, net)
         local data = net:receive()
         if type(data) ~= 'string' then return end
         local packet_lease, id, epoch, index, code, sector, station, ware, quantity, cents = data:match(
-            '^PURCHASE|([0-9a-f]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([%w%-]+)|([%w_]+)|([%w%-]+)|([%w_]+)|(%d+)|(%d+)$')
-        if packet_lease ~= lease or #id ~= 32 or #epoch ~= 32 or code ~= 'WRN-302' or index ~= '7354'
-                or sector ~= 'cluster_01_sector001_macro' or station ~= 'BIM-169' or ware ~= 'water'
-                or quantity ~= '6' or #cents > 10 or tonumber(cents) < 1
-                or tonumber(cents) > 2147483647 or seen[id] then return end
-        if active then return end
+            '^PURCHASE|([0-9a-f]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([A-Za-z0-9_]+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([a-z][a-z0-9_]*)|(%d+)|(%d+)$')
+        if packet_lease ~= lease or #id ~= 32 or #epoch ~= 32 or #sector > 128 or #ware > 128
+                or active or seen[id] then return end
+        index = positive_integer(index, 2147483647)
+        quantity = positive_integer(quantity, 65535)
+        cents = positive_integer(cents, 2147483647)
+        if not index or not quantity or not cents then return end
         seen[id] = true
         if attempted then
             send(id, 1, 'RESULT|' .. id .. '|provider_limit|0')
             send(id, 2, 'DONE')
             return
         end
-        active = {id=id, start=C.GetCurrentGameTime(), sequence=0}
+        active = {id=id, start=C.GetCurrentGameTime(), sequence=0, ware=ware, quantity=quantity}
         local ok, result = pcall(AddUITriggeredEvent, screen, 'Buy', {
-            request_id=id, epoch=epoch, ship_index=tonumber(index), ship_code=code, sector=sector,
-            station_code=station, ware=ware, quantity=tonumber(quantity), price_cents=tonumber(cents),
-            trial='six_unit', fixed_request=true, live_request=true,
+            request_id=id, epoch=epoch, ship_index=index, ship_code=code, sector=sector,
+            station_code=station, ware=ware, quantity=quantity, price_cents=cents,
+            trial='live_purchase', fixed_request=true, live_request=true,
         })
         if (not ok or result == false) and active then
             attempted = true
@@ -112,7 +119,7 @@ function M.new(lease, net)
         if not active.next_read or now < active.next_read then return end
         local ok, result = pcall(X4LAN_AUTHORITY_TRADE_LEDGER.collect, {
             ship=active.ship, station=active.station, start_time=active.start,
-            end_time=now, quantity=6, ware='water',
+            end_time=now, quantity=active.quantity, ware=active.ware,
         })
         if not ok or type(result) ~= 'table' or type(result.rows) ~= 'table' then
             result = {status='unknown', reason='collector_error', rows={}}

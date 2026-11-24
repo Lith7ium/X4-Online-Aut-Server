@@ -29,7 +29,7 @@ function AddUITriggeredEvent(name, action, request)
     assert(request.live_request and request.fixed_request)
     assert(request.ship_index == 7354 and request.ship_code == 'WRN-302')
     assert(request.sector == 'cluster_01_sector001_macro' and request.station_code == 'BIM-169')
-    assert(request.trial == 'six_unit' and request.ware == 'water' and request.quantity == 6)
+    assert(request.trial == 'live_purchase' and request.ware == 'water' and request.quantity == 6)
     local id = request.request_id
     assert(not dispatched[id])
     dispatched[id] = true
@@ -51,7 +51,7 @@ function AddUITriggeredEvent(name, action, request)
     event('Result', id .. '|submitted|5819')
     completion = function()
         game_time = 12
-        event('Deal', id .. '|' .. epoch .. '|six_unit|6|5819|11.000|12.000'
+        event('Deal', id .. '|' .. epoch .. '|live_purchase|6|5819|11.000|12.000'
             .. '|0x10|0x20|water|6|0|5819|34914|1000000|965200|1|1|1000000|965200|12|18')
         event('Observed', id .. '|5819|6|0|0|0|-34800|1|1')
     end

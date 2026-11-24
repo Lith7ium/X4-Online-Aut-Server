@@ -67,6 +67,12 @@ class StockTradeReceiptSourceTests(unittest.TestCase):
 
 class FixedTradeDriverTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_live_bridge_preserves_dynamic_native_binding_and_journal(self):
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['luajit', 'tests/authority_native_purchase_binding.lua'],
+                       cwd=root, check=True, timeout=10)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_native_refusal_and_success_sequences_use_original_price(self):
         root = Path(__file__).resolve().parents[1]
         subprocess.run(['luajit', 'tests/authority_company_fixed_trade.lua'],
@@ -77,13 +83,13 @@ class FixedTradeDriverTests(unittest.TestCase):
         document = ET.parse(source)
         branches = [node for node in document.iter('do_elseif')
                     if any(event.attrib['name'] == "'X4AuthorityCompanyStockTrade.Refused'"
-                           for event in node.iter('raise_lua_event'))]
+                           for event in node.findall('./do_if/raise_lua_event'))]
         refusal, = branches
         self.assertIsNone(refusal.find('.//create_trade_order'))
         proof = next(node.attrib['value'] for node in refusal.findall('do_if')
                      if node.find('raise_lua_event') is not None)
         self.assertIn('$ship.orders.count == $refusal_orders_before', proof)
-        self.assertIn('$refusal_water_before == $refusal_water_after', proof)
+        self.assertIn('$refusal_cargo_before == $refusal_cargo_after', proof)
         self.assertIn('$refusal_cash_before == $refusal_cash_after', proof)
 
 
