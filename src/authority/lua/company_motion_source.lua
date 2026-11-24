@@ -2,6 +2,17 @@
 local M = {}
 local seat
 
+-- The native sampler reports only these operations and binding checks. Never
+-- log an unrecognized value, which could include an engine event or Lua error.
+local fault_labels = {}
+local binding_checks = {'actor_key', 'id_convert', 'id_roundtrip', 'dock_values', 'external_binding'}
+for _, operation in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending'}) do
+    fault_labels[operation] = true
+    for _, check in ipairs(binding_checks) do
+        fault_labels[operation .. '_' .. check] = true
+    end
+end
+
 function M.arm(verified_seat)
     assert(seat == nil or seat == verified_seat)
     seat = verified_seat
@@ -136,7 +147,11 @@ function M.new_x4(config, save_path, pinned, udp)
                     return row.index == config.index and entity == selected and actor() == selected
                 end,
                 descriptor = X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE, resolve = resolve,
-                fault = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED') end,
+                diagnostics = true,
+                fault = function(reason)
+                    local label = fault_labels[reason] and reason or 'unknown'
+                    DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED ' .. label)
+                end,
             })
         end,
     })

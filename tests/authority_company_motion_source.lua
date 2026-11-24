@@ -76,3 +76,28 @@ owner:tick()
 assert(packets[6] == 'GAP')
 owner:tick()
 assert(#packets == 6)
+
+-- Exercise the native adapter's actual diagnostic callback without invoking X4.
+local lines, native_options = {}, nil
+DebugError = function(line) lines[#lines + 1] = line end
+RegisterEvent = function() return true end
+X4LAN_REPLICA_MOTION_BINDING = {normalize_profile_save_path = function(path) return path end}
+X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER = {new_x4 = function(options) return options end}
+source.new = function(options) native_options = options; return {} end
+source.new_x4({port = 1, lease = 'test', generation = generation, nonce = nonce, index = index},
+              '/private/save', {epoch = epoch, issued_count = index}, {open = function() return {} end})
+local config = native_options.make_sampler(actor, function() return true end)
+assert(config.diagnostics == true)
+local prefix = '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED '
+for _, reason in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending',
+                         'sample_dock_values', 'register_actor_key', 'reset_id_roundtrip',
+                         'tick_external_binding', 'tick_id_convert'}) do
+    config.fault(reason)
+    assert(lines[#lines] == prefix .. reason)
+end
+for _, reason in ipairs({'event_dock_values|payload', 'sample_private_error', 17, {}}) do
+    config.fault(reason)
+    assert(lines[#lines] == prefix .. 'unknown')
+end
+config.fault(nil)
+assert(lines[#lines] == prefix .. 'unknown')
