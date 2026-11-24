@@ -37,7 +37,7 @@ import linux_snapshot_capture as snapshot
 from authority.checkpoints import CheckpointStore
 from authority.experimental_local_host import ExperimentalLocalHost
 from authority.experimental_tcp_control import ExperimentalTCPControl
-from authority.experimental_tcp_participants import ExperimentalTCPParticipants
+from authority.experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from authority.local_control_bridge import LocalControlBridge
 from authority.load_messages import _pairs, _reject_constant
 from authority.recovery import stage_confirmed_recovery
@@ -552,8 +552,12 @@ def capture_first_registry_snapshot(adapter, store, verify):
     return saved
 
 
-def settle_shutdown(control, world, store, check):
+def settle_shutdown(control, world, store, check, *, purchases=None):
     """Disconnect clients and settle their last-disconnect pause/save once."""
+    if purchases is not None:
+        while not purchases.before_world_transition():
+            check()
+            time.sleep(.05)
     control.close()
     while world.session.pending is not None:
         check()
@@ -624,20 +628,30 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
         super().__init__(host, enabled=enabled, timeout=timeout)
         self._guard_process = guard_process
 
+    def check_process(self):
+        try:
+            self._guard_process()
+        except Exception as error:
+            raise ParticipantGuardFailure('recovered X4 process guard failed') from error
+        return True
+
     def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
-        if check is not None:
-            raise RuntimeError('unexpected nested participant guard')
+        def check_exchange():
+            self.check_process()
+            if check is not None:
+                check()
         return super()._exchange(conn, peer, others, raw, expected, deadline,
-                                 check=self._guard_process, validate_answer=validate_answer)
+                                 check=check_exchange, validate_answer=validate_answer)
 
     def _quiet(self, peers, deadline):
-        self._guard_process()
+        self.check_process()
         result = super()._quiet(peers, deadline)
-        self._guard_process()
+        self.check_process()
         return result
 
 
-def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1, motion_service=None, pose_trial=None):
+def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
+          motion_service=None, pose_trial=None, purchases=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -668,7 +682,17 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             except BaseException:
                 conn.close()
                 raise
-        host.tick(tick_interval)
+        if purchases is None:
+            host.tick(tick_interval)
+        else:
+            # Reading a disconnect can request a pause inside this tick. Defer
+            # engine actions until the in-flight booking has been checked.
+            host.tick(tick_interval, defer_world=True)
+            session = host._world.session
+            if session.pending is not None and purchases.before_world_transition():
+                host.tick(0)
+            if session.pending is None and session.state == 'running':
+                purchases.step()
         if motion_service is not None:
             motion_service.poll()
             if pose_trial is not None and motion_service.running:
@@ -856,6 +880,9 @@ def run(args):
     company_motion = getattr(args, 'company_motion', False)
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    company_purchases = getattr(args, 'company_purchases', False)
+    if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
+        raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
     cockpit_capture = getattr(args, 'company_cockpit_purchase', None)
@@ -890,6 +917,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
+    purchase_provider = purchases = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1085,6 +1113,10 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if company_purchases:
+                from authority_native_purchase import NativePurchaseProvider
+                purchase_provider = NativePurchaseProvider()
+                protected.extend(purchase_provider.install(case))
             if trade_mode:
                 protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce,
                                                      cockpit_purchase=cockpit_purchase))
@@ -1413,7 +1445,7 @@ def run(args):
             from authority.company_motion_service import CompanyMotionService
             motion_service = CompanyMotionService()
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
-                                         motion_service=motion_service)
+                                         motion_service=motion_service, company_purchases=company_purchases)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
         def verify_process():
@@ -1421,6 +1453,10 @@ def run(args):
             return overlap_guard[0]()
         world._participants = RecoveredGuardedParticipants(host, enabled=True, timeout=120,
                                                           guard_process=verify_process)
+        if purchase_provider is not None:
+            from authority.company_purchase_scheduler import CompanyPurchaseScheduler
+            purchases = CompanyPurchaseScheduler(world._participants, purchase_provider,
+                                                guard=world._participants.check_process)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -1927,7 +1963,7 @@ def run(args):
             return gateway is not None and not gateway.running
 
         result.update(serve(listener, host, deadline=deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
-                            should_stop=lambda: stop[0] or gateway_stopped()))
+                            purchases=purchases, should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -1939,7 +1975,7 @@ def run(args):
             # Stop intake, then settle the last-disconnect save before stopping X4.
             listener.close()
             listener = None
-            saved = settle_shutdown(control, world, store, check)
+            saved = settle_shutdown(control, world, store, check, purchases=purchases)
             control = None
         if failed_gateway:
             raise RuntimeError('TLS gateway stopped while serving')
@@ -1989,6 +2025,11 @@ def run(args):
                 motion_service.close()
             except OSError as error:
                 errors.append('movement service cleanup: ' + type(error).__name__)
+        if purchase_provider is not None:
+            try:
+                purchase_provider.close()
+            except OSError as error:
+                errors.append('purchase provider cleanup: ' + type(error).__name__)
         if pose_channel is not None:
             pose_channel.close()
         services_stopped = True
@@ -2046,6 +2087,8 @@ def run(args):
                                            require_registry_snapshot=True)
                 if pose_channel is not None:
                     pose_overlay.archive_cue(case, out)
+                if purchase_provider is not None:
+                    purchase_provider.archive_cues(case, out)
                 if trade_mode:
                     trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:

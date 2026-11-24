@@ -15,6 +15,10 @@ from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 _MAX_ID = 9007199254740991
 
 
+class ParticipantGuardFailure(RuntimeError):
+    """The owner or world changed during an exchange, independently of a peer's input."""
+
+
 class ExperimentalTCPParticipants:
     """Participant adapter for an exclusively owned experimental local host.
 

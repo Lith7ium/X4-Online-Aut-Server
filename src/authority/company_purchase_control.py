@@ -4,7 +4,7 @@ import json
 import re
 import time
 
-from .experimental_tcp_participants import ExperimentalTCPParticipants
+from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from .load_messages import MAX_INTEGER, MAX_MESSAGE
 
 
@@ -26,10 +26,6 @@ class CompanyPurchasePeerLost(ConnectionError):
     def __init__(self, handle):
         self.handle = handle
         super().__init__('company purchase participant connection lost')
-
-
-class _PurchaseOwnershipLost(RuntimeError):
-    pass
 
 
 def _int(value, *, minimum=1, maximum=MAX_INTEGER):
@@ -220,10 +216,10 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
         try:
             allowed = guard is None or guard() is True
         except Exception as error:
-            raise _PurchaseOwnershipLost('company purchase world guard failed') from error
+            raise ParticipantGuardFailure('company purchase world guard failed') from error
         if (not allowed or control._reader_lease is not lease or not host._busy or not participants._busy
                 or peer.get('company_purchase') is not window or not binding_current()):
-            raise _PurchaseOwnershipLost('company purchase participant binding changed')
+            raise ParticipantGuardFailure('company purchase participant binding changed')
 
     def validate(answer):
         if not _bound(answer, envelope, _RESULT, 'purchase'):
@@ -241,7 +237,7 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
             answer = participants._exchange(
                 conn, peer, [], raw, None, deadline, check=check, validate_answer=validate)
             participants._quiet(peers, deadline)
-        except _PurchaseOwnershipLost:
+        except ParticipantGuardFailure:
             raise
         except (OSError, RuntimeError, ValueError) as error:
             check()
