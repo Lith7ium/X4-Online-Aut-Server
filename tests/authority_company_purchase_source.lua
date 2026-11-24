@@ -58,3 +58,8 @@ incoming = {prefix .. 'RECEIPT|3|pilot_reported|34914'}
 source:tick()
 assert(#receipts == 4 and receipts[4].outcome == 'pilot_reported'
     and receipts[4].settled_total_cents == 34914 and receipts[4].company_balance_cents == nil)
+
+assert(source:request(intent, settle))
+incoming = {prefix .. 'RECEIPT|4|refused|captain_required'}
+source:tick()
+assert(#receipts == 5 and receipts[5].outcome == 'refused' and receipts[5].reason == 'captain_required')

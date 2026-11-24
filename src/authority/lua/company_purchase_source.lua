@@ -72,6 +72,8 @@ function M.new(options)
                         if not receipt.current_price_cents or receipt.current_price_cents == pending.intent.price_cents then
                             receipt = nil
                         end
+                    elseif row[3] == 'refused' and #row == 4 and row[4] == 'captain_required' then
+                        receipt.reason = row[4]
                     elseif row[3] == 'pilot_reported' and #row == 4 then
                         receipt.settled_total_cents = exact_decimal(row[4], 1)
                         if not receipt.settled_total_cents then receipt = nil end

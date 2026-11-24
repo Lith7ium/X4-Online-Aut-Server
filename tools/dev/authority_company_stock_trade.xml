@@ -37,24 +37,31 @@
               <set_value name="$parking" exact="player.station"/>
               <set_value name="$status" exact="if $live then 'dock_mismatch' else 'invalid_fixture'"/>
               <set_value name="$bay" exact="@$ship.dock"/>
-              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational and $ship.pilot and $ship.pilot != player.entity
+              <set_value name="$owned_docked" exact="@$ship.isclass.ship and $ship.isoperational
                   and $ship.owner == faction.player and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index
                   and $ship != player.ship and $ship != player.container and @$station.isclass.station and $station.isoperational
                   and @$parking.isclass.station and player.entity.hascontext.{$parking}
                   and not player.controlled and not player.occupiedship and @player.room.exists and @$bay.istradingallowed"/>
               <set_value name="$live_dock" exact="$live and $owned_docked and @$bay.isclass.dockingbay and $bay.external and not $bay.isstorage
-                  and $bay.dockstate == dockstate.default and $bay.container == $station
+                  and $bay.dockstate == dockstate.default and $bay.container == $station and $bay.docked.indexof.{$ship}
                   and not $ship.isinternallystored and $ship.trueowner == faction.player
-                  and $station.owner and $station.trueowner == $station.owner and $ship.sector == $station.sector
-                  and $ship.assignedaipilot == $ship.pilot and @$ship.pilot.owner == faction.player
-                  and $ship.orders.count == 0 and (not $ship.defaultorder or $ship.defaultorder.id == 'Wait')"/>
-              <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169' and $parking != $station and $parking.idcode == 'XPJ-169'"/>
+                  and $station.owner and $station.trueowner == $station.owner and $ship.sector == $station.sector"/>
+              <set_value name="$fixture_dock" exact="not $live and $owned_docked and $ship.pilot and $ship.pilot != player.entity
+                  and $ship.idcode == 'WRN-302' and $station.owner == faction.teladi and $station.idcode == 'BIM-169'
+                  and $parking != $station and $parking.idcode == 'XPJ-169'"/>
               <do_if value="$live_dock or $fixture_dock">
                 <do_if value="$fixed and (@$v.$sector != @$station.sector.macro.id or @$v.$station_code != $station.idcode or @$v.$ship_code != $ship.idcode or @$v.$ware != $ware.id or @$v.$quantity != $quantity or not @$v.$price_cents or $v.$price_cents le 0 or $v.$price_cents gt 2147483647 or ($v.$price_cents)L != $v.$price_cents)">
                   <set_value name="$status" exact="'request_binding_invalid'"/>
                 </do_if>
                 <do_elseif value="event.param2 == 'Buy' and (@State.$attempted or (not $live and @State.$refused))">
                   <set_value name="$status" exact="'already_attempted'"/>
+                </do_elseif>
+                <do_elseif value="$live and (not @$ship.assignedaipilot.exists or $ship.assignedaipilot == player.entity or @$ship.assignedaipilot.owner != faction.player)">
+                  <set_value name="$status" exact="'captain_required'"/>
+                </do_elseif>
+                <do_elseif value="$live and (not $ship.pilot or $ship.pilot != $ship.assignedaipilot
+                    or $ship.orders.count != 0 or ($ship.defaultorder and $ship.defaultorder.id != 'Wait'))">
+                  <set_value name="$status" exact="'dock_mismatch'"/>
                 </do_elseif>
                 <do_else>
                   <set_value name="$status" exact="'no_unique_offer'"/>

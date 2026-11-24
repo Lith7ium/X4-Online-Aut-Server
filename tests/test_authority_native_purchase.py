@@ -155,6 +155,21 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(provider.poll(), dict(PURCHASE, outcome='unknown'))
             self.assertEqual(provider.evidence(id)['reason'], 'native_receipt_sequence_gap')
 
+    def test_native_captain_required_is_a_clean_refusal(self):
+        provider = self.provider()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(('127.0.0.1', 0))
+            address = provider._socket.getsockname()
+            lease = provider._lease
+            purchase_id = PURCHASE['purchase_id']
+            prefix = f'RECEIPT|{lease}|{purchase_id}|'
+            peer.sendto(f'PURCHASE_HELLO|{lease}'.encode(), address)
+            self.assertIsNone(provider.begin(BINDING, PURCHASE))
+            peer.sendto(f'{prefix}1|RESULT|{purchase_id}|captain_required|0'.encode(), address)
+            peer.sendto(f'{prefix}2|DONE'.encode(), address)
+            self.assertEqual(provider.poll(), dict(PURCHASE, outcome='refused', reason='captain_required'))
+            self.assertIsNone(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32)))
+
     @unittest.skipUnless(shutil.which('cc') and shutil.which('luajit'), 'LuaJIT and C compiler required')
     def test_real_udp_luajit_requotes_and_confirms_only_native_ledger_proof(self):
         with TemporaryDirectory() as directory:
@@ -207,7 +222,7 @@ class NativePurchaseProviderTests(unittest.TestCase):
         guards = {node.attrib['name']: node.attrib['exact'] for node in root.iter('set_value')
                   if node.attrib['name'] in ('$owned_docked', '$live_dock', '$fixture_dock')}
         for field in ('dockingbay', '$bay.external', '$bay.container == $station', 'not $bay.isstorage',
-                      'not $ship.isinternallystored', '$ship.orders.count == 0',
+                      'not $ship.isinternallystored', '$bay.docked.indexof.{$ship}',
                       '$ship.sector == $station.sector', '$ship.trueowner == faction.player'):
             self.assertIn(field, guards['$live_dock'])
         self.assertIn('$byship.{$ship} == $index', guards['$owned_docked'])
@@ -224,3 +239,17 @@ class NativePurchaseProviderTests(unittest.TestCase):
         self.assertEqual(buys[0].attrib['immediate'], 'true')
         for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
             self.assertEqual(list(root.iter(action)), [])
+
+        entry = request.find(".//do_if[@value='$live_dock or $fixture_dock']")
+        binding = entry.find('do_if')
+        for identity in ('$sector', '$station_code', '$ship_code'):
+            self.assertIn(identity, binding.get('value'))
+        captain_required = entry.find("./do_elseif/set_value[@exact=\"'captain_required'\"]/..")
+        self.assertIn('not @$ship.assignedaipilot.exists', captain_required.get('value'))
+        self.assertEqual([node.tag for node in captain_required], ['set_value'])
+        idle = next(guard for guard in entry.findall('do_elseif') if '$ship.orders.count' in guard.get('value'))
+        self.assertIn('$ship.pilot != $ship.assignedaipilot', idle.get('value'))
+        self.assertLess(ordered.index(binding), ordered.index(captain_required))
+        self.assertLess(ordered.index(captain_required), ordered.index(idle))
+        self.assertLess(ordered.index(idle), ordered.index(next(root.iter('find_sell_offer'))))
+        self.assertEqual(list(root.iter('create_trade_computer')), [])

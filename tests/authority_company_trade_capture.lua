@@ -180,6 +180,8 @@ for _, fields in ipairs({
     report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr.', fields)
 end
 report('refused', nil, 'Company purchase refused.')
+report('refused', nil, 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
+    {reason = 'captain_required'})
 report('refused', nil,
     'Company purchase refused. Unit price changed from 58.19 Cr to 58.77 Cr. Reopen the stock offer and confirm the new price.',
     {reason = 'price_changed', current_price_cents = 5877})

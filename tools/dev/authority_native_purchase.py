@@ -17,7 +17,7 @@ _IDS = re.compile(r'[0-9a-f]{32}')
 _COMPONENT = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _PURCHASE_FIELDS = ('purchase_id', 'sector', 'station_code', 'ware', 'quantity', 'price_cents')
 _BINDING_FIELDS = ('registry_epoch', 'ship_index', 'ship_code')
-_REFUSALS = {'dock_mismatch', 'invalid_registry', 'no_unique_offer',
+_REFUSALS = {'captain_required', 'dock_mismatch', 'invalid_registry', 'no_unique_offer',
              'request_binding_invalid', 'provider_limit'}
 _MAX_IDS = 1024
 _MAX_RECEIPTS = 201

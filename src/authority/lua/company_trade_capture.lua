@@ -185,6 +185,8 @@ function M.install(o)
                         completed_contexts[data], completed_orders[submitted_orders] = true, true
                     end
                     show_price_change(intent.price_cents, price, true)
+                elseif receipt.reason == 'captain_required' then
+                    o.notice('captain_required')
                 else
                     o.notice('refused')
                 end
@@ -221,6 +223,7 @@ local trade_notices = {
     pending = 'Company purchase awaiting confirmation.',
     accepted_pending_statement = 'Company purchase accepted. Awaiting reconciliation with your purchase record.',
     refused = 'Company purchase refused.',
+    captain_required = 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
     uncertain = 'Company purchase status uncertain. Check the authoritative receipt.',
     already_attempted = 'Company purchase already submitted.',
     stale_identity = 'Company purchase refused: ship or station changed.',
