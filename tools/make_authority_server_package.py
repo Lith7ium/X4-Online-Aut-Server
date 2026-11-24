@@ -18,6 +18,7 @@ REQUIRED = {
     'src/native/net.c', 'src/lockstep/base/ui/sha256.lua',
     'src/authority/md/checkpoint_marker.xml',
     'tools/dev/authority_connection_check.py',
+    'tools/dev/authority_exec_gate.py',
     'tools/dev/authority_identity_fixture.xml',
     'tools/dev/authority_loopback_simulated_client.py',
     'tools/dev/authority_provider_server.py',
