@@ -91,8 +91,7 @@ function M.new(readers, epoch, net, prefix, clock)
             local slot = slots[name]
             local binding
             if running then
-                slot.reader:tick()
-                binding = slot.reader:current()
+                binding = slot.reader:tick()
             end
             publish_view(slot, name, binding, now, running)
         end

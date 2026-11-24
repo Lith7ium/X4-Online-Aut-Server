@@ -70,25 +70,31 @@ function M.new(pinned, own_index, engine)
                     row = {epoch = epoch, sector_macro = sector, index = index, code = code, actor = actor}}
     end
 
+    local function current_binding()
+        if not observed then return nil end
+        local row = observed.row
+        return {epoch = row.epoch, sector_macro = row.sector_macro, index = row.index, code = row.code, actor = row.actor}
+    end
+
     function api:tick()
         local target, now = inspect()
-        if not target or pending or (next_poll and now < next_poll) then return end
-        if sequence >= 4294967295 then self:close(); return end
-        sequence = sequence + 1
-        next_poll = now + INTERVAL
-        local id = nonce .. '-' .. engine.scope .. '-' .. tostring(sequence)
-        pending = {id = id, target = target, deadline = now + FRESHNESS}
-        local ok, issued = pcall(engine.issue, {
-            request_id = id, epoch = epoch, count = count, own = own_index, mode = target.mode, target = target.ref,
-        })
-        if not ok or issued ~= true then pending, observed = nil, nil end
+        if target and not pending and (not next_poll or now >= next_poll) then
+            if sequence >= 4294967295 then self:close(); return end
+            sequence = sequence + 1
+            next_poll = now + INTERVAL
+            local id = nonce .. '-' .. engine.scope .. '-' .. tostring(sequence)
+            pending = {id = id, target = target, deadline = now + FRESHNESS}
+            local ok, issued = pcall(engine.issue, {
+                request_id = id, epoch = epoch, count = count, own = own_index, mode = target.mode, target = target.ref,
+            })
+            if not ok or issued ~= true then pending, observed = nil, nil end
+        end
+        return current_binding()
     end
 
     function api:current()
         inspect()
-        if not observed then return nil end
-        local row = observed.row
-        return {epoch = row.epoch, sector_macro = row.sector_macro, index = row.index, code = row.code, actor = row.actor}
+        return current_binding()
     end
 
     function api:matches(wanted_epoch, sector, index, actor, code)

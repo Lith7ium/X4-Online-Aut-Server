@@ -2,8 +2,7 @@ local stream = dofile('src/authority/lua/company_observer_stream.lua')
 local epoch, generation, prefix = ('a'):rep(32), ('b'):rep(32), 'C|private|test|'
 local function reader(sector, index, actor, code)
     local self = {visible = true, matches_now = true}
-    self.tick = function() end
-    self.current = function()
+    self.tick = function()
         if self.visible then
             return {epoch = epoch, sector_macro = sector, index = index, actor = actor, code = code}
         end
