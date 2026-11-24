@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 from authority import windows_fixture_workspace as subject
 
+_CREATE_VIEW = subject.game.create_view
+
 
 class WindowsFixtureWorkspaceTests(unittest.TestCase):
     def setUp(self):
@@ -71,6 +73,21 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         extensions.mkdir()
         for dlc in (Path(game_directory) / 'extensions').glob('ego_dlc_*'):
             (extensions / dlc.name).mkdir()
+
+    def test_base_game_view_omits_owned_dlc_without_touching_install(self):
+        workspace = subject.WindowsFixtureWorkspace(self.game, self.view_container,
+                                                    self.run_directory, base_game_only=True)
+
+        def create_view(game, view, **options):
+            return _CREATE_VIEW(game, view, junction=lambda source, target: target.mkdir(),
+                                **options)
+
+        with patch.object(subject.game, 'create_view', side_effect=create_view):
+            workspace.prepare()
+        self.assertEqual(list((workspace.view / 'extensions').iterdir()), [])
+        self.assertEqual((workspace.profile_directory / 'content.xml').read_text(),
+                         subject.profile.content_xml(['x4_lan_lab']))
+        self.assertTrue((self.game / 'extensions' / 'ego_dlc_1').is_dir())
 
     def _install_overlay_files(self):
         extension = self.workspace.view / 'extensions' / 'x4_lan_lab'
