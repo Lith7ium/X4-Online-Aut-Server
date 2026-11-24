@@ -111,12 +111,21 @@ class CompanyMotionObserverTest(unittest.TestCase):
         self.view('map', 5)
         self.poll()
         self.assertEqual(self.views, [[{'sector_macro': 'sector_a', 'indices': [7354]}]])
+        stopped = {'x': -0.0, 'y': 0, 'z': 0}
+        for sequence, rate in ((1, None), (2, stopped)):
+            self.observer.snapshot(self.sample(sequence, velocity=rate))
+            self.seen(self.remote())
+            self.seen(self.remote())
+            self.poll()
+            self.assertTrue(all(slot['last_nonzero_velocity_confirmed'] is None
+                                for slot in self.source.observer_stats()['slots'].values()))
+
         velocity = {'x': -2, 'y': 0, 'z': 4}
-        self.observer.snapshot(self.sample(1, velocity=velocity))
+        self.observer.snapshot(self.sample(3, velocity=velocity))
         cockpit, map_view = self.remote(), self.remote()
         self.assertEqual(cockpit[1:4], ['cockpit', '1', self.epoch])
         self.assertEqual(map_view[1:4], ['map', '5', self.epoch])
-        self.assertEqual(map_view[8:], ['10.5', '11', '-3', '-2', '0', '4', '1', '1'])
+        self.assertEqual(map_view[8:], ['10.5', '11', '-3', '-2', '0', '4', '1', '3'])
         self.seen(cockpit, peer=self.foreign)
         self.seen(map_view, actor='0x9999')
         self.seen([*map_view[:13], '999', *map_view[14:]])  # changed rate
@@ -124,20 +133,38 @@ class CompanyMotionObserverTest(unittest.TestCase):
         self.seen([*map_view[:-1], '999'])  # changed capture clock
         self.seen(map_view[:-2])  # previous, shorter packet format
         self.poll()
-        self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+        stats = self.source.observer_stats()
+        self.assertEqual(stats['samples_confirmed'], 4)
+        self.assertTrue(all(slot['last_nonzero_velocity_confirmed'] is None for slot in stats['slots'].values()))
         self.seen(cockpit)
         self.seen(map_view)
         self.seen(cockpit)
         self.poll()
         stats = self.source.observer_stats()
-        self.assertEqual(stats['samples_confirmed'], 2)
-        self.assertEqual(stats['velocity_samples_confirmed'], 2)
+        self.assertEqual(stats['samples_confirmed'], 6)
+        self.assertEqual(stats['velocity_samples_confirmed'], 4)
         self.assertEqual(stats['last_confirmed']['slot'], 'map')
         self.assertEqual(stats['last_confirmed']['real_velocity'], velocity)
         self.assertEqual({name: slot['samples_confirmed'] for name, slot in stats['slots'].items()},
-                         {'cockpit': 1, 'map': 1})
+                         {'cockpit': 3, 'map': 3})
         self.assertNotIn(self.prefix.decode().split('|')[1], str(stats))
         self.assertNotIn(self.source.local_generation, str(stats))
+
+        moving = {name: slot['last_confirmed'] for name, slot in stats['slots'].items()}
+        self.observer.snapshot(self.sample(4, velocity=stopped))
+        self.seen(self.remote())
+        self.seen(self.remote())
+        self.observer.snapshot(self.sample(5))
+        self.seen(self.remote())
+        self.seen(self.remote())
+        self.seen(cockpit)  # Valid once, but too late to modify the current evidence.
+        self.poll()
+        stats = self.source.observer_stats()
+        self.assertEqual((stats['samples_confirmed'], stats['velocity_samples_confirmed']), (10, 6))
+        self.assertEqual(stats['last_confirmed']['sequence'], 5)
+        for name, slot in stats['slots'].items():
+            self.assertIsNone(slot['last_confirmed']['real_velocity'])
+            self.assertEqual(slot['last_nonzero_velocity_confirmed'], moving[name])
 
     def test_heartbeat_expiry_old_serial_and_end_drop_pending_receipts(self):
         with patch('authority.company_motion_observer.time.monotonic') as clock:

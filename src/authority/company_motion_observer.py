@@ -45,6 +45,7 @@ class _View:
     samples_confirmed: int = 0
     velocity_samples_confirmed: int = 0
     last_confirmed: dict | None = None
+    last_nonzero_velocity_confirmed: dict | None = None
 
     def replace(self, binding):
         self.active = binding
@@ -141,6 +142,8 @@ class CompanyMotionObserver:
                 'real_velocity': velocity, 'source_time': sample['source_time'],
                 'capture_time': sample['capture_time'],
             }
+            if velocity is not None and any(component != 0 for component in velocity.values()):
+                view.last_nonzero_velocity_confirmed = view.last_confirmed
             return
 
     def snapshot(self, sample):
@@ -173,7 +176,8 @@ class CompanyMotionObserver:
         slots = {
             name: {'samples_confirmed': slot.samples_confirmed,
                    'velocity_samples_confirmed': slot.velocity_samples_confirmed,
-                   'last_confirmed': slot.last_confirmed}
+                   'last_confirmed': slot.last_confirmed,
+                   'last_nonzero_velocity_confirmed': slot.last_nonzero_velocity_confirmed}
             for name, slot in self._slots.items()
         }
         return deepcopy({
