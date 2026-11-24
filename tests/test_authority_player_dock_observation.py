@@ -11,7 +11,7 @@ class PlayerDockFlightTests(unittest.TestCase):
         origin = 'IN_SPACE|0x10|0x20|0|0|0|0x40|0|374528|0|1000000|300.11'
         arrived = 'DOCKED|0x10|0x20|0x30|0x10|0x10|0x10|0|2364|0|1000000|550.31'
         self.rows = [
-            'START|' + origin, 'SEAT|controlled|16ULL', 'AUTOPILOT|started|nil',
+            'START|' + origin, 'SEAT|controlled|16ULL', 'AUTOPILOT|started|nil', 'DEPARTURE|374528|373123',
             'QUICKDOCK|dispatched', 'DOCKED|' + arrived, 'BEFORE_CONFIRM|' + arrived,
             'AFTER_CONFIRM|' + arrived, 'INTENT|cluster_01_sector001_macro|BIM-169|water|6|5820',
             'DONE|intent_captured',
@@ -25,8 +25,8 @@ class PlayerDockFlightTests(unittest.TestCase):
 
     def test_rejects_other_ship_or_cargo_changes(self):
         for original, altered in (('SEAT|controlled|16ULL', 'SEAT|controlled|17ULL'),
-                                  ('AFTER_CONFIRM', self.rows[6].replace('|0|1000000|', '|6|1000000|')),
-                                  ('DOCKED|DOCKED', self.rows[4].replace('0x30', '0')),
-                                  ('INTENT', self.rows[7].replace('BIM-169', 'XPJ-169'))):
+                                  ('AFTER_CONFIRM', self.rows[7].replace('|0|1000000|', '|6|1000000|')),
+                                  ('DOCKED|DOCKED', self.rows[5].replace('0x30', '0')),
+                                  ('INTENT', self.rows[8].replace('BIM-169', 'XPJ-169'))):
             with self.subTest(original=original), self.assertRaises(ValueError):
                 verify_player_flight([altered if row.startswith(original) else row for row in self.rows])

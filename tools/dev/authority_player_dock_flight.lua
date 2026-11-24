@@ -34,6 +34,9 @@ local screen = 'X4AuthorityPlayerDockObserver'
 local pinned = {nonce = cfg.authority_player_dock_flight_nonce,
     epoch = '4ba7be438ebb04ec5bb85fdb95b5a488', issued_count = 10082}
 local index = 7354
+-- Travel drive, traffic and software rendering can make the 375 km approach slow.
+local approach_timeout = 900
+local docking_timeout = 120
 local phase, deadline = 'init'
 local binding, observation, seat, capture, before, intent
 local departed
@@ -192,7 +195,7 @@ local function frame(registry)
             local accepted = StartAutoPilot(binding.station_lua)
             assert(accepted ~= false, 'autopilot_refused')
             autopilot = true
-            phase, deadline, next_poll, next_sample, next_range = 'flight', now + 300, now, now, now
+            phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
             log('AUTOPILOT|started|' .. tostring(accepted))
         end
     elseif phase == 'flight' or phase == 'dock_wait' then
@@ -211,7 +214,7 @@ local function frame(registry)
                 assert(C.SetSofttarget(binding.station, '') and C.GetSofttarget2().softtargetID == binding.station
                     and C.RequestDockAt(binding.station, true), 'dock_target_or_range_changed')
                 assert(control_matches() and C.QuickDock(), 'quickdock_refused')
-                phase, deadline = 'dock_wait', now + 30
+                phase, deadline = 'dock_wait', now + docking_timeout
                 log('QUICKDOCK|dispatched')
             end
         end

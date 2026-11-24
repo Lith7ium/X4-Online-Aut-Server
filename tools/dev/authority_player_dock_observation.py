@@ -60,7 +60,7 @@ def _once(rows, name):
 
 
 def verify_player_flight(rows):
-    names = ('START', 'SEAT', 'AUTOPILOT', 'QUICKDOCK', 'DOCKED',
+    names = ('START', 'SEAT', 'AUTOPILOT', 'DEPARTURE', 'QUICKDOCK', 'DOCKED',
              'BEFORE_CONFIRM', 'AFTER_CONFIRM', 'DONE')
     stages = {name: _once(rows, name) for name in names}
     order = [stage[0] for stage in stages.values()]
@@ -70,6 +70,9 @@ def verify_player_flight(rows):
     if (source.state != 'IN_SPACE' or not source.ship or not source.station or source.ship == source.station
             or source.controlled or source.occupied or source.bay or source.captain):
         raise ValueError('source ship, cockpit or dock differs from the confirmed parked fixture')
+    start, later = map(int, stages['DEPARTURE'][1].split('|'))
+    if start != source.distance or start - later < 1000 or later < 0:
+        raise ValueError('normal flight lacks an observed kilometre of approach')
     seat = stages['SEAT'][1].split('|')
     if len(seat) != 2 or seat[0] != 'controlled' or _handle(seat[1]) != source.ship:
         raise ValueError('normal seat confirmation identifies another ship')
