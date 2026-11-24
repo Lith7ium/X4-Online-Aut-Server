@@ -20,7 +20,18 @@ Use the licensed Linux X4 9.00 installation from Steam build 23660954. The
 supervisor checks the executable SHA-256
 `113f73d74570084f6ce18a659b365009eccf579fb66dbabb5dad2b1718045f20`.
 It mounts the game and compatible installed DLC read-only. Keep the host's
-normal Steam and X4 profile in place.
+normal Steam and X4 profile in place. The supplied seed enabled these eight
+official extension directories:
+
+```text
+ego_dlc_boron     ego_dlc_mini_01   ego_dlc_mini_02   ego_dlc_pirate
+ego_dlc_split     ego_dlc_terran    ego_dlc_timelines  ego_dlc_ventures
+```
+
+The local Steam manifest reports 34,930,397,255 bytes for the game installation
+used to build this seed. Provision a complete matching Linux installation
+including its game data and bundled libraries. The provider package and seed
+are separate downloads.
 
 Extract into a directory owned by the operator and create the private working
 directory.
@@ -105,13 +116,15 @@ second shell in the extracted directory:
 ```sh
 python3 tools/dev/authority_loopback_simulated_client.py \
   --endpoint .local/provider-run-01/endpoint.json \
-  --out .local/provider-probe-01 --count 2 --timeout 600
+  --out .local/provider-probe-01 --count 1 --hold-seconds 60 --timeout 1200
 ```
 
-This downloads two actual checkpoints and compares their markers. The probe
-simulates both client loads and the participant receipts, so it exercises the
-server and transfer path without launching a second X4. Run it only against
-the disposable server and check its final `result.json` after shutdown.
+This downloads and verifies the first offered save. The probe simulates the
+client load and its participant receipts, stays connected for 60 seconds after
+the resume receipt, then disconnects. The server runs a real X4 throughout.
+Allow time for the final native save and registry check. Use the server's
+`checkpoints/CONFIRMED` pointer to see when the new checkpoint has been confirmed.
+For an additional rejoin test, use a fresh probe output path.
 
 In TLS mode the server publishes `connection.json`. The separate connection
 check verifies the TLS pin and authenticates to both backend services without
