@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,27 @@ with tempfile.TemporaryDirectory() as directory:
 
 
 class WindowsClientPackageTest(unittest.TestCase):
+    def test_collects_tracked_developer_imports_from_packaged_cli(self):
+        options = 'tools/dev/authority_client_options.py'
+        helper = 'tools/dev/authority_prompt.py'
+        unreferenced = 'tools/dev/unreferenced_experiment.py'
+        paths = package.REQUIRED | {options, helper, unreferenced}
+        tree = b''.join(f'100644 blob object\t{path}\0'.encode() for path in sorted(paths))
+        scripts = {
+            'tools/dev/authority_windows_fixture_client.py':
+                b'from authority_client_options import choose_ship\n',
+            options: b'def choose_ship():\n    import authority_prompt\n',
+        }
+
+        def git(command, *args):
+            if command == 'ls-tree':
+                return tree
+            return scripts.get(args[0].split(':', 1)[1], b'')
+
+        with patch.object(package, 'git', side_effect=git):
+            selected = set(package.select_paths('revision'))
+        self.assertEqual(selected, package.REQUIRED | {options, helper})
+
     def test_reproducible_sources_and_extracted_entry_points(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

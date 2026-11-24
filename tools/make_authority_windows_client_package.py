@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from zipfile import ZipFile, ZipInfo
 
-from make_authority_server_package import git
+from make_authority_server_package import git, source_imports
 
 PREFIX = 'x4-authority-windows-diagnostic/'
 DLL = 'network/x4lan_net_64.dll'
@@ -62,17 +62,35 @@ COMPANY_SEAT = {'src/authority/lua/client_seat.lua', 'src/authority/md/client_se
 
 
 def select_paths(commit):
-    paths = set()
+    records = {}
     for entry in filter(None, git('ls-tree', '-r', '-z', commit).split(b'\0')):
         record, raw_path = entry.split(b'\t', 1)
-        path = raw_path.decode('utf-8')
+        records[raw_path.decode('utf-8')] = record
+
+    dev = 'tools/dev/'
+    modules = {path.removeprefix(dev).removesuffix('.py').replace('/', '.'): path
+               for path in records if path.startswith(dev) and path.endswith('.py')}
+    paths, pending = set(), []
+
+    def include(path):
+        if not records[path].startswith((b'100644 blob ', b'100755 blob ')):
+            raise ValueError(f'package requires a regular tracked file: {path}')
+        paths.add(path)
+        if path.startswith(dev) and path.endswith('.py'):
+            pending.append(path)
+
+    for path in records:
         if path in REQUIRED or path in COMPANY_SEAT or (
                 path.startswith('src/authority/') and path.endswith('.py')):
-            if not record.startswith((b'100644 blob ', b'100755 blob ')):
-                raise ValueError(f'package requires a regular tracked file: {path}')
-            paths.add(path)
+            include(path)
     if missing := REQUIRED - paths:
         raise ValueError('revision lacks Windows diagnostic files: ' + ', '.join(sorted(missing)))
+    while pending:
+        path = pending.pop()
+        for module in source_imports(git('show', f'{commit}:{path}'), path):
+            dependency = modules.get(module)
+            if dependency is not None and dependency not in paths:
+                include(dependency)
     return sorted(paths)
 
 
