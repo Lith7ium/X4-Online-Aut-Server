@@ -202,7 +202,9 @@ class FixtureSessionTests(unittest.TestCase):
         self.owner.request_ship_motion = lambda: self.calls.append('request_ship_motion')
         self.owner.motion_port = 4567
         self.owner.ship_motion_credential = {'ticket': 'synthetic in-memory token'}
-        source = SimpleNamespace(socket=object(), close=lambda: self.calls.append('source_close'))
+        observation = {'samples_confirmed': 1}
+        source = SimpleNamespace(socket=object(), close=lambda: self.calls.append('source_close'),
+                                 observer_stats=lambda: observation)
         validate_peer = object()
         counts = dict(samples_acknowledged=2, velocity_samples_acknowledged=1,
                       snapshots_received=0, visibility_ends=0)
@@ -221,7 +223,7 @@ class FixtureSessionTests(unittest.TestCase):
             return SimpleNamespace(poll=lambda: self.calls.append('motion_poll'),
                                    close=lambda: self.calls.append('motion_close'), stats=stats, failure=None)
 
-        motion_module = SimpleNamespace(ReconnectingCompanyMotionClient=start_motion)
+        motion_module = SimpleNamespace(ReconnectingCompanyMotionClient=SimpleNamespace(observing=start_motion))
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
              patch.object(subject, 'WindowsMotionPeer', return_value=validate_peer) as peer_factory, \
              patch('authority.company_motion_source.CompanyMotionSource', return_value=source), \
@@ -231,6 +233,7 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)
         self.assertEqual(result['company_motion'], counts)
+        self.assertEqual(result['company_observer'], observation)
         self.assertNotIn(self.owner.ship_motion_credential['ticket'], str(result))
         self.assertIs(peer_factory.call_args.args[1], source.socket)
         first_download = self.calls.index(('download', self.workspace.download_dir))

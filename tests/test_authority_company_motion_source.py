@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -49,6 +50,145 @@ class CompanyMotionSourceTest(unittest.TestCase):
 
     def test_selected_sampler_only_captures_after_resume_and_resets_rates(self):
         subprocess.run(['luajit', 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
+
+
+class CompanyMotionObserverTest(unittest.TestCase):
+    def setUp(self):
+        self.epoch, self.generation = 'a' * 32, 'b' * 32
+        self.source = CompanyMotionSource()
+        self.addCleanup(self.source.close)
+        config = self.source.configure(self.epoch, 1961)
+        self.destination = ('127.0.0.1', config['port'])
+        self.prefix = f'C|{config["lease"]}|{config["generation"]}|'.encode('ascii')
+        self.owned = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.foreign = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for peer in (self.owned, self.foreign):
+            self.addCleanup(peer.close)
+            peer.bind(('127.0.0.1', 0))
+            peer.settimeout(.1)
+        self.validator_live = True
+        self.observer = self.source.observe(self.validate)
+        self.views = []
+        self.observer.bind_views(self.views.append)
+
+    def validate(self, peer):
+        return self.validator_live and peer == self.owned.getsockname()
+
+    def send(self, body, *, peer=None):
+        if type(body) is str:
+            body = body.encode('ascii')
+        (peer or self.owned).sendto(self.prefix + body, self.destination)
+
+    def view(self, slot, serial, *, sector='sector_a', index=7354, actor='0xabcdef',
+             code='WRN-302', peer=None):
+        self.send(f'VIEW|{slot}|{serial}|{self.epoch}|{sector}|{index}|{actor}|{code}', peer=peer)
+
+    def clear(self, slot, serial):
+        self.send(f'VIEW|{slot}|{serial}|{self.epoch}|-|0|-|-')
+
+    def poll(self):
+        return self.source.poll(self.validate)
+
+    def sample(self, sequence, *, velocity=None, sector='sector_a', index=7354):
+        return {'version': 3, 'epoch': self.epoch, 'generation': self.generation,
+                'index': index, 'sequence': sequence, 'sector_macro': sector, 'source_time': 1.0,
+                'capture_time': sequence, 'x': 10.5, 'y': 11, 'z': -3, 'real_velocity': velocity}
+
+    def remote(self):
+        raw = self.owned.recv(513)
+        self.assertTrue(raw.startswith(self.prefix))
+        fields = raw[len(self.prefix):].decode('ascii').split('|')
+        self.assertEqual((len(fields), fields[0]), (14, 'REMOTE'))
+        return fields
+
+    def seen(self, remote, *, actor='0xabcdef', code='WRN-302', peer=None):
+        self.send('|'.join(('SEEN', *remote[1:8], actor, code, *remote[8:])), peer=peer)
+
+    def test_simultaneous_views_deduplicate_subscription_but_confirm_each_slot(self):
+        self.view('cockpit', 1)
+        self.view('map', 5)
+        self.poll()
+        self.assertEqual(self.views, [[{'sector_macro': 'sector_a', 'indices': [7354]}]])
+        velocity = {'x': -2, 'y': 0, 'z': 4}
+        self.observer.snapshot(self.sample(1, velocity=velocity))
+        cockpit, map_view = self.remote(), self.remote()
+        self.assertEqual(cockpit[1:4], ['cockpit', '1', self.epoch])
+        self.assertEqual(map_view[1:4], ['map', '5', self.epoch])
+        self.assertEqual(map_view[8:], ['10.5', '11', '-3', '-2', '0', '4'])
+        self.seen(cockpit, peer=self.foreign)
+        self.seen(map_view, actor='0x9999')
+        self.seen([*map_view[:-1], '999'])
+        self.poll()
+        self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+        self.seen(cockpit)
+        self.seen(map_view)
+        self.seen(cockpit)
+        self.poll()
+        stats = self.source.observer_stats()
+        self.assertEqual(stats['samples_confirmed'], 2)
+        self.assertEqual(stats['velocity_samples_confirmed'], 2)
+        self.assertEqual(stats['last_confirmed']['slot'], 'map')
+        self.assertEqual(stats['last_confirmed']['real_velocity'], velocity)
+        self.assertEqual({name: slot['samples_confirmed'] for name, slot in stats['slots'].items()},
+                         {'cockpit': 1, 'map': 1})
+        self.assertNotIn(self.prefix.decode().split('|')[1], str(stats))
+        self.assertNotIn(self.source.local_generation, str(stats))
+
+    def test_heartbeat_expiry_old_serial_and_end_drop_pending_receipts(self):
+        with patch('authority.company_motion_observer.time.monotonic') as clock:
+            clock.return_value = 0
+            self.view('map', 4)
+            self.view('cockpit', 2, sector='sector_b', index=1970)
+            self.poll()
+            self.assertEqual(self.views[-1], [{'sector_macro': 'sector_a', 'indices': [7354]},
+                                               {'sector_macro': 'sector_b', 'indices': [1970]}])
+            clock.return_value = 2
+            self.view('cockpit', 2, sector='sector_b', index=1970)
+            self.view('map', 3, sector='sector_b', index=1970)
+            self.view('map', 4, sector='sector_b', index=1970)
+            self.poll()
+            self.observer.snapshot(self.sample(1))
+            delayed = self.remote()
+            self.assertEqual(delayed[-3:], ['-', '-', '-'])
+            clock.return_value = 3
+            self.seen(delayed)
+            self.poll()
+            self.assertEqual(self.views[-1], [{'sector_macro': 'sector_b', 'indices': [1970]}])
+            self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+            self.observer.snapshot(self.sample(2, sector='sector_b', index=1970))
+            active = self.remote()
+            self.observer.end(1970, self.generation)
+            self.seen(active)
+            self.poll()
+            self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+            self.observer.snapshot(self.sample(3, sector='sector_b', index=1970))
+            active = self.remote()
+            self.clear('cockpit', 3)
+            self.seen(active)
+            self.poll()
+            self.assertEqual(self.views[-1], [])
+            self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+
+    def test_bad_optional_datagrams_and_peer_loss_keep_cockpit_path_available(self):
+        self.view('map', 1, peer=self.foreign)
+        self.view('map', 1, index=1961)
+        self.view('map', 9007199254740992)
+        self.view('map', 1, actor='18446744073709551616')
+        self.send(b'VIEW|map|1|' + b'x' * 600)
+        self.send(b'VIEW|map|1|\xff')
+        self.send('VIEW2|unknown observer version')
+        self.send(f'SAMPLE3|{self.epoch}|1961|1|sector_a|20|1|1|2|3|-|-|-|')
+        self.assertEqual(self.poll()['sequence'], 1)
+        self.assertEqual(self.views, [])
+        self.view('map', 1)
+        self.poll()
+        self.validator_live = False
+        self.observer.snapshot(self.sample(1))
+        with self.assertRaises(socket.timeout):
+            self.remote()
+        self.validator_live = True
+        self.send(f'SAMPLE3|{self.epoch}|1961|2|sector_a|20|2|2|2|3|10|0|0|')
+        self.assertEqual(self.poll()['sequence'], 2)
 
 
 if __name__ == '__main__':

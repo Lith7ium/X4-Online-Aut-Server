@@ -5,6 +5,7 @@ import select
 import socket
 import threading
 
+from .company_motion_observer import CompanyMotionObserver
 from .experimental_tcp_motion import check_motion_progress, motion_value
 
 
@@ -28,6 +29,7 @@ class CompanyMotionSource:
         self._registry = None
         self._previous = self._returned = None
         self._peer = None
+        self._observer = None
 
     @property
     def socket(self):
@@ -60,6 +62,33 @@ class CompanyMotionSource:
         return {'port': self._socket.getsockname()[1], 'lease': self._lease,
                 'generation': self._generation, 'nonce': self._nonce, 'index': index}
 
+    def _prefix(self):
+        return f'C|{self._lease}|{self._generation}|'.encode('ascii')
+
+    def observe(self, validate_peer):
+        """Attach the optional observer to this source's authenticated X4 peer."""
+        self._owner()
+        if self._registry is None or self._observer is not None or not callable(validate_peer):
+            raise ValueError('configured company motion source and validator required')
+
+        def send(message):
+            self._owner()
+            packet = self._prefix() + message.encode('ascii')
+            if self._peer is None or len(packet) > 512:
+                return False
+            try:
+                return (validate_peer(self._peer) is True
+                        and self._socket.sendto(packet, self._peer) == len(packet))
+            except Exception:
+                return False  # An unavailable native observer cannot stop cockpit publication.
+
+        self._observer = CompanyMotionObserver(self._registry, send)
+        return self._observer
+
+    def observer_stats(self):
+        self._owner()
+        return self._observer.stats()
+
     def poll(self, validate_peer):
         """Return one latest new V3 sample, or None. validate_peer takes (IPv4, port)."""
         self._owner()
@@ -67,12 +96,18 @@ class CompanyMotionSource:
             raise ValueError('configured company motion source and validator required')
         newest = None
         checked_peer = None
-        prefix = f'C|{self._lease}|{self._generation}|'.encode('ascii')
+        prefix = self._prefix()
+        if self._observer is not None:
+            self._observer.expire()
         for _ in range(32):
             try:
                 raw, address = self._socket.recvfrom(513)
             except BlockingIOError:
                 break
+            except OSError as error:
+                if self._observer is not None and getattr(error, 'winerror', None) == 10040:
+                    continue  # An oversized datagram is discarded by Winsock.
+                raise
             if not raw.startswith(prefix) or address[0] != '127.0.0.1':
                 continue
             if checked_peer != address:
@@ -81,7 +116,16 @@ class CompanyMotionSource:
                 if validate_peer(address) is not True:
                     continue
                 checked_peer = self._peer = address
-            fields = raw[len(prefix):].decode('ascii').split('|')
+            body = raw[len(prefix):]
+            if self._observer is not None and body.partition(b'|')[0] not in (b'GAP', b'SAMPLE3'):
+                if len(raw) <= 512 and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
+                    try:
+                        fields = body.decode('ascii').split('|')
+                    except UnicodeDecodeError:
+                        continue
+                    self._observer.receive(fields)
+                continue
+            fields = body.decode('ascii').split('|')
             if fields == ['GAP']:
                 newest = None
                 self._returned = None

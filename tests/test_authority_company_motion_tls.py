@@ -1,6 +1,7 @@
 """One pinned TLS port, real motion and control sockets, synthetic cockpits."""
 import asyncio
 import hashlib
+import socket
 from pathlib import Path
 import ssl
 import tempfile
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from authority.company_motion_client import CompanyMotionClient
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
+from authority.company_motion_source import CompanyMotionSource
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
 
@@ -118,6 +120,87 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 writer.close()
                 await writer.wait_closed()
+
+    async def test_owned_observer_confirmations_cross_real_motion_tunnel(self):
+        _, viewer_port = await self.link()
+        _, publisher_port = await self.link()
+        viewer_grant = self.grant(1, 1970, 'sector_a')
+        publisher_grant = self.grant(2, 7354, 'sector_a')
+        publisher, cockpit, _, _ = self.attach(publisher_port, publisher_grant)
+        viewer_source = CompanyMotionSource()
+        self.addCleanup(viewer_source.close)
+        config = viewer_source.configure(REGISTRY_EPOCH, viewer_grant['index'])
+        overlay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(overlay.close)
+        overlay.bind(('127.0.0.1', 0))
+        overlay.setblocking(False)
+        destination = ('127.0.0.1', config['port'])
+        prefix = f'C|{config["lease"]}|{config["generation"]}|'.encode('ascii')
+        actor, code = '0x20000000000001', 'WRN-302'
+        viewer = ReconnectingCompanyMotionClient.observing(
+            viewer_port, viewer_grant, viewer_source, lambda address: address == overlay.getsockname(),
+        )
+        self.addCleanup(viewer.close)
+        self.clients = [viewer, publisher]
+
+        def send(message):
+            overlay.sendto(prefix + message.encode('ascii'), destination)
+
+        def viewer_peer():
+            return next((peer for peer in self.service._peers.values()
+                         if peer.grant is not None and peer.grant.handle == 1), None)
+
+        remote = []
+
+        def collect(count):
+            while len(remote) < count:
+                try:
+                    raw, source = overlay.recvfrom(513)
+                except BlockingIOError:
+                    return False
+                self.assertEqual(source, destination)
+                self.assertTrue(raw.startswith(prefix))
+                remote.append(raw[len(prefix):].decode('ascii').split('|'))
+            return True
+
+        def seen(row):
+            send('|'.join(('SEEN', *row[1:8], actor, code, *row[8:])))
+
+        send(f'VIEW|cockpit|1|{REGISTRY_EPOCH}|sector_a|7354|{actor}|{code}')
+        send(f'VIEW|map|1|{REGISTRY_EPOCH}|sector_a|7354|{actor}|{code}')
+        self.service.set_running(True)
+        await self.drive(lambda: publisher._running and viewer_peer() is not None and
+                         viewer_peer().view_id == 1)
+        cockpit.stage(1, 'sector_a', 10)
+        await self.drive(lambda: collect(2))
+        self.assertEqual({row[1] for row in remote}, {'cockpit', 'map'})
+        self.assertTrue(all(row[5] == publisher_grant['generation'] and row[-3:] == ['-', '-', '-']
+                            for row in remote))
+        for row in remote:
+            seen(row)
+        await self.drive(lambda: viewer_source.observer_stats()['samples_confirmed'] == 2)
+        self.assertEqual(viewer.stats()['snapshots_received'], 1)
+
+        send(f'VIEW|map|2|{REGISTRY_EPOCH}|-|0|-|-')
+        viewer.poll()
+        remote.clear()
+        cockpit.stage(2, 'sector_a', 26)
+        await self.drive(lambda: collect(1))
+        self.assertEqual(remote[0][1], 'cockpit')
+        self.assertEqual(remote[0][-3:], ['16', '3', '-2'])
+        seen(remote[0])
+        await self.drive(lambda: viewer_source.observer_stats()['velocity_samples_confirmed'] == 1)
+
+        remote.clear()
+        cockpit.stage(3, 'sector_a', 42)
+        await self.drive(lambda: collect(1))
+        self.service._drop(viewer_peer())
+        await self.drive(lambda: viewer._client is None)
+        seen(remote[0])
+        viewer.poll()
+        stats = viewer_source.observer_stats()
+        self.assertEqual(stats['samples_confirmed'], 3)
+        self.assertEqual(stats['last_confirmed']['sequence'], 2)
 
     async def test_two_grantees_exchange_visible_motion_and_control_survives_pause_and_revoke(self):
         control_port, motion_a = await self.link()

@@ -169,6 +169,13 @@ class ReconnectingCompanyMotionClient:
             self._finish_link()
             self._fail()
 
+    @classmethod
+    def observing(cls, port, credential, source, validate_peer):
+        observer = source.observe(validate_peer)
+        client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end)
+        observer.bind_views(client.set_views)
+        return client
+
     def stats(self):
         counts = self._counts.copy()
         if self._client is not None:

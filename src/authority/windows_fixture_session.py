@@ -231,7 +231,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_source is not None:
                     from .company_motion_reconnect import ReconnectingCompanyMotionClient
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
-                    company_client = ReconnectingCompanyMotionClient(owner.motion_port,
+                    company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
                         owner.ship_motion_credential, company_source, validate_peer)
                 commands = 0
                 while True:
@@ -274,6 +274,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_client.close()
                         if result is not None:
                             result['company_motion'] = company_client.stats()
+                            result['company_observer'] = company_source.observer_stats()
                             if company_client.failure is not None:
                                 result['company_motion_failure'] = company_client.failure
                     except BaseException:

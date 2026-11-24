@@ -417,7 +417,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             return participant.process is not None and socket_owner(
                                 peer, company_source.socket.getsockname(), participant.process)
 
-                        company_client = ReconnectingCompanyMotionClient(owner.motion_port,
+                        company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
                             owner.ship_motion_credential, company_source, validate_peer)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
@@ -454,6 +454,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     try:
                         company_client.close()
                         result['company_motion'] = company_client.stats()
+                        result['company_observer'] = company_source.observer_stats()
                         if company_client.failure is not None:
                             result['company_motion_failure'] = company_client.failure
                     except BaseException:
