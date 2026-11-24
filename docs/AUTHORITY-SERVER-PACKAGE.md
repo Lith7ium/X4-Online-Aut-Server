@@ -1,9 +1,9 @@
-# Linux authority test-server package
+# Linux authority server and player source package
 
 This is the source package for an isolated recovered X4 internal test. The
-package contains the server and pinned TLS gateway, the Lua and MD files they
-install into a disposable profile, and the C source of the small UDP module.
-The supervisor compiles that module on the host. The archive contains no X4
+package contains the server, Linux player and pinned TLS gateway, plus the Lua
+and MD files they install into disposable profiles. The package also contains
+the C source for the small UDP module, which each launcher compiles on its host. The archive contains no X4
 executable, game data, saves, Steam state, credentials or vendored runtime.
 It uses the project's noncommercial terms and notices in the archive root.
 
@@ -108,6 +108,31 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
+## Join the two-ship Company test
+
+Use matching server and client sources and the separate private format-3 seed
+with two Company ships. Start the provider with `--require-registry-snapshot`,
+the TLS settings above and `--company-motion`. The control, file and
+authenticated movement channels use the same advertised TCP port. Supply
+`connection.json` to the testers over a private channel.
+
+On the Linux player machine, use the pinned X4 installation and matching DLC.
+Start from a local X11 or Xwayland display with readable Xauthority. The
+launcher creates a disposable profile and keeps the game window on that
+display. Use a different output path for each player:
+
+```sh
+tools/run_authority_client.sh --company-motion \
+  --connection-file /path/to/connection.json \
+  --game '/path/to/X4 Foundations' --out .local/player-run-01
+```
+
+Keep the connection file owner-readable only (`chmod 600`). Select a free ship
+at the prompt, or use `--company-ship-index` to name one explicitly. For the
+private two-ship fixture, select WOO-831 (1970) and WRN-302 (7354) on separate
+players. The separate Windows diagnostic kit joins the same provider with its
+own `--company-motion` option.
+
 ## Check the deployment from the host
 
 Start a loopback run as above. Once its private `endpoint.json` appears, use a
@@ -166,9 +191,9 @@ python3 tools/make_authority_server_package.py --ref HEAD \
 ```
 
 The packager reads committed source blobs. It includes Python imports of the
-recovered supervisor and its helpers, including imports inside functions,
-plus explicit Lua and MD assets for the provider path. Some shared
-development modules are transitively imported by the supervisor. The
+recovered supervisor and Linux player, including imports inside functions,
+plus the Lua, MD and extension assets used to assemble their private overlays.
+Some shared development modules are transitively imported by the supervisor. The
 standalone development experiments remain outside the provider workflow.
 The archive uses an ordered Git tar and a fixed gzip timestamp. The printed
 commit ID and SHA-256 identify it.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the committed Linux authority test-server sources."""
+"""Package the committed Linux authority server and player sources."""
 import argparse
 import ast
 import gzip
@@ -16,6 +16,8 @@ REQUIRED = {
     'LICENSE.md', 'LICENSING.md', 'NOTICE.txt', 'VERSION.txt',
     'docs/AUTHORITY-SERVER-PACKAGE.md',
     'src/native/net.c', 'src/lockstep/base/ui/sha256.lua',
+    'src/lockstep/base/libraries/factions.xml', 'src/lockstep/base/libraries/icons.xml',
+    *(f'src/lockstep/base/assets/textures/ui/x4lan/x4lan_player{i}.dds' for i in range(1, 17)),
     'src/authority/md/checkpoint_marker.xml',
     'tools/dev/authority_connection_check.py',
     'tools/dev/authority_exec_gate.py',
@@ -25,6 +27,8 @@ REQUIRED = {
     'tools/dev/authority_portable_seed.py',
     'tools/dev/authority_software_vulkan.py',
     'tools/run_authority_server.sh',
+    'tools/run_authority_client.sh',
+    'tools/dev/authority_linux_player_client.py',
     'tools/dev/authority_recovered_loopback_server.py',
     'tools/dev/authority_recovered_tls_gateway.py',
     'tools/dev/authority_checkpoint_marker_probe.lua',
@@ -34,6 +38,11 @@ REQUIRED = {
     'tools/dev/authority_ship_registry.xml',
     'tools/dev/authority_registry_availability_snapshot.lua',
     'tools/dev/authority_registry_availability_snapshot.xml',
+    'tools/dev/authority_download_load_probe.lua',
+    'tools/dev/authority_two_x4_participant_probe.lua',
+    'tools/dev/authority_registry_resolve_string.lua',
+    'tools/dev/authority_job_descriptor_probe.lua',
+    'tools/dev/authority_job_descriptor_probe.xml',
     'tools/dev/native_gate_battle.xml',
     'tools/dev/native_gate_snapshot.lua',
 }
@@ -71,7 +80,7 @@ def select_paths(commit):
         records[raw_path.decode('utf-8')] = record
     missing = REQUIRED.difference(records)
     if missing:
-        raise ValueError('revision lacks server package files: ' + ', '.join(sorted(missing)))
+        raise ValueError('revision lacks authority package files: ' + ', '.join(sorted(missing)))
 
     paths = {path for path in records if included(path)}
     dev = 'tools/dev/'
