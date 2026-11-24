@@ -1,10 +1,13 @@
 """Player CLI, isolated command and owned seat-log binding. No X4 launches."""
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import replace
+import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -213,6 +216,7 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, \
                     redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(args), 0)
+            self.assertIsNone(run.call_args.args[0].timeout)
             options = run.call_args.kwargs
             self.assertEqual(options['player_settings']['shared_key'], bytes.fromhex('b' * 64))
             self.assertEqual(options['player_settings']['server_fingerprint'], 'a' * 64)
@@ -225,7 +229,8 @@ class PlayerClientTests(unittest.TestCase):
             self.assertTrue(run.call_args.kwargs['company_purchases'])
             with patch.object(native, 'run', return_value={'success': True}) as run, \
                     redirect_stdout(io.StringIO()):
-                self.assertEqual(cli.main([*args, '--company-motion']), 0)
+                self.assertEqual(cli.main([*args, '--company-motion', '--timeout', '45']), 0)
+            self.assertEqual(run.call_args.args[0].timeout, 45)
             self.assertTrue(run.call_args.kwargs['company_motion'])
             self.assertNotIn('company_hull_playback_index', run.call_args.kwargs)
             option = ['--company-hull-playback-index', str(INDEX + 1)]
@@ -261,6 +266,79 @@ class PlayerClientTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), 'Session Full\n')
         self.assertEqual(stdout.getvalue(), '')
 
+    def test_admitted_player_uses_optional_total_budget_and_keeps_commands_bounded(self):
+        for timeout in (None, 15):
+            with self.subTest(timeout=timeout), tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+                clock = 100
+                deadline = clock + (3600 if timeout is None else timeout)
+                root = Path(temp)
+                out, game, home = (root / name for name in ('run', 'game', 'home'))
+                (game / 'extensions').mkdir(parents=True)
+                home.mkdir()
+                player = SimpleNamespace(pw_uid=os.getuid(), pw_name='test')
+                args = SimpleNamespace(timeout=timeout, display=':1', seed=1, keepalive_interval=None,
+                    archived_identity_fixture=None, expected_content_sha256=None)
+                save = b'fixture'
+                owner = Mock()
+                owner.request_offer.return_value = MarkerBoundOffer(
+                    replace(OFFER, size=len(save), sha256=hashlib.sha256(save).hexdigest()), MARKER)
+                owner.copy_to_new_slot.side_effect = lambda _source, target: target.write_bytes(save)
+
+                process = Mock()
+                command_budgets = []
+
+                def spawn(_command, _log, processes):
+                    processes.append((process, 1))
+
+                def activate(_attempt, participant, *, participant_timeout):
+                    self.assertEqual(participant.deadline, deadline)
+                    self.assertEqual(participant_timeout, 30 if timeout is None else 14)
+                    owner.poll.side_effect = lambda interval: active_poll(participant, interval)
+
+                def active_poll(participant, interval):
+                    nonlocal clock
+                    self.assertEqual(interval, .1)
+                    participant.request('resume')
+                    clock = deadline + 1
+                    if owner.poll.call_count == 2:
+                        process.poll.return_value = 0
+
+                owner.activate.side_effect = activate
+                process.poll.return_value = None
+                watch = SimpleNamespace(stage=2, path=None, poll=Mock(return_value=True), verify=Mock())
+                for target, name, effect in (
+                    (native, 'validate_environment', lambda *args, **kwargs:
+                        (out, game, root / 'auth', None, player, home, 'steam')),
+                    (native, 'compile_net', lambda _compiler, library: library.write_bytes(b'net')),
+                    (native.load, 'readonly_save_command', lambda *args: ['bwrap', '--die-with-parent']),
+                    (native, 'command_with_private_lock', lambda command, **kwargs: command),
+                    (native.load, 'spawn_owned_gated', spawn),
+                    (native, 'reserve_company_ship', lambda *args: INDEX),
+                    (native.company_seat, 'install', lambda *args, **kwargs: ([], watch)),
+                    (native, 'verify_receipts', lambda *args: None),
+                    (native.download, 'game_identity', lambda *args: (os.getpid(), 1)),
+                    (native.download, 'stop_owned_resources', lambda *args: True),
+                    (native.live, 'steam_identity', lambda *args: 'steam'),
+                    (native.time, 'monotonic', lambda: clock),
+                ):
+                    stack.enter_context(patch.object(target, name, side_effect=effect))
+                connection = stack.enter_context(patch.object(native, 'client_connection', return_value=nullcontext(owner)))
+                stack.enter_context(patch.object(native.NativeParticipant, 'enroll', autospec=True))
+                stack.enter_context(patch.object(native.NativeParticipant, '_peer_guard', autospec=True))
+                stack.enter_context(patch.object(native.Participant, 'request', autospec=True,
+                    side_effect=lambda participant, operation: command_budgets.append((operation, participant.timeout))))
+
+                result = native.run(args, player_settings={}, select_ship=Mock(), on_admitted=Mock())
+
+                self.assertEqual(connection.call_args.kwargs['deadline'], deadline)
+                self.assertTrue(result['success'], result)
+                if timeout is None:
+                    self.assertEqual(result['session_end'], 'game_closed')
+                    self.assertEqual(command_budgets, [('pause', 30), ('resume', 30), ('resume', 30)])
+                else:
+                    self.assertEqual(result['session_end'], 'session_limit')
+                    self.assertEqual(command_budgets, [('pause', 14), ('resume', 14)])
+
     def test_player_polls_company_client_only_during_the_active_run(self):
         calls = []
         owner = Mock()
@@ -269,8 +347,8 @@ class PlayerClientTests(unittest.TestCase):
         process.poll.side_effect = [None, 0]
         company_client = Mock()
         company_client.poll.side_effect = lambda: calls.append('motion')
-        self.assertEqual(native.poll_player(owner, process, Mock(), float('inf'), lambda: False,
-                                             company_client=company_client), 'game_closed')
+        self.assertEqual(native.poll_player(owner, process, Mock(), None, lambda: False,
+                                            company_client=company_client), 'game_closed')
         self.assertEqual(calls, ['control', 'motion'])
 
     def test_player_loop_closes_only_its_confirmed_process_and_propagates_unrelated_errors(self):
@@ -278,16 +356,16 @@ class PlayerClientTests(unittest.TestCase):
         process = Mock()
         guard = Mock()
         process.poll.side_effect = [None, 0]
-        self.assertEqual(native.poll_player(owner, process, guard, float('inf'), lambda: False), 'game_closed')
+        self.assertEqual(native.poll_player(owner, process, guard, None, lambda: False), 'game_closed')
         owner.poll.assert_called_once_with(.1)
         process.reset_mock()
-        self.assertEqual(native.poll_player(owner, process, guard, float('inf'), lambda: True), 'user_left')
+        self.assertEqual(native.poll_player(owner, process, guard, None, lambda: True), 'user_left')
         process.poll.assert_not_called()
         process.poll.side_effect = None
         process.poll.return_value = None
         guard.side_effect = RuntimeError('protected_configuration_changed')
         with self.assertRaisesRegex(RuntimeError, 'protected_configuration_changed'):
-            native.poll_player(owner, process, guard, float('inf'), lambda: False)
+            native.poll_player(owner, process, guard, None, lambda: False)
         process.wait.assert_not_called()
 
 

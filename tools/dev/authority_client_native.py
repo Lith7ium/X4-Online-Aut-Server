@@ -44,6 +44,8 @@ import authority_native_client_playback as native_playback
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
 
+MAX_NATIVE_BUDGET = 3600
+
 
 class NativeParticipant(Participant):
     """Fence native calls and verify their connected UDP socket belongs to X4."""
@@ -85,7 +87,10 @@ class NativeParticipant(Participant):
             self.playback.before_pause()
         self._peer_guard()
         previous = self.timeout
-        self.timeout = min(previous, marked.remaining(self.deadline), 30)
+        command_timeout = min(previous, 30)
+        if self.deadline is not None:
+            command_timeout = min(command_timeout, marked.remaining(self.deadline))
+        self.timeout = command_timeout
         try:
             super().request(operation)
             self._peer_guard()
@@ -121,7 +126,7 @@ def verify_receipts(path, ticket, marker):
 
 def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
                          registry_check=None, motion_consumer=None, company_purchase_exchange=None,
-                         company_purchase_statement=None, company_purchase_statement_result=None):
+                         company_purchase_statement=None, company_purchase_statement_result=None, play_until_exit=False):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -158,9 +163,12 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     if company_purchase_statement is not None:
         motion_options.update(company_purchase_statement=company_purchase_statement,
                               company_purchase_statement_result=company_purchase_statement_result)
-    owner.activate(attempt, participant, participant_timeout=min(30, marked.remaining(participant.deadline)),
-                   **motion_options)
+    command_timeout = 30 if play_until_exit else min(30, marked.remaining(participant.deadline))
+    owner.activate(attempt, participant, participant_timeout=command_timeout, **motion_options)
     guard(full=True)
+    if play_until_exit:
+        # The load owner has handed off to per-command participant budgets.
+        participant.deadline = None
     result['admission_state'] = 'accepted'
     participant.server_control = True
     result['phase'] = 'active'
@@ -183,9 +191,10 @@ def validate_environment(args, *, player_mode=False):
     auth = Path(os.environ.get('XAUTHORITY', default_auth))
     if not auth.is_file() or not os.access(auth, os.R_OK):
         raise ValueError('readable_xauthority_required')
-    if (not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600 or
-            (not player_mode and
-             (not math.isfinite(args.active_seconds) or not 0 < args.active_seconds < args.timeout)) or
+    if ((args.timeout is not None and
+            (not math.isfinite(args.timeout) or not 0 < args.timeout <= MAX_NATIVE_BUDGET)) or
+            (not player_mode and (args.timeout is None or not math.isfinite(args.active_seconds) or
+                                 not 0 < args.active_seconds < args.timeout)) or
             not 0 <= args.seed <= 0xffffffff):
         raise ValueError('invalid_native_budget')
     library = None
@@ -264,7 +273,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
             shared_key=bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64)),
             file_token=stage_cli._read_secret_file(args.file_token_file, 32))
         library_digest = args.native_library_sha256
-    deadline = time.monotonic()+args.timeout
+    join_deadline = time.monotonic() + (MAX_NATIVE_BUDGET if args.timeout is None else args.timeout)
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     result = dict(success=False, scope='one private Linux native client; cooperative load/control; no gameplay proof',
         exact_loaded_file_proven=False, admission_state='not_attempted', server_pause_confirmations=0,
@@ -297,7 +306,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         else:
             download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
         motion_options = {'motion_enabled': True} if company_motion else {}
-        with client_connection(**connection_settings, deadline=deadline,
+        with client_connection(**connection_settings, deadline=join_deadline,
                 keepalive_interval=args.keepalive_interval, **motion_options) as owner:
             try:
                 case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
@@ -326,7 +335,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 def guard(*, full=False):
                     nonlocal process_identity, next_context_check
                     now = time.monotonic()
-                    if now >= deadline:
+                    if participant.deadline is not None and now >= participant.deadline:
                         raise TimeoutError('native_client_deadline')
                     owner_process, started = processes[0]
                     if owner_process.poll() is not None:
@@ -350,7 +359,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     return True
 
                 result['phase'] = 'prepare'
-                participant = NativeParticipant(owner, deadline, guard,
+                participant = NativeParticipant(owner, join_deadline, guard,
                     keepalive_interval=args.keepalive_interval)
                 participant.server_library = library
                 config = download.install_probe(case, profile, ticket)
@@ -370,7 +379,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     result['archived_identity_fixture_installed'] = True
                 if playback_scripts is not None:
                     playback = native_playback.install(case, profile, bound, ticket, participant,
-                        playback_scripts, playback_driver, deadline, out)
+                        playback_scripts, playback_driver, join_deadline, out)
                     participant.playback = playback
                 paths = [config, lab/'ui.xml', profile/'content.xml', profile/'config.xml',
                     lab/'md/authority_checkpoint_marker.xml', lab/'ui/authority_checkpoint_marker_probe.lua',
@@ -437,7 +446,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
                     guard, verify_loaded, result, registry_check=registry_check,
                     motion_consumer=(playback_driver.accept_motion
-                        if type(playback_driver) is native_playback.LiveSourceInput else None), **purchase_options)
+                        if type(playback_driver) is native_playback.LiveSourceInput else None),
+                    play_until_exit=player_mode and args.timeout is None, **purchase_options)
                 if player_mode:
                     result['controlled_company_ship_index'] = index
                     if company_source is not None:
@@ -452,10 +462,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             owner.ship_motion_credential, company_source, validate_peer)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
-                        deadline, lambda: stop_requested, company_client=company_client)
+                        participant.deadline, lambda: stop_requested, company_client=company_client)
                 else:
                     active_until = time.monotonic()+args.active_seconds
-                    if active_until >= deadline:
+                    if active_until >= join_deadline:
                         raise TimeoutError('insufficient_active_budget')
                     while time.monotonic() < active_until:
                         guard()
@@ -583,7 +593,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
 
 def poll_player(owner, process, guard, deadline, stop_requested, *, company_client=None):
     """Serve the admitted client until its own game exits or the user leaves."""
-    while time.monotonic() < deadline:
+    while deadline is None or time.monotonic() < deadline:
         if stop_requested():
             return 'user_left'
         if process.poll() == 0:

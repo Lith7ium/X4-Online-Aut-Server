@@ -29,8 +29,8 @@ def main(argv=None):
                         help='opt in to authority-confirmed Company cockpit purchases')
     parser.add_argument('--company-hull-playback-index', type=int,
                         help='isolated test only: follow another company ship in the same cockpit sector')
-    parser.add_argument('--timeout', type=float, default=3600,
-                        help='total run budget in seconds, including join and play (maximum 3600)')
+    parser.add_argument('--timeout', type=float,
+                        help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
     if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
         parser.error('--company-ship-index must be between 1 and 200000')

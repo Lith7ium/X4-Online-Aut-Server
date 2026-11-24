@@ -301,6 +301,10 @@ private two-ship fixture, select WOO-831 (1970) and WRN-302 (7354) on separate
 players. The separate Windows diagnostic kit joins the same provider with its
 PowerShell `-CompanyMotion` option.
 
+The Linux launcher allows up to an hour to connect and join. Once admitted,
+close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
+add `--timeout SECONDS` (up to 3600), which covers both joining and playing.
+
 With matching observer builds, the player can target a company ship in the
 cockpit and select another company ship on the open map, including in another
 sector. The cockpit target has to remain within sensor range and high
