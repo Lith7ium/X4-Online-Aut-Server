@@ -51,7 +51,10 @@ During the join, the console emits one `pilot_progress` line per confirmed event
 A ship reservation identifies the selected registry index. The world marker
 and cockpit control each have a separate native receipt. The server's accepted
 reply confirms `participant_admitted` and can grant Company movement for the
-selected ship. `first_own_sample_acknowledged` records the server's first
+selected ship. `first_local_resume_confirmed` records X4's first confirmed
+resume after the final session check. The local motion stages distinguish
+a datagram with the expected prefix, an X4-owned sender, and a valid pose
+for the selected ship. `first_own_sample_acknowledged` records the server's first
 acknowledgment of a local movement sample. `first_remote_pose_received`
 records an incoming pose for another ship in the selected view. The final
 JSON includes `confirmed_stages` on success and on failure.
