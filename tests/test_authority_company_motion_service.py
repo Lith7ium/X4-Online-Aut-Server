@@ -73,6 +73,20 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.publish(source, self.first, 21, sector='sector_b')
         self.service.poll()
         self.assertEqual(json.loads(stream.readline())['kind'], 'motion_end')
+        self.service.revoke(2)
+        traffic = self.service.participant_traffic()
+        publisher, = traffic['active']
+        observer, = traffic['recently_closed']
+        self.assertEqual((publisher['ship_index'], publisher['channel_bindings'],
+                          publisher['samples_accepted'], publisher['samples_with_velocity'],
+                          publisher['last_source_sequence']), (1, 1, 21, 19, 21))
+        self.assertEqual((observer['ship_index'], observer['view_updates'],
+                          observer['nonempty_view_updates'], observer['snapshot_receipts'],
+                          observer['last_received_ship_index']), (2, 1, 1, 1, 1))
+        self.assertEqual((observer['samples_accepted'], publisher['snapshot_receipts']), (0, 0))
+        self.assertEqual(traffic['older_grants_omitted'], 0)
+        self.assertNotIn(self.second['ticket'], json.dumps(traffic))
+        self.assertNotIn(self.first['generation'], json.dumps(traffic))
 
     def test_unobserved_sector_and_stale_window_are_fenced(self):
         self.service.set_running(True)
@@ -107,6 +121,17 @@ class CompanyMotionServiceTests(unittest.TestCase):
         late, late_stream = self.open()
         self.send(late, {'kind': 'bind_motion', 'ticket': self.first['ticket']})
         self.assertEqual(late_stream.readline(), b'')
+
+    def test_traffic_retains_active_grants_and_only_a_bounded_departure_history(self):
+        self.service.revoke(2)
+        for index in range(3, MAX_PEERS + 5):
+            self.grant(index)
+            self.service.transport_lost(index)
+        traffic = self.service.participant_traffic()
+        self.assertEqual([row['ship_index'] for row in traffic['active']], [1])
+        self.assertEqual(len(traffic['recently_closed']), MAX_PEERS)
+        self.assertEqual(traffic['older_grants_omitted'], 3)
+        self.assertEqual(traffic['recently_closed'][-1]['channel_bindings'], 0)
 
     def test_outdated_last_position_expires_without_reporting_an_unseen_ship(self):
         self.service.set_running(True)

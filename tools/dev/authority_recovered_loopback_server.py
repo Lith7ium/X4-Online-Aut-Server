@@ -2020,6 +2020,7 @@ def run(args):
             result['company_motion_samples_received'] = motion_service.accepted_samples
             result['company_motion_samples_with_velocity'] = motion_service.samples_with_velocity
             result['company_motion_last_ship'] = motion_service.last_ship_position
+            result['company_motion_participants'] = motion_service.participant_traffic()
             try:
                 motion_service.close()
             except OSError as error:

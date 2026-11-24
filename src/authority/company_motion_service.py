@@ -1,7 +1,7 @@
 """Local backend for the pinned TLS movement service, polled by the world owner."""
 from collections import deque
 import copy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import re
 import secrets
 import socket
@@ -19,6 +19,17 @@ MAX_SAMPLE_AGE = 3.0
 
 
 @dataclass
+class _MotionTraffic:
+    channel_bindings: int = 0
+    samples_accepted: int = 0
+    samples_with_velocity: int = 0
+    view_updates: int = 0
+    nonempty_view_updates: int = 0
+    snapshot_receipts: int = 0
+    last_received_ship_index: int | None = None
+
+
+@dataclass
 class _Grant:
     handle: int
     ticket: str = field(repr=False)
@@ -30,6 +41,11 @@ class _Grant:
     last_sequence: int = 0
     visible_until: float = 0
     trial_route: tuple | None = None
+    traffic: _MotionTraffic = field(default_factory=_MotionTraffic)
+
+    def traffic_summary(self):
+        return {'participant_handle': self.handle, 'ship_index': self.index,
+                'last_source_sequence': self.last_sequence, **asdict(self.traffic)}
 
 
 @dataclass
@@ -89,6 +105,8 @@ class CompanyMotionService:
             raise
         self.port = self.listener.getsockname()[1]
         self._grants = {}
+        self._closed_traffic = deque(maxlen=MAX_PEERS)
+        self._closed_grants = 0
         self._tickets = {}
         self._peers = {}
         self._owner = threading.current_thread()
@@ -176,11 +194,26 @@ class CompanyMotionService:
         grant = self._grants.pop(handle, None)
         if grant is None:
             return
+        self._closed_traffic.append(grant.traffic_summary())
+        self._closed_grants += 1
         self._tickets.pop(grant.ticket)
         for peer in tuple(self._peers.values()):
             if peer.grant is grant:
                 self._drop(peer)
         self._retire_sample(grant.index, grant.generation, transport_lost=transport_lost)
+
+    def participant_traffic(self):
+        """Report transport evidence for active grants and the most recent departures.
+
+        A snapshot receipt comes from the remote launcher. Native X4 playback
+        and position readback are recorded separately by the receiving game.
+        """
+        self._check_owner()
+        return {
+            'active': [grant.traffic_summary() for grant in self._grants.values()],
+            'recently_closed': [row.copy() for row in self._closed_traffic],
+            'older_grants_omitted': self._closed_grants - len(self._closed_traffic),
+        }
 
     def set_running(self, running):
         self._check_owner()
@@ -299,6 +332,7 @@ class CompanyMotionService:
         grant.trial_route = peer.resuming = route
         peer.grant = grant
         peer.trial_index = trial_index
+        grant.traffic.channel_bindings += 1
         bound = {'kind': 'motion_bound', 'window': self.window, 'running': self.running,
                  'last_sequence': grant.last_sequence}
         if trial_index is not None:
@@ -318,6 +352,9 @@ class CompanyMotionService:
         if type(message['view_id']) is not int or not peer.view_id < message['view_id'] <= MAX_COUNTER:
             raise ValueError('invalid observed view revision')
         views = normalize_views(rows, own_index=peer.grant.index)
+        peer.grant.traffic.view_updates += 1
+        if views:
+            peer.grant.traffic.nonempty_view_updates += 1
         previous = peer.views
         peer.view_id = message['view_id']
         peer.views = views
@@ -367,6 +404,8 @@ class CompanyMotionService:
         grant.last_sequence = value['sequence']
         grant.visible_until = now + MAX_SAMPLE_AGE
         self._remember_application(AcceptedCompanyMotion(grant.handle, self.window, now, value))
+        grant.traffic.samples_accepted += 1
+        grant.traffic.samples_with_velocity += int(value['real_velocity'] is not None)
         self.accepted_samples += 1
         self.samples_with_velocity += int(value['real_velocity'] is not None)
         self.last_ship_position = {key: value[key] for key in ('index', 'sector_macro', 'sequence')}
@@ -392,6 +431,8 @@ class CompanyMotionService:
                     tuple(message[key] for key in fields) != peer.awaiting_ack):
                 raise ValueError('movement receipt does not match the in-flight snapshot')
             peer.awaiting_ack = None
+            peer.grant.traffic.snapshot_receipts += 1
+            peer.grant.traffic.last_received_ship_index = message['index']
         elif message.get('kind') in ('motion_view', 'motion_views'):
             self._view(peer, message)
         elif message.get('kind') == 'motion_sample':
