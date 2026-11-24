@@ -304,6 +304,23 @@ local function test_first_capture_collisions_and_failed_initialize()
     assert(#stores == 1 and #faults == 1)
 end
 
+local function test_shuttle_seed_extends_only_after_inspection()
+    local normal = make_gate()
+    assert(normal.accept_company_shuttle_pair == nil)
+    local early = make_gate({company_shuttle_seed = true})
+    assert(early:accept_company_shuttle_pair() == false and early:state().stopped)
+    local gate, requests, stores, reports, faults = make_gate({company_shuttle_seed = true})
+    assert(gate:start() and gate:tick())
+    local cursor = complete_active(gate, requests, 1, 'inspect')
+    assert(reports[1].issued_count == COUNT)
+    assert(gate:accept_company_shuttle_pair())
+    assert(gate:prepare(string.rep('d',32)) and gate:tick())
+    assert(requests[cursor].action == 'BeginNext' and requests[cursor].payload.issued_count == COUNT + 2)
+    assert(#stores == 0 and #faults == 0)
+    assert(gate:accept_company_shuttle_pair() == false and gate:state().stopped)
+end
+
+test_shuttle_seed_extends_only_after_inspection()
 test_two_fresh_full_captures()
 test_corrupt_initial_inspect_blocks_readiness()
 test_mismatch_identifies_the_observation_and_first_indices()
