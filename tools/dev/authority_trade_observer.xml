@@ -5,12 +5,12 @@
   <cue name="ObserveLoaded" instantiate="true">
    <conditions><event_game_loaded/></conditions>
    <actions>
-    <debug_text text="'[X4LAN] AUTH_TRADE_READ BEGIN age=%s ware=energycells'.[player.age]"/>
+    <debug_text text="'[X4LAN] AUTH_TRADE_READ BEGIN age=%s ware=water'.[player.age]"/>
     <debug_text text="'[X4LAN] AUTH_TRADE_READ ACCOUNT faction=player faction_ct=%s player_ct=%s'.[(if faction.player.hasownaccount then (faction.player.money / 1ct)L else 'unknown'), (player.money / 1ct)L]"/>
     <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and md.X4AuthorityShipRegistry.State.$last? and not md.X4AuthorityShipRegistry.State.$faulted">
      <debug_text text="'[X4LAN] AUTH_TRADE_READ REGISTRY epoch=%s count=%s'.[md.X4AuthorityShipRegistry.State.$epoch, md.X4AuthorityShipRegistry.State.$last]"/>
      <set_value name="$targets" exact="[[1970, 'WOO-831'], [7354, 'WRN-302']]"/>
-     <set_value name="$ware" exact="ware.energycells"/>
+     <set_value name="$ware" exact="ware.water"/>
      <do_all exact="$targets.count" counter="$row">
       <set_value name="$index" exact="$targets.{$row}.{1}"/>
       <set_value name="$code" exact="$targets.{$row}.{2}"/>
@@ -21,20 +21,21 @@
        <set_value name="$station" exact="null"/>
        <set_value name="$station_source" exact="'none'"/>
        <debug_text text="'[X4LAN] AUTH_TRADE_READ SHIP index=%s code=%s status=observed sector=%s docked=%s internal=%s dock_state=%s dock_host=%s free_units=%s cargo_units=%s'.[$index, $code, (if @$sector.isclass.sector then $sector.macro.id else 'unknown'), (if $dock.exists then 1 else 0), (if $ship.isinternallystored then 1 else 0), (if $dock.exists then $dock.dockstate else 'none'), (if @$dock.container.exists then $dock.container.idcode else 'none'), $ship.cargo.{$ware}.free, $ship.cargo.{$ware}.count]"/>
-       <do_if value="@$dock.container.isclass.station and @$dock.container.isoperational and $dock.container.owner != faction.player">
-        <set_value name="$station" exact="$dock.container"/>
-        <set_value name="$station_source" exact="'docked'"/>
-       </do_if>
-       <do_elseif value="@$sector.isclass.sector">
-        <find_station name="$nearby" space="$sector" functional="true" checkoperational="true" sortbydistanceto="$ship" sortlimit="12" multiple="true" required="false"/>
-        <do_all exact="$nearby.count" counter="$candidate">
-         <set_value name="$candidate_station" exact="$nearby.{$candidate}"/>
-         <do_if value="not $station and $candidate_station.owner != faction.player and $candidate_station.distanceto.{$ship} le 100km">
+       <do_if value="@$sector.macro.id == 'cluster_01_sector001_macro'">
+        <find_station name="$stations" space="$sector" functional="true" checkoperational="true" multiple="true" required="false"/>
+        <set_value name="$matches" exact="0"/>
+        <do_all exact="$stations.count" counter="$candidate">
+         <set_value name="$candidate_station" exact="$stations.{$candidate}"/>
+         <do_if value="$candidate_station.idcode == 'BIM-169' and $candidate_station.owner == faction.teladi">
+          <set_value name="$matches" exact="$matches + 1"/>
           <set_value name="$station" exact="$candidate_station"/>
-          <set_value name="$station_source" exact="'nearby'"/>
+          <set_value name="$station_source" exact="if @$dock.container == $station then 'docked' else 'same_sector'"/>
          </do_if>
         </do_all>
-       </do_elseif>
+        <do_if value="$matches != 1">
+         <set_value name="$station" exact="null"/>
+        </do_if>
+       </do_if>
        <do_if value="$station">
         <find_sell_offer result="$offer" seller="$station" wares="$ware" excludeempty="false" excludemissions="true"/>
         <debug_text text="'[X4LAN] AUTH_TRADE_READ STATION ship=%s source=%s code=%s macro=%s owner=%s distance_m=%s stock_units=%s'.[$code, $station_source, $station.idcode, $station.macro.id, $station.owner.id, ($station.distanceto.{$ship} / 1m)L, $station.cargo.{$ware}.count]"/>
