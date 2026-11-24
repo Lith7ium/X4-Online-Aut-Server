@@ -125,13 +125,38 @@ and the shield mount with a Frontier Mk5 shield. It includes Mk3 combat
 thrusters, Mk2 docking and scanner software, flight assist, targeting and
 trade software.
 
-Prepare the pair in a disposable copy with the server avatar parked. Save
-and cold-load that copy, check the loadout on both ships, and read their
-codes and distinct registry indices from its Company catalogue. Put these
-indices in the Linux and Windows invitations, with each observer targeting
-the other pilot's index. Before handing the world to the pilots, check both
-seat choices and mutual cockpit targeting. The November 24 WOO-831 / WRN-302
-seed is the earlier two-sector flight fixture.
+Start with the private parked format-3 archive from the November 24
+WOO-831 / WRN-302 trial. Use a fresh directory for each run and keep the
+source stopped. Set `game` to the pinned installation and `parked_archive`
+to the archive's absolute path.
+
+```sh
+mkdir -p .local
+python3 tools/dev/authority_portable_seed.py restore \
+  --archive "$parked_archive" --out "$PWD/.local/shuttle-source"
+tools/run_authority_server.sh --game "$game" \
+  --store "$PWD/.local/shuttle-source/checkpoints" \
+  --out "$PWD/.local/shuttle-prepare" --company-shuttle-pair prepare
+tools/run_authority_server.sh --game "$game" \
+  --store "$PWD/.local/shuttle-prepare/checkpoints" \
+  --out "$PWD/.local/shuttle-verify" --company-shuttle-pair verify
+```
+
+Check `success` in both runs' `result.json`. The prepare run creates and
+saves the pair. The verify run loads that checkpoint in a fresh X4 process
+and reads the two hulls. Both runs use disposable profiles. The cold result
+records each ship's code and index under `company_shuttle_pair.pair.ships`.
+Copy the two verified indices into the Linux and Windows invitations, with
+each observer targeting the other pilot's index. Check both seat choices and
+mutual cockpit targeting with the actual clients.
+
+Export the stopped preparation after the cold run succeeds. Use this private
+archive for ordinary hosting.
+
+```sh
+python3 tools/dev/authority_portable_seed.py export \
+  --source "$PWD/.local/shuttle-prepare" --archive "$PWD/.local/shuttle-pair.zip"
+```
 
 ## Prepare the parked server avatar for the two-ship test
 
