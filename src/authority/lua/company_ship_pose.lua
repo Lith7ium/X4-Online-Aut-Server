@@ -3,7 +3,10 @@ local M = {}
 local SCREEN = 'X4AuthorityCompanyShipPose'
 local HELLO_INTERVAL = 0.5
 local MD_TIMEOUT = 2
-local success_status = {inspect = 'INSPECTED', apply = 'DISPATCHED', verify = 'OBSERVED'}
+local success_status = {inspect = 'INSPECTED', apply = 'DISPATCHED', verify = 'OBSERVED',
+                        locate = 'LOCATED', transfer = 'DISPATCHED'}
+local resolves_actor = {inspect = true, locate = true}
+local writes_pose = {apply = true, transfer = true}
 local POSITION_LIMIT = 10000000
 
 local function token(value)
@@ -34,10 +37,10 @@ local function request_fields(value, lease, epoch)
     local row = fields(value, 12)
     if not row or row[1] ~= 'P' or row[2] ~= lease or row[5] ~= epoch then return nil end
     local action, request, index, generation, frame, actor = row[3], row[4], row[6], row[7], row[8], row[9]
-    if action ~= 'inspect' and action ~= 'apply' and action ~= 'verify' then return nil end
+    if not success_status[action] then return nil end
     if not token(request) or not token(generation) or #index > 6 or not index:match('^[1-9]%d*$')
             or tonumber(index) > 200000 or #frame > 128 or not frame:match('^[a-z0-9_]+$') then return nil end
-    if (action == 'inspect' and actor ~= '0') or (action ~= 'inspect' and not actor_id(actor)) then return nil end
+    if (resolves_actor[action] and actor ~= '0') or (not resolves_actor[action] and not actor_id(actor)) then return nil end
     local x, y, z = tonumber(row[10]), tonumber(row[11]), tonumber(row[12])
     for _, axis in ipairs({x or false, y or false, z or false}) do
         if not finite(axis) or math.abs(axis) > POSITION_LIMIT then return nil end
@@ -57,7 +60,7 @@ function M.new(config, engine, net)
     local prefix = 'P|' .. config.lease .. '|'
     local allow_apply = config.allow_apply == true
     local next_hello = 0
-    local pending, inspected, last_request
+    local pending, inspected, located, last_request
     local closed, write_fault = false, false
     local api = {}
 
@@ -71,7 +74,7 @@ function M.new(config, engine, net)
     local function fail_pending(status)
         local args = pending.args
         pending = nil
-        if args.action == 'apply' then write_fault = true end
+        if writes_pose[args.action] then write_fault = true end
         refuse(args, status)
     end
 
@@ -85,28 +88,43 @@ function M.new(config, engine, net)
         local args = pending.args
         local row = fields(value, 11)
         if not row or row[2] ~= args.epoch or row[3] ~= tostring(args.index) or row[4] ~= args.generation
-                or row[5] ~= args.action or row[8] ~= args.frame or not row[6]:match('^[A-Z_]+$') then
+                or row[5] ~= args.action or not row[6]:match('^[A-Z_]+$')
+                or #row[8] > 128 or not row[8]:match('^[a-z0-9_]+$')
+                or (row[8] ~= args.frame and not (args.action == 'locate' and row[6] == 'LOCATED')) then
             fail_pending('BRIDGE_MD_INVALID')
             return
         end
         local suffix = '|0|0|0|-'
         if row[6] == success_status[args.action] then
-            if not actor_id(row[7]) or (args.action ~= 'inspect' and row[7] ~= args.actor)
+            if not actor_id(row[7]) or (not resolves_actor[args.action] and row[7] ~= args.actor)
                     or not finite(tonumber(row[9])) or not finite(tonumber(row[10]))
                     or not finite(tonumber(row[11])) then
                 fail_pending('BRIDGE_MD_INVALID')
                 return
             end
-            local live, x, y, z, code = engine.actor(args, row[7], args.action ~= 'apply')
-            if not live or (args.action ~= 'apply' and (not finite(x) or not finite(y) or not finite(z)
+            local read = not writes_pose[args.action]
+            local live, x, y, z, code = engine.actor(args, row[7], read, row[8])
+            if not live and args.action == 'transfer' then
+                -- The relocation may still be pending when MD acknowledges dispatch.
+                live = engine.actor(args, row[7], false, args.source_frame)
+            end
+            if not live or (read and (not finite(x) or not finite(y) or not finite(z)
                     or type(code) ~= 'string' or not code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$'))) then
                 fail_pending('BRIDGE_LOCAL_REFUSED')
                 return
             end
-            if args.action ~= 'apply' then
+            if read then
                 suffix = '|' .. number(x) .. '|' .. number(y) .. '|' .. number(z) .. '|' .. code
             end
-            if args.action == 'inspect' then inspected = binding(args, row[7]) end
+            if args.action == 'locate' then
+                local dx, dy, dz = x - tonumber(row[9]), y - tonumber(row[10]), z - tonumber(row[11])
+                if dx*dx + dy*dy + dz*dz > 1 then
+                    fail_pending('BRIDGE_LOCAL_REFUSED')
+                    return
+                end
+                located = {key = binding(args, row[7]), source = row[8], request = args}
+            end
+            if resolves_actor[args.action] and row[8] == args.frame then inspected = binding(args, row[7]) end
         elseif row[7] ~= '0' or row[9] ~= '0' or row[10] ~= '0' or row[11] ~= '0' then
             fail_pending('BRIDGE_MD_INVALID')
             return
@@ -117,7 +135,7 @@ function M.new(config, engine, net)
 
     local function update()
         if not engine.ready() then
-            inspected = nil
+            inspected, located = nil, nil
             if pending then fail_pending('BRIDGE_LOCAL_REFUSED') end
             return
         end
@@ -136,11 +154,20 @@ function M.new(config, engine, net)
         local args = request_fields(net:receive(), config.lease, config.epoch)
         if not args or args.request_id == last_request then return end
         last_request = args.request_id
-        if args.action == 'inspect' then inspected = nil end
-        if (args.action == 'apply' and (not allow_apply or write_fault
-                or inspected ~= binding(args, args.actor)))
-                or (args.action ~= 'inspect' and not engine.actor(args, args.actor, false))
-                or (args.action == 'apply' and engine.paused()) then
+        local candidate = located
+        located = nil
+        if resolves_actor[args.action] or args.action == 'transfer' then inspected = nil end
+        if args.action == 'transfer' then
+            if not candidate or candidate.key ~= binding(args, args.actor) or candidate.source == args.frame
+                    or candidate.request.x ~= args.x or candidate.request.y ~= args.y or candidate.request.z ~= args.z then
+                refuse(args, 'BRIDGE_LOCAL_REFUSED')
+                return
+            end
+            args.locate_id, args.source_frame = candidate.request.request_id, candidate.source
+        end
+        if (writes_pose[args.action] and (not allow_apply or write_fault or engine.paused()))
+                or (args.action == 'apply' and inspected ~= binding(args, args.actor))
+                or (not resolves_actor[args.action] and not engine.actor(args, args.actor, false, args.source_frame or args.frame)) then
             refuse(args, 'BRIDGE_LOCAL_REFUSED')
             return
         end
@@ -154,7 +181,7 @@ function M.new(config, engine, net)
     function api:close()
         if closed then return end
         closed = true
-        pending, inspected = nil, nil
+        pending, inspected, located = nil, nil, nil
         net:close()
     end
 
@@ -226,16 +253,16 @@ function M.new_x4(config, registry_ready, profile_path, udp)
     local net = assert(udp.open('127.0.0.1', config.port))
     return M.new(config, {
         ready = ready, clock = udp.monotonic, paused = function() return C.IsGamePaused() end,
-        actor = function(args, actor, read)
+        actor = function(args, actor, read, frame)
             local id = resolve.parse_hex(actor)
-            local sector = id and live_context(id, args.frame)
+            local sector = id and live_context(id, frame)
             if not sector then return false end
             if not read then return true end
             local value = C.GetObjectPositionInSector(id)
             local ptr = C.GetObjectIDCode(id)
             if ptr == nil or ptr == ffi.NULL then return false end
             local code = ffi.string(ptr)
-            if live_context(id, args.frame) ~= sector then return false end
+            if live_context(id, frame) ~= sector then return false end
             return true, tonumber(value.x), tonumber(value.y), tonumber(value.z), code
         end,
         issue = function(args) return AddUITriggeredEvent(SCREEN, 'Request', args) ~= false end,

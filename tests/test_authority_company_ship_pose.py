@@ -29,6 +29,25 @@ class CompanyShipPoseTests(unittest.TestCase):
         self.assertIsNotNone(apply.find("do_if/set_value[@exact=\"'DISPATCHED'\"]"))
         self.assertFalse({'teleport_player', 'save_game', 'set_owner', 'create_order'} & {node.tag for node in doc.iter()})
 
+    def test_transfer_consumes_bound_locate_and_requires_one_matching_sector(self):
+        doc = ET.parse(MD).getroot()
+        request = doc.find("./cues/cue[@name='Request']/actions/do_if")
+        consume = request.find("do_if/remove_value[@name='State.$located']")
+        self.assertIsNotNone(consume)
+        process = doc.find("./cues/library[@name='ProcessPose']/actions")
+        transfer = process.find("do_elseif[@value=\"$action == 'transfer'\"]/do_if")
+        self.assertTrue(all(field in transfer.get('value') for field in (
+            '$locate_id', '$source_frame', '$epoch', '$index', '$generation', '$frame',
+            '$x', '$y', '$z', '$located.$sector', '$located.$ship')))
+        self.assertEqual(transfer.find('find_sector').attrib, {
+            'name': '$targets', 'macro': 'macro.{$args.$frame}', 'multiple': 'true', 'required': 'false'})
+        unique = transfer.find('do_if')
+        self.assertIn('$targets.count == 1', unique.get('value'))
+        self.assertIn('$targets.{1}.macro.id == $args.$frame', unique.get('value'))
+        self.assertEqual(unique.find("set_value[@name='$sector']").get('exact'), '$targets.{1}')
+        self.assertEqual(unique.find('include_actions').get('ref'), 'ApplyPose')
+        self.assertEqual(len(list(doc.iter('warp'))), 1)
+
     @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_bridge_preflight_fences_writes_and_keeps_independent_readback(self):
         script = r'''
@@ -115,6 +134,72 @@ assert(actions==4)
 bridge:close()
 request('b','inspect')
 assert(actions==4)
+'''
+        subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
+    def test_cross_sector_locate_is_live_and_authorizes_only_one_exact_transfer(self):
+        script = r'''
+local pose = dofile(arg[1])
+local lease, epoch, generation = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32)
+local actor, dest = '0x19', 'sector_b'
+local function exercise(writable)
+    local callback, packet, issue, reply, actual = nil, nil, nil, nil, 'sector_a'
+    local sequence = 0
+    local api = pose.new({lease=lease, epoch=epoch, allow_apply=writable}, {
+        clock=function() return 1 end, ready=function() return true end, paused=function() return false end,
+        issue=function(args) issue=args return true end,
+        register=function(cb) callback=cb return true end,
+        actor=function(_, id, read, frame)
+            if frame ~= actual or id ~= actor then return false end
+            if read then return true, 1,2,3,'ABC-123' end
+            return true
+        end
+    }, {receive=function() local p=packet;packet=nil;return p end, close=function() end,
+        send=function(_,value) reply=value;return true end})
+    local function send(action, x, target, grant)
+        sequence=sequence+1
+        issue,reply=nil,nil
+        packet=table.concat({'P',lease,action,string.format('%032x',sequence),epoch,17,grant or generation,
+            target or dest,action=='locate' and '0' or actor,x or 500,600,700},'|')
+        api:tick()
+    end
+    local function result(status, frame, position)
+        callback(nil, table.concat({issue.request_id,epoch,17,generation,issue.action,status,actor,
+                                    frame,position or '1|2|3'},'|'))
+    end
+    local function locate()
+        send('locate'); result('LOCATED',actual)
+        assert(reply:find('|LOCATED|'..actor..'|'..actual..'|1|2|3|1|2|3|ABC-123',1,true))
+        return issue.request_id
+    end
+    local function refused()
+        assert(not issue and reply:find('BRIDGE_LOCAL_REFUSED',1,true))
+    end
+    locate(); send('transfer',501); refused()
+    locate(); send('transfer',500,'sector_c'); refused()
+    locate(); send('transfer',500,dest,('e'):rep(32)); refused()
+    locate(); actual='sector_c'; send('transfer'); refused()
+    actual='sector_a'
+    send('locate'); result('LOCATED','sector_c'); assert(reply:find('BRIDGE_LOCAL_REFUSED',1,true))
+    send('transfer'); refused()
+    local id=locate()
+    send('transfer')
+    if writable then
+        assert(issue.locate_id==id and issue.source_frame=='sector_a' and issue.frame==dest)
+        result('DISPATCHED',dest,'0|0|0')
+        assert(reply:find('|DISPATCHED|'..actor..'|'..dest..'|0|0|0|0|0|0|-',1,true))
+        send('transfer'); refused()
+        actual=dest
+        send('verify'); result('OBSERVED',dest)
+        assert(reply:find('|OBSERVED|'..actor..'|'..dest..'|1|2|3|1|2|3|ABC-123',1,true))
+        locate(); send('transfer'); refused()
+    else
+        refused()
+    end
+end
+exercise(true)
+exercise(false)
 '''
         subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
 

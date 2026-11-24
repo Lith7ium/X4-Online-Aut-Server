@@ -3,6 +3,7 @@
      grant lifetime, serializes requests, and verifies each reply before continuing. -->
 <mdscript name="X4AuthorityCompanyShipPose" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
+  <cue name="State" namespace="this"/>
   <cue name="Request" instantiate="true">
    <conditions>
     <event_ui_triggered screen="'X4AuthorityCompanyShipPose'" control="'Request'"/>
@@ -14,11 +15,14 @@
      <set_value name="$index" exact="$args.$index"/>
      <set_value name="$action" exact="$args.$action"/>
      <set_value name="$status" exact="'REGISTRY_INVALID'"/>
+     <set_value name="$replyframe" exact="$args.$frame"/>
+     <set_value name="$located" exact="@State.$located"/>
+     <do_if value="State.$located?"><remove_value name="State.$located"/></do_if>
      <set_value name="$actor" exact="'0'"/>
      <set_value name="$x" exact="0"/>
      <set_value name="$y" exact="0"/>
      <set_value name="$z" exact="0"/>
-     <do_if value="$action != 'inspect' and $action != 'apply' and $action != 'verify'">
+     <do_if value="$action != 'inspect' and $action != 'apply' and $action != 'verify' and $action != 'locate' and $action != 'transfer'">
       <set_value name="$status" exact="'ACTION_INVALID'"/>
      </do_if>
      <do_elseif value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and $args.$epoch == md.X4AuthorityShipRegistry.State.$epoch">
@@ -27,7 +31,7 @@
        <include_actions ref="ProcessPose"/>
       </do_if>
      </do_elseif>
-     <raise_lua_event name="'X4AuthorityCompanyShipPose.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$index,$args.$generation,$action,$status,$actor,$args.$frame,$x,$y,$z]"/>
+     <raise_lua_event name="'X4AuthorityCompanyShipPose.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$index,$args.$generation,$action,$status,$actor,$replyframe,$x,$y,$z]"/>
     </do_if>
    </actions>
   </cue>
@@ -54,13 +58,13 @@
      <do_elseif value="$ship.dock.exists or @$ship.assigneddock.exists or @$ship.parkedat.exists or $ship.isinternallystored">
       <set_value name="$status" exact="'DOCKING_OR_STORED'"/>
      </do_elseif>
-     <do_elseif value="not @$ship.sector.isclass.sector or $ship.sector.macro.id != $args.$frame or not @$ship.parent.isclass.zone or @$ship.zone.islocalhighway or @$ship.zone.issuperhighway">
+     <do_elseif value="not @$ship.sector.isclass.sector or (($action != 'locate' and $action != 'transfer') and $ship.sector.macro.id != $args.$frame) or not @$ship.parent.isclass.zone or @$ship.zone.islocalhighway or @$ship.zone.issuperhighway">
       <set_value name="$status" exact="'FRAME_INVALID'"/>
      </do_elseif>
      <do_else>
       <set_value name="$actor" exact="'%s'.[$ship]"/>
       <set_value name="$sector" exact="$ship.sector"/>
-      <do_if value="$action != 'inspect' and @$args.$actor != $actor">
+      <do_if value="$action != 'inspect' and $action != 'locate' and @$args.$actor != $actor">
        <set_value name="$actor" exact="'0'"/>
        <set_value name="$status" exact="'TARGET_CHANGED'"/>
       </do_if>
@@ -77,13 +81,39 @@
     <do_if value="$action == 'apply'">
      <include_actions ref="ApplyPose"/>
     </do_if>
+    <do_elseif value="$action == 'transfer'">
+     <set_value name="$status" exact="'TRANSFER_REFUSED'"/>
+     <set_value name="$actor" exact="'0'"/>
+     <do_if value="$located and @$args.$locate_id == $located.$request.$request_id
+          and $ship == $located.$ship and $sector == $located.$sector
+          and $sector.macro.id == @$args.$source_frame and $args.$frame != $args.$source_frame
+          and $args.$epoch == $located.$request.$epoch and $index == $located.$request.$index
+          and $args.$generation == $located.$request.$generation and $args.$frame == $located.$request.$frame
+          and $args.$x == $located.$request.$x and $args.$y == $located.$request.$y and $args.$z == $located.$request.$z">
+      <find_sector name="$targets" macro="macro.{$args.$frame}" multiple="true" required="false"/>
+      <do_if value="@$targets.count == 1 and @$targets.{1}.isclass.sector and $targets.{1}.macro.id == $args.$frame">
+       <set_value name="$actor" exact="'%s'.[$ship]"/>
+       <set_value name="$sector" exact="$targets.{1}"/>
+       <include_actions ref="ApplyPose"/>
+      </do_if>
+     </do_if>
+    </do_elseif>
     <do_else>
      <!-- Separate request, reading the live game object in its sector frame. -->
      <create_position name="$pose" space="$sector" object="$ship"/>
      <set_value name="$x" exact="$pose.x / 1m"/>
      <set_value name="$y" exact="$pose.y / 1m"/>
      <set_value name="$z" exact="$pose.z / 1m"/>
-     <set_value name="$status" exact="if $action == 'inspect' then 'INSPECTED' else 'OBSERVED'"/>
+     <do_if value="$action == 'locate'">
+      <set_value name="$replyframe" exact="$sector.macro.id"/>
+      <set_value name="$status" exact="'LOCATED'"/>
+      <do_if value="$replyframe != $args.$frame">
+       <set_value name="State.$located" exact="table[$request=$args, $ship=$ship, $sector=$sector]"/>
+      </do_if>
+     </do_if>
+     <do_else>
+      <set_value name="$status" exact="if $action == 'inspect' then 'INSPECTED' else 'OBSERVED'"/>
+     </do_else>
     </do_else>
    </actions>
   </library>
