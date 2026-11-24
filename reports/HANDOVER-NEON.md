@@ -90,6 +90,14 @@ observer builds use code `cf57d0b1`. Exchange session settings privately.
   and direct Windows Internet gameplay with two pilots remain open.
   [Flight and cold-reload measurements](AUTHORITY-COMPANY-FLIGHT-20261124.md)
   [Native cockpit results](AUTHORITY-COMPANY-MOTION-20261124.md)
+- The ordinary company client now supports a nearby cockpit target and one
+  selected ship on a map of another sector at the same time. Native Bazzite
+  sampled a stationary player ship every 0.117 s at the median. Fedora
+  downloaded the world over LAN TLS and reached the X4 menu, then its
+  Steam IPC failed before admission. In a separate native session WOO's
+  stock map selected WRN in the other sector. Its position agreed with the
+  saved world within 0.51 mm. Live flight between two pilots remains open.
+  [Observer implementation and native results](AUTHORITY-COMPANY-OBSERVER-20261124.md)
 - Astra owns server-avatar parking. Lith7ium chose the walkable player HQ
   when available, with a well-protected station until then. The current seed
   has no HQ. Its preferred fallback is the Argon defence platform XPJ-169 in
