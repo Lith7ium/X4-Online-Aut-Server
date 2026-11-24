@@ -77,7 +77,9 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, required=True, help='fresh output directory under .local')
     parser.add_argument('--xvfb', help='Xvfb executable; defaults to PATH')
     parser.add_argument('--vulkan-icd', type=Path, help='Mesa lavapipe ICD; defaults to system detection')
-    parser.add_argument('--timeout', type=float, default=3600, help='total run duration in seconds')
+    parser.add_argument('--timeout', type=float, default=3600, help='run duration in seconds, or startup timeout with --persistent')
+    parser.add_argument('--persistent', action='store_true',
+                        help='keep accepting pilots after the last one leaves, until the operator stops the server')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--require-company-ship', action='store_true',
@@ -132,6 +134,11 @@ def main(argv=None):
                 or args.company_trade_trial or args.company_cockpit_purchase):
             parser.error('--bootstrap-registry-snapshot requires an isolated provider with no TLS or fixture mode')
         server_flags.append('--bootstrap-registry-snapshot')
+    if args.persistent:
+        if (args.bootstrap_registry_snapshot or args.park_server_avatar or args.company_shuttle_pair
+                or args.verify_company_pose or args.company_trade_trial or args.company_cockpit_purchase):
+            parser.error('--persistent requires a serving run')
+        server_flags.append('--persistent')
     if args.base_game_only:
         server_flags.append('--base-game-only')
     if args.registry_status:

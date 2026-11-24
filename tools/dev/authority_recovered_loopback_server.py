@@ -646,7 +646,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
     """
     if listener.family != socket.AF_INET or listener.getsockname()[0] != '127.0.0.1':
         raise ValueError('loopback listener required')
-    if not callable(check) or not callable(should_stop) or not math.isfinite(deadline) or not 0 < tick_interval <= 1:
+    if (not callable(check) or not callable(should_stop) or not 0 < tick_interval <= 1
+            or (deadline is not None and not math.isfinite(deadline))):
         raise ValueError('invalid supervisor configuration')
     listener.setblocking(False)
     accepted = 0
@@ -654,7 +655,7 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
     admitted_handles = set()
     last_pose_request = None
     next_pose_wake = 0.0
-    while time.monotonic() < deadline and not should_stop():
+    while (deadline is None or time.monotonic() < deadline) and not should_stop():
         check()
         # Limit accepts per tick so connection attempts cannot starve X4 actions.
         for _ in range(8):
@@ -686,14 +687,14 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             motion_service.poll()
             if pose_trial is not None and motion_service.running:
                 pose_trial.poll(motion_service)
-        for peer in host._control._peers.values():
-            if peer['stage'] == 'admitted' and peer['handle'] not in admitted_handles:
-                admitted_handles.add(peer['handle'])
-                admitted += 1
+        current_handles = {peer['handle'] for peer in host._control._peers.values() if peer['stage'] == 'admitted'}
+        admitted += len(current_handles - admitted_handles)
+        admitted_handles = current_handles
         # poll() returns immediately without peers: wait for a new connection.
         if not host._control._peers:
             import select
-            select.select([listener], [], [], min(tick_interval, max(0, deadline-time.monotonic())))
+            wait = tick_interval if deadline is None else min(tick_interval, max(0, deadline - time.monotonic()))
+            select.select([listener], [], [], wait)
     check()
     return {'accepted_connections': accepted, 'admitted_connections': admitted}
 
@@ -1962,9 +1963,9 @@ def run(args):
             else: result['diagnostic_clients'] = results
         # Publish only after the private diagnostic sockets have been accepted
         # and the selected listener is ready. Both files contain bearer secrets.
+        if stop[0] or time.monotonic() >= deadline:
+            raise InterruptedError('provider startup cancelled')
         if tls is not None:
-            if stop[0] or time.monotonic() >= deadline:
-                raise InterruptedError('TLS startup cancelled')
             gateway = RecoveredTLSGateway(tls, out=out, control_port=listener.getsockname()[1],
                                           file_port=service.port, file_token=service.token,
                                           motion_port=motion_service.port if motion_service is not None else None)
@@ -1979,7 +1980,8 @@ def run(args):
         def gateway_stopped():
             return gateway is not None and not gateway.running
 
-        result.update(serve(listener, host, deadline=deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
+        service_deadline = None if getattr(args, 'persistent', False) else deadline
+        result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
                             should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
@@ -2162,6 +2164,8 @@ def main(argv=None):
     parser.add_argument('--game',type=Path,required=True); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
+    parser.add_argument('--persistent', action='store_true',
+                        help='keep serving after startup until stopped; --timeout still bounds startup')
     parser.add_argument('--software-vulkan-icd', type=Path,
                         help='use this Mesa CPU Vulkan ICD and remove GPU devices from X4')
     parser.add_argument('--seed',type=int,default=276944566)

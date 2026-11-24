@@ -483,6 +483,45 @@ class LoopTests(unittest.TestCase):
                 MODULE.serve(listener,Host(),deadline=time.monotonic()+1,check=failed)
 
 
+class PersistentHostTests(unittest.TestCase):
+    def test_next_day_pilot_can_join_after_the_first_leaves(self):
+        host = Host()
+        now = 100.0
+        with socket.socket() as listener, socket.socket() as first, socket.socket() as second:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            address = listener.getsockname()
+            first.connect(address)
+            first.sendall(b'A')
+
+            checks = 0
+
+            def check():
+                nonlocal now, checks
+                checks += 1
+                self.assertLess(checks, 12, 'persistent server stopped making progress')
+                if now == 100.0 and host.handles == 1:
+                    first.close()
+                    now += 86400
+                elif host.handles == 1 and not host._control._peers:
+                    second.connect(address)
+                    second.sendall(b'A')
+
+            def both_joined():
+                return host.handles == 2 and any(peer['stage'] == 'admitted' for peer in host._control._peers.values())
+
+            def close_connections():
+                for connection in host._control._peers:
+                    connection.close()
+
+            self.addCleanup(close_connections)
+            with patch.object(MODULE, 'time', SimpleNamespace(monotonic=lambda: now)):
+                result = MODULE.serve(listener, host, deadline=None, check=check,
+                                      should_stop=both_joined, tick_interval=.01)
+        self.assertEqual(now, 86500.0)
+        self.assertEqual(result, {'accepted_connections': 2, 'admitted_connections': 2})
+
+
 class PoseWakeTests(unittest.TestCase):
     def test_hello_backlog_cannot_spin_control_or_delay_a_new_request(self):
         now = 10.0

@@ -95,6 +95,14 @@ Use `--require-registry-snapshot` for the portable format-3 seed. Omit it for
 the ordinary fixture shown above. The saved DLC selection must match the
 licensed game installation.
 
+For a world that should still accept pilots the next day, add
+`--persistent` to the provider command. The last departure pauses and
+saves the world. The provider then waits for the next connection. In this
+mode `--timeout` bounds startup. To shut down the provider, send SIGTERM
+to its process or use Ctrl+C in its foreground terminal. Before restarting,
+use the successful provider run's `checkpoints` directory as `--store`
+and choose a fresh `--out` directory.
+
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
 and records the Vulkan probe in `.local/provider-run-01/software-vulkan.log`.

@@ -201,6 +201,7 @@ class AuthorityServerPackageTest(unittest.TestCase):
                     self.assertIn('--company-motion', result.stdout)
                     if role == 'server':
                         self.assertIn('--park-server-avatar {prepare,verify}', result.stdout)
+                        self.assertIn('--persistent', result.stdout)
 
             # Compose both parking variants using only extracted source assets.
             subprocess.run([sys.executable, '-c', PARKING_OVERLAY],
