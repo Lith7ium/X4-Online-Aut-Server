@@ -193,6 +193,7 @@ print('capture-clock buffer and playback checks passed')
 
 do
  local hull_playback = assert(loadfile('src/authority/lua/company_hull_playback.lua'))()
+ assert(hull_playback.MAX_PREDICTION_SECONDS == 5)
  local epoch, generation = string.rep('a', 32), string.rep('b', 32)
  local function trial(change)
   local binding = {slot='cockpit', serial=7, epoch=epoch, generation=generation, index=7354,
@@ -256,9 +257,74 @@ do
   near(result.actual.x, 2.5); near(result.target.y, 1.25); near(result.elapsed, .05)
   e.now=2.6
   assert(hull:tick() and e.writes==3)
-  near(e.point.x, 20); near(e.point.y, 10); near(e.point.z, -4)
+  near(e.point.x, 22.5); near(e.point.y, 11.25); near(e.point.z, -4.5)
   e.now=2.96
-  assert(not hull:tick() and hull:state()=='stale' and e.writes==3)
+  assert(hull:tick() and e.writes==4)
+  e.now=7.2
+  assert(not hull:tick() and hull:state()=='stale' and e.writes==4)
+ end
+
+ -- Local arrival opens the five-second prediction window. Raw source and
+ -- capture clocks have unrelated origins and must be returned unchanged.
+ do
+  local hull,e,binding=trial()
+  local velocity={x=10,y=0,z=0}
+  assert(hull:push(binding,hull_sample(1,86000,0,0,0,velocity),e.now))
+  assert(hull:tick() and e.writes==0)
+  e.now=2.76
+  assert(hull:tick() and e.writes==1)
+  near(e.point.x, 6.1)
+  e.now=6.99
+  assert(hull:tick() and e.writes==2)
+  near(e.point.x, 48.4)
+  local seen=e.records[#e.records-1]
+  assert(seen.kind=='readback' and seen.capture_time==86000 and seen.source_time==42.25)
+  near(seen.actual.x,6.1)
+  e.now=7
+  assert(not hull:tick() and hull:state()=='stale' and e.writes==2)
+  assert(e.records[#e.records].kind=='readback')
+  near(e.records[#e.records].actual.x,48.4)
+  e.now=7.4
+  assert(not hull:push(binding,hull_sample(2,86005.4,54,0,0,velocity),e.now))
+  assert(not hull:tick() and e.writes==2)
+ end
+
+ -- A consistent fresh sample before expiry extends only the local deadline.
+ do
+  local hull,e,binding=trial()
+  local velocity={x=1,y=0,z=0}
+  assert(hull:push(binding,hull_sample(1,90000,0,0,0,velocity),e.now))
+  e.now=6.99
+  assert(hull:push(binding,hull_sample(2,90005.02,5.02,0,0,velocity),e.now))
+  e.now=7.76
+  assert(hull:tick() and e.writes==1)
+  assert(hull:state()=='active' and e.point.x>5.02)
+  e.now=11.99
+  assert(not hull:tick() and hull:state()=='stale' and e.writes==1)
+ end
+
+ -- Delayed relative delivery can shift the buffer's remote estimate.
+ -- A just-arrived position cannot be extrapolated by transit time alone.
+ do
+  local hull,e,binding=trial()
+  local velocity={x=-10,y=0,z=0}
+  assert(hull:push(binding,hull_sample(1,90000,0,0,0,velocity),e.now))
+  e.now=3.4
+  assert(hull:push(binding,hull_sample(2,90000.1,-1,0,0,velocity),e.now))
+  assert(hull:tick() and e.writes==1)
+  near(e.point.x, -1)
+  e.now=4.16
+  assert(hull:tick() and e.writes==2)
+  near(e.point.x, -8.6)
+ end
+
+ -- A long native update gap may make the next correction too large even
+ -- though its sample has not expired.
+ do
+  local hull,e,binding=trial()
+  assert(hull:push(binding,hull_sample(1,90000,0,0,0,rate),e.now))
+  e.now=6.99
+  assert(not hull:tick() and hull:state()=='correction_out_of_bounds' and e.writes==0)
  end
 
  -- The target can be based on an older buffered sample than the newest arrival.
@@ -282,13 +348,16 @@ do
   assert(not ok and why=='waiting_for_velocity' and hull:tick() and e.writes==0)
   assert(hull:push(binding,hull_sample(2,9000.1,4,0,0,zero),e.now))
   assert(hull:tick() and e.writes==1)
-  assert(not hull:push(binding,hull_sample(3,9000.2,5,0,0),e.now))
-  assert(not hull:tick() and e.writes==1)
+  e.now=6.9
+  assert(hull:push(binding,hull_sample(3,9000.2,5,0,0),e.now))
+  assert(hull:tick() and e.writes==1 and e.point.x==4)
+  e.now=7
+  assert(not hull:tick() and hull:state()=='stale' and e.writes==1)
  end
 
  for _, case in ipairs({
-  {'capture_gap', 2.1, 9001, 1},
-  {'arrival_gap', 2.8, 9000.1, 1},
+  {'capture_gap', 2.1, 9060.1, 1},
+  {'arrival_gap', 7, 9000.1, 1},
   {'source_discontinuity', 2.1, 9000.1, 51},
  }) do
   local hull,e,binding=trial()

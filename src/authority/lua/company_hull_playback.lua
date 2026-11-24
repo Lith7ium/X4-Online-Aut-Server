@@ -1,6 +1,10 @@
 -- Default-off, one verified cockpit target in the same sector. No native or wire APIs.
 local M = {}
-local MAX_STEP, MAX_AGE, READBACK_TOLERANCE = 50, .75, 3
+local MAX_STEP, PREDICTION_SECONDS, READBACK_TOLERANCE = 50, 5, 3
+M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
+-- The shared buffer's remote-capture continuity bound is independent of
+-- the local prediction deadline and tolerates different transit delays.
+local CAPTURE_CONTINUITY_LIMIT = 60
 local BINDING_FIELDS = {'slot', 'serial', 'epoch', 'sector_macro', 'index', 'actor', 'code', 'generation'}
 
 local function number(value, minimum, maximum)
@@ -76,6 +80,12 @@ function M.new(options)
         return false, reason
     end
 
+    local function expiry()
+        local ok, now = pcall(cfg.clock)
+        if not ok or not number(now, 0, 1e12) then return nil end
+        return last_arrival ~= nil and now >= last_arrival + PREDICTION_SECONDS
+    end
+
     local function guard()
         if terminal then return false end
         if cfg.paused() ~= false then
@@ -93,6 +103,7 @@ function M.new(options)
     local checked_buffer = {}
     function checked_buffer.new(settings)
         local inner, lineage = buffer.new(settings), {}
+        local newest
         return {
             push = function(_, sample, arrival)
                 local ok, reason = inner:push(sample, arrival)
@@ -104,11 +115,23 @@ function M.new(options)
                 lineage[#lineage + 1] = {sequence = sample.sequence, source_time = sample.source_time,
                                          capture_time = sample.capture_time}
                 if #lineage > 16 then table.remove(lineage, 1) end
+                newest = {pose = sample.pose, rate = sample.real_rate, arrival = arrival}
                 return true
             end,
             render = function(_, now)
                 local rendered = inner:render(now)
                 if not rendered then return nil end
+                if rendered.phase == 'extrapolated' or rendered.phase == 'frozen' then
+                    -- Capture time supports interpolation, but transit jitter
+                    -- must never predict farther than actual local time elapsed.
+                    local elapsed = math.min(PREDICTION_SECONDS, now - newest.arrival)
+                    for axis = 1, 3 do
+                        local start = newest.pose[axis]
+                        local limit = start + newest.rate[axis] * elapsed
+                        rendered.pose[axis] = math.min(math.max(start, limit),
+                            math.max(math.min(start, limit), rendered.pose[axis]))
+                    end
+                end
                 for _, source in ipairs(lineage) do
                     if source.sequence == rendered.source_sequence then
                         rendered_source = source
@@ -121,8 +144,9 @@ function M.new(options)
 
     player = assert(playback.new({
         enabled = true, buffer = checked_buffer, sample_version = 3, frame = binding.sector_macro,
-        max_age = MAX_AGE, max_step = MAX_STEP,
-        buffer_options = {delay = .15, horizon = .2, stale = MAX_AGE, teleport_distance = MAX_STEP},
+        max_age = PREDICTION_SECONDS, max_step = MAX_STEP,
+        buffer_options = {delay = .15, horizon = PREDICTION_SECONDS,
+                          stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
         read = function()
             local actual = assert(xyz(cfg.read(copy(binding)), 1e7), 'invalid native company hull read')
@@ -132,6 +156,11 @@ function M.new(options)
             return actual
         end,
         write = function(target, before)
+            local expired = expiry()
+            if expired ~= false then
+                refusal = expired and 'stale' or 'invalid_local_clock'
+                return false
+            end
             local position = assert(xyz(target, 1e7))
             write_source = rendered_source
             return cfg.write(copy(binding), position, xyz(before, 1e7))
@@ -179,13 +208,17 @@ function M.new(options)
                 or not number(arrival, 0, 1e12) then
             return stop('invalid_sample', 'sample')
         end
+        local expired = expiry()
+        if expired == nil then return stop('invalid_local_clock', 'arrival') end
+        if expired or (last_arrival and arrival >= last_arrival + PREDICTION_SECONDS) then
+            return stop('arrival_gap', 'arrival')
+        end
         local velocity = xyz(sample.real_velocity, 5000)
         if not velocity then
-            if sample.real_velocity == nil and not last_arrival then return false, 'waiting_for_velocity' end
-            return stop('missing_or_invalid_velocity', 'sample')
-        end
-        if last_arrival and arrival - last_arrival >= MAX_AGE then
-            return stop('arrival_gap', 'arrival')
+            -- Incomplete data cannot start a track, replace a known rate, or
+            -- reset the deadline for predictions from the last complete sample.
+            if sample.real_velocity == nil then return last_arrival ~= nil, 'waiting_for_velocity' end
+            return stop('invalid_velocity', 'sample')
         end
         local ok, reason = player:push({
             version = 3, frame = binding.sector_macro, sequence = sample.sequence, source_time = sample.source_time,
@@ -205,6 +238,9 @@ function M.new(options)
         if not player:tick() then return false, terminal end
         local state = player:state()
         if state == 'paused' or state == 'stale' then return stop(state, 'lifetime') end
+        local expired = expiry()
+        if expired == nil then return stop('invalid_local_clock', 'lifetime') end
+        if expired then return stop('stale', 'lifetime') end
         return true
     end
 
