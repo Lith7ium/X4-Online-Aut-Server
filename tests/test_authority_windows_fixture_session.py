@@ -219,13 +219,13 @@ class FixtureSessionTests(unittest.TestCase):
             self.assertIs(validator, validate_peer)
             self.calls.append('motion_start')
             return SimpleNamespace(poll=lambda: self.calls.append('motion_poll'),
-                                   close=lambda: self.calls.append('motion_close'), stats=stats)
+                                   close=lambda: self.calls.append('motion_close'), stats=stats, failure=None)
 
-        motion_module = SimpleNamespace(CompanyMotionClient=start_motion)
+        motion_module = SimpleNamespace(ReconnectingCompanyMotionClient=start_motion)
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
              patch.object(subject, 'WindowsMotionPeer', return_value=validate_peer) as peer_factory, \
              patch('authority.company_motion_source.CompanyMotionSource', return_value=source), \
-             patch.dict(sys.modules, {'authority.company_motion_client': motion_module}):
+             patch.dict(sys.modules, {'authority.company_motion_reconnect': motion_module}):
             result = self.run_session(require_registry_snapshot=True,
                                       select_ship=lambda ships, pump: 2, company_motion=True)
         self.assertTrue(self.connection_options['motion_enabled'])

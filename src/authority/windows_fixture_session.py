@@ -229,10 +229,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
                 if company_source is not None:
-                    from .company_motion_client import CompanyMotionClient
+                    from .company_motion_reconnect import ReconnectingCompanyMotionClient
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
-                    company_client = CompanyMotionClient(owner.motion_port, owner.ship_motion_credential,
-                                                         company_source, validate_peer)
+                    company_client = ReconnectingCompanyMotionClient(owner.motion_port,
+                        owner.ship_motion_credential, company_source, validate_peer)
                 commands = 0
                 while True:
                     if time.monotonic() >= deadline:
@@ -274,6 +274,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_client.close()
                         if result is not None:
                             result['company_motion'] = company_client.stats()
+                            if company_client.failure is not None:
+                                result['company_motion_failure'] = company_client.failure
                     except BaseException:
                         cleanup_errors.append('company motion client cleanup failed')
                 if company_source is not None:

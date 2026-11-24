@@ -5,8 +5,10 @@ from pathlib import Path
 import ssl
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from authority.company_motion_client import CompanyMotionClient
+from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
@@ -65,8 +67,9 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def echo_control(reader, writer):
         try:
-            writer.write(b'control:' + await reader.readline())
-            await writer.drain()
+            while request := await reader.readline():
+                writer.write(b'control:' + request)
+                await writer.drain()
         finally:
             writer.close()
             await writer.wait_closed()
@@ -181,6 +184,65 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConnectionError):
             await self.drive(stale.poll)
         self.assertEqual(self.service.accepted_samples, 6)
+
+    async def test_motion_only_drop_rebinds_with_same_control_socket_and_sequence_baseline(self):
+        control_port, motion_port = await self.link()
+        reader, writer = await asyncio.open_connection('127.0.0.1', control_port)
+
+        async def close_control():
+            writer.close()
+            await writer.wait_closed()
+        self.addAsyncCleanup(close_control)
+
+        async def check_control(marker):
+            async with asyncio.timeout(3):
+                writer.write(marker + b'\n')
+                await writer.drain()
+                self.assertEqual(await reader.readline(), b'control:' + marker + b'\n')
+
+        source = SelectedCockpit(1970)
+        client = ReconnectingCompanyMotionClient(motion_port, self.grant(1, 1970, 'sector_a'),
+            source, lambda address: address == ('127.0.0.1', 22970))
+        self.addCleanup(client.close)
+        self.clients = [client]
+        self.service.set_running(True)
+        await self.drive(lambda: client._client is not None and client._client._running)
+        source.stage(1, 'sector_a', 10)
+        await self.drive(lambda: client.stats()['samples_acknowledged'] == 1)
+        await check_control(b'before-drop')
+        first_link = client._client
+        peer, = self.service._peers.values()
+        with patch.object(self.service, '_write'):  # Sequence 2 reaches the server, but its ACK cannot reach the client.
+            source.stage(2, 'sector_a', 26)
+            await self.drive(lambda: self.service.accepted_samples == 2)
+        self.assertEqual(client.stats()['samples_acknowledged'], 1)
+        self.service._drop(peer)
+        await self.drive(lambda: client._client is None)
+        source.stage(3, 'sector_a', 42)
+        await self.drive(lambda: source.sample is None)
+        await check_control(b'during-motion-drop')
+        await self.drive(lambda: client._client is not None and client._client._running)
+        self.assertIsNot(client._client, first_link)
+        self.assertEqual(client._client._last_sequence, 2)
+        self.assertEqual(self.service.accepted_samples, 2)
+        source.stage(2, 'sector_a', 26)
+        await self.drive(lambda: source.sample is None)
+        self.assertEqual(self.service.accepted_samples, 2)
+
+        source.stage(4, 'sector_a', 58)
+        await self.drive(lambda: client.stats()['samples_acknowledged'] == 2)
+        self.assertEqual(client.stats()['velocity_samples_acknowledged'], 0)
+        self.assertEqual(self.service._grants[1].last_sequence, 4)
+        source.stage(5, 'sector_a', 74)
+        await self.drive(lambda: client.stats()['samples_acknowledged'] == 3)
+        self.assertEqual(client.stats()['velocity_samples_acknowledged'], 1)
+        await check_control(b'after-motion-rebind')
+
+        client.close()
+        await self.drive(lambda: not self.service._peers)
+        self.assertEqual(client.stats()['samples_acknowledged'], 3)
+        self.assertIsNone(client._credential)
+        await check_control(b'after-motion-close')
 
     async def test_motion_requires_both_pin_and_shared_key_before_binding(self):
         grant = self.grant(1, 1970, 'sector_a')

@@ -401,15 +401,15 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     result['controlled_company_ship_index'] = index
                     if company_source is not None:
-                        from authority.company_motion_client import CompanyMotionClient
+                        from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 
                         def validate_peer(peer):
                             guard(full=True)
                             return participant.process is not None and socket_owner(
                                 peer, company_source.socket.getsockname(), participant.process)
 
-                        company_client = CompanyMotionClient(owner.motion_port, owner.ship_motion_credential,
-                                                             company_source, validate_peer)
+                        company_client = ReconnectingCompanyMotionClient(owner.motion_port,
+                            owner.ship_motion_credential, company_source, validate_peer)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
                         deadline, lambda: stop_requested, company_client=company_client)
@@ -445,6 +445,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     try:
                         company_client.close()
                         result['company_motion'] = company_client.stats()
+                        if company_client.failure is not None:
+                            result['company_motion_failure'] = company_client.failure
                     except BaseException:
                         cleanup_errors.append('company_motion_client_cleanup_failed')
                 if company_source is not None:
