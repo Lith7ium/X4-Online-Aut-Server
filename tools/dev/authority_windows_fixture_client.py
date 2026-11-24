@@ -127,6 +127,17 @@ def run(args):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ['--find-game']:
+        from lockstep.launcher.game import find_install
+        try:
+            game = find_install().resolve(strict=True)
+        except (OSError, ImportError, SystemExit):
+            print('Could not find X4 Foundations in Steam libraries. Pass -Game with its installed folder.',
+                  file=sys.stderr)
+            return 1
+        print(json.dumps({'game': str(game)}))
+        return 0
     args = parser().parse_args(argv)
     try:
         result = run(args)

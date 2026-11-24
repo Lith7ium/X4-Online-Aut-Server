@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)] [string] $Game,
+    [Parameter()] [string] $Game,
     [Parameter(Mandatory = $true)] [string] $ConnectionFile,
     [string] $WorkRoot,
     [string] $Python = 'python',
@@ -24,6 +24,17 @@ if ($ObserveSeconds -ge $TimeoutSeconds) {
     throw 'Allow time for the initial join before the observation window.'
 }
 $packageRoot = Split-Path -Parent $PSScriptRoot
+$client = Join-Path $PSScriptRoot 'dev/authority_windows_fixture_client.py'
+if (-not $PSBoundParameters.ContainsKey('Game')) {
+    $discovery = @(& $Python $client '--find-game')
+    if ($LASTEXITCODE -ne 0 -or $discovery.Count -ne 1) {
+        throw 'Could not find X4 Foundations in Steam libraries. Pass -Game with its installed folder.'
+    }
+    $Game = ($discovery[0] | ConvertFrom-Json).game
+    if ($Game -isnot [string] -or -not [IO.Path]::IsPathRooted($Game)) {
+        throw 'Steam discovery did not return an absolute game folder. Pass -Game.'
+    }
+}
 $gameDirectory = Get-Item -LiteralPath $Game
 $connection = Get-Item -LiteralPath $ConnectionFile
 if (-not $gameDirectory.PSIsContainer -or $connection.PSIsContainer) {
@@ -56,7 +67,6 @@ if ($dll.PSIsContainer -or (Get-FileHash -LiteralPath $dll.FullName -Algorithm S
 }
 
 $runId = 'x4-authority-' + [guid]::NewGuid().ToString('N')
-$client = Join-Path $PSScriptRoot 'dev/authority_windows_fixture_client.py'
 $clientArgs = @(
     '--isolated-fixture-test',
     '--timeout', [string]$TimeoutSeconds,

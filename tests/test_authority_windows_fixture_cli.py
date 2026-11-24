@@ -26,6 +26,42 @@ class FixtureCliTests(unittest.TestCase):
                              file_token='c' * 32, file_slot=1)
         self.connection.write_text(json.dumps(self.settings))
 
+    def test_find_game_uses_packaged_steam_libraries_with_spaces(self):
+        from lockstep.launcher import game
+
+        steamapps = self.root / 'Steam root' / 'steamapps'
+        library = self.root / 'Alternate Steam Libräry'
+        installed = library / 'steamapps/common/X4 Foundations'
+        steamapps.mkdir(parents=True)
+        installed.mkdir(parents=True)
+        (steamapps / 'libraryfolders.vdf').write_text(
+            f'"libraryfolders" {{ "1" {{ "path" "{library}" }} }}', encoding='utf-8')
+        (steamapps / 'appmanifest_392160.acf').touch()
+        (installed / 'X4.exe').touch()
+        output, errors = io.StringIO(), io.StringIO()
+        with (patch.object(game, 'steam_root', return_value=steamapps.parent),
+              contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors)):
+            self.assertEqual(cli.main(['--find-game']), 1)
+            self.assertEqual(output.getvalue(), '')
+            self.assertIn('Pass -Game', errors.getvalue())
+
+            (library / 'steamapps/appmanifest_392160.acf').touch()
+            self.assertEqual(cli.main(['--find-game']), 0)
+        self.assertEqual(json.loads(output.getvalue()), {'game': str(installed.resolve())})
+
+    def test_explicit_game_bypasses_steam_discovery(self):
+        from lockstep.launcher import game
+
+        installed = self.root / 'Explicit X4'
+        arguments = ['--connection-file', str(self.connection), '--game', str(installed),
+                     '--view-container', str(self.root / 'view'), '--out', str(self.root / 'out'),
+                     '--network-dll', str(self.root / 'net.dll'), '--network-dll-sha256', 'a' * 64]
+        with (patch.object(game, 'find_install') as discover, patch.object(cli, 'run', return_value={}) as run,
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(cli.main(arguments), 0)
+        discover.assert_not_called()
+        self.assertEqual(run.call_args.args[0].game, installed)
+
     def test_connection_decodes_only_expected_fields(self):
         settings = cli.read_connection_settings(self.connection)
         self.assertEqual(settings, self.settings | {'shared_key': bytes.fromhex('b' * 64)})

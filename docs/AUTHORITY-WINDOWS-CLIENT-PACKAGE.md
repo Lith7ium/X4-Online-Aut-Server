@@ -44,10 +44,13 @@ file. It can run before opening X4.
 python .\tools\dev\authority_connection_check.py --connection-file C:\X4Test\connection.json
 
 .\tools\run_authority_windows_client.ps1 `
-  -Game 'D:\SteamLibrary\steamapps\common\X4 Foundations' `
-  -ConnectionFile C:\X4Test\connection.json `
-  -WorkRoot D:\X4Test
+  -ConnectionFile 'C:\X4Test\connection.json'
 ```
+
+Without `-Game`, the launcher checks Steam's configured libraries for
+X4 Foundations. Pass `-Game 'D:\SteamLibrary\steamapps\common\X4 Foundations'`
+to select a specific installation. The same pinned executable check applies
+in both cases.
 
 `-WorkRoot` is an existing writable directory on the game drive. The default
 is the parent of the X4 installation. Each invocation picks fresh sibling

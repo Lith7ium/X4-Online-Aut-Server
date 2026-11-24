@@ -59,6 +59,15 @@ software with a noncommercial restriction, not an OSI open-source project.
 The earlier "replica" design (host-authoritative NPC copies, packages 7.0 to 7.5)
 was retired in November 2026. It is preserved at the Git tag `legacy/replica-7.5`.
 
+## Windows authority client
+
+In the extracted authority client package, run
+`.\tools\run_authority_windows_client.ps1 -ConnectionFile 'C:\X4Test\connection.json'`
+from PowerShell. The launcher searches Steam's configured libraries for X4.
+Pass `-Game` to select a specific installation.
+See the [Windows authority client guide](docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md)
+for the pinned build, required profile state, and optional settings.
+
 ## Quick start (developers, Windows)
 
 ```
