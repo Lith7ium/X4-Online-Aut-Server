@@ -17,9 +17,9 @@ TAG = b'[X4LAN] AUTH_VANILLA_PAIR '
 
 def _checked(pair):
     if (not isinstance(pair, dict) or set(pair) != {'codes','station','room','sector'}
-            or pair['sector'] != SECTOR or not CODE.fullmatch(pair['station'])
-            or not MACRO.fullmatch(pair['room']) or not isinstance(pair['codes'], list)
-            or len(pair['codes']) != 2 or any(not CODE.fullmatch(c) for c in pair['codes'])
+            or pair['sector'] != SECTOR or not isinstance(pair['station'], str) or not CODE.fullmatch(pair['station'])
+            or not isinstance(pair['room'], str) or not MACRO.fullmatch(pair['room']) or not isinstance(pair['codes'], list)
+            or len(pair['codes']) != 2 or any(not isinstance(c, str) or not CODE.fullmatch(c) for c in pair['codes'])
             or len(set(pair['codes'])) != 2):
         raise ValueError('invalid native vanilla pair receipt')
     return pair
