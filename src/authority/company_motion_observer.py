@@ -196,6 +196,10 @@ class CompanyMotionObserver:
                 if trial is not None:
                     self._trial = trial
 
+    def resume_route(self):
+        """The single previously forwarded trial route, without pose or clocks."""
+        return self._trial[1:] if self._trial is not None else None
+
     def transport_lost(self, index, generation):
         """Clear old receipt candidates without revoking the local trial's authorization."""
         for view in self._slots.values():

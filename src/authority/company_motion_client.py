@@ -3,7 +3,8 @@ import re
 import socket
 import time
 
-from .company_motion_frames import MAX_COUNTER, encode_frame, normalize_views, read_frames, view_matches
+from .company_motion_frames import (BIND_TIMEOUT, MAX_COUNTER, encode_frame,
+                                    normalize_views, read_frames, view_matches)
 from .experimental_tcp_motion import motion_value
 from .trusted_load_messages import validate_ship_motion_credential
 
@@ -14,11 +15,20 @@ class CompanyMotionClient:
     """Poll on the player owner thread. Only one sample awaits a receipt in each direction."""
 
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
-                 on_view_reset=None, on_transport_lost=None, on_clock=None, _latest_seen=None):
+                 on_view_reset=None, on_transport_lost=None, on_clock=None, trial_index=None,
+                 resume_route=None, _latest_seen=None):
         epoch, index = source.registry
         if any(callback is not None and not callable(callback)
                for callback in (on_view_reset, on_transport_lost, on_clock)):
             raise ValueError('invalid movement observation callback')
+        if (trial_index is not None or on_transport_lost is not None) and (
+                on_transport_lost is None or type(trial_index) is not int
+                or not 1 <= trial_index <= 200000 or trial_index == index):
+            raise ValueError('invalid movement trial index')
+        if resume_route is not None and (
+                trial_index is None or type(resume_route) is not tuple or len(resume_route) != 3
+                or resume_route[0] != trial_index):
+            raise ValueError('movement resume route does not match trial index')
         if type(credential) is not dict or not callable(validate_peer):
             raise ValueError('movement admission and local source validator required')
         credential = validate_ship_motion_credential(credential, index=index, registry_epoch=epoch,
@@ -30,8 +40,10 @@ class CompanyMotionClient:
             self._connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._connection.setblocking(False)
             bind = {'kind': 'bind_motion', 'ticket': credential['ticket']}
-            if on_transport_lost is not None:
-                bind['loss_notifications'] = True
+            if trial_index is not None:
+                bind.update(loss_notifications=True, trial_index=trial_index)
+            if resume_route is not None:
+                bind['resume_route'] = resume_route
             self._outgoing = encode_frame(bind)
         except BaseException:
             self._connection.close()
@@ -43,9 +55,11 @@ class CompanyMotionClient:
         self._on_view_reset = on_view_reset
         self._on_transport_lost = on_transport_lost
         self._on_clock = on_clock
+        self._trial_index = trial_index
+        self._resume_route = resume_route
         self._generation = credential['generation']
         self._incoming = bytearray()
-        self._bind_deadline = time.monotonic() + 15
+        self._bind_deadline = time.monotonic() + BIND_TIMEOUT
         self._window = None
         self._running = False
         self._last_sequence = 0
@@ -103,7 +117,7 @@ class CompanyMotionClient:
             del self._visible[index]
             self._hidden.discard(index)
             self._stats['visibility_ends'] += 1
-            if transport_lost and self._on_transport_lost is not None:
+            if transport_lost and self._trial_index == index:
                 self._on_transport_lost(index, generation)
             else:
                 self._on_end(index, generation)
@@ -126,10 +140,15 @@ class CompanyMotionClient:
         fields = {'kind', 'window', 'running'}
         if binding:
             fields.add('last_sequence')
-            if self._on_transport_lost is not None:
-                fields.add('loss_notifications')
-                if message.get('loss_notifications') is not True:
-                    raise ValueError('movement bind lacks negotiated loss notifications')
+            if self._trial_index is not None:
+                fields.update(('loss_notifications', 'trial_index'))
+                if (message.get('loss_notifications') is not True or type(message.get('trial_index')) is not int
+                        or message['trial_index'] != self._trial_index):
+                    raise ValueError('movement bind lacks negotiated trial capability')
+            if self._resume_route is not None:
+                fields.add('resume_valid')
+                if type(message.get('resume_valid')) is not bool:
+                    raise ValueError('movement bind lacks a resume verdict')
         window = message.get('window')
         if (set(message) != fields or type(window) is not int or not 0 <= window <= MAX_COUNTER or
                 type(message['running']) is not bool or binding != (self._window is None)):
@@ -149,6 +168,14 @@ class CompanyMotionClient:
         self._retire_outside({})
         if self._on_clock is not None:
             self._on_clock(window, self._running)
+        if binding and self._resume_route is not None:
+            index, generation, sector = self._resume_route
+            self._resume_route = None
+            if message['resume_valid'] and self._running:
+                if view_matches(self._desired_view or {}, index, sector):
+                    self._visible[index] = sector, generation
+            else:
+                self._on_end(index, generation)
         if not binding and self._on_view_reset is not None:
             self._on_view_reset()
 
@@ -187,13 +214,15 @@ class CompanyMotionClient:
                 self._snapshot(sample)
             self._receipt = {'kind': 'motion_received', 'view_id': view_id, 'index': sample['index'],
                              'sequence': sample['sequence'], 'generation': sample['generation']}
-        elif (kind == 'motion_end' or (kind == 'motion_hidden' and self._on_transport_lost is not None)) and (
+        elif (kind == 'motion_end' or (kind == 'motion_hidden' and self._trial_index is not None)) and (
                 set(message) == {'kind', 'window', 'view_id', 'index', 'generation'}
         ):
             index, generation = message['index'], message['generation']
             if (type(index) is not int or not 1 <= index <= 200000 or
                     type(generation) is not str or not _HEX32.fullmatch(generation)):
                 raise ValueError('invalid movement visibility end')
+            if kind == 'motion_hidden' and index != self._trial_index:
+                raise ValueError('remote disappearance outside trial index')
             visible = self._visible.get(index)
             if (visible is not None and visible[1] == generation
                     and view_id >= self._route_revisions.get((index, visible[0]), MAX_COUNTER + 1)):

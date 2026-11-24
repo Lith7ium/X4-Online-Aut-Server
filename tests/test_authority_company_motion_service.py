@@ -127,11 +127,12 @@ class CompanyMotionServiceTests(unittest.TestCase):
             self.service.poll()
             self.assertEqual(json.loads(stream.readline())['kind'], 'motion_state')
 
-    def test_opt_in_ttl_preserves_only_a_bounded_hard_end_watermark(self):
+    def test_opt_in_route_survives_stale_pose_until_view_or_revoke(self):
         self.service.set_running(True)
         source, _ = self.bind(self.first)
         third = self.grant(3)
-        viewers = [self.bind(grant, loss_notifications=True) for grant in (self.second, third)]
+        viewers = [self.bind(grant, loss_notifications=True, trial_index=1)
+                   for grant in (self.second, third)]
         for viewer, _ in viewers:
             self.view(viewer, [1])
         clock_path = 'authority.company_motion_service.time.monotonic'
@@ -144,11 +145,105 @@ class CompanyMotionServiceTests(unittest.TestCase):
             for _, stream in viewers:
                 self.assertEqual(json.loads(stream.readline())['kind'], 'motion_hidden')
             self.view(viewers[0][0], [], view_id=2)
-        with patch(clock_path, return_value=105):
+        self.assertIsNone(self.service._grants[2].trial_route)
+        with patch(clock_path, return_value=200):
             self.service.poll()
-        for peer in self.service._peers.values():
-            self.assertEqual(peer.hidden_until, {})
-            self.assertEqual(peer.delivered, {})
+            self.assertIsNotNone(self.service._grants[3].trial_route)
+            self.service.revoke(1)
+            self.service.set_running(False)
+            self.service.poll()
+        self.assertEqual(json.loads(viewers[0][1].readline())['kind'], 'motion_state')
+        self.assertEqual(json.loads(viewers[1][1].readline())['kind'], 'motion_end')
+        self.assertEqual(json.loads(viewers[1][1].readline())['kind'], 'motion_state')
+        self.assertIsNone(self.service._grants[3].trial_route)
+
+    def test_protocol_error_before_rebound_publisher_sample_hard_ends_hidden_route(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second, loss_notifications=True, trial_index=1)
+        self.view(viewer, [1])
+        self.publish(source, self.first, 1)
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_snapshot')
+
+        source.shutdown(socket.SHUT_RDWR)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_hidden')
+        rebound, rebound_stream = self.bind(self.first)
+        self.send(rebound, {'kind': 'motion_sample', 'window': self.service.window, 'sample': {}})
+        self.assertEqual(rebound_stream.readline(), b'')
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_end')
+        self.assertIsNone(self.service._grants[2].trial_route)
+
+    def test_control_transport_loss_removes_authority_and_regrant_ends_trial_route(self):
+        self.service.set_running(True)
+        source, source_stream = self.bind(self.first)
+        trial, trial_stream = self.bind(self.second, loss_notifications=True, trial_index=1)
+        legacy, legacy_stream = self.bind(self.grant(3))
+        self.view(trial, [1])
+        self.view(legacy, [1])
+        self.publish(source, self.first, 1)
+        self.assertEqual(json.loads(source_stream.readline())['kind'], 'motion_sampled')
+        for stream in (trial_stream, legacy_stream):
+            self.assertEqual(json.loads(stream.readline())['kind'], 'motion_snapshot')
+
+        self.service.transport_lost(1)
+        self.service.poll()
+        self.assertEqual(source_stream.readline(), b'')
+        self.assertNotIn(1, self.service._grants)
+        stale, stale_stream = self.open()
+        self.send(stale, {'kind': 'bind_motion', 'ticket': self.first['ticket']})
+        self.assertEqual(stale_stream.readline(), b'')
+        self.assertEqual(json.loads(trial_stream.readline())['kind'], 'motion_hidden')
+        self.assertEqual(json.loads(legacy_stream.readline())['kind'], 'motion_end')
+        self.assertIsNotNone(self.service._grants[2].trial_route)
+
+        replacement = self.grant(1)
+        self.assertNotEqual(replacement['generation'], self.first['generation'])
+        self.service.poll()
+        self.assertEqual(json.loads(trial_stream.readline())['kind'], 'motion_end')
+        self.assertIsNone(self.service._grants[2].trial_route)
+        self.assertEqual(self.service.accepted_samples, 1)
+
+    def test_revoke_after_resume_verdict_but_before_view_still_prioritizes_hard_end(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second, loss_notifications=True, trial_index=1)
+        self.view(viewer, [1])
+        self.publish(source, self.first, 1)
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_snapshot')
+        viewer.shutdown(socket.SHUT_RDWR)
+        self.service.poll()
+        resumed, reply = self.open()
+        self.send(resumed, {'kind': 'bind_motion', 'ticket': self.second['ticket'], 'loss_notifications': True,
+                            'trial_index': 1, 'resume_route': [1, self.first['generation'], 'sector_a']})
+        self.assertIs(json.loads(reply.readline())['resume_valid'], True)
+        self.service.revoke(1)
+        self.view(resumed, [1])
+        self.assertEqual(json.loads(reply.readline())['kind'], 'motion_end')
+
+    def test_control_loss_resume_is_scoped_to_the_prior_observer_and_ends_on_regrant(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second, loss_notifications=True, trial_index=1)
+        self.view(viewer, [1])
+        self.publish(source, self.first, 1)
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_snapshot')
+        viewer.shutdown(socket.SHUT_RDWR)
+        self.service.poll()
+        self.service.transport_lost(1)
+
+        claim = [1, self.first['generation'], 'sector_a']
+        for grant, expected in ((self.grant(3), False), (self.second, True)):
+            resumed, reply = self.open()
+            self.send(resumed, {'kind': 'bind_motion', 'ticket': grant['ticket'], 'loss_notifications': True,
+                                'trial_index': 1, 'resume_route': claim})
+            self.assertIs(json.loads(reply.readline())['resume_valid'], expected)
+            self.view(resumed, [1])
+        self.grant(1)
+        self.service.poll()
+        end = json.loads(reply.readline())
+        self.assertEqual((end['kind'], end['generation']), ('motion_end', self.first['generation']))
 
     def test_clock_change_before_binding_sends_only_current_bound_state(self):
         connection, stream = self.open()

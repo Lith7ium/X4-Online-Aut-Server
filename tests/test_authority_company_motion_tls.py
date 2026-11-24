@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from authority.company_motion_client import CompanyMotionClient
-from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
+from authority.company_motion_observer import CompanyMotionObserver, MAX_OBSERVER_DATAGRAM
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_motion_source import CompanyMotionSource
@@ -486,6 +486,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
             on_snapshot=snapshots.append,
             on_end=lambda *identity: events.append(('end', *identity)),
             on_transport_lost=lambda *identity: events.append(('lost', *identity)),
+            trial_index=7354, resume_route=lambda: None,
         )
         self.addCleanup(viewer.close)
         viewer.set_view('sector_a', [7354])
@@ -549,7 +550,8 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
             viewer_port, viewer_grant, SelectedCockpit(1970), lambda _: True,
             on_snapshot=snapshots.append, on_end=lambda *identity: events.append(('end', *identity)),
             on_transport_lost=lambda *identity: events.append(('lost', *identity)),
-            on_world_reset=lambda: events.append(('reset',)),
+            on_world_reset=lambda: events.append(('reset',)), trial_index=7354,
+            resume_route=lambda: (7354, source_grant['generation'], 'sector_a') if snapshots else None,
         )
         self.addCleanup(viewer.close)
         self.clients = [viewer, publisher]
@@ -577,7 +579,59 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         self.service.set_running(False)
         self.service.set_running(True)
         await self.drive(lambda: viewer._client is not None and viewer._client._running)
-        self.assertEqual(events, [('lost', *identity), ('lost', *identity), ('reset',)])
+        self.assertEqual(events, [('lost', *identity), ('lost', *identity), ('reset',), ('end', *identity)])
+
+    async def _trial_hard_end_while_viewer_is_disconnected(self, *, sector_change):
+        _, viewer_port = await self.link()
+        _, source_port = await self.link()
+        viewer_grant = self.grant(1, 1970, 'sector_a')
+        source_grant = self.grant(2, 7354, 'sector_a')
+        publisher, source, _, _ = self.attach(source_port, source_grant)
+        messages = []
+        observer = CompanyMotionObserver(
+            (REGISTRY_EPOCH, 1970), lambda message: messages.append(message.split('|')) or True,
+            trial_index=7354,
+        )
+        viewer = ReconnectingCompanyMotionClient(
+            viewer_port, viewer_grant, SelectedCockpit(1970), lambda _: True,
+            on_snapshot=observer.snapshot, on_end=observer.end, on_transport_lost=observer.transport_lost,
+            on_world_reset=observer.reset_world, trial_index=7354, resume_route=observer.resume_route,
+        )
+        self.addCleanup(viewer.close)
+        self.clients = [viewer, publisher]
+        observer.bind_views(viewer.set_views)
+        observer.receive(['VIEW', 'cockpit', '1', REGISTRY_EPOCH, 'sector_a', '7354', '0x123abc', 'WRN-302'])
+        self.service.set_running(True)
+        await self.drive(lambda: publisher._running)
+        source.stage(1, 'sector_a', 10)
+        await self.drive(lambda: bool(messages))
+        initial, = messages
+        self.assertEqual(initial[0], 'REMOTE')
+        initial_window = self.service.window
+        viewer_peer = next(peer for peer in self.service._peers.values()
+                           if peer.grant is not None and peer.grant.handle == 1)
+        self.service._drop(viewer_peer)
+        await self.drive(lambda: viewer._client is None)
+        self.assertEqual(messages, [initial])
+
+        if sector_change:
+            source.stage(2, 'sector_b', 20)
+            await self.drive(lambda: publisher.stats()['samples_acknowledged'] == 2)
+        else:
+            self.clients.remove(publisher)
+            self.service.revoke(2)
+
+        await self.drive(lambda: len(messages) == 2)
+        end = ['END', 'cockpit', '1', REGISTRY_EPOCH, '7354', source_grant['generation'], 'sector_a']
+        self.assertEqual(messages, [initial, end])
+        self.assertEqual(viewer._client._window, initial_window)
+        self.assertIsNone(observer.resume_route())
+
+    async def test_trial_same_window_rebind_hard_ends_a_revoked_source_without_new_sample(self):
+        await self._trial_hard_end_while_viewer_is_disconnected(sector_change=False)
+
+    async def test_trial_same_window_rebind_hard_ends_a_source_that_changed_sector(self):
+        await self._trial_hard_end_while_viewer_is_disconnected(sector_change=True)
 
     async def test_trial_refuses_a_bind_without_loss_capability(self):
         _, viewer_port = await self.link()
@@ -585,6 +639,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         viewer = ReconnectingCompanyMotionClient(
             viewer_port, viewer_grant, SelectedCockpit(1970), lambda _: True,
             on_snapshot=lambda _: None, on_end=lambda *_: None, on_transport_lost=lambda *_: None,
+            trial_index=7354, resume_route=lambda: None,
         )
         self.addCleanup(viewer.close)
         self.clients = [viewer]
@@ -592,12 +647,40 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         bind = self.service._bind
 
         def bind_legacy(peer, message):
-            bind(peer, {key: value for key, value in message.items() if key != 'loss_notifications'})
+            bind(peer, {key: value for key, value in message.items() if key not in {'loss_notifications', 'trial_index'}})
 
         with patch.object(self.service, '_bind', side_effect=bind_legacy):
             await self.drive(lambda: viewer.failure is not None)
         self.assertEqual(viewer.failure, 'motion_local_or_protocol_failure')
         self.assertIsNone(viewer._client)
+
+    async def test_trial_legacy_eof_across_sockets_exhausts_one_initial_bind_budget(self):
+        _, viewer_port = await self.link()
+        viewer_grant = self.grant(1, 1970, 'sector_a')
+        attempts = []
+
+        def legacy_disconnect(peer, message):
+            self.assertIs(message.get('loss_notifications'), True)
+            attempts.append(peer)
+            self.service._drop(peer)
+
+        with patch('authority.company_motion_reconnect.BIND_TIMEOUT', .65), \
+                patch.object(self.service, '_bind', side_effect=legacy_disconnect):
+            viewer = ReconnectingCompanyMotionClient(
+                viewer_port, viewer_grant, SelectedCockpit(1970), lambda _: True,
+                on_snapshot=lambda _: None, on_end=lambda *_: None, on_transport_lost=lambda *_: None,
+                trial_index=7354, resume_route=lambda: None,
+            )
+            self.addCleanup(viewer.close)
+            self.clients = [viewer]
+            await self.drive(lambda: viewer.failure is not None)
+            self.assertGreaterEqual(len(attempts), 2)
+            self.assertEqual(viewer.failure, 'motion_initial_bind_timeout')
+            self.assertIsNone(viewer._client)
+            admitted_attempts = len(attempts)
+            viewer.poll()
+            self.service.poll()
+            self.assertEqual(len(attempts), admitted_attempts)
 
     async def test_legacy_server_can_reject_dual_view_without_dropping_existing_control(self):
         control, motion = await self.link()

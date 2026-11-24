@@ -2,7 +2,7 @@
 import time
 
 from .company_motion_client import CompanyMotionClient
-from .company_motion_frames import normalize_views
+from .company_motion_frames import BIND_TIMEOUT, normalize_views
 
 _INITIAL_DELAY = .25
 _MAX_DELAY = 5
@@ -39,10 +39,13 @@ class ReconnectingCompanyMotionClient:
     same thread. An explicit view survives a link reset without retaining poses.
     """
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
-                 on_transport_lost=None, on_world_reset=None):
+                 on_transport_lost=None, on_world_reset=None, trial_index=None, resume_route=None):
         if ((on_snapshot is not None or on_end is not None)
                 and not (callable(on_snapshot) and callable(on_end))):
             raise ValueError('an observed view needs snapshot and visibility callbacks')
+        if (trial_index is not None or on_transport_lost is not None) and (
+                trial_index is None or not callable(resume_route) or not callable(on_transport_lost)):
+            raise ValueError('a movement trial needs recovery callbacks')
         self._port = port
         self._credential = dict(credential) if type(credential) is dict else credential
         self._source = _LocalSource(source)
@@ -50,6 +53,9 @@ class ReconnectingCompanyMotionClient:
         self._on_snapshot, self._on_end = on_snapshot, on_end
         self._on_transport_lost = on_transport_lost
         self._on_world_reset = on_world_reset
+        self._trial_index = trial_index
+        self._resume_route = resume_route
+        self._initial_bind_until = None if trial_index is None else time.monotonic() + BIND_TIMEOUT
         self._clock = None
         self._view = None
         self._latest_seen = {}
@@ -94,13 +100,14 @@ class ReconnectingCompanyMotionClient:
             raise ValueError('local movement observer failed') from None
 
     def _bound_clock(self, window, running):
+        self._initial_bind_until = None
         clock = (window, running)
-        if self._clock is not None and clock != self._clock:
+        if self._on_world_reset is not None and self._clock is not None and clock != self._clock:
             self._notify(self._on_world_reset)
         self._clock = clock
 
-    def _fail(self):
-        self.failure = 'motion_local_or_protocol_failure'
+    def _fail(self, reason='motion_local_or_protocol_failure'):
+        self.failure = reason
         self._credential = None
         self._view = None
         self._latest_seen.clear()
@@ -131,6 +138,10 @@ class ReconnectingCompanyMotionClient:
     def poll(self):
         if self._closed or self.failure is not None:
             return
+        if self._initial_bind_until is not None and time.monotonic() >= self._initial_bind_until:
+            self._finish_link()
+            self._fail('motion_initial_bind_timeout')
+            return
         try:
             if self._client is None:
                 # Consume pre-bind observations without retaining them. The new
@@ -148,8 +159,11 @@ class ReconnectingCompanyMotionClient:
                     if self._on_transport_lost is not None:
                         observer['on_transport_lost'] = lambda index, generation: self._notify(
                             self._on_transport_lost, index, generation)
-                    if self._on_world_reset is not None:
+                    if self._on_transport_lost is not None or self._on_world_reset is not None:
                         observer['on_clock'] = self._bound_clock
+                    if self._trial_index is not None:
+                        observer['trial_index'] = self._trial_index
+                        observer['resume_route'] = self._resume_route()
                 self._client = CompanyMotionClient(self._port, self._credential,
                                                    self._source, self._validate_peer, **observer)
                 self._apply_view()
@@ -168,8 +182,10 @@ class ReconnectingCompanyMotionClient:
     def observing(cls, port, credential, source, validate_peer):
         observer = source.observe(validate_peer)
         trial = {}
-        if getattr(source, 'playback_index', None) is not None:
-            trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world)
+        trial_index = getattr(source, 'playback_index', None)
+        if trial_index is not None:
+            trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
+                         trial_index=trial_index, resume_route=observer.resume_route)
         client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end, **trial)
         observer.bind_views(client.set_views)
         return client
