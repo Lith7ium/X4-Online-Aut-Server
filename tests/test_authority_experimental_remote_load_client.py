@@ -39,7 +39,7 @@ class RemoteLoadClientTests(unittest.TestCase):
     def connect(self, *, ack_attempt=None, after_ack=b'', offer=None, after_offer=b'',
                 not_ready_count=0, offer_delay=0, io_timeout=2, keepalive_interval=None,
                 wrong_alive=False, ack_delay=0, close_after_claim=False, fragment_ack=False,
-                reject_post_claim_input=False):
+                reject_post_claim_input=False, offer_response=None):
         listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM);listener.bind(('127.0.0.1',0));listener.listen(1)
         listener.settimeout(3);client=socket.create_connection(listener.getsockname(),timeout=3)
         errors=[]; claims=[]; self.keepalives=[]
@@ -52,6 +52,11 @@ class RemoteLoadClientTests(unittest.TestCase):
                         conn.sendall(b'{\"version\":1,\"kind\":\"not_ready\"}\n')
                     if stream.readline()!=offer_request(): raise AssertionError('unexpected offer request')
                     if offer_delay: time.sleep(offer_delay)
+                    if offer_response is not None:
+                        conn.sendall(offer_response)
+                        if stream.readline():
+                            raise AssertionError('unexpected request after rejected offer')
+                        return
                     conn.sendall(encode_bound_offer(offer or self.bound)+b'\n'+after_offer)
                     line=stream.readline()
                     while line:
@@ -86,6 +91,7 @@ class RemoteLoadClientTests(unittest.TestCase):
             file_token=self.token,file_slot=1,deadline=time.monotonic()+5,io_timeout=io_timeout,
             keepalive_interval=keepalive_interval)
         self.addCleanup(obj.close)
+        self.server_thread = thread
         return obj,claims,errors
 
     def staged(self,obj):
@@ -102,6 +108,26 @@ class RemoteLoadClientTests(unittest.TestCase):
         self.staged(obj); self.observations(obj); obj.claim(self.offer.attempt_id)
         self.assertEqual(len(claims),1)
         self.assertFalse(errors)
+
+    def test_session_full_is_terminal_and_requires_exact_wire_fields(self):
+        obj, _, errors = self.connect(offer_response=b'{"version":1,"kind":"session_full"}\n')
+        with self.assertRaisesRegex(subject.SessionFull, '^Session Full$'):
+            obj.request_offer()
+        self.server_thread.join(1)
+        self.assertFalse(self.server_thread.is_alive())
+        self.assertFalse(errors)
+
+        for response in (
+            b'{"version":true,"kind":"session_full"}\n',
+            b'{"version":1,"kind":"session_full","detail":"private"}\n',
+        ):
+            with self.subTest(response=response):
+                obj, _, errors = self.connect(offer_response=response)
+                with self.assertRaises(ValueError):
+                    obj.request_offer()
+                self.server_thread.join(1)
+                self.assertFalse(self.server_thread.is_alive())
+                self.assertFalse(errors)
 
     def test_not_ready_retry_obeys_overall_deadline(self):
         obj,_,_=self.connect(not_ready_count=10)

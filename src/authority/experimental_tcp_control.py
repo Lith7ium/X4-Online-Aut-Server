@@ -17,8 +17,10 @@ from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 from .trusted_load_messages import (
     MOTION_CLAIM_KIND, decode_load_claim, encode_bound_offer, validate_ship_motion_credential,
 )
-from .trusted_marker_load_session import TrustedMarkerLoadSession
+from .trusted_marker_load_session import CompanyPilotCapacity, TrustedMarkerLoadSession
 
+_SESSION_FULL = b'{"version":1,"kind":"session_full"}\n'
+_NOT_READY = b'{"version":1,"kind":"not_ready"}\n'
 _REQUEST = b'{"version":1,"kind":"offer_request"}\n'
 # A peer may recover at most this much time over its entire connection when
 # the host itself cannot pump sockets during synchronous world actions.
@@ -150,6 +152,8 @@ class ExperimentalTCPControl:
             self._peers[conn] = {'handle': handle, 'in': b'', 'out': b'', 'stage': 'attached',
                                  'deadline': time.monotonic() + self._timeout,
                                  'host_blocked_grace': 0.0}
+        except CompanyPilotCapacity:
+            raise
         except BaseException as error:
             # attach may have succeeded even if control was interrupted
             # before the new connection could be recorded here.
@@ -245,9 +249,13 @@ class ExperimentalTCPControl:
                     if not self._current_socket(conn, peer):
                         self._drop(conn)
                         return
-                    peer['handle'] = self._session.attach(conn)
+                    try:
+                        peer['handle'] = self._session.attach(conn)
+                    except CompanyPilotCapacity:
+                        peer['out'] += _SESSION_FULL
+                        return
                 if not self._offer_ready():
-                    peer['out'] += b'{"version":1,"kind":"not_ready"}\n'
+                    peer['out'] += _NOT_READY
                     return
                 started = time.monotonic()
                 bound = self._session.begin(conn)

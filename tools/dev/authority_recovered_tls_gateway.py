@@ -10,6 +10,11 @@ import ssl
 import threading
 
 from authority.experimental_tls_tunnel import _read_shared_key, create_server_context, start_server
+from authority.trusted_marker_load_session import COMPANY_PILOT_LIMIT
+
+# Four Company controls plus four save transfers leave room for a refusal
+# and a connection probe. Pilot places are counted in the trusted session.
+COMPANY_RELIABLE_CONNECTIONS = 2 * COMPANY_PILOT_LIMIT + 2
 
 
 def gateway_settings(args):
@@ -83,9 +88,11 @@ class RecoveredTLSGateway:
 
     async def _run(self, wakeup):
         _, _, _, _, _, context, key = self._settings
+        max_connections = COMPANY_RELIABLE_CONNECTIONS if self._motion_port is not None else 8
         tunnel = await start_server(listener=self._listener, ssl_context=context, shared_key=key,
                                     control_port=self._control_port, file_port=self._file_port,
                                     motion_port=self._motion_port,
+                                    max_connections=max_connections,
                                     max_motion_connections=self._max_motion_connections)
         waiter = asyncio.create_task(tunnel.wait())
         stop = asyncio.create_task(asyncio.get_running_loop().sock_recv(wakeup, 1))

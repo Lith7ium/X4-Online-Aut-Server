@@ -125,6 +125,17 @@ class FixtureCliTests(unittest.TestCase):
         self.assertEqual(report['status'], 'failed')
         self.assertNotIn('PRIVATE_CREDENTIAL', output.getvalue())
 
+    def test_cli_reports_session_full_from_remote_client(self):
+        arguments = ['--connection-file', str(self.connection), '--game', str(self.root / 'game'),
+                     '--view-container', str(self.root / 'view'), '--out', str(self.root / 'out'),
+                     '--network-dll', str(self.root / 'net.dll'), '--network-dll-sha256', 'a' * 64]
+        with (patch.object(cli, 'run', side_effect=cli.SessionFull('private detail')),
+              contextlib.redirect_stdout(io.StringIO()) as stdout,
+              contextlib.redirect_stderr(io.StringIO()) as stderr):
+            self.assertEqual(cli.main(arguments), 1)
+        self.assertEqual(stderr.getvalue(), 'Session Full\n')
+        self.assertEqual(stdout.getvalue(), '')
+
     def test_final_failure_preserves_live_confirmations(self):
         arguments = ['--connection-file', str(self.connection), '--game', str(self.root / 'game'),
                      '--view-container', str(self.root / 'view'), '--out', str(self.root / 'out'),

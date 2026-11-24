@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 from authority.company_ship_selection import reserve_company_ship
 from authority.experimental_client_owner import CompanyShipChoiceDenied
+from authority.experimental_remote_load_client import SessionFull
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
 from authority.company_motion_source import CompanyMotionSource, validate_playback_index
@@ -206,6 +207,8 @@ def validate_environment(args, *, player_mode=False):
 
 def error_code(error):
     """Map only known failures to fixed, credential-free diagnostic codes."""
+    if isinstance(error, SessionFull):
+        return SessionFull.code
     known_codes = {'native_client_deadline', 'owned_launcher_stopped', 'owned_x4_changed',
         'owned_x4_disappeared', 'steam_identity_changed', 'protected_configuration_changed',
         'owned_loaded_state_unconfirmed', 'no_server_control_confirmed', 'insufficient_active_budget',

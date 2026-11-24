@@ -227,6 +227,20 @@ class PlayerClientTests(unittest.TestCase):
             run.assert_not_called()
             self.assertNotIn('b' * 64, stdout.getvalue())
 
+    def test_cli_reports_session_full_from_native_client(self):
+        self.assertNotEqual(native.error_code(RuntimeError('session_full')), 'session_full')
+        error_code = native.error_code(cli.SessionFull('private detail'))
+        self.assertEqual(error_code, 'session_full')
+        result = {'success': False, 'error_code': error_code}
+        arguments = ['--connection-file', 'private.json', '--display', ':1', '--out', '.local/run',
+                     '--game', '/licensed/X4 Foundations', '--company-ship-index', str(INDEX)]
+        with (patch.object(cli, 'read_connection_settings', return_value={}),
+              patch.object(native, 'run', return_value=result),
+              redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr):
+            self.assertEqual(cli.main(arguments), 1)
+        self.assertEqual(stderr.getvalue(), 'Session Full\n')
+        self.assertEqual(stdout.getvalue(), '')
+
     def test_player_polls_company_client_only_during_the_active_run(self):
         calls = []
         owner = Mock()

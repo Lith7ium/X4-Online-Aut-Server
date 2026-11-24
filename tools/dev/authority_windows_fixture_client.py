@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 
 from authority_client_options import _read_settings, prompt_company_ship, read_connection_settings
+from authority.experimental_remote_load_client import SessionFull
 
 
 def read_motion_request(path):
@@ -156,6 +157,9 @@ def main(argv=None):
 
     try:
         result = run(args, on_stage=report_stage)
+    except SessionFull:
+        print(SessionFull.message, file=sys.stderr)
+        return 1
     except (Exception, KeyboardInterrupt) as error:
         # Exception text can contain credentials supplied by a peer or file.
         # Report only its type and source location, never locals or arguments.

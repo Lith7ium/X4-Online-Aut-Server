@@ -46,6 +46,13 @@ def _company_ship(value):
     return value
 
 
+class SessionFull(RuntimeError):
+    """The authenticated server has no free pilot place."""
+
+    code = 'session_full'
+    message = 'Session Full'
+
+
 class ExperimentalRemoteLoadClient:
     """Single-owner, single-attempt state machine.
 
@@ -187,9 +194,10 @@ class ExperimentalRemoteLoadClient:
 
         A not_ready response can occur while the server pauses and saves for
         this join. Retry only that exact protocol response, without overlapping
-        requests or extending the caller's deadline. Other responses still fail
-        closed. The offer response may take until the overall deadline because
-        server pause/save is synchronous; EOF and socket errors remain visible.
+        requests or extending the caller's deadline. A session_full response
+        ends this attempt. Other responses still fail closed. The offer
+        response may take until the overall deadline because server pause/save
+        is synchronous. EOF and socket errors remain visible.
         Other socket waits retain io_timeout.
         """
         with self._operation('new'):
@@ -203,7 +211,9 @@ class ExperimentalRemoteLoadClient:
                     reply = None
                 if (type(reply) is dict and set(reply) == {'version', 'kind'} and
                         type(reply['version']) is int and reply['version'] == 1 and
-                        reply['kind'] == 'not_ready'):
+                        reply['kind'] in ('not_ready', SessionFull.code)):
+                    if reply['kind'] == SessionFull.code:
+                        raise SessionFull(SessionFull.message)
                     # No pipelining: unexpected data or EOF before the next
                     # request is a protocol failure, not another response.
                     delay = min(0.1, self._remaining())

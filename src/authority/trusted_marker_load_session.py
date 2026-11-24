@@ -19,10 +19,15 @@ from .load_messages import MAX_INTEGER, Offer, Receipt
 from .marker_evidence import verify_saved_marker
 
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
+COMPANY_PILOT_LIMIT = 4
 
 
 class StaleShipChoice(ValueError):
     """The supplied connection and attempt do not have a current offer."""
+
+
+class CompanyPilotCapacity(ValueError):
+    """All Company pilot places are occupied by active or joining clients."""
 
 
 class CompanyShipUnavailable(ValueError):
@@ -103,6 +108,10 @@ class TrustedMarkerLoadSession:
                 raise ValueError('opaque connection object required')
             if id(connection) in self._connections:
                 raise ValueError('connection already attached')
+            # Starting the offer flow reserves a place before it can request a
+            # world pause. Connection probes do not call attach().
+            if self._require_company_ship and len(self._connections) >= COMPANY_PILOT_LIMIT:
+                raise CompanyPilotCapacity('Company pilot capacity reached')
             peer = 'trusted-marker-' + str(self._next_peer)
             self._next_peer += 1
             try:

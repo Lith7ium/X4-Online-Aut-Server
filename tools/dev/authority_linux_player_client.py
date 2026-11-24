@@ -7,6 +7,7 @@ import sys
 
 import authority_client_native as native
 from authority.company_motion_source import validate_playback_index
+from authority.experimental_remote_load_client import SessionFull
 from authority_client_options import prompt_company_ship, read_connection_settings
 
 
@@ -70,6 +71,9 @@ def main(argv=None):
         else:
             reason = 'invalid_connection_file_or_player_options'
         result = dict(success=False, error_class='player_client_refused', error_code=reason)
+    if not result['success'] and result.get('error_code') == SessionFull.code:
+        print(SessionFull.message, file=sys.stderr)
+        return 1
     print(json.dumps(result))
     return 0 if result['success'] else 1
 

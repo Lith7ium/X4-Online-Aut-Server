@@ -6,6 +6,7 @@ import socket
 from pathlib import Path
 import ssl
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -16,12 +17,16 @@ from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_motion_source import CompanyMotionSource
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
+from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient, SessionFull
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
 from authority.save_transfer import SaveOffers
 from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
 from authority.world import WorldCoordinator
+from authority_recovered_tls_gateway import COMPANY_RELIABLE_CONNECTIONS
+from lockstep.launcher.joinfiles import FileService
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
 from test_authority_trusted_marker_load_session import FakeEngine, FakeService, claim_for
 
@@ -52,7 +57,7 @@ class SelectedCockpit:
         return sample
 
 
-class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
+class CompanyMotionTLSHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.service = CompanyMotionService()
         self.addCleanup(self.service.close)
@@ -65,19 +70,15 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         self.certificate, self.key = certificate, key
         self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
 
-        control = await asyncio.start_server(self.echo_control, '127.0.0.1', 0)
-        self.addAsyncCleanup(control.wait_closed)
-        self.addCleanup(control.close)
-        await self.start_gateway(control.sockets[0].getsockname()[1])
-
-    async def start_gateway(self, control_port, max_connections=1):
-        unused_file = self.listener()
+    async def start_gateway(self, control_port, max_connections=1, max_motion_connections=3, *, file_port=None):
+        if file_port is None:
+            file_port = self.listener().getsockname()[1]
         public = self.listener()
         self.public_port = public.getsockname()[1]
         gateway = await start_server(listener=public, ssl_context=create_server_context(self.certificate, self.key),
             shared_key=KEY, control_port=control_port,
-            file_port=unused_file.getsockname()[1], motion_port=self.service.port,
-            max_connections=max_connections, max_motion_connections=3, idle_timeout=15)
+            file_port=file_port, motion_port=self.service.port,
+            max_connections=max_connections, max_motion_connections=max_motion_connections, idle_timeout=15)
         self.addAsyncCleanup(gateway.close)
 
     @staticmethod
@@ -96,13 +97,17 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         return listener
 
     async def link(self, *, key=KEY, fingerprint=None):
+        control, _, motion = await self.link_ports(key=key, fingerprint=fingerprint)
+        return control, motion
+
+    async def link_ports(self, *, key=KEY, fingerprint=None, max_connections=1):
         control, files, motion = (self.listener() for _ in range(3))
         tunnel = await start_client(control_listener=control, file_listener=files, motion_listener=motion,
             server_host='127.0.0.1', server_port=self.public_port,
             server_fingerprint=fingerprint or self.fingerprint, shared_key=key,
-            max_connections=1, idle_timeout=15)
+            max_connections=max_connections, idle_timeout=15)
         self.addAsyncCleanup(tunnel.close)
-        return control.getsockname()[1], motion.getsockname()[1]
+        return tuple(listener.getsockname()[1] for listener in (control, files, motion))
 
     def grant(self, handle, index, sector):
         return self.service.admit(handle, f'{handle:032x}', index, sector, SESSION_EPOCH, REGISTRY_EPOCH)
@@ -134,6 +139,14 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 writer.close()
                 await writer.wait_closed()
+
+class CompanyMotionTLSTests(CompanyMotionTLSHarness):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        control = await asyncio.start_server(self.echo_control, '127.0.0.1', 0)
+        self.addAsyncCleanup(control.wait_closed)
+        self.addCleanup(control.close)
+        await self.start_gateway(control.sockets[0].getsockname()[1])
 
     async def test_owned_observer_confirmations_cross_real_motion_tunnel(self):
         _, viewer_port = await self.link()
@@ -869,3 +882,201 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         accepted, _, _, _ = self.attach(port, grant)
         self.clients = [accepted]
         await self.drive(lambda: accepted._window == 0)
+
+
+class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
+    async def test_four_pilots_reserve_fly_and_reuse_slot_after_departure(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / 'store').mkdir()
+        store = CheckpointStore(root / 'store')
+        engine = FakeEngine(root)
+        files = FileService('c' * 32, slots=(1,)).start()
+        self.addCleanup(files.close)
+        world = WorldCoordinator(SESSION_EPOCH, engine, store, SaveOffers(files, store))
+        sector = 'sector_a'
+        indices = {100, 101, 102, 103}
+        catalogue = CompanyShipCatalogue(REGISTRY_EPOCH, tuple(
+            CompanyShip(index, f'[0x{index:x}]', sector, 'Fighter', f'FTR-{index}')
+            for index in sorted(indices)
+        ))
+        session = TrustedMarkerLoadSession(world, enabled=True, require_company_ship=True,
+                                           company_ship_reader=lambda _: catalogue)
+        control = ExperimentalTCPControl(session, enabled=True, motion_service=self.service)
+        self.addCleanup(control.close)
+        host = ExperimentalLocalHost(world, control, files, enabled=True)
+        upstream = self.listener()
+        upstream.setblocking(False)
+        await self.start_gateway(upstream.getsockname()[1], max_connections=COMPANY_RELIABLE_CONNECTIONS,
+                                 max_motion_connections=8, file_port=files.port)
+
+        async def drive_control(until):
+            def poll():
+                try:
+                    connection, _ = upstream.accept()
+                except BlockingIOError:
+                    pass
+                else:
+                    host.adopt(connection, defer_attach=True)
+                host.tick(defer_world=True)
+                return until()
+            await self.drive(poll)
+
+        async def connect():
+            port, file_port, motion_port = await self.link_ports(max_connections=2)
+            reader, writer = await asyncio.open_connection('127.0.0.1', port)
+
+            async def close():
+                writer.close()
+                await writer.wait_closed()
+
+            self.addAsyncCleanup(close)
+
+            async def exchange(message):
+                writer.write(message.rstrip(b'\n') + b'\n')
+                await writer.drain()
+                response = asyncio.create_task(reader.readline())
+                await drive_control(response.done)
+                reply = response.result()
+                self.assertTrue(reply.endswith(b'\n'))
+                return json.loads(reply)
+
+            return close, exchange, motion_port, file_port
+
+        async def choose(link, offer, index):
+            return await link[1](json.dumps({'version': 1, 'kind': 'choose_company_ship',
+                'attempt_id': offer.attempt_id, 'ship_index': index}).encode())
+
+        async def admit(link, offer):
+            reply = await link[1](encode_load_claim(claim_for(offer), ship_motion=True))
+            self.assertEqual(reply['kind'], 'accepted')
+            return reply['ship_motion']
+
+        probe = await connect()
+        applicants = await asyncio.gather(*(connect() for _ in range(5)))
+        await drive_control(lambda: len(control._peers) == 6)
+        self.assertFalse(world.session.players)  # Accepted probe/control sockets are not pilots.
+        replies = await asyncio.gather(*(link[1](offer_request()) for link in applicants))
+        self.assertCountEqual([row['kind'] for row in replies], ['not_ready'] * 4 + ['session_full'])
+        self.assertEqual(len(world.session.players), 4)
+        denied, = [link for link, row in zip(applicants, replies) if row['kind'] == 'session_full']
+        await denied[0]()
+        await probe[0]()
+        await drive_control(lambda: len(control._peers) == 4)
+        self.assertEqual(len(world.session.players), 4)
+        host.tick()
+        host.tick()
+
+        winners = [link for link, row in zip(applicants, replies) if row['kind'] == 'not_ready']
+        offers = []
+        for link in winners:
+            reply = await link[1](offer_request())
+            self.assertEqual(reply['kind'], 'marked_offer')
+            offers.append(decode_bound_offer(json.dumps(reply).encode()).offer)
+        seats = {}
+        for index, link, offer in zip(sorted(indices), winners, offers):
+            if index == 101:
+                duplicate = await choose(link, offer, 100)
+                self.assertEqual(duplicate['kind'], 'company_ship_unavailable')
+            self.assertEqual((await choose(link, offer, index))['kind'], 'company_ship_chosen')
+            seats[index] = (link, offer)
+        grants = {index: await admit(link, offer) for index, (link, offer) in seats.items()}
+        self.assertEqual({row['index'] for row in grants.values()}, indices)
+        self.assertEqual(len(world.session.ready_players), 4)
+        world._participants = Mock()
+        world._participants.resume.return_value = world._participants.pause.return_value = True
+        with patch.object(engine, 'resume'):
+            host.tick()
+        self.assertEqual(world.session.state, 'running')
+        world._participants.resume.assert_called_once_with(tuple(offer.connection_handle for offer in
+            sorted(offers, key=lambda row: row.connection_handle)))
+
+        racers = {index: self.attach(seats[index][0][2], grant) for index, grant in grants.items()}
+        self.clients = [parts[0] for parts in racers.values()]
+        for client in self.clients:
+            client.set_view(sector, sorted(indices))  # Own ship is automatically excluded.
+        self.service.set_running(True)
+        await drive_control(lambda: len(self.service._peers) == 4 and
+            all(peer.grant is not None and peer.views == {sector: indices - {peer.grant.index}}
+                for peer in self.service._peers.values()))
+
+        async def fly_round(sequence):
+            start = {index: len(snapshots) for index, (_, _, snapshots, _) in racers.items()}
+            for index, (_, source, _, _) in racers.items():
+                source.stage(sequence, sector, index + 16 * sequence)
+            await drive_control(lambda: all(client.stats()['samples_acknowledged'] == sequence and
+                len(snapshots) == start[index] + len(racers) - 1
+                for index, (client, _, snapshots, _) in racers.items()))
+            for own_index, (_, _, snapshots, _) in racers.items():
+                rows = snapshots[start[own_index]:]
+                self.assertCountEqual([row['index'] for row in rows], set(racers) - {own_index})
+                for row in rows:
+                    self.assertEqual((row['sequence'], row['sector_macro'], row['x'], row['y'], row['z']),
+                                     (sequence, sector, row['index'] + 16 * sequence, 5, 7))
+                    self.assertEqual(row['generation'], grants[row['index']]['generation'])
+                    self.assertEqual(row['real_velocity'], VELOCITY if sequence > 1 else None)
+
+        await fly_round(1)
+        await fly_round(2)
+        self.assertEqual((self.service.accepted_samples, self.service.samples_with_velocity), (8, 4))
+        file_writers = []
+        for link in winners:
+            _, writer = await asyncio.open_connection('127.0.0.1', link[3])
+            self.addCleanup(writer.close)
+            file_writers.append(writer)
+
+        def all_file_sockets_open():
+            with files.lock:
+                return len(files._handlers) == 4
+
+        await drive_control(all_file_sockets_open)
+        probe = await connect()
+        await drive_control(lambda: len(control._peers) == 5)
+        rejected_port, rejected_file_port, _ = await self.link_ports()
+
+        def request_fifth_offer():
+            with socket.create_connection(('127.0.0.1', rejected_port), timeout=2) as conn:
+                client = ExperimentalRemoteLoadClient(conn, enabled=True, file_host='127.0.0.1',
+                    file_port=rejected_file_port, file_token=files.token, file_slot=1,
+                    deadline=time.monotonic() + 2)
+                return client.request_offer()
+
+        fifth = asyncio.create_task(asyncio.to_thread(request_fifth_offer))
+        await drive_control(fifth.done)
+        with self.assertRaisesRegex(SessionFull, '^Session Full$'):
+            await fifth
+        self.assertEqual(world.session.state, 'running')
+        self.assertIsNone(world.session.pending)
+        await probe[0]()
+        for writer in file_writers:
+            writer.close()
+            await writer.wait_closed()
+        await drive_control(lambda: len(control._peers) == 4)
+
+        departing = 100
+        departed_client, _, _, _ = racers.pop(departing)
+        self.clients.remove(departed_client)
+        departed_link, departed_offer = seats[departing]
+        await departed_link[0]()  # Control EOF revokes motion without closing surviving clients.
+        retired = (departing, grants[departing]['generation'])
+        await drive_control(lambda: departed_offer.connection_handle not in self.service._grants
+            and all(retired in ends for _, _, _, ends in racers.values()))
+        self.assertEqual((world.session.state, len(world.session.ready_players)), ('running', 3))
+        self.assertIsNone(world.session.pending)
+        await fly_round(3)
+        self.assertEqual((self.service.accepted_samples, self.service.samples_with_velocity), (11, 7))
+
+        replacement = await connect()
+        self.assertEqual(await replacement[1](offer_request()), {'version': 1, 'kind': 'not_ready'})
+        self.assertEqual(world.session.pending.operation, 'pause')
+        host.tick()
+        host.tick()
+        reply = await replacement[1](offer_request())
+        replacement_offer = decode_bound_offer(json.dumps(reply).encode()).offer
+        self.assertEqual((await choose(replacement, replacement_offer, departing))['kind'],
+                         'company_ship_chosen')
+        replacement_grant = await admit(replacement, replacement_offer)
+        self.assertEqual(replacement_grant['index'], departing)
+        self.assertNotEqual(replacement_grant['generation'], grants[departing]['generation'])
+        self.assertEqual(len(world.session.ready_players), 4)
