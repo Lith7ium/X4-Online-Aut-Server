@@ -1,20 +1,29 @@
 """One pinned TLS port, real motion and control sockets, synthetic cockpits."""
 import asyncio
 import hashlib
+import json
 import socket
 from pathlib import Path
 import ssl
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from authority.checkpoints import CheckpointStore
 from authority.company_motion_client import CompanyMotionClient
 from authority.company_motion_observer import CompanyMotionObserver, MAX_OBSERVER_DATAGRAM
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_motion_source import CompanyMotionSource
+from authority.company_ships import CompanyShip, CompanyShipCatalogue
+from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
+from authority.save_transfer import SaveOffers
+from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
+from authority.trusted_marker_load_session import TrustedMarkerLoadSession
+from authority.world import WorldCoordinator
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
+from test_authority_trusted_marker_load_session import FakeEngine, FakeService, claim_for
 
 REGISTRY_EPOCH = 'b' * 32
 SESSION_EPOCH = 'a' * 32
@@ -53,18 +62,22 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         certificate, key = (Path(temp.name) / name for name in ('cert.pem', 'key.pem'))
         certificate.write_text(TEST_CERTIFICATE, encoding='ascii')
         key.write_text(TEST_PRIVATE_KEY, encoding='ascii')
+        self.certificate, self.key = certificate, key
         self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(TEST_CERTIFICATE)).hexdigest()
 
         control = await asyncio.start_server(self.echo_control, '127.0.0.1', 0)
         self.addAsyncCleanup(control.wait_closed)
         self.addCleanup(control.close)
+        await self.start_gateway(control.sockets[0].getsockname()[1])
+
+    async def start_gateway(self, control_port, max_connections=1):
         unused_file = self.listener()
         public = self.listener()
         self.public_port = public.getsockname()[1]
-        gateway = await start_server(listener=public, ssl_context=create_server_context(certificate, key),
-            shared_key=KEY, control_port=control.sockets[0].getsockname()[1],
+        gateway = await start_server(listener=public, ssl_context=create_server_context(self.certificate, self.key),
+            shared_key=KEY, control_port=control_port,
             file_port=unused_file.getsockname()[1], motion_port=self.service.port,
-            max_connections=1, max_motion_connections=3, idle_timeout=15)
+            max_connections=max_connections, max_motion_connections=3, idle_timeout=15)
         self.addAsyncCleanup(gateway.close)
 
     @staticmethod
@@ -474,6 +487,130 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
                          {(1970, 'sector_a', 3), (7354, 'sector_c', 4)})
         self.assertIsNone(viewer.failure)
         await self.control_roundtrip(control, b'after-dual-rebind')
+
+    async def test_publisher_control_eof_notifies_tls_viewer_and_revokes_ticket(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root / 'store').mkdir()
+        store = CheckpointStore(root / 'store')
+        engine = FakeEngine(root)
+        world = WorldCoordinator('1' * 32, engine, store, SaveOffers(FakeService(), store))
+        catalogue = CompanyShipCatalogue(REGISTRY_EPOCH, (
+            CompanyShip(7354, '[0x345]', 'sector_a', 'Scout', 'WRN-302'),
+            CompanyShip(1970, '[0x346]', 'sector_a', 'Scout', 'WOO-831'),
+        ))
+        session = TrustedMarkerLoadSession(world, enabled=True, company_ship_reader=lambda _: catalogue)
+        control = ExperimentalTCPControl(session, enabled=True, motion_service=self.service)
+        self.addCleanup(control.close)
+        upstream = self.listener()
+        upstream.setblocking(False)
+        await self.start_gateway(upstream.getsockname()[1], max_connections=2)
+
+        async def drive_control(until):
+            def poll():
+                try:
+                    connection, _ = upstream.accept()
+                except BlockingIOError:
+                    pass
+                else:
+                    control.adopt(connection)
+                control.poll()
+                return until()
+            await self.drive(poll)
+
+        async def connect():
+            control_port, motion_port = await self.link()
+            reader, writer = await asyncio.open_connection('127.0.0.1', control_port)
+            async def close_connection():
+                writer.close()
+                await writer.wait_closed()
+            self.addAsyncCleanup(close_connection)
+
+            async def exchange(message):
+                writer.write(message if message.endswith(b'\n') else message + b'\n')
+                await writer.drain()
+                response = asyncio.create_task(reader.readline())
+                await drive_control(response.done)
+                result = response.result()
+                self.assertTrue(result.endswith(b'\n'))
+                return result.rstrip(b'\n')
+
+            return writer, motion_port, exchange
+
+        async def join(connection, index):
+            writer, motion_port, exchange = connection
+            offer_reply = await exchange(offer_request())
+            self.assertEqual(json.loads(offer_reply)['kind'], 'marked_offer')
+            offer = decode_bound_offer(offer_reply).offer
+            chosen = await exchange(json.dumps({'version':1, 'kind':'choose_company_ship',
+                'attempt_id':offer.attempt_id, 'ship_index':index}).encode())
+            self.assertEqual(json.loads(chosen)['kind'], 'company_ship_chosen')
+            accepted = json.loads(await exchange(encode_load_claim(claim_for(offer), ship_motion=True)))
+            self.assertEqual(accepted['kind'], 'accepted')
+            return writer, motion_port, offer.connection_handle, accepted['ship_motion']
+
+        publisher_link, viewer_link = await asyncio.gather(connect(), connect())
+        await drive_control(lambda: len(control._peers) == 2)
+        world.step()
+        world.step()
+        publisher_control, publisher_port, publisher_handle, publisher_grant = await join(publisher_link, 7354)
+        viewer_control, viewer_port, viewer_handle, viewer_grant = await join(viewer_link, 1970)
+        world._participants = Mock()
+        world._participants.resume.return_value = True
+        with patch.object(engine, 'resume'):
+            world.step()
+        self.assertEqual(world.session.state, 'running')
+
+        publisher, source, _, _ = self.attach(publisher_port, publisher_grant)
+        viewer_source = SelectedCockpit(1970)
+        snapshots, notices = [], []
+        viewer = ReconnectingCompanyMotionClient(viewer_port, viewer_grant, viewer_source, lambda _: True,
+            on_snapshot=snapshots.append, on_end=lambda *route: notices.append(('end', *route)),
+            on_transport_lost=lambda *route: notices.append(('lost', *route)),
+            trial_index=7354, resume_route=lambda: None)
+        self.addCleanup(viewer.close)
+        viewer.set_view('sector_a', [7354])
+        self.clients = [publisher, viewer]
+        self.service.set_running(True)
+        await drive_control(lambda: publisher._running and viewer._client is not None and viewer._client._running)
+        source.stage(1, 'sector_a', 10)
+        await drive_control(lambda: len(snapshots) == 1)
+        self.assertEqual(snapshots[0]['generation'], publisher_grant['generation'])
+
+        # Leave the motion tunnel connected; it must be severed by control EOF.
+        self.clients.remove(publisher)
+        publisher_control.close()
+        await publisher_control.wait_closed()
+        await drive_control(lambda: bool(notices))
+        self.assertEqual(notices, [('lost', 7354, publisher_grant['generation'])])
+        self.assertNotIn(publisher_handle, self.service._grants)
+        self.assertEqual([handle for handle, _ in world.session.ready_players], [viewer_handle])
+        self.assertFalse(viewer_control.is_closing())
+        self.assertEqual(world.session.state, 'running')
+        self.assertIsNone(world.session.pending)
+
+        async def require_eof(client):
+            def poll():
+                try:
+                    client.poll()
+                except ConnectionError:
+                    return True
+                return False
+            await drive_control(poll)
+
+        await require_eof(publisher)
+        _, retry_port = await self.link()
+        refused, retry_source, _, _ = self.attach(retry_port, publisher_grant)
+        retry_source.stage(2, 'sector_a', 20)
+        await require_eof(refused)
+        self.assertEqual(refused.stats()['samples_acknowledged'], 0)
+        self.assertEqual([row['sequence'] for row in snapshots], [1])
+        self.assertEqual(notices, [('lost', 7354, publisher_grant['generation'])])
+
+        viewer_source.stage(1, 'sector_a', 100)
+        await drive_control(lambda: viewer.stats()['samples_acknowledged'] == 1)
+        self.assertEqual(self.service.accepted_samples, 2)
 
     async def test_trial_publisher_drop_is_soft_until_hard_authority_change(self):
         _, viewer_port = await self.link()
