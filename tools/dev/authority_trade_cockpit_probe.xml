@@ -48,7 +48,7 @@
    </actions>
   </cue>
 
-  <cue name="Verify" namespace="this">
+  <cue name="Verify" instantiate="true" namespace="this">
    <conditions><event_ui_triggered screen="'X4AuthorityTradeCockpit'" control="'Verify'"/></conditions>
    <actions>
     <set_value name="$Phase" exact="'VERIFY'"/>
