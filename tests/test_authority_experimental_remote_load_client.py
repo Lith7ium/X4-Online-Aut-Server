@@ -303,7 +303,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             obj.copy_to_new_slot(source, self.root / 'save_010.xml.gz')
 
-    def test_copy_rejects_changed_source_and_leaves_its_created_file(self):
+    def test_copy_rejects_changed_source_before_publication(self):
         obj, claims, _ = self.connect()
         obj.request_offer()
         source = obj.download(self.root / 'download')
@@ -311,7 +311,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         target = self.root / 'save_009.xml.gz'
         with self.assertRaises(ValueError):
             obj.copy_to_new_slot(source, target)
-        self.assertTrue(target.exists())
+        self.assertFalse(target.exists())
         self.assertEqual(source.read_bytes(), b'not the offered bytes')
         self.assertEqual(claims, [])
 
@@ -331,7 +331,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b'corrupted destination')
         self.assertEqual(claims, [])
 
-    def test_copy_fsync_failure_leaves_file_and_faults_attempt(self):
+    def test_copy_fsync_failure_faults_attempt_before_publication(self):
         obj, claims, _ = self.connect()
         obj.request_offer()
         source = obj.download(self.root / 'download')
@@ -339,7 +339,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         with patch.object(staging.os, 'fsync', side_effect=OSError('synthetic fsync failure')):
             with self.assertRaises(OSError):
                 obj.copy_to_new_slot(source, target)
-        self.assertTrue(target.exists())
+        self.assertFalse(target.exists())
         self.assertEqual(source.read_bytes(), self.data)
         with self.assertRaises(RuntimeError):
             obj.load_requested(self.offer.attempt_id)
@@ -369,7 +369,7 @@ class RemoteLoadClientTests(unittest.TestCase):
         with patch.object(staging, '_write_all', side_effect=slow_write):
             with self.assertRaises(TimeoutError):
                 other.copy_to_new_slot(other_source, other_target)
-        self.assertTrue(other_target.exists())
+        self.assertFalse(other_target.exists())
         self.assertEqual(other_claims, [])
 
 

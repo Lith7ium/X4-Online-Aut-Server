@@ -321,11 +321,11 @@ class ExperimentalRemoteLoadClient:
         """Copy to an absent X4 slot and verify it before local load.
 
         The caller exclusively controls both directories and fences X4's save
-        scan until the copy completes. Failure can leave a partial or complete
-        file at target for the caller to inspect; no existing slot is replaced.
-        After failure the caller must keep X4 from scanning the target until any
-        incomplete file has been handled under its control. This does not start
-        X4 or establish that it loaded the staged bytes.
+        scan until the copy completes. A partial target can remain after a
+        failed fenced fallback copy on Unix filesystems without hard links.
+        Keep the scan fenced until any incomplete target has been handled.
+        After publication, the complete slot can remain if the owner's
+        verification fails. A separate native load observation is required.
         """
         with self._operation('downloaded'):
             pump = self._pump if self._keepalive_interval is not None else self._remaining
