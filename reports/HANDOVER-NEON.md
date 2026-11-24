@@ -78,8 +78,12 @@ admitted when a fresh sample is delayed. The port remains on Neon's branch.
   and the GPU-free server accepted 326 position samples, 325 with measured
   velocity. There was one real client. Its departure paused and saved the world.
   Two-way delivery and movement-only reconnect were tested on loopback with
-  synthetic sources. A second real pilot, remote rendering, server-side pose
-  persistence and direct native Windows Internet gameplay remain open.
+  synthetic sources. In a later Linux flight the pilot strafed WRN-302 by
+  45.17 m. The provider adopted the position and a fresh GPU-free X4 read it
+  from the confirmed last-departure save within 0.52 mm. The software client
+  sampled too slowly to report velocity during this flight. Remote rendering
+  and direct Windows Internet gameplay with two pilots remain open.
+  [Flight and cold-reload measurements](AUTHORITY-COMPANY-FLIGHT-20261124.md)
   [Native cockpit results](AUTHORITY-COMPANY-MOTION-20261124.md)
 - Astra owns server-avatar parking. Lith7ium chose the walkable player HQ
   when available, with a well-protected station until then. The current seed
