@@ -6,6 +6,7 @@ The caller owns process and log provenance, freshness and file continuity.
 from .load_messages import Offer
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import registry_receipt
+from .client_seat_overlay import REFUSALS, SEAT_REFUSED_TAG, SEAT_TAG, seat_prefix
 
 MAX_LOG = 256 << 20
 MAX_LINE = 65536
@@ -75,7 +76,7 @@ class BoundReceiptStream:
     """
 
     def __init__(self, bound, *, slot, registry_status=None, registry_nonce=None,
-                 require_full_inspection=False):
+                 require_full_inspection=False, seat_index=None):
         encode_bound_offer(bound)
         offer = Offer(**{name: getattr(bound.offer, name) for name in Offer.__dataclass_fields__})
         if (type(slot) is not str or len(slot) != 8 or not slot.startswith('save_') or
@@ -102,6 +103,12 @@ class BoundReceiptStream:
             self._expected.append(('registry', header))
         elif require_full_inspection:
             raise ValueError('full inspection requires a registry header')
+        self._seat_prefix = None
+        if seat_index is not None:
+            if not require_full_inspection:
+                raise ValueError('client seat requires full registry inspection')
+            self._seat_prefix = seat_prefix(seat_index, registry_nonce, registry_status)
+            self._expected.append(('seat', self._seat_prefix + b'controlled'))
         self._expected.append(('load', ('pause_observed|' + fields).encode('ascii')))
         self._stage = 0
         self._carry = b''
@@ -132,6 +139,19 @@ class BoundReceiptStream:
                 if self._full_inspection and b'auth_registry_full_inspect_error' in lowered:
                     raise ValueError('client reported a full registry inspection error')
                 rows = []
+                if self._seat_prefix is not None:
+                    if b'auth_download_load error' in lowered:
+                        raise ValueError('client seat load owner failed')
+                    if SEAT_REFUSED_TAG in line:
+                        value = line.split(SEAT_REFUSED_TAG, 1)[1].strip()
+                        if not value.startswith(self._seat_prefix):
+                            raise ValueError('client seat refusal differs from selection')
+                        reason = value[len(self._seat_prefix):]
+                        if reason not in REFUSALS:
+                            raise ValueError('invalid client seat refusal')
+                        raise ValueError('client seat refused: ' + reason.decode('ascii'))
+                    if SEAT_TAG in line:
+                        rows.append(('seat', line.split(SEAT_TAG, 1)[1].strip()))
                 if LOAD_TAG in line:
                     rows.append(('load', line.split(LOAD_TAG, 1)[1].strip()))
                 if MARKER_TAG in line:

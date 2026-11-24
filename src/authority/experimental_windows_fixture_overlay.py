@@ -22,6 +22,7 @@ import stat
 
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
+from .client_seat_overlay import extend_seat_gate
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
     select_motion_sources, transform_motion_control, validate_motion_settings,
@@ -83,7 +84,7 @@ def _windows_save_path(value):
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
                             registry_status=None, registry_nonce=None, motion_settings=None,
-                            registry_snapshot=None):
+                            registry_snapshot=None, seat_index=None):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -98,6 +99,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     and clean up the owned configuration after X4 stops.
     Optional registry status must come from the verified offered checkpoint;
     the Lua gate checks its epoch/count before the ordinary pause receipt.
+    The optional seat index selects one operational entry in the full saved registry.
     Optional motion settings reuse the Linux client's modules and update hooks.
     They require this registry gate and a distinct UDP port/context. The caller
     must stop motion before pause/exit; this builder starts no process or socket.
@@ -110,6 +112,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if registry_snapshot is not None:
         full_registry = validate_full_snapshot(registry_snapshot, registry_status,
                                                registry_nonce, bound_offer.marker)
+    if seat_index is not None and full_registry is None:
+        raise ValueError('client seat requires full registry inspection')
     if (not _HEX32.fullmatch(offer.world_epoch) or
             type(participant_port) is not int or not 1 <= participant_port <= 65535 or
             type(participant_lease) is not str or not _HEX32.fullmatch(participant_lease) or
@@ -174,6 +178,16 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             files[target] = _source(ROOT / source, 1024 * 1024)
         files['ui/authority_download_load_probe.lua'] = extend_full_inspect(
             files['ui/authority_download_load_probe.lua'].decode('utf-8')).encode('utf-8')
+    if seat_index is not None:
+        load_name = 'ui/authority_download_load_probe.lua'
+        files[load_name] = extend_seat_gate(files[load_name].decode('utf-8'), seat_index,
+                                            full_registry).encode('utf-8')
+        for target, source in (
+                ('ui/authority_registry_resolve_string.lua',
+                 'tools/dev/authority_registry_resolve_string.lua'),
+                ('ui/client_seat.lua', 'src/authority/lua/client_seat.lua'),
+                ('md/client_seat.xml', 'src/authority/md/client_seat.xml')):
+            files[target] = _source(ROOT / source, 1024 * 1024)
     udp = files['ui/local_udp_module.lua']
     if udp.count(b'return M\n') != 1:
         raise ValueError('unexpected UDP module export')
@@ -201,6 +215,10 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         config = config[:-2] + ',authority_registry_snapshot={' + ','.join(
             key + '=' + (str(value) if type(value) is int else lua_string(value))
             for key, value in full_registry.items()) + '}}\n'
+    if seat_index is not None:
+        insertion = ui_files.index('ui/authority_download_load_probe.lua')
+        ui_files[insertion:insertion] = [
+            'ui/authority_registry_resolve_string.lua', 'ui/client_seat.lua']
     if motion_settings is not None:
         selection = validate_motion_settings(registry_status, motion_settings)
         motion_settings = selection.settings
@@ -233,7 +251,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         files[load_name] = append_load_ready_hook(files[load_name].decode('utf-8')).encode('utf-8')
         config = config[:-2] + render_motion_config(registry_status, motion_settings) + '}\n'
         insertion = ui_files.index(control_name)
-        ui_files[insertion:insertion] = ['ui/' + name for _, name in modules]
+        ui_files[insertion:insertion] = ['ui/' + name for _, name in modules
+                                           if 'ui/' + name not in ui_files]
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

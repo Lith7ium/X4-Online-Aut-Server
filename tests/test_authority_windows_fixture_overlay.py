@@ -121,6 +121,33 @@ class FixtureOverlayTest(unittest.TestCase):
                 subprocess.run(['luajit', str(root / 'tests/authority_windows_registry_gate.lua'),
                                 str(target / 'ui'), mode], check=True, capture_output=True, cwd=root)
 
+    def test_saved_ship_seat_requires_operational_full_registry_and_loads_before_pause(self):
+        status = ('ready', '1' * 32, 8, '2' * 64)
+        snapshot = {
+            'format': 3, 'source_registry_checked': True, 'epoch': status[1],
+            'evidence_scope': 'saved checkpoint bytes only', 'run_id': 'e' * 32,
+            'issued_count': 8, 'mapping_sha256': status[3],
+            'availability_bits': '11111111', 'operational_bits': '11111101',
+            'available_count': 8, 'unavailable_count': 0, 'operational_count': 7,
+        }
+        options = dict(registry_status=status, registry_nonce='3' * 32)
+        with self.assertRaisesRegex(ValueError, 'requires full registry inspection'):
+            self.install(**options, seat_index=8)
+        with self.assertRaisesRegex(ValueError, 'inoperable'):
+            self.install(**options, registry_snapshot=snapshot, seat_index=7)
+        manifest = self.install(**options, registry_snapshot=snapshot, seat_index=8)
+        target = self.view / 'extensions/x4_lan_lab'
+        self.assertIn('md/client_seat.xml', manifest)
+        paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
+        self.assertLess(paths.index('ui/client_seat.lua'),
+                        paths.index('ui/authority_download_load_probe.lua'))
+        load = (target / 'ui/authority_download_load_probe.lua').read_text()
+        self.assertLess(load.index('full_registry_inspect:ready()'), load.index('client_seat:tick()'))
+        self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
+        self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['luajit', 'tests/authority_client_seat.lua'], cwd=root, check=True)
+
     def test_incomplete_registry_options_leave_no_overlay(self):
         for changes in ({'registry_nonce': '3' * 32},
                         {'registry_status': ('ready', '1' * 32, 3, '2' * 64)},

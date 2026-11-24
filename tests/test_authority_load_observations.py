@@ -145,6 +145,32 @@ class ClientLoadObservations(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'inspection error'):
             checked.feed(b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT_ERROR unexpected response\n')
 
+    def test_saved_ship_seat_receipt_gates_pause_and_refuses_exactly(self):
+        nonce = '1' * 32
+        status = ('ready', '2' * 32, 20, '3' * 64)
+        inspected = observations.FULL_INSPECT_TAG + (self.bound.marker + ' 20\n').encode()
+        header = observations.REGISTRY_TAG + (nonce + '|startup|' + status[1] + '|20\n').encode()
+        prefix = (nonce + '|' + status[1] + '|18|').encode()
+        ready = observations.SEAT_TAG + prefix + b'controlled\n'
+        refused = observations.SEAT_REFUSED_TAG + prefix + b'PILOT_PRESENT\n'
+        before_seat = self.request + self.marker + inspected + header
+
+        def stream():
+            return observations.BoundReceiptStream(self.bound, slot='save_009',
+                registry_status=status, registry_nonce=nonce, require_full_inspection=True,
+                seat_index=18)
+
+        checked = stream()
+        self.assertFalse(checked.feed(before_seat + ready))
+        self.assertTrue(checked.feed(self.pause))
+        with self.assertRaisesRegex(ValueError, 'client seat refused: PILOT_PRESENT'):
+            checked.feed(refused)
+        for data in (before_seat + self.pause, before_seat + ready + ready,
+                     before_seat + ready.replace(b'|18|', b'|17|') + self.pause,
+                     self.request + self.marker + inspected + ready + header + self.pause):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                stream().feed(data)
+
     def test_partial_registry_configuration_is_refused(self):
         for options in ({'registry_nonce': '1' * 32},
                         {'registry_status': ('uninitialized',)},

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityClientSeat" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Seat" instantiate="true">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityClientSeat'" control="'Seat'"/>
+   </conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <set_value name="$index" exact="$args.$index"/>
+    <set_value name="$action" exact="$args.$action"/>
+    <set_value name="$result" exact="'REGISTRY_INVALID'"/>
+    <set_value name="$actor" exact="'0'"/>
+    <set_value name="$owner" exact="'0'"/>
+    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch != $args.$epoch or md.X4AuthorityShipRegistry.State.$last != $args.$count">
+      <set_value name="$result" exact="'REGISTRY_CHANGED'"/>
+     </do_if>
+     <do_elseif value="$index lt 1 or $index gt md.X4AuthorityShipRegistry.State.$last or $index != ($index)i">
+      <set_value name="$result" exact="'INDEX_INVALID'"/>
+     </do_elseif>
+     <do_else>
+      <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
+      <do_if value="not @$ship.isclass.ship or @md.X4AuthorityShipRegistry.State.$byship.{$ship} != $index">
+       <set_value name="$result" exact="'BINDING_INVALID'"/>
+      </do_if>
+      <do_elseif value="$ship.owner != faction.player">
+       <set_value name="$result" exact="'OWNER_INVALID'"/>
+      </do_elseif>
+      <do_elseif value="not $ship.isoperational">
+       <set_value name="$result" exact="'SHIP_INOPERABLE'"/>
+      </do_elseif>
+      <do_else>
+       <set_value name="$actor" exact="'%s'.[$ship]"/>
+       <set_value name="$owner" exact="$ship.owner.id"/>
+       <do_if value="$action != 'inspect' and $args.$actor != $actor">
+        <set_value name="$result" exact="'TARGET_CHANGED'"/>
+       </do_if>
+       <do_elseif value="player.ship == $ship and player.occupiedship == $ship and player.controlled == $ship and player.container == $ship">
+        <set_value name="$result" exact="'CONTROLLED'"/>
+       </do_elseif>
+       <do_elseif value="$action == 'verify'">
+        <set_value name="$result" exact="'CONTROL_MISSING'"/>
+       </do_elseif>
+       <do_elseif value="$ship == player.ship or $ship == player.occupiedship or $ship == player.controlled or $ship == player.container">
+        <set_value name="$result" exact="'PLAYER_CONTEXT'"/>
+       </do_elseif>
+       <do_elseif value="$ship.dock.exists or $ship.isinternallystored">
+        <set_value name="$result" exact="'SHIP_DOCKED_OR_STORED'"/>
+       </do_elseif>
+       <do_elseif value="not @$ship.sector.isclass.sector">
+        <set_value name="$result" exact="'SHIP_SECTOR_INVALID'"/>
+       </do_elseif>
+       <do_elseif value="$ship.pilot.exists or $ship.assignedpilot.exists">
+        <set_value name="$result" exact="'PILOT_PRESENT'"/>
+       </do_elseif>
+       <do_elseif value="$action == 'inspect'">
+        <set_value name="$result" exact="'READY'"/>
+       </do_elseif>
+       <do_elseif value="$action == 'take'">
+        <teleport_player object="$ship" control="true" instant="true" force="true"/>
+        <set_value name="$result" exact="'DISPATCHED'"/>
+       </do_elseif>
+       <do_else>
+        <set_value name="$result" exact="'ACTION_INVALID'"/>
+       </do_else>
+      </do_else>
+     </do_else>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityClientSeat.Result'" param="'%s|%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$index,$action,$result,$actor,$owner]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
