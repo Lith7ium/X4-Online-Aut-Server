@@ -51,6 +51,18 @@ assert(M.collect(request, function()
     for n=1,65 do too_many[n] = row() end
     return too_many
 end).reason == 'row_limit')
-request.end_time = 131
+request.ware, request.quantity = 'energycells', 3
+assert(M.collect(request, read).reason == 'no_completed_trade')
+local live = M.collect(request, function(source)
+    if source == 'ship' then return {row(), row({ware='energycells', amount=3})} end
+    return {}
+end)
+assert(live.status == 'observed' and #live.rows == 1 and live.trade_id == '4')
+assert(live.rows[1].ware == 'energycells' and live.rows[1].quantity == 3)
+request.quantity = 65536
+assert(M.collect(request, read).reason == 'invalid_request')
+request.ware, request.quantity = 'energycells|water', 3
+assert(M.collect(request, read).reason == 'invalid_request')
+request.ware, request.end_time = 'energycells', 131
 assert(M.collect(request, read).reason == 'invalid_request')
 """, module)

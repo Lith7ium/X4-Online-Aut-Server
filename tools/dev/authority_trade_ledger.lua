@@ -1,4 +1,4 @@
--- Read-only view of the stock X4 transaction ledger for the private water trial.
+-- Read-only view of the stock X4 transaction ledger for a bounded native purchase.
 local ffi = require('ffi')
 local M = {}
 local MAX_ROWS = 64
@@ -150,7 +150,8 @@ local function native_reader(source, ship, station, start_time, end_time)
 end
 
 function M.collect(input, read)
-    if type(input) ~= 'table' or input.ware ~= 'water' or type(input.quantity) ~= 'number'
+    if type(input) ~= 'table' or type(input.ware) ~= 'string' or #input.ware > 128
+        or not input.ware:match('^[a-z][a-z0-9_]*$') or type(input.quantity) ~= 'number'
         or input.quantity < 1 or input.quantity > 65535 or input.quantity % 1 ~= 0
         or not finite(input.start_time) or not finite(input.end_time)
         or input.end_time <= input.start_time or input.end_time - input.start_time > MAX_WINDOW then

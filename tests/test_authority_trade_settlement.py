@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
 from authority_trade_settlement import (
-    purchase_settlement, reconcile_observed_purchase, six_unit_settlement,
+    live_purchase_before, purchase_settlement, reconcile_observed_purchase, six_unit_settlement,
 )
 
 
@@ -121,6 +121,60 @@ class SixUnitSettlementTests(unittest.TestCase):
             six_unit_settlement(rows, 'request', 'epoch')
 
 
+class LivePurchaseSettlementTests(unittest.TestCase):
+    def setUp(self):
+        self.rows = [
+            'DOCK|request|READY|0x10|0x20|0x30|11.000',
+            'RESULT|request|quote|2719',
+            'BEFORE|request|epoch|0x10|0x20|0x30|energycells|3|2719|12|1000000|1000000|11.000',
+            'RESULT|request|submitted|2719',
+            'DEAL|request|epoch|live_purchase|3|2719|11.000|13.000|0x10|0x20|energycells|3|0'
+            '|2719|8157|1000000|991900|1|1|1000000|991900|12|15',
+            'OBSERVED|request|2719|3|0|0|0|-8100|1|1',
+            'LEDGER|observed|-|75|10|14',
+            'ENTRY|ship|12|16|32|32|energycells|3|1|73|75|trade|0|completed_trade|1|1|-8100|2719|1',
+            'DONE',
+        ]
+
+    def settle(self, rows):
+        return purchase_settlement(rows, 'request', 'epoch', 'live_purchase', ware='energycells', quantity=3)
+
+    def test_verifies_requested_ware_and_quantity_with_stock_debit(self):
+        result = self.settle(self.rows)
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['before']['ware'], 'energycells')
+        self.assertEqual(result['before']['quantity'], 3)
+        self.assertEqual(result['ship_ware_units_after'], 15)
+        self.assertEqual(result['quoted_total_cents'], 8157)
+        self.assertEqual(result['settled_total_cents'], 8100)
+
+    def test_rejects_binding_mismatches(self):
+        for index, old, new in ((2, '|energycells|', '|water|'), (2, '|3|', '|6|'),
+                                (4, '|live_purchase|', '|six_unit|'), (4, '|energycells|', '|water|'),
+                                (4, '|live_purchase|3|', '|live_purchase|6|'), (4, '|12|15', '')):
+            with self.subTest(index=index, new=new), self.assertRaises(ValueError):
+                rows = self.rows.copy()
+                rows[index] = rows[index].replace(old, new)
+                self.settle(rows)
+        parts = [row.split('|') for row in self.rows[:3]]
+        with self.assertRaisesRegex(ValueError, 'invalid native purchase request'):
+            live_purchase_before(parts, 'request', 'epoch', ware='energycells', quantity=True)
+
+    def test_withholds_confirmation_for_unmatched_cargo_or_ledger(self):
+        for index, old, new, reason in (
+            (4, '|12|15', '|11|14', 'pre_purchase_snapshot_disagrees'),
+            (5, '|3|', '|6|', 'cargo_or_transfer_disagrees'),
+            (7, '|energycells|', '|water|', 'ledger_completed_trade_unconfirmed'),
+            (7, '|3|', '|6|', 'ledger_completed_trade_unconfirmed'),
+            (7, '|16|32|', '|17|32|', 'ledger_completed_trade_unconfirmed'),
+            (7, '|-8100|', '|-8157|', 'ledger_debit_disagrees'),
+        ):
+            with self.subTest(reason=reason, old=old):
+                rows = self.rows.copy()
+                rows[index] = rows[index].replace(old, new)
+                self.assertEqual(self.settle(rows)['reason'], reason)
+
+
 class NativeEconomicReadbackTests(unittest.TestCase):
     def setUp(self):
         self.before = {
@@ -140,6 +194,16 @@ class NativeEconomicReadbackTests(unittest.TestCase):
         self.assertEqual(result['status'], 'already_applied')
         self.assertEqual(result['settled_total_cents'], 34800)
         self.assertEqual(result['trade_id'], 75)
+
+    def test_reconciles_requested_ware_and_quantity(self):
+        before = dict(self.before, ware='energycells', quantity=3, price_cents=2719)
+        after = dict(self.after, ware='energycells', cargo_units=15,
+                     company_balance_cents=991900, player_balance_cents=991900)
+        rows = [self.rows[0], self.rows[1].replace('|water|6|', '|energycells|3|')
+                .replace('|-34800|5819|', '|-8100|2719|')]
+        self.assertEqual(reconcile_observed_purchase(before, after, rows)['settled_total_cents'], 8100)
+        self.assertEqual(reconcile_observed_purchase(before, dict(after, ware='water'), rows)['reason'],
+                         'native_binding_disagrees')
 
     def test_ambiguity_does_not_assert_no_effect(self):
         other_debit = self.rows[1].replace('|73|', '|74|').replace('|16|32|32|', '|0|32|32|')
