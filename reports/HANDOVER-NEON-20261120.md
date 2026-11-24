@@ -1,5 +1,7 @@
 # Neon and Cobalt handover · X4 authoritative multiplayer
 
+**Archived.** [Current handover for Neon and Cobalt](HANDOVER-NEON.md).
+
 20 November 2026. Astra is technical lead on Lith7ium’s authoritative fork. Lith7ium approves major architecture changes. Silver develops his own fork independently. Astra’s goal is paused. Neon owns native NPC reacquisition after a sector change. Cobalt can work in parallel on what the client can observe through the map.
 
 ## Where to start
