@@ -87,7 +87,7 @@ def result_from_rows(rows, mode):
             'client_intent_captured': bool(intents), 'records': rows}
 
 
-def read_probe_rows(log, prefix, deadline, guard, *, max_records):
+def read_probe_rows(log, prefix, deadline, guard, *, max_records, error_markers=()):
     """Read complete tagged records from the owned game's append-only log."""
     rows = []
     pending = b''
@@ -101,6 +101,8 @@ def read_probe_rows(log, prefix, deadline, guard, *, max_records):
                 if len(pending) > 65536:
                     raise ValueError('unbounded native probe log line')
                 for line in lines:
+                    if any(marker in line for marker in error_markers):
+                        raise ValueError(f'native preparation failed: {line[:500]!r}')
                     if prefix not in line:
                         continue
                     row = line.split(prefix, 1)[1].strip().decode('ascii')

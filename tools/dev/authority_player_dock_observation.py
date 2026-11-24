@@ -97,5 +97,8 @@ def verify_player_flight(rows):
 
 
 def observe_player_flight(log, deadline, guard):
-    rows = read_probe_rows(log, PREFIX, deadline, guard, max_records=1024)
+    rows = read_probe_rows(log, PREFIX, deadline, guard, max_records=1024,
+                           error_markers=(b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT_ERROR ',
+                                          b'[X4LAN] AUTH_RECOVERY ERROR',
+                                          b'[X4LAN] AUTH_CLIENT_SEAT_REFUSED '))
     return verify_player_flight(rows)
