@@ -94,3 +94,26 @@ generation, sequence, clocks, position and velocity. It is `null` until a
 matching sample is confirmed in that slot. Compare these fields with the
 Linux pilot's source capture. This measures delivery to the selected local
 hull. Verifying visible motion also requires a later read of its actual pose.
+
+### Try playback in the same sector
+
+Use an isolated world and matching playback-capable packages. Get both pilots
+into the same sector and within cockpit sensor range. The observer flying
+WOO-831 can add `-CompanyHullPlaybackIndex 7354` to the `-CompanyMotion`
+invocation above, then select WRN-302 in the cockpit HUD. For other saves,
+use the registry index offered for the other pilot's company ship.
+
+The trial follows that existing ship and reads its position back on a
+later game update. It excludes the locally controlled ship and map-only
+selections. If motion data stops arriving while the ship remains visible,
+the observer can predict for up to five real seconds from the last complete
+sample using its measured velocity. The experiment limits each position
+correction to 50 m. After five seconds the ship receives no more position
+corrections until a newer complete sample from the same pilot passes the
+cockpit and distance checks again. An ordinary socket close during play
+uses the same local timeout as an interrupted link. The server releases
+the departing pilot's seat immediately. A pause, a lost HUD binding or a
+confirmed change of pilot ends the trial. The native log records the first
+position readback and the first readback showing at least one metre of displacement under
+`AUTH_COMPANY_SHIP_PLAYBACK_READBACK`. The Windows game path awaits a
+two-machine trial.

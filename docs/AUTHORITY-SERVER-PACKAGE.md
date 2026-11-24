@@ -178,6 +178,13 @@ confirmed sample for each view. Each slot also retains
 This stage reads the local hull. See the
 [two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
 
+For the isolated same-sector playback trial, the Linux observer can also
+pass `--company-hull-playback-index 7354` with `--company-motion`. Choose
+WOO-831 as the local ship and target WRN-302 in the cockpit. Match the index
+to your own world if using another test save. The ordinary map observer
+continues to cover the selected remote sector. Both the trial receiver and
+the provider must support the opt-in loss notifications.
+
 ## Check the deployment from the host
 
 Start a loopback run as above. Once its private `endpoint.json` appears, use a

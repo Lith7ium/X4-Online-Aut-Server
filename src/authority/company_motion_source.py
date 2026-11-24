@@ -108,8 +108,7 @@ class CompanyMotionSource:
             except Exception:
                 return False  # An unavailable native observer cannot stop cockpit publication.
 
-        self._observer = CompanyMotionObserver(self._registry, send,
-                                               trial_index=getattr(self, 'playback_index', None))
+        self._observer = CompanyMotionObserver(self._registry, send, trial_index=self.playback_index)
         return self._observer
 
     def observer_stats(self):
