@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityCompanyShuttleCreate" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <!-- A non-instantiated event cue can consume only one creation request. -->
+  <cue name="Create" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityCompanyShuttlePair'" control="'Create'"/></conditions>
+   <actions>
+    <set_value name="$nonce" exact="@event.param3.$nonce"/>
+    <set_value name="$registry" exact="md.X4AuthorityShipRegistry.State"/>
+    <set_value name="$snapshot" exact="md.X4AuthorityRegistryAvailabilitySnapshot.State"/>
+    <set_value name="$station" exact="player.station"/>
+    <set_value name="$sector" exact="@$station.sector"/>
+    <set_value name="$status" exact="'SOURCE'"/>
+    <do_if value="@$station.isclass.station and $station.owner == faction.argon and $station.idcode == 'XPJ-169' and @$sector.macro.id == 'cluster_06_sector002_macro' and @player.room.macro.id == 'dockingbay_arg_s_01_macro' and player.entity.hascontext.{$station} and not player.controlled and not player.occupiedship">
+     <do_if value="$registry.$epoch == @event.param3.$epoch and $registry.$epoch == $snapshot.$epoch and not $registry.$faulted and not $snapshot.$faulted and $snapshot.$format == 3 and $snapshot.$sealed and not $snapshot.$previous_run_id?">
+      <do_if value="$registry.$last == 10082 and $snapshot.$issued_count == 10082 and $snapshot.$cursor == 10082 and $snapshot.$available_count + $snapshot.$unavailable_count == 10082 and not $registry.$ships.{10083}? and not $registry.$ships.{10084}?">
+       <set_value name="$status" exact="'LOADOUT'"/>
+       <get_loadout loadout="'x4lan_coop_xperimental'" macro="macro.ship_ter_s_xperimental_01_a_macro" result="$loadout"/>
+       <do_if value="$loadout">
+        <set_value name="$status" exact="'CREATE'"/>
+        <do_all exact="2" counter="$slot">
+         <set_value name="$index" exact="(10082 + $slot)i"/>
+         <set_value name="$yaw" exact="if $slot == 1 then 0deg else 180deg"/>
+         <set_value name="$z" exact="if $slot == 1 then -1500m else 1500m"/>
+         <create_ship name="$ship" macro="macro.ship_ter_s_xperimental_01_a_macro" sector="$sector">
+          <owner exact="faction.player" overridenpc="true"/>
+          <loadout loadout="$loadout"/>
+          <position x="20km" y="100km" z="$z"/>
+          <rotation yaw="$yaw" pitch="0deg" roll="0deg"/>
+         </create_ship>
+         <do_if value="not @$ship.isoperational or $ship.owner != faction.player or $ship.sector != $sector or $ship.pilot.exists or $ship.assignedpilot.exists or $registry.$byship.{$ship}? or $snapshot.$byship.{$ship}?">
+          <break/>
+         </do_if>
+         <set_value name="$registry.$ships.{$index}" exact="$ship"/>
+         <set_value name="$registry.$byship.{$ship}" exact="$index"/>
+         <set_value name="$registry.$last" exact="$index"/>
+         <!-- The full next capture rechecks all old and appended bindings before any save. -->
+         <set_value name="$snapshot.$ships.{$index}" exact="$ship"/>
+         <set_value name="$snapshot.$byship.{$ship}" exact="$index"/>
+         <set_value name="$snapshot.$available.{$index}" exact="1"/>
+         <set_value name="$snapshot.$operational.{$index}" exact="1"/>
+         <set_value name="$snapshot.$issued_count" exact="$index"/>
+         <set_value name="$snapshot.$cursor" exact="$index"/>
+         <set_value name="$snapshot.$available_count" operation="add"/>
+         <set_value name="$snapshot.$operational_count" operation="add"/>
+        </do_all>
+        <do_if value="$registry.$last == 10084 and $snapshot.$issued_count == 10084">
+         <set_value name="$status" exact="'CREATED'"/>
+        </do_if>
+       </do_if>
+      </do_if>
+     </do_if>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityCompanyShuttlePair.Created'" param="'%s|%s'.[$nonce,$status]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

@@ -262,6 +262,23 @@ function M.new(options)
         return true
     end
 
+    -- The isolated shuttle seed driver calls this once after validating both
+    -- new bindings in MD and reading back both living ships from the engine.
+    if options.company_shuttle_seed == true then
+        function api:accept_company_shuttle_pair()
+            if busy or stopped or not ready or active or pending_marker or first_capture
+                    or cfg.issued_count ~= 10082 or not last_evidence
+                    or last_evidence.mode ~= 'inspect' or not guard() then
+                fail('company shuttle registry extension refused')
+                return false
+            end
+            cfg.issued_count = cfg.issued_count + 2
+            cfg.expected_binding_bits = cfg.expected_binding_bits .. '11'
+            cfg.expected_operational_bits = cfg.expected_operational_bits .. '11'
+            return true
+        end
+    end
+
     function api:prepare(marker)
         if busy or stopped or not ready or active or pending_marker or not first_save_confirmed then
             fail('prepare while gate is not ready'); return false, 'not_ready'
