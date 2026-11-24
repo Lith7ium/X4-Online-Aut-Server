@@ -55,8 +55,13 @@ class _View:
 class CompanyMotionObserver:
     """Keep one observed hull per native slot and a bounded receipt history."""
 
-    def __init__(self, registry, send):
+    def __init__(self, registry, send, *, trial_index=None):
         self._epoch, self._own_index = registry
+        if trial_index is not None and (type(trial_index) is not int or not 1 <= trial_index <= 200000
+                                        or trial_index == self._own_index):
+            raise ValueError('invalid local cockpit trial index')
+        self._trial_index = trial_index
+        self._trial = None
         self._send = send
         self._set_views = None
         self._slots = {name: _View() for name in _SLOTS}
@@ -77,10 +82,21 @@ class CompanyMotionObserver:
             self._subscribed = subscribed
             self._set_views([{'sector_macro': sector, 'indices': list(indices)} for sector, indices in subscribed])
 
+    def _end_trial(self):
+        if self._trial is None:
+            return
+        serial, index, generation, sector = self._trial
+        self._trial = None
+        # A still-queued native SEEN must not certify a pose after revocation.
+        self._slots['cockpit'].pending.clear()
+        self._send(f'END|cockpit|{serial}|{self._epoch}|{index}|{generation}|{sector}')
+
     def expire(self):
         now = time.monotonic()
-        for view in self._slots.values():
+        for slot, view in self._slots.items():
             if view.active is not None and now >= view.deadline:
+                if slot == 'cockpit':
+                    self._end_trial()
                 view.replace(None)
         self._sync_views()
 
@@ -99,6 +115,8 @@ class CompanyMotionObserver:
         view.serial, view.binding = serial, binding
         view.deadline = time.monotonic() + _TTL
         if new_serial or binding != view.active:
+            if view is self._slots['cockpit']:
+                self._end_trial()
             view.replace(binding)
             self._sync_views()
 
@@ -159,14 +177,23 @@ class CompanyMotionObserver:
         for slot, view in self._slots.items():
             if view.active is None or (sample['sector_macro'], sample['index']) != view.active[:2]:
                 continue
+            trial = None
+            if slot == 'cockpit' and sample['index'] == self._trial_index:
+                trial = view.serial, sample['index'], sample['generation'], sample['sector_macro']
+                if self._trial != trial:
+                    self._end_trial()
             message = '|'.join(map(str, (
                 'REMOTE', slot, view.serial, self._epoch, sample['index'], sample['generation'],
                 sample['sequence'], sample['sector_macro'], *values,
             )))
             if self._send(message):
                 view.pending.append((sample, values, time.monotonic()))
+                if trial is not None:
+                    self._trial = trial
 
     def end(self, index, generation):
+        if self._trial is not None and self._trial[1:3] == (index, generation):
+            self._end_trial()
         for view in self._slots.values():
             if view.active is not None and view.active[1] == index:
                 view.pending = deque((item for item in view.pending if item[0]['generation'] != generation),
