@@ -60,7 +60,9 @@ tools/run_authority_server.sh \
 The provider launcher uses a private Xvfb display and Mesa software Vulkan.
 The trial still uses the game's graphics libraries. Rendering performance and
 native operation on a provider host require measurement. GPU-free refers to
-device access and the software driver selection.
+device access and the software driver selection. The launcher detects Xvfb on
+`PATH` and the system lavapipe ICD. For alternate installed paths, use
+`--xvfb /absolute/path/to/Xvfb` and `--vulkan-icd /absolute/path/to/lvp_icd.json`.
 
 For a remote fixture client, add the explicit TLS options from the
 [recovered-server guide](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
