@@ -24,7 +24,7 @@
     <cue name="MeasurePlacement" checkinterval="0.5s">
      <conditions>
       <check_value value="@Position.$Status == 'MOVING'"/>
-      <check_value value="player.age ge $CheckAfter and (player.age ge $Deadline or @$Ship.distanceto.{$Station} le 5km)"/>
+      <check_value value="player.age ge $CheckAfter and (player.age ge $Deadline or @$Ship.distanceto.{$Bay} le 2km)"/>
      </conditions>
      <actions>
       <include_actions ref="CheckBinding"/>
@@ -35,7 +35,7 @@
        <do_else>
         <set_value name="$StationM" exact="($Ship.distanceto.{$Station} / 1m)L"/>
         <set_value name="$BayM" exact="($Ship.distanceto.{$Bay} / 1m)L"/>
-        <set_value name="$Status" exact="if $StationM le 5000 and $BayM ge 250 and $BayM le 2000 then 'PLACED' else 'PLACEMENT_NOT_OBSERVED'"/>
+        <set_value name="$Status" exact="if $BayM ge 250 and $BayM le 2000 then 'PLACED' else 'PLACEMENT_NOT_OBSERVED'"/>
        </do_else>
       </do_if>
       <include_actions ref="ReplyPosition"/>
@@ -113,7 +113,7 @@
     <do_else>
      <set_value name="$Sector" exact="$Ship.sector"/>
      <get_safe_pos result="$SafePosition" object="$Bay" sector="$Sector" min="500m" max="1500m" radius="$Ship.safesize" ignored="$Ship"/>
-     <do_if value="not $SafePosition or $Station.distanceto.[$Sector, $SafePosition] gt 5km or $Bay.distanceto.[$Sector, $SafePosition] lt 250m or $Bay.distanceto.[$Sector, $SafePosition] gt 2km">
+     <do_if value="not $SafePosition or $Bay.distanceto.[$Sector, $SafePosition] lt 250m or $Bay.distanceto.[$Sector, $SafePosition] gt 2km">
       <set_value name="$Status" exact="'NO_SAFE_APPROACH'"/>
      </do_if>
      <do_else>
