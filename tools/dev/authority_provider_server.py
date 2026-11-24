@@ -77,15 +77,35 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, required=True, help='fresh output directory under .local')
     parser.add_argument('--xvfb', help='Xvfb executable; defaults to PATH')
     parser.add_argument('--vulkan-icd', type=Path, help='Mesa lavapipe ICD; defaults to system detection')
-    args, server_flags = parser.parse_known_args(argv)
+    parser.add_argument('--timeout', type=float, default=3600, help='total run duration in seconds')
+    parser.add_argument('--registry-status', action='store_true', help='verify saved registry status')
+    parser.add_argument('--require-registry-snapshot', action='store_true',
+                        help='require and verify format-3 saved registry snapshots')
+    tls = parser.add_argument_group('optional TLS gateway')
+    tls.add_argument('--tls-bind', help='IPv4 address for the TLS listener')
+    tls.add_argument('--tls-port', type=int, help='TLS listener port; 0 selects an available port')
+    tls.add_argument('--tls-advertise', help='client-reachable IPv4 address or DNS name')
+    tls.add_argument('--tls-advertise-port', type=int, help='client-reachable port, if different')
+    tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
+    tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
+    tls.add_argument('--tls-shared-key-file', type=Path, help='private file containing the shared key')
+    args = parser.parse_args(argv)
+    server_flags = []
+    for flag in ('bind', 'port', 'advertise', 'advertise-port', 'certificate',
+                 'private-key', 'shared-key-file'):
+        value = getattr(args, 'tls_' + flag.replace('-', '_'))
+        if value is not None:
+            server_flags.extend(('--tls-' + flag, str(value)))
+    if args.registry_status:
+        server_flags.append('--registry-status')
+    if args.require_registry_snapshot:
+        server_flags.append('--require-registry-snapshot')
     xvfb, xauth, xdpyinfo = (shutil.which(name) for name in (args.xvfb or 'Xvfb', 'xauth', 'xdpyinfo'))
     icd = args.vulkan_icd or lavapipe_icd()
     if sys.platform != 'linux' or os.geteuid() == 0:
         parser.error('run as an unprivileged Linux user')
     if not all((xvfb, xauth, xdpyinfo, icd, shutil.which('bwrap'), shutil.which('vulkaninfo'))):
         parser.error('Xvfb, xauth, xdpyinfo, bubblewrap, vulkaninfo and Mesa lavapipe are required')
-    if '--' in server_flags:
-        parser.error('pass recovered server options directly')
     old_handler = signal.getsignal(signal.SIGTERM)
 
     def interrupt(_number, _frame):
@@ -98,7 +118,7 @@ def main(argv=None):
             os.environ['XAUTHORITY'] = str(authorization)
             return supervisor.main([
                 *server_flags, '--game', str(args.game), '--store', str(args.store),
-                '--out', str(args.out), '--display', display,
+                '--out', str(args.out), '--display', display, '--timeout', str(args.timeout),
                 '--software-vulkan-icd', str(icd.resolve(strict=True)),
             ])
     except KeyboardInterrupt:
