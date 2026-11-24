@@ -114,11 +114,42 @@ class WindowsMotionPeerTests(unittest.TestCase):
 
     def test_empty_table_foreign_pid_wrong_address_and_duplicate_are_refused(self):
         for rows in ([], [('127.0.0.1', 45123, 9999)],
-                     [('0.0.0.0', 45123, 1234)],
+                     [('192.0.2.7', 45123, 1234)], [('127.0.0.2', 45123, 1234)],
                      [('127.0.0.1', 45123, 1234), ('127.0.0.1', 45123, 1234)]):
             with self.subTest(rows=rows):
                 self.rows4 = rows
                 self.assertFalse(self.validate())
+
+    def test_implicitly_bound_wildcard_owner_row_is_accepted(self):
+        # The shipped network DLL opens a nonblocking, implicitly bound Winsock
+        # UDP socket. Native Windows lists that sender as 0.0.0.0, not 127.0.0.1.
+        self.rows4 = [('0.0.0.0', self.peer[1], self.owner.pid)]
+        self.assertTrue(self.validate())
+
+    def test_wildcard_row_keeps_pid_and_single_port_checks(self):
+        for rows4, rows6 in (([('0.0.0.0', 45123, 9999)], []),
+                             ([('0.0.0.0', 45123, 1234), ('127.0.0.1', 45123, 1234)], []),
+                             ([('0.0.0.0', 45123, 1234), ('127.0.0.1', 45123, 9999)], []),
+                             ([('0.0.0.0', 45123, 1234)], [('::', 45123, 1234)])):
+            with self.subTest(rows4=rows4, rows6=rows6):
+                self.rows4, self.rows6 = rows4, rows6
+                self.assertFalse(self.validate())
+
+    @unittest.skipUnless(sys.platform == 'win32', 'native Windows UDP owner table')
+    def test_native_implicitly_bound_sender_is_accepted(self):
+        # Reproduces the Windows pilot path without X4: this process stands in
+        # for the owner, and its implicitly bound sender reaches the destination.
+        owner = FakeOwner()
+        owner.pid = subject.os.getpid()
+        peer_check = subject.WindowsMotionPeer(owner, self.destination)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sender:
+            sender.setblocking(False)
+            sender.connect(self.destination.getsockname())
+            sender.send(b'C|probe')
+            self.destination.settimeout(2)
+            data, peer = self.destination.recvfrom(64)
+            self.assertEqual(data, b'C|probe')
+            self.assertTrue(peer_check(peer))
 
     def test_ipv6_same_source_port_competitor_is_refused(self):
         self.rows6 = [('::1', self.peer[1], 4321)]
