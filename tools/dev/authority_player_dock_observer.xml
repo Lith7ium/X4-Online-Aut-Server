@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Private readback for one player-controlled WRN-302 approach to BIM-169. -->
+<mdscript name="X4AuthorityPlayerDockObserver" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Cache"/>
+
+  <cue name="Inspect" instantiate="true" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityPlayerDockObserver'" control="'Inspect'"/></conditions>
+   <actions>
+    <set_value name="$Status" exact="'REGISTRY_INVALID'"/>
+    <set_value name="$Distance" exact="-1"/>
+    <set_value name="$Water" exact="-1"/>
+    <set_value name="$Company" exact="-1"/>
+    <do_if value="@md.X4AuthorityShipRegistry.State.$epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and @md.X4AuthorityShipRegistry.State.$last == 10082 and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <include_actions ref="InspectShip"/>
+    </do_if>
+    <set_value name="$Receipt" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$Status,if @$Ship.exists then $Ship else '0',if @$Station.exists then $Station else '0',if @$Bay.exists then $Bay else '0',if player.controlled then player.controlled else '0',if player.occupiedship then player.occupiedship else '0',if player.container then player.container else '0',if @$Captain.exists then $Captain else '0',$Distance,$Water,$Company,player.age / 1s]"/>
+    <raise_lua_event name="'X4AuthorityPlayerDockObserver.Result'" param="$Receipt"/>
+   </actions>
+  </cue>
+
+  <library name="InspectShip" purpose="include_actions">
+   <actions>
+    <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+    <set_value name="$Status" exact="'SHIP_INVALID'"/>
+    <do_if value="@$Ship.isclass.ship and $Ship.isoperational and $Ship.owner == faction.player and $Ship.idcode == 'WRN-302' and $Ship.macro.id == 'ship_arg_s_fighter_02_a_macro' and @$Ship.sector.macro.id == 'cluster_01_sector001_macro' and @md.X4AuthorityShipRegistry.State.$byship.{$Ship} == 7354">
+     <set_value name="$Station" exact="@Cache.$Station"/>
+     <do_if value="not $Station">
+      <include_actions ref="FindStation"/>
+     </do_if>
+     <set_value name="$Status" exact="'STATION_INVALID'"/>
+     <do_if value="@$Station.isclass.station and $Station.isoperational and $Station.idcode == 'BIM-169' and $Station.owner == faction.teladi and $Station.trueowner == faction.teladi and $Station.macro.id == 'station_gen_factory_base_01_macro' and $Station.sector == $Ship.sector">
+      <do_if value="not @Cache.$Station">
+       <set_value name="Cache.$Station" exact="$Station"/>
+      </do_if>
+      <include_actions ref="ReadState"/>
+     </do_if>
+    </do_if>
+   </actions>
+  </library>
+
+  <library name="FindStation" purpose="include_actions">
+   <actions>
+    <find_station name="$Stations" space="$Ship.sector" functional="true" checkoperational="true" multiple="true" required="false"/>
+    <set_value name="$Matches" exact="0"/>
+    <do_for_each name="$Candidate" in="$Stations">
+     <do_if value="$Candidate.idcode == 'BIM-169'">
+      <set_value name="$Station" exact="$Candidate"/>
+      <set_value name="$Matches" operation="add"/>
+     </do_if>
+    </do_for_each>
+    <do_if value="$Matches != 1">
+     <set_value name="$Station" exact="null"/>
+    </do_if>
+   </actions>
+  </library>
+
+  <library name="ReadState" purpose="include_actions">
+   <actions>
+    <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+    <set_value name="$Distance" exact="($Ship.distanceto.{$Station} / 1m)L"/>
+    <set_value name="$Water" exact="$Ship.cargo.{ware.water}.count"/>
+    <do_if value="faction.player.hasownaccount and faction.player.money == player.money">
+     <set_value name="$Company" exact="(player.money / 1ct)L"/>
+    </do_if>
+    <set_value name="$Bay" exact="@$Ship.dock"/>
+    <set_value name="$Status" exact="'IN_SPACE'"/>
+    <do_if value="$Ship.isinternallystored or (@$Bay.exists and (not $Bay.isclass.dockingbay or $Bay.isstorage or $Bay.container != $Station or not $Bay.istradingallowed))">
+     <set_value name="$Status" exact="'DOCK_INVALID'"/>
+    </do_if>
+    <do_elseif value="@$Bay.exists and $Bay.dockstate == dockstate.default">
+     <set_value name="$Status" exact="'DOCKED'"/>
+    </do_elseif>
+   </actions>
+  </library>
+ </cues>
+</mdscript>
