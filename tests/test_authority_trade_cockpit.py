@@ -21,8 +21,14 @@ class TradeCockpitEvidenceTests(unittest.TestCase):
             result_from_rows([self.quote, self.binding, 'DONE|offer_read'], 'offer')
 
     def test_confirm_requires_control_and_the_intended_purchase(self):
-        rows = [self.binding, self.quote, self.controlled, self.intent, 'DONE|intent_captured']
+        steps = [self.binding, self.quote, 'PERMISSION|research|granted',
+                 'TAKE|DISPATCHED|0x11|0x22|0x33|0x44|0|0|0x55']
+        rows = [*steps, self.controlled, self.intent, 'DONE|intent_captured']
         self.assertTrue(result_from_rows(rows, 'cockpit')['client_intent_captured'])
-        for mutation in (rows[:2] + rows[3:], rows[:3] + [self.intent.replace('BIM-169', 'XPJ-169')] + rows[4:]):
+        for mutation in (
+            [*steps, self.intent, rows[-1]],
+            [*steps, self.controlled.replace('0x44', '0x78'), self.intent, rows[-1]],
+            [*steps, self.controlled, self.intent.replace('BIM-169', 'XPJ-169'), rows[-1]],
+        ):
             with self.subTest(rows=mutation), self.assertRaises(ValueError):
                 result_from_rows(mutation, 'cockpit')

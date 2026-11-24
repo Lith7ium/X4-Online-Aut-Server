@@ -62,7 +62,9 @@ def result_from_rows(rows, mode):
     if not match:
         raise ValueError('invalid stock offer')
     cents, amount, minimum, can_trade = map(int, match.groups())
-    if not any(row.startswith('INSPECT|READY|') for row in rows[:rows.index(offer[0])]):
+    inspections = [row.split('|') for row in rows[:rows.index(offer[0])] if row.startswith('INSPECT|READY|')]
+    if (len(inspections) != 1 or len(inspections[0]) != 9
+            or not all(re.fullmatch(r'0x[0-9a-fA-F]+', handle) for handle in inspections[0][2:5])):
         raise ValueError('stock offer lacks a prior native ship and station binding')
     intents = [row for row in rows if row.startswith('INTENT|')]
     if terminal == 'intent_captured':
@@ -71,8 +73,13 @@ def result_from_rows(rows, mode):
                                  intents[0])):
             raise ValueError('stock purchase confirmation lacks a matching client intent')
         before_intent = rows[:rows.index(intents[0])]
-        if not any(row.startswith('VERIFY|CONTROLLED|') for row in before_intent):
-            raise ValueError('stock purchase confirmation lacks a prior native cockpit receipt')
+        ship, station, dock, captain = inspections[0][2:6]
+        permission = [row for row in before_intent if re.fullmatch(r'PERMISSION\|[^|]+\|granted', row)]
+        take = [row for row in before_intent if row.startswith(f'TAKE|DISPATCHED|{ship}|{station}|{dock}|')]
+        controlled = f'VERIFY|CONTROLLED|{ship}|{station}|{dock}|{captain}|{ship}|{ship}|{ship}'
+        if (len(permission) != 1 or len(take) != 1 or controlled not in before_intent
+                or not before_intent.index(permission[0]) < before_intent.index(take[0]) < before_intent.index(controlled)):
+            raise ValueError('stock purchase confirmation lacks permission, takeover or matching native cockpit')
     elif intents:
         raise ValueError('unexpected stock purchase intent')
     return {'outcome': terminal, 'unit_price_cents': cents, 'available_units': amount,
