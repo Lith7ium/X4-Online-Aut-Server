@@ -2,23 +2,56 @@
 <!-- One stock-assigned berth for the isolated WRN-302 trade UI fixture. -->
 <mdscript name="X4AuthorityPlayerTradeBerth" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
+  <cue name="Position" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityPlayerTradeBerth'" control="'Position'"/></conditions>
+   <actions>
+    <include_actions ref="ReadRequestBinding"/>
+    <set_value name="$StationM" exact="-1"/>
+    <set_value name="$BayM" exact="-1"/>
+    <do_if value="$Status == 'READY'">
+     <do_if value="@Prepare.$Status? or @$Ship.assigneddock.exists">
+      <set_value name="$Status" exact="'DOCK_REQUEST_ALREADY_STARTED'"/>
+     </do_if>
+     <do_else>
+      <include_actions ref="PlaceNearBay"/>
+     </do_else>
+    </do_if>
+    <do_if value="$Status != 'MOVING'">
+     <include_actions ref="ReplyPosition"/>
+    </do_if>
+   </actions>
+   <cues>
+    <cue name="MeasurePlacement" checkinterval="0.5s">
+     <conditions>
+      <check_value value="@Position.$Status == 'MOVING'"/>
+      <check_value value="player.age ge $CheckAfter and (player.age ge $Deadline or @$Ship.distanceto.{$Station} le 5km)"/>
+     </conditions>
+     <actions>
+      <include_actions ref="CheckBinding"/>
+      <do_if value="$Status == 'READY'">
+       <do_if value="not @$Bay.isclass.dockingbay or $Bay.container != $Station or $Bay.isstorage or not $Bay.istradingallowed">
+        <set_value name="$Status" exact="'PLACEMENT_BAY_CHANGED'"/>
+       </do_if>
+       <do_else>
+        <set_value name="$StationM" exact="($Ship.distanceto.{$Station} / 1m)L"/>
+        <set_value name="$BayM" exact="($Ship.distanceto.{$Bay} / 1m)L"/>
+        <set_value name="$Status" exact="if $StationM le 5000 and $BayM ge 250 and $BayM le 2000 then 'PLACED' else 'PLACEMENT_NOT_OBSERVED'"/>
+       </do_else>
+      </do_if>
+      <include_actions ref="ReplyPosition"/>
+     </actions>
+    </cue>
+   </cues>
+  </cue>
+
   <cue name="Prepare" namespace="this">
    <conditions><event_ui_triggered screen="'X4AuthorityPlayerTradeBerth'" control="'Prepare'"/></conditions>
    <actions>
-    <set_value name="$Args" exact="event.param3"/>
-    <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
-    <set_value name="$Station" exact="@md.X4AuthorityPlayerDockObserver.Cache.$Station"/>
-    <set_value name="$Avatar" exact="player.entity"/>
-    <include_actions ref="CheckBinding"/>
+    <include_actions ref="ReadRequestBinding"/>
     <do_if value="$Status == 'READY'">
-     <do_if value="@$Args.$ship != '%s'.[$Ship] or @$Args.$station != '%s'.[$Station]">
-      <set_value name="$Status" exact="'BINDING_MISMATCH'"/>
-     </do_if>
-     <do_else>
-      <!-- The cockpit already requested permission using the stock station action. -->
-      <set_value name="$Deadline" exact="player.age + 25s"/>
-      <set_value name="$Status" exact="'REQUESTED'"/>
-     </do_else>
+     <!-- The cockpit already requested permission using the stock station action. -->
+     <set_value name="$Deadline" exact="player.age + 25s"/>
+     <set_value name="$Status" exact="'REQUESTED'"/>
     </do_if>
     <include_actions ref="Reply"/>
    </actions>
@@ -54,6 +87,46 @@
     </cue>
    </cues>
   </cue>
+
+  <library name="ReadRequestBinding" purpose="include_actions">
+   <actions>
+    <set_value name="$Args" exact="event.param3"/>
+    <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+    <set_value name="$Station" exact="@md.X4AuthorityPlayerDockObserver.Cache.$Station"/>
+    <set_value name="$Avatar" exact="player.entity"/>
+    <include_actions ref="CheckBinding"/>
+    <do_if value="$Status == 'READY' and (@$Args.$ship != '%s'.[$Ship] or @$Args.$station != '%s'.[$Station])">
+     <set_value name="$Status" exact="'BINDING_MISMATCH'"/>
+    </do_if>
+   </actions>
+  </library>
+
+  <library name="PlaceNearBay" purpose="include_actions">
+   <actions>
+    <find_dockingbay name="$Bay" object="$Station" checkoperational="true" multiple="false" required="false" sortbydistanceto="$Ship">
+     <match_dock size="$Ship.docksize" free="true" trading="true" allowplayeronly="false" showroom="false" storage="false"/>
+     <match_relation_to object="$Ship" comparison="not" relation="enemy"/>
+    </find_dockingbay>
+    <do_if value="not @$Bay.isclass.dockingbay or $Bay.container != $Station or $Bay.isstorage or not $Bay.isdockingallowed or not $Bay.istradingallowed">
+     <set_value name="$Status" exact="'NO_FREE_TRADE_BAY'"/>
+    </do_if>
+    <do_else>
+     <set_value name="$Sector" exact="$Ship.sector"/>
+     <get_safe_pos result="$SafePosition" object="$Bay" sector="$Sector" min="500m" max="1500m" radius="$Ship.safesize" ignored="$Ship"/>
+     <do_if value="not $SafePosition or $Station.distanceto.[$Sector, $SafePosition] gt 5km or $Bay.distanceto.[$Sector, $SafePosition] lt 250m or $Bay.distanceto.[$Sector, $SafePosition] gt 2km">
+      <set_value name="$Status" exact="'NO_SAFE_APPROACH'"/>
+     </do_if>
+     <do_else>
+      <set_value name="$CheckAfter" exact="player.age + 1s"/>
+      <set_value name="$Deadline" exact="player.age + 8s"/>
+      <set_value name="$Status" exact="'MOVING'"/>
+      <warp object="$Ship" sector="$Sector">
+       <position value="$SafePosition"/>
+      </warp>
+     </do_else>
+    </do_else>
+   </actions>
+  </library>
 
   <library name="CheckBinding" purpose="include_actions">
    <actions>
@@ -92,6 +165,14 @@
       <set_value name="$Status" exact="'ASSIGNMENT_MISMATCH'"/>
      </do_elseif>
     </do_if>
+   </actions>
+  </library>
+
+  <library name="ReplyPosition" purpose="include_actions">
+   <actions>
+    <set_value name="$Receipt" exact="'%s|%s|%s|%s|%s|%s|%s'.[$Status,if @$Ship.exists then $Ship else '0',if @$Station.exists then $Station else '0',if @$Bay.exists then $Bay else '0',$StationM,$BayM,player.age / 1s]"/>
+    <debug_text text="'[X4LAN] AUTH_PLAYER_TRADE_POSITION %s'.[$Receipt]" chance="100"/>
+    <raise_lua_event name="'X4AuthorityPlayerTradeBerth.Placed'" param="$Receipt"/>
    </actions>
   </library>
 
