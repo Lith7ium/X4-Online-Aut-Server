@@ -71,6 +71,10 @@ function M.install(o)
             o.notice('already_attempted')
             return
         end
+        if data.immediate ~= true or o.identity(data.immediateObject) ~= ship then
+            o.notice('immediate_trade_required')
+            return
+        end
         local dock_ok, dock = pcall(o.read_dock, data.currentShip, data.component)
         if not dock_ok or type(dock) ~= 'table' or dock.ship ~= ship or dock.station ~= station
                 or dock.sector ~= o.sector or dock.station_code ~= o.station_code then

@@ -59,7 +59,7 @@ local options = {menu = menu, ship = 11, station = 71, sector = 'cluster_01_sect
         return true
     end}
 assert(module.install_x4(options) == nil)
-menu.contextMenuData = {component = 71, currentShip = 11, orders = {[123] = -1}}
+menu.contextMenuData = {component = 71, currentShip = 11, immediate = true, immediateObject = 11, orders = {[123] = -1}}
 original('disabled')
 
 options.enabled = true
@@ -72,6 +72,11 @@ menu.contextMenuData.component = 71
 menu.contextMenuData.currentShip = nil
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'stale_identity')
 menu.contextMenuData.currentShip = 11
+menu.contextMenuData.immediate = false
+assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'immediate_trade_required')
+menu.contextMenuData.immediate, menu.contextMenuData.immediateObject = true, 71
+assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'immediate_trade_required')
+menu.contextMenuData.immediateObject = 11
 live = false
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'stale_dock')
 live = true

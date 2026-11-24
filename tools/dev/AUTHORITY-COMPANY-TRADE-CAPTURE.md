@@ -35,11 +35,12 @@ docked ships, the live sector and station identities, and the offer's station
 from `GetTradeData`. Ship or station choices outside the armed pair retain the
 native behavior.
 
-No stock callback implementation was available for inspection in this
-checkout. In particular, the instant-versus-queued decision inside the stock
-handler has not been observed in this adapter. Its scope requires the chosen
-ship to be at the chosen station, controlled, physically docked, and outside
-internal storage, and redirects that confirmation to the authoritative
-immediate-purchase path. The exact Lua record and export behavior together
-still need a native test. The focused LuaJIT test exercises the adapter
-against synthetic X4 UI and dock data.
+The installed stock 9.00 source in catalog `08.cat`, entry
+`ui/addons/ego_detailmonitor/menu_map.lua`, defines the instant decision at
+lines 21312–21329 and consumes it at lines 3632–3656. The wrapper requires
+both `contextMenuData.immediate == true` and an `immediateObject` matching
+the selected ship. This admits only the stock ship's immediate purchase
+path and suppresses its local order and trade-computer signal. It still
+checks live physical docking, control, and ownership. The exact Lua
+record and export behavior together still need a native test. The focused
+LuaJIT test exercises the adapter against synthetic X4 UI and dock data.
