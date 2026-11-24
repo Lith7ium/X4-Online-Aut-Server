@@ -132,7 +132,10 @@ use the same Company ship catalogue from the confirmed checkpoint. This also
 works with the catalogue from a subsequent save. Before writing a position,
 the server checks the current reservation, registry binding, ownership, seat
 and sector in the live game. It reads the resulting position back through MD
-and the native UI. Ships must already be in the reported sector. A later
+and the native UI. A sector change requires the same pilot to have reported
+both the old and new sector. The server locates the reserved ship, transfers
+it once and checks its position in the destination sector. A pilot's first
+sample after joining cannot by itself trigger a transfer. A later
 `--verify-company-pose` checks the saved positions against the recorded
 movement after a cold start. The ordinary `--company-motion` option alone runs the relay. The human
 flight used that relay. [Two-pilot flight report](../reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
@@ -153,6 +156,12 @@ continuing flight samples, HVC-420 finished 480 m and KHI-630 finished
 checkpoint `5bbb18fafd344559b8e32c79cfe93809`, MD and UI independently
 reported zero metres of error for both. This measured server persistence.
 Movement on a human pilot's screen still needs an independent client test.
+
+On `601545f6`, a fresh native Linux provider started from that saved
+generation. Two synthetic pilots reserved the same ships again and sent
+new flight samples. After the last departure, the paused MD/UI readings
+and the positions independently read from the next confirmed save agreed
+for both ships (`checkpoint-4a14017bcb6741df8743143a6080e410`).
 
 For new pose trials, `company_pose_trial.application_drops` in `result.json`
 counts observed discards and keeps the latest ship index, source sequence and
