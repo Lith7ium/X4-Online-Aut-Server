@@ -18,7 +18,7 @@ class SixUnitSettlementTests(unittest.TestCase):
             'OBSERVED|request|5819|6|-646|-1000000|-1611661312|-34800|1|1',
             'RESULT|request|already_attempted|0', 'LEDGER|observed|-|75|448.4|455.7',
             'ENTRY|ship|455.65|16|32|32|water|6|1|73|75|trade|0|completed_trade'
-            '|1|1|-34800|34914|1',
+            '|1|1|-34800|5819|1',
             'DONE',
         ]
 
@@ -40,6 +40,10 @@ class SixUnitSettlementTests(unittest.TestCase):
             (self.rows[:7] + ['LEDGER|unknown|unavailable|-|-|-', 'DONE'], 'ledger_unavailable'),
             (self.rows[:-2] + [negative.replace('|455.65|', '|448.4|'), 'DONE'],
              'ledger_entry_outside_window'),
+            (self.rows[:4] + [self.rows[4].replace('|5819|34914|', '|5820|34920|')] + self.rows[5:],
+             'accepted_unit_price_disagrees'),
+            (self.rows[:-2] + [negative.replace('|5819|1', '|5820|1'), 'DONE'],
+             'ledger_unit_price_disagrees'),
             (self.rows[:-2] + [negative.replace('|-34800|', '|-34914|'), 'DONE'],
              'ledger_debit_disagrees'),
             (self.rows[:-1] + [negative.replace('|73|', '|74|').replace('ENTRY|ship|', 'ENTRY|player|'),

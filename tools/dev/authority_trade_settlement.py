@@ -82,7 +82,7 @@ def _ledger(rows):
     return header
 
 
-def _purchase_reason(ledger, buyer, seller, dock_time, completed, debit):
+def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, debit):
     trade_id = ledger['trade_id']
     if ledger['status'] != 'observed' or not trade_id or trade_id <= 0:
         return 'ledger_unavailable', None
@@ -106,6 +106,9 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, debit):
             or entry['ware'] != WARE or entry['quantity'] != QUANTITY
             for entry in completed_entries):
         return 'ledger_completed_trade_unconfirmed', None
+
+    if any(entry['price_cents'] != quoted_unit for entry in completed_entries):
+        return 'ledger_unit_price_disagrees', None
 
     # A transaction may appear in multiple X4 log sources. Its native entry ID,
     # game time and all transaction fields must agree before collapsing copies.
@@ -195,7 +198,9 @@ def six_unit_settlement(rows, nonce, epoch):
         reason = 'docking_or_avatar_disagrees'
     elif deal['transferred_qty'] != QUANTITY or deal['destroyed_qty'] != 0 or ship_cargo != QUANTITY:
         reason = 'cargo_or_transfer_disagrees'
-    elif deal['deal_unit_ct'] <= 0 or deal['deal_nominal_ct'] != nominal:
+    elif deal['deal_unit_ct'] != quoted_unit:
+        reason = 'accepted_unit_price_disagrees'
+    elif deal['deal_nominal_ct'] != nominal:
         reason = 'deal_nominal_disagrees'
     elif (not deal['faction_hasown_before'] or not deal['faction_hasown_after']
           or deal['player_before_ct'] != deal['faction_before_ct']
@@ -207,7 +212,7 @@ def six_unit_settlement(rows, nonce, epoch):
 
     purchase = None
     if reason is None:
-        reason, purchase = _purchase_reason(ledger, buyer, seller, dock_time, completed_at, debit)
+        reason, purchase = _purchase_reason(ledger, buyer, seller, dock_time, completed_at, quoted_unit, debit)
     verified = reason == 'verified'
     return {
         'verified': verified, 'reason': reason,
