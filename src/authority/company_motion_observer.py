@@ -15,6 +15,9 @@ _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _TTL = 3.0
 _MAX_PENDING = 4
 _SLOTS = ('cockpit', 'map')
+# A full SEEN can reach 543 bytes with the lease/generation prefix,
+# a 128-byte sector macro and eight round-trippable doubles.
+MAX_OBSERVER_DATAGRAM = 576
 
 
 def _counter(text, limit=MAX_COUNTER):
@@ -100,7 +103,7 @@ class CompanyMotionObserver:
 
     def receive(self, fields):
         """Receive only from the source's authenticated, process-owned peer."""
-        if self._set_views is None or len(fields) not in (8, 16):
+        if self._set_views is None or len(fields) not in (8, 18):
             return
         kind, slot, serial_text, epoch, *body = fields
         view = self._slots.get(slot)
@@ -110,19 +113,19 @@ class CompanyMotionObserver:
         self.expire()
         if kind == 'VIEW' and len(body) == 4:
             self._view(view, serial, *body)
-        elif kind == 'SEEN' and len(body) == 12 and serial == view.serial and view.active is not None:
+        elif kind == 'SEEN' and len(body) == 14 and serial == view.serial and view.active is not None:
             self._seen(slot, view, *body[:6], tuple(body[6:]))
 
-    def _seen(self, slot, view, index_text, generation, sequence_text, sector, actor, code, coordinates):
+    def _seen(self, slot, view, index_text, generation, sequence_text, sector, actor, code, values):
         index, sequence = _counter(index_text, 200000), _counter(sequence_text)
         if ((sector, index, actor, code) != view.active or sequence is None
                 or not _TOKEN.fullmatch(generation)):
             return
         now = time.monotonic()
-        for offset, (sample, expected_coordinates, sent_at) in enumerate(view.pending):
+        for offset, (sample, expected_values, sent_at) in enumerate(view.pending):
             if generation != sample['generation'] or sequence != sample['sequence']:
                 continue
-            if coordinates != expected_coordinates:
+            if values != expected_values:
                 return
             for _ in range(offset + 1):
                 view.pending.popleft()
@@ -135,7 +138,8 @@ class CompanyMotionObserver:
                 'slot': slot, 'serial': view.serial, 'epoch': self._epoch, 'index': index,
                 'generation': generation, 'sequence': sequence, 'sector_macro': sector,
                 'code': code, 'position': {axis: sample[axis] for axis in 'xyz'},
-                'real_velocity': velocity,
+                'real_velocity': velocity, 'source_time': sample['source_time'],
+                'capture_time': sample['capture_time'],
             }
             return
 
@@ -147,16 +151,17 @@ class CompanyMotionObserver:
         rate = sample['real_velocity']
         position = tuple(format(sample[axis], '.17g') for axis in 'xyz')
         velocity = ('-', '-', '-') if rate is None else tuple(format(rate[axis], '.17g') for axis in 'xyz')
-        coordinates = (*position, *velocity)
+        clocks = tuple(format(sample[key], '.17g') for key in ('source_time', 'capture_time'))
+        values = (*position, *velocity, *clocks)
         for slot, view in self._slots.items():
             if view.active is None or (sample['sector_macro'], sample['index']) != view.active[:2]:
                 continue
             message = '|'.join(map(str, (
                 'REMOTE', slot, view.serial, self._epoch, sample['index'], sample['generation'],
-                sample['sequence'], sample['sector_macro'], *coordinates,
+                sample['sequence'], sample['sector_macro'], *values,
             )))
             if self._send(message):
-                view.pending.append((sample, coordinates, time.monotonic()))
+                view.pending.append((sample, values, time.monotonic()))
 
     def end(self, index, generation):
         for view in self._slots.values():

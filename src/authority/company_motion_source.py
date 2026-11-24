@@ -5,8 +5,11 @@ import select
 import socket
 import threading
 
-from .company_motion_observer import CompanyMotionObserver
+from .company_motion_observer import MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
 from .experimental_tcp_motion import check_motion_progress, motion_value
+
+
+_MAX_SAMPLER_DATAGRAM = 512
 
 
 class CompanyMotionSource:
@@ -74,7 +77,7 @@ class CompanyMotionSource:
         def send(message):
             self._owner()
             packet = self._prefix() + message.encode('ascii')
-            if self._peer is None or len(packet) > 512:
+            if self._peer is None or len(packet) > MAX_OBSERVER_DATAGRAM:
                 return False
             try:
                 return (validate_peer(self._peer) is True
@@ -97,11 +100,13 @@ class CompanyMotionSource:
         newest = None
         checked_peer = None
         prefix = self._prefix()
+        packet_limit = _MAX_SAMPLER_DATAGRAM
         if self._observer is not None:
             self._observer.expire()
+            packet_limit = MAX_OBSERVER_DATAGRAM
         for _ in range(32):
             try:
-                raw, address = self._socket.recvfrom(513)
+                raw, address = self._socket.recvfrom(packet_limit + 1)
             except BlockingIOError:
                 break
             except OSError as error:
@@ -118,7 +123,7 @@ class CompanyMotionSource:
                 checked_peer = self._peer = address
             body = raw[len(prefix):]
             if self._observer is not None and body.partition(b'|')[0] not in (b'GAP', b'SAMPLE3'):
-                if len(raw) <= 512 and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
+                if len(raw) <= MAX_OBSERVER_DATAGRAM and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
                     try:
                         fields = body.decode('ascii').split('|')
                     except UnicodeDecodeError:
@@ -130,7 +135,7 @@ class CompanyMotionSource:
                 newest = None
                 self._returned = None
                 continue
-            if len(raw) > 512 or len(fields) != 14 or fields[0] != 'SAMPLE3':
+            if len(raw) > _MAX_SAMPLER_DATAGRAM or len(fields) != 14 or fields[0] != 'SAMPLE3':
                 raise ValueError('invalid local company motion packet')
             _, epoch, index, sequence, sector, source_time, capture_time, x, y, z, vx, vy, vz, end = fields
             if (end != '' or not re.fullmatch(r'[1-9][0-9]{0,15}', sequence)

@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+from authority.company_motion_frames import MAX_COUNTER
+from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_source import CompanyMotionSource
 
 
@@ -95,10 +97,10 @@ class CompanyMotionObserverTest(unittest.TestCase):
                 'capture_time': sequence, 'x': 10.5, 'y': 11, 'z': -3, 'real_velocity': velocity}
 
     def remote(self):
-        raw = self.owned.recv(513)
+        raw = self.owned.recv(MAX_OBSERVER_DATAGRAM + 1)
         self.assertTrue(raw.startswith(self.prefix))
         fields = raw[len(self.prefix):].decode('ascii').split('|')
-        self.assertEqual((len(fields), fields[0]), (14, 'REMOTE'))
+        self.assertEqual((len(fields), fields[0]), (16, 'REMOTE'))
         return fields
 
     def seen(self, remote, *, actor='0xabcdef', code='WRN-302', peer=None):
@@ -114,10 +116,13 @@ class CompanyMotionObserverTest(unittest.TestCase):
         cockpit, map_view = self.remote(), self.remote()
         self.assertEqual(cockpit[1:4], ['cockpit', '1', self.epoch])
         self.assertEqual(map_view[1:4], ['map', '5', self.epoch])
-        self.assertEqual(map_view[8:], ['10.5', '11', '-3', '-2', '0', '4'])
+        self.assertEqual(map_view[8:], ['10.5', '11', '-3', '-2', '0', '4', '1', '1'])
         self.seen(cockpit, peer=self.foreign)
         self.seen(map_view, actor='0x9999')
-        self.seen([*map_view[:-1], '999'])
+        self.seen([*map_view[:13], '999', *map_view[14:]])  # changed rate
+        self.seen([*map_view[:-2], '999', map_view[-1]])  # changed game clock
+        self.seen([*map_view[:-1], '999'])  # changed capture clock
+        self.seen(map_view[:-2])  # previous, shorter packet format
         self.poll()
         self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
         self.seen(cockpit)
@@ -149,7 +154,7 @@ class CompanyMotionObserverTest(unittest.TestCase):
             self.poll()
             self.observer.snapshot(self.sample(1))
             delayed = self.remote()
-            self.assertEqual(delayed[-3:], ['-', '-', '-'])
+            self.assertEqual(delayed[11:14], ['-', '-', '-'])
             clock.return_value = 3
             self.seen(delayed)
             self.poll()
@@ -168,6 +173,26 @@ class CompanyMotionObserverTest(unittest.TestCase):
             self.poll()
             self.assertEqual(self.views[-1], [])
             self.assertEqual(self.source.observer_stats()['samples_confirmed'], 0)
+
+    def test_maximum_formatted_observer_roundtrip_fits_its_datagram_limit(self):
+        sector, index = 's' * 128, 200000
+        actor = str(2**64 - 1)
+        self.view('cockpit', MAX_COUNTER, sector=sector, index=index, actor=actor)
+        self.poll()
+        point = -1.2345678901234567e-300
+        sample = self.sample(MAX_COUNTER, velocity=dict.fromkeys('xyz', point), sector=sector, index=index)
+        sample.update(x=point, y=point, z=point, source_time=-point, capture_time=-point)
+        self.observer.snapshot(sample)
+        remote = self.remote()
+        receipt_fields = ('SEEN', *remote[1:8], actor, 'WRN-302', *remote[8:])
+        self.assertEqual(len(self.prefix) + len('|'.join(remote)), 516)
+        self.assertEqual(len(self.prefix) + len('|'.join(receipt_fields)), 543)
+        self.assertLessEqual(543, MAX_OBSERVER_DATAGRAM)
+        self.seen(remote, actor=actor)
+        self.poll()
+        last = self.source.observer_stats()['last_confirmed']
+        self.assertEqual(last['source_time'], sample['source_time'])
+        self.assertEqual(last['capture_time'], sample['capture_time'])
 
     def test_bad_optional_datagrams_and_peer_loss_keep_cockpit_path_available(self):
         self.view('map', 1, peer=self.foreign)

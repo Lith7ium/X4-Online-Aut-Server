@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from authority.company_motion_client import CompanyMotionClient
+from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_motion_source import CompanyMotionSource
@@ -155,7 +156,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         def collect(count):
             while len(remote) < count:
                 try:
-                    raw, source = overlay.recvfrom(513)
+                    raw, source = overlay.recvfrom(MAX_OBSERVER_DATAGRAM + 1)
                 except BlockingIOError:
                     return False
                 self.assertEqual(source, destination)
@@ -174,7 +175,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         cockpit.stage(1, 'sector_a', 10)
         await self.drive(lambda: collect(2))
         self.assertEqual({row[1] for row in remote}, {'cockpit', 'map'})
-        self.assertTrue(all(row[5] == publisher_grant['generation'] and row[-3:] == ['-', '-', '-']
+        self.assertTrue(all(row[5] == publisher_grant['generation'] and row[11:] == ['-', '-', '-', '0.5', '1']
                             for row in remote))
         for row in remote:
             seen(row)
@@ -187,7 +188,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         cockpit.stage(2, 'sector_a', 26)
         await self.drive(lambda: collect(1))
         self.assertEqual(remote[0][1], 'cockpit')
-        self.assertEqual(remote[0][-3:], ['16', '3', '-2'])
+        self.assertEqual(remote[0][11:], ['16', '3', '-2', '1', '2'])
         seen(remote[0])
         await self.drive(lambda: viewer_source.observer_stats()['velocity_samples_confirmed'] == 1)
 
