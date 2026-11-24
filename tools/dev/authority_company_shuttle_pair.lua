@@ -1,8 +1,8 @@
 -- Runs only in the private preparation or cold-inspection overlay.
 local M = {}
-local screen = 'X4AuthorityCompanyShuttlePair'
 
 function M.new_x4(config, guard)
+    local screen = config.screen or 'X4AuthorityCompanyShuttlePair'
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
     if not pcall(ffi.typeof, 'UIPosRot') then
@@ -23,8 +23,10 @@ function M.new_x4(config, guard)
     local C, parse = ffi.C, X4LAN_RESOLVE_STRING.parse_hex
     local action = config.mode == 'prepare' and 'Create' or 'Inspect'
     local waiting, failure, finished, deadline = nil, nil, false, GetCurRealTime() + 30
-    local current, ships = 10083, {}
-    local function log(row) DebugError('[X4LAN] AUTH_COMPANY_SHUTTLE_PAIR ' .. config.nonce .. '|' .. row) end
+    local indices = config.indices or {10083,10084}
+    local slot, current, ships = 1, indices[1], {}
+    local station_code, room = config.station or 'XPJ-169', config.room
+    local function log(row) DebugError('[X4LAN] ' .. (config.tag or 'AUTH_COMPANY_SHUTTLE_PAIR') .. ' ' .. config.nonce .. '|' .. row) end
     local function refuse(reason)
         if not failure then failure = reason; log('ERROR|' .. reason) end
     end
@@ -42,6 +44,15 @@ function M.new_x4(config, guard)
             action = 'Inspect'
             return
         end
+        if config.live_station then
+            if config.mode == 'prepare' and row == config.nonce .. '|' .. current .. '|PARKING' then return end
+            local core, observed_station, observed_room = row:match('^(.*)|([A-Z0-9]+%-[A-Z0-9]+)|([%w_]+)$')
+            if not core then return refuse('INSPECT_' .. row:sub(1,100)) end
+            if (config.station or ships[1]) and (observed_station ~= station_code or observed_room ~= room) then
+                return refuse('STATION_CHANGED')
+            end
+            row, station_code, room = core, observed_station, observed_room
+        end
         local nonce, index, shipref, sectorref, shipcode =
             row:match('^([a-f0-9]+)|(%d+)|AVAILABLE|(0[xX]%x+)|(0[xX]%x+)|([A-Z0-9]+%-[A-Z0-9]+)$')
         if nonce ~= config.nonce or tonumber(index) ~= current then return refuse('INSPECT_' .. row:sub(1,110)) end
@@ -52,7 +63,7 @@ function M.new_x4(config, guard)
                 or C.GetContextByClass(id, 'sector', false) ~= sector then return refuse('LOCAL_BINDING') end
         local container = C.GetPlayerContainerID()
         local station = C.GetContextByClass(container, 'station', true)
-        if station == 0 or code(station) ~= 'XPJ-169' or C.GetPlayerControlledShipID() ~= 0
+        if station == 0 or code(station) ~= station_code or C.GetPlayerControlledShipID() ~= 0
                 or C.GetPlayerOccupiedShipID() ~= 0 then return refuse('LOCAL_AVATAR') end
         local ref = ConvertStringToLuaID((tostring(id):gsub('ULL$', '')))
         if not ref or X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(ref)) ~= id then return refuse('LOCAL_ID') end
@@ -72,10 +83,9 @@ function M.new_x4(config, guard)
             if not current_wares[required] then return refuse('SOFTWARE_MISSING_' .. required) end
         end
         local pose = C.GetObjectPositionInSector(id)
-        local slot = current - 10082
         if config.codes and config.codes[slot] ~= shipcode then return refuse('COLD_IDENTITY') end
         ships[slot] = {id=id, sector=sector, code=shipcode, pose=pose}
-        if slot == 1 then current = current + 1; return end
+        if slot == 1 then slot, current = 2, indices[2]; return end
         local first = ships[1]
         if first.id == id or first.code == shipcode or first.sector ~= sector then return refuse('DUPLICATE') end
         local dx, dy, dz = pose.x - first.pose.x, pose.y - first.pose.y, pose.z - first.pose.z
@@ -85,7 +95,7 @@ function M.new_x4(config, guard)
             return refuse(('POSE_%.2f_%.2f_%.2f_%.3f_%.3f'):format(dx,dy,dz,first.pose.yaw,pose.yaw))
         end
         finished = true
-        log('PAIR|' .. first.code .. '|' .. shipcode)
+        log('PAIR|' .. first.code .. '|' .. shipcode .. (config.live_station and ('|' .. station_code .. '|' .. room) or ''))
     end
     for _, entry in ipairs({{'Create','Created'}, {'Inspect','Inspected'}}) do
         local which = entry[1]
@@ -98,7 +108,11 @@ function M.new_x4(config, guard)
         if GetCurRealTime() >= deadline then refuse('TIMEOUT_' .. action); return false end
         if not waiting then
             waiting = action
-            if AddUITriggeredEvent(screen, action, {nonce=config.nonce,epoch=config.epoch,index=current}) == false then
+            local args = {nonce=config.nonce,epoch=config.epoch,index=current}
+            if config.live_station then
+                args.fresh, args.station, args.room = config.mode == 'prepare', config.station, config.room
+            end
+            if AddUITriggeredEvent(screen, action, args) == false then
                 refuse('DISPATCH')
             end
         end

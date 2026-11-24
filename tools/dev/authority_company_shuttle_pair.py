@@ -109,8 +109,19 @@ def verify_log(path, nonce, read_evidence):
 
 
 def verify_saved(checkpoint, pair):
-    by_index = {entry['index']: entry for entry in _checked(pair)['ships']}
-    loadout = ET.parse(LOADOUT).find('./add/loadout')
+    ships = _checked(pair)['ships']
+    result, snapshot = verify_flight_pair(checkpoint, [ship['code'] for ship in ships],
+        loadout_path=LOADOUT, sector_macro=SECTOR, station_code='XPJ-169', room_macro='dockingbay_arg_s_01_macro')
+    if ([ship['index'] for ship in result['ships']] != list(INDICES)
+            or (snapshot['epoch'], snapshot['issued_count']) != (EPOCH, INDICES[-1])):
+        raise ValueError('saved format-3 shuttle identities differ')
+    return result
+
+
+def verify_flight_pair(checkpoint, codes, *, loadout_path, sector_macro, station_code, room_macro):
+    """Resolve the two native codes from the verified snapshot and inspect their equipment."""
+    loadout = ET.parse(loadout_path).find('./add/loadout')
+    hull = loadout.attrib['macro']
     mounts = {node.attrib['path'].removeprefix('../'): node.attrib['macro']
               for node in loadout.find('macros')}
     software = sorted(node.attrib['ware'] for node in loadout.find('software'))
@@ -139,35 +150,36 @@ def verify_saved(checkpoint, pair):
         while components and components[-1][0] >= depth:
             components.pop()
         kind = attrs.get('class', '')
-        if attrs.get('owner') == 'player' and attrs.get('macro') == HULL:
+        if attrs.get('owner') == 'player' and attrs.get('macro') == hull:
             owned_shuttles.append(index)
-        if index in by_index or kind == 'player':
+        code = attrs.get('code')
+        if code in codes or kind == 'player':
             sector = next((a.get('macro') for _, a in reversed(components) if a.get('class') == 'sector'), None)
-            if sector != SECTOR:
+            if sector != sector_macro:
                 raise ValueError('shuttle or avatar in unexpected sector')
             if kind == 'player':
                 stations = [a.get('code') for _, a in components if a.get('class', '').startswith('station')]
-                rooms = [a.get('macro') for _, a in components if a.get('class') == 'dockingbay']
-                if (stations != ['XPJ-169'] or 'dockingbay_arg_s_01_macro' not in rooms
+                rooms = [a.get('macro') for _, a in components if a.get('class') in ('dockingbay','room')]
+                if (stations != [station_code] or room_macro not in rooms
                         or any(a.get('class', '').startswith('ship_') for _, a in components)):
                     raise ValueError('server avatar is outside its parking room')
                 avatars.append(attrs.get('owner'))
             else:
-                if (index in ships or attrs.get('code') != by_index[index]['code'] or attrs.get('macro') != HULL
+                if (type(index) is not int or index < 1 or code in ships or attrs.get('macro') != hull
                         or attrs.get('owner') != 'player' or attrs.get('connection') != 'space'
                         or attrs.get('thruster') != thruster or components[-1][1].get('class') not in ('zone','sector')):
                     raise ValueError(f'invalid saved shuttle at registry index {index}')
                 ship = {'index': index, 'code': attrs['code'], 'mounts': {}, 'software': None,
                         'thruster': thruster}
-                ships[index], ship_depth, mount = ship, depth, None
+                ships[code], ship_depth, mount = ship, depth, None
         components.append((depth, attrs))
 
     snapshot = verify_join_snapshot(checkpoint, observe_universe=observe)
-    if ((snapshot['epoch'], snapshot['issued_count']) != (EPOCH, INDICES[-1])
-            or set(ships) != set(INDICES) or sorted(i or 0 for i in owned_shuttles) != list(INDICES)
-            or avatars != ['player']):
-        raise ValueError('saved format-3 shuttle identities or parked avatar differ')
-    for index, ship in ships.items():
+    if (set(ships) != set(codes) or len(owned_shuttles) != 2 or None in owned_shuttles
+            or len(set(owned_shuttles)) != 2 or avatars != ['player']):
+        raise ValueError('saved format-3 ship identities or parked avatar differ')
+    for ship in ships.values():
+        index = ship['index']
         # Stock saves can omit factory-default software. The native inspection
         # reads the current version of every slot, including both hull defaults.
         recorded = ship['software']
@@ -175,7 +187,7 @@ def verify_saved(checkpoint, pair):
         if (ship['mounts'] != mounts or recorded is None or len(set(recorded)) != len(recorded)
                 or set(recorded) - set(software) or set(software) - set(recorded) - defaults):
             raise ValueError(f'saved shuttle equipment differs at {index}: {ship!r}')
-    return {'ships': [ships[index] for index in INDICES], 'sector': SECTOR, 'parked_station': 'XPJ-169'}
+    return {'ships': [ships[code] for code in codes], 'sector': sector_macro, 'parked_station': station_code}, snapshot
 
 
 def archive_cues(out, case, read_expected, digest):

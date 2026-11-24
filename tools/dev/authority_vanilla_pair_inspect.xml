@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityVanillaPairInspect" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Inspect" instantiate="true">
+   <conditions><event_ui_triggered screen="'X4AuthorityVanillaPair'" control="'Inspect'"/></conditions>
+   <actions>
+    <set_value name="$v" exact="event.param3"/>
+    <set_value name="$ship" exact="null"/>
+    <set_value name="$station" exact="player.station"/>
+    <set_value name="$room" exact="player.room"/>
+    <set_value name="$status" exact="'PARKING'"/>
+    <do_if value="@$station.isclass.station and $station.isoperational and $station.owner == faction.argon and $station.trueowner == faction.argon and @$station.sector.macro.id == 'cluster_06_sector002_macro' and @$room.exists and player.entity.hascontext.{$station} and not player.occupiedship and not player.controlled">
+     <set_value name="$status" exact="'BINDING'"/>
+     <do_if value="$v.$fresh and ($v.$index == 1 or $v.$index == 2)">
+      <do_if value="@md.X4AuthorityVanillaPairCreate.Prepare.$nonce == $v.$nonce and @md.X4AuthorityVanillaPairCreate.Prepare.$station == $station">
+       <set_value name="$ship" exact="@md.X4AuthorityVanillaPairCreate.Prepare.$ships.{$v.$index}"/>
+      </do_if>
+     </do_if>
+     <do_elseif value="not $v.$fresh and $station.idcode == $v.$station and $room.macro.id == $v.$room">
+      <set_value name="$reg" exact="md.X4AuthorityShipRegistry.State"/>
+      <set_value name="$snap" exact="md.X4AuthorityRegistryAvailabilitySnapshot.State"/>
+      <do_if value="$snap.$format == 3 and $snap.$sealed and not $reg.$faulted and not $snap.$faulted and $reg.$epoch == $snap.$epoch and $reg.$last == $snap.$issued_count">
+       <set_value name="$bound" exact="@$reg.$ships.{$v.$index}"/>
+       <do_if value="@$bound.exists and $snap.$ships.{$v.$index} == $bound and @$reg.$byship.{$bound} == $v.$index and @$snap.$byship.{$bound} == $v.$index and $snap.$available.{$v.$index} == 1 and $snap.$operational.{$v.$index} == 1">
+        <set_value name="$ship" exact="$bound"/>
+       </do_if>
+      </do_if>
+     </do_elseif>
+     <do_if value="@$ship.isclass.ship and $ship.isoperational and $ship.macro == macro.ship_arg_s_fighter_03_a_macro and $ship.owner == faction.player and $ship.trueowner == faction.player and $ship.sector == $station.sector and not $ship.dock.exists and not $ship.isinternallystored and not $ship.pilot.exists and not $ship.assignedpilot.exists and $ship != player.container">
+      <set_value name="$status" exact="'AVAILABLE'"/>
+     </do_if>
+    </do_if>
+    <do_if value="$status == 'AVAILABLE'">
+     <raise_lua_event name="'X4AuthorityVanillaPair.Inspected'" param="'%s|%s|AVAILABLE|%s|%s|%s|%s|%s'.[$v.$nonce,$v.$index,$ship,$ship.sector,$ship.idcode,$station.idcode,$room.macro.id]"/>
+    </do_if>
+    <do_else><raise_lua_event name="'X4AuthorityVanillaPair.Inspected'" param="'%s|%s|%s'.[$v.$nonce,$v.$index,$status]"/></do_else>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
