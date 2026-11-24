@@ -108,6 +108,31 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
+## Starting ships for human flight tests
+
+Prepare fresh human playtest worlds with **two fully equipped Xperimental
+Shuttles in the same sector**. Give each pilot a separate undocked Company
+ship. Place them a few kilometres apart in clear space, facing one another,
+so each pilot can acquire the other in the cockpit immediately. Players can
+fly to different sectors after the first sighting. This is a starting setup
+for new test worlds. A reconnect uses the saved world and ship positions.
+
+Use the Timelines sandbox ship `ship_ter_s_xperimental_01_a_macro` for both
+seats. For seed preparation, the [shared shuttle loadout](../tools/dev/fixtures/human-flight/libraries/loadouts.xml)
+is the fixed equipment definition from the LAN flight tests. It fills all
+six gun mounts with Gamma HEPTs, both engine mounts with Frontier engines
+and the shield mount with a Frontier Mk5 shield. It includes Mk3 combat
+thrusters, Mk2 docking and scanner software, flight assist, targeting and
+trade software.
+
+Prepare the pair in a disposable copy with the server avatar parked. Save
+and cold-load that copy, check the loadout on both ships, and read their
+codes and distinct registry indices from its Company catalogue. Put these
+indices in the Linux and Windows invitations, with each observer targeting
+the other pilot's index. Before handing the world to the pilots, check both
+seat choices and mutual cockpit targeting. The November 24 WOO-831 / WRN-302
+seed is the earlier two-sector flight fixture.
+
 ## Prepare the parked server avatar for the two-ship test
 
 Use the specific confirmed two-ship format-3 seed supplied for this experiment.
