@@ -859,6 +859,13 @@ def run(args):
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
     cockpit_capture = getattr(args, 'company_cockpit_purchase', None)
+    shuttle_mode = getattr(args, 'company_shuttle_pair', None)
+    if shuttle_mode is not None:
+        if (shuttle_mode not in ('prepare', 'verify') or not require_snapshot or parking is not None
+                or tls is not None or require_company_ship or company_motion or trade_mode or cockpit_capture
+                or getattr(args, 'company_pose_trial', False) or getattr(args, 'verify_company_pose', False)):
+            raise ValueError('shuttle pair preparation and verification require isolated format-3 recovery')
+        import authority_company_shuttle_pair as shuttle_probe
     cockpit_purchase = None
     if cockpit_capture is not None:
         if trade_mode is not None:
@@ -1047,6 +1054,15 @@ def run(args):
         registry_snapshot_state = None
         if require_snapshot:
             fixture, saved_evidence = fixture
+            if shuttle_mode is not None:
+                shuttle_source = source_store.directory.parent / 'result.json'
+                shuttle_provenance = read_evidence(shuttle_source, 1 << 20)
+                shuttle_expected = shuttle_probe.source_expected(
+                    shuttle_mode, checkpoint, json.loads(shuttle_provenance, object_pairs_hook=_pairs,
+                                                         parse_constant=_reject_constant))
+                shuttle_result = {'mode': shuttle_mode, 'source_sha256': checkpoint.sha256,
+                                  'client_endpoint_opened': False}
+                result['company_shuttle_pair'] = shuttle_result
             if trade_mode:
                 if trade_mode != 'inspect' and checkpoint.sha256 != trade_probe.SOURCE_DIGEST:
                     raise ValueError('stock purchase trial requires its original private two-ship world')
@@ -1092,6 +1108,9 @@ def run(args):
                 protected.extend(pose_overlay.install(case, profile, port=pose_channel.port,
                                                       lease=pose_channel.lease, epoch=pose_channel.epoch,
                                                       writable=pose_live))
+            if shuttle_mode is not None:
+                shuttle_nonce = secrets.token_hex(16)
+                protected.extend(shuttle_probe.install(case, shuttle_nonce, shuttle_mode, shuttle_expected))
             if parking is not None:
                 parking_nonce = secrets.token_hex(16)
                 protected.extend(parking_probe.install(case, parking_nonce, parking, parking_expected,
@@ -1260,6 +1279,12 @@ def run(args):
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if require_snapshot:
             registry_snapshot_state.verify_initial(profile/'engine-output.log')
+            if shuttle_mode is not None:
+                shuttle_log = profile / 'engine-output.log'
+                shuttle_pair = shuttle_probe.verify_log(shuttle_log, shuttle_nonce, read_evidence)
+                if shuttle_mode == 'verify' and shuttle_pair != shuttle_expected:
+                    raise ValueError('cold shuttle candidates differ from preparation')
+                shuttle_result.update(pair=shuttle_pair, native_candidates=True)
             if parking is not None:
                 parking_location = parking_probe.verify_log(profile/'engine-output.log', parking_nonce, read_evidence)
                 if parking_expected is not None and parking_location != parking_expected:
@@ -1297,7 +1322,8 @@ def run(args):
                 result['registry_snapshot'] = first_capture_state.metadata()
             if require_snapshot:
                 saved = store_arg.get(checkpoint_id)
-                registry_snapshot_state.verify_save(saved, profile/'engine-output.log')
+                appended = tuple(ship['index'] for ship in shuttle_pair['ships']) if shuttle_mode == 'prepare' else ()
+                registry_snapshot_state.verify_save(saved, profile/'engine-output.log', appended_indices=appended)
                 result['registry_snapshot'] = registry_snapshot_state.metadata()
             if registry_check is not None:
                 saved=store_arg.get(checkpoint_id)
@@ -1395,6 +1421,14 @@ def run(args):
             result.update(success=True, final_world_state='paused',
                           final_checkpoint_id=saved.checkpoint_id,
                           final_checkpoint_sha256=saved.sha256)
+            raise _WitnessFinished()
+        if shuttle_mode is not None:
+            check()
+            if shuttle_mode == 'prepare':
+                witness_pending = capture_first_registry_snapshot(adapter, store, verify)
+                result.update(final_checkpoint_id=witness_pending.checkpoint_id,
+                              final_checkpoint_sha256=witness_pending.sha256)
+            result.update(success=True, final_world_state='paused')
             raise _WitnessFinished()
         if parking is not None:
             check()
@@ -2044,6 +2078,15 @@ def run(args):
                 if require_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            require_registry_snapshot=True)
+                if shuttle_mode is not None:
+                    if (read_evidence(shuttle_source, 1 << 20) != shuttle_provenance
+                            or shuttle_probe.verify_log(shuttle_log, shuttle_nonce, read_evidence) != shuttle_pair):
+                        raise ValueError('shuttle source or native receipt changed before cleanup')
+                    if shuttle_mode == 'verify' and any(store.directory.iterdir()):
+                        raise ValueError('cold shuttle verification published a checkpoint')
+                    pair_checkpoint = witness_pending if shuttle_mode == 'prepare' else checkpoint
+                    shuttle_result['saved'] = shuttle_probe.verify_saved(pair_checkpoint, shuttle_pair)
+                    shuttle_result['cue_sha256'] = shuttle_probe.archive_cues(out, case, expected, live.sha)
                 if pose_channel is not None:
                     pose_overlay.archive_cue(case, out)
                 if trade_mode:
@@ -2129,6 +2172,8 @@ def main(argv=None):
                        help='isolated two-ship stock trade experiment without network clients')
     trade.add_argument('--company-cockpit-purchase', type=Path, metavar='RESULT_JSON',
                        help='process one recorded stock cockpit purchase in the private recovered world')
+    parser.add_argument('--company-shuttle-pair', choices=('prepare', 'verify'),
+                        help='prepare or cold-check the private two-shuttle starting world')
     parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
                         help='isolated private station parking fixture and read-only cold verification')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')

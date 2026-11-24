@@ -179,6 +179,20 @@ class SnapshotModeTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 snapshots.verify_transition(baseline, {**next_save, **change})
 
+    def test_the_shuttle_pair_only_appends_two_operational_bindings(self):
+        baseline = {'epoch': 'a' * 32, 'issued_count': 3, 'run_id': 'b' * 32,
+                    'availability_bits': '101'}
+        saved = {**baseline, 'issued_count': 5, 'run_id': 'c' * 32,
+                 'availability_bits': '10111', 'operational_bits': '00111'}
+        snapshots.verify_transition(baseline, saved, appended_indices=(4, 5))
+        for indices, change in (
+                ((), {}), ((5, 4), {}), ((4, 5), {'issued_count': 6}),
+                ((4, 5), {'availability_bits': '11111'}),
+                ((4, 5), {'availability_bits': '10110'}),
+                ((4, 5), {'operational_bits': '00110'})):
+            with self.subTest(indices=indices, change=change), self.assertRaises(ValueError):
+                snapshots.verify_transition(baseline, {**saved, **change}, appended_indices=indices)
+
     def test_state_keeps_only_latest_verified_receipt(self):
         source = SimpleNamespace(checkpoint_id='source', sha256='1' * 64, marker='a' * 32)
         saved = SimpleNamespace(checkpoint_id='saved', sha256='2' * 64, marker='b' * 32)

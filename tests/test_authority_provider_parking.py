@@ -54,6 +54,8 @@ class ProviderParkingTest(unittest.TestCase):
 
     def test_company_pose_modes_forward_only_their_expected_options(self):
         cases = (
+            (['--company-shuttle-pair', 'prepare'], ['--require-registry-snapshot', '--company-shuttle-pair', 'prepare']),
+            (['--company-shuttle-pair', 'verify'], ['--require-registry-snapshot', '--company-shuttle-pair', 'verify']),
             (['--company-pose-trial', '--tls-port', '0'],
              ['--tls-port', '0', '--require-registry-snapshot', '--require-company-ship',
               '--company-motion', '--company-pose-trial']),
@@ -75,6 +77,9 @@ class ProviderParkingTest(unittest.TestCase):
 
     def test_conflicting_company_pose_modes_and_verify_hosting_flags_fail_before_display(self):
         cases = (
+            ['--company-shuttle-pair', 'prepare', '--tls-port', '0'],
+            ['--company-shuttle-pair', 'verify', '--company-motion'],
+            ['--company-shuttle-pair', 'prepare', '--company-trade-trial', 'buy'],
             ['--company-pose-trial', '--verify-company-pose'],
             ['--company-pose-trial', '--park-server-avatar', 'prepare'],
             ['--verify-company-pose', '--park-server-avatar', 'verify'],

@@ -86,6 +86,8 @@ def main(argv=None):
     parser.add_argument('--require-registry-snapshot', action='store_true',
                         help='require and verify format-3 saved registry snapshots')
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--company-shuttle-pair', choices=('prepare', 'verify'),
+                      help='prepare or cold-check two fully equipped Company shuttles on a private copy')
     mode.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
                       help='prepare or verify the parked avatar on the isolated two-ship fixture')
     mode.add_argument('--company-pose-trial', action='store_true',
@@ -112,6 +114,8 @@ def main(argv=None):
         if value is not None:
             server_flags.extend(('--tls-' + flag, str(value)))
     if server_flags or args.require_company_ship or args.company_motion:
+        if args.company_shuttle_pair:
+            parser.error('--company-shuttle-pair uses an isolated fixture with no TLS or Company hosting options')
         if args.park_server_avatar:
             parser.error('--park-server-avatar uses an isolated fixture with no TLS or Company hosting options')
         if args.verify_company_pose:
@@ -120,9 +124,11 @@ def main(argv=None):
     require_ship = args.require_company_ship or company_motion
     if args.registry_status:
         server_flags.append('--registry-status')
-    if (args.require_registry_snapshot or require_ship or args.park_server_avatar
+    if (args.require_registry_snapshot or require_ship or args.park_server_avatar or args.company_shuttle_pair
             or args.verify_company_pose or args.company_trade_trial or args.company_cockpit_purchase):
         server_flags.append('--require-registry-snapshot')
+    if args.company_shuttle_pair:
+        server_flags.extend(('--company-shuttle-pair', args.company_shuttle_pair))
     if args.company_trade_trial:
         server_flags.extend(('--company-trade-trial', args.company_trade_trial))
     if args.company_cockpit_purchase:

@@ -69,10 +69,16 @@ def verify_bootstrap_status(previous_result, checkpoint, saved_status):
     return saved_status
 
 
-def verify_transition(previous, current):
+def verify_transition(previous, current, *, appended_indices=()):
     """No ID revival; operational observations may change independently."""
+    old_count = previous['issued_count']
+    if appended_indices:
+        if (appended_indices != (old_count + 1, old_count + 2)
+                or current['availability_bits'][old_count:] != '11'
+                or current['operational_bits'][old_count:] != '11'):
+            raise ValueError('shuttle transition requires exactly two new operational bindings')
     if (current['epoch'] != previous['epoch'] or
-            current['issued_count'] != previous['issued_count'] or
+            current['issued_count'] != old_count + len(appended_indices) or
             current['run_id'] == previous['run_id'] or
             any(old == '0' and new == '1' for old, new in zip(
                 previous['availability_bits'], current['availability_bits']))):
@@ -113,11 +119,11 @@ class RegistrySnapshotState:
         bridge_gate.verify_bridge_observation(log_path, self.nonce, self.latest_evidence)
         self.initial_inspect_verified = True
 
-    def verify_save(self, checkpoint, log_path):
+    def verify_save(self, checkpoint, log_path, *, appended_indices=()):
         if not self.initial_inspect_verified:
             raise ValueError('initial registry inspection not verified')
         current = verify_join_snapshot(checkpoint)
-        verify_transition(self.latest_evidence, current)
+        verify_transition(self.latest_evidence, current, appended_indices=appended_indices)
         bridge_gate.verify_bridge_observation(log_path, self.nonce, current,
                                               previous_run_id=self.latest_evidence['run_id'])
         self.latest_evidence = current
