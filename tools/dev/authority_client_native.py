@@ -28,6 +28,7 @@ from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
 from authority.company_motion_source import CompanyMotionSource, validate_playback_index
+from authority.company_purchase_source import CompanyPurchaseSource
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
 import authority_load_live as load
@@ -118,7 +119,7 @@ def verify_receipts(path, ticket, marker):
 
 
 def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
-                         registry_check=None, motion_consumer=None):
+                         registry_check=None, motion_consumer=None, company_purchase_exchange=None):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -150,6 +151,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     participant.loading = False  # activate may receive server participant traffic immediately.
     result['phase'] = 'claim'
     motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
+    if company_purchase_exchange is not None:
+        motion_options['company_purchase_exchange'] = company_purchase_exchange
     owner.activate(attempt, participant, participant_timeout=min(30, marked.remaining(participant.deadline)),
                    **motion_options)
     guard(full=True)
@@ -226,10 +229,12 @@ def error_code(error):
 
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
-        company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None):
+        company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
+    if type(company_purchases) is not bool or (company_purchases and not player_mode):
+        raise ValueError('Company purchases require player mode')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion)
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
@@ -259,7 +264,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = seat_watch = None
-    company_source = company_client = None
+    company_source = company_client = purchase_source = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -301,6 +306,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                                             company_motion=company_motion, own_index=index)
                     if company_motion:
                         owner.request_ship_motion()
+                    if company_purchases:
+                        purchase_epoch = owner.enable_company_purchases()
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
                 stage_offered_save(owner, out/'download', target)
@@ -367,6 +374,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     if company_motion:
                         company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
                         source_options['company_motion'] = company_source
+                    if company_purchases:
+                        purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch)
+                        source_options['company_purchase'] = purchase_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)
                     paths.extend(seat_paths)
@@ -406,10 +416,19 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     registry_check = seat_watch.verify
                 elif playback is not None:
                     registry_check = playback.verify_registry
+                purchase_options = {}
+                if purchase_source is not None:
+                    def validate_purchase_peer(peer):
+                        guard()
+                        return participant.process is not None and socket_owner(
+                            peer, purchase_source.socket.getsockname(), participant.process)
+
+                    purchase_source.bind_validator(validate_purchase_peer)
+                    purchase_options['company_purchase_exchange'] = purchase_source.exchange
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
                     guard, verify_loaded, result, registry_check=registry_check,
                     motion_consumer=(playback_driver.accept_motion
-                        if type(playback_driver) is native_playback.LiveSourceInput else None))
+                        if type(playback_driver) is native_playback.LiveSourceInput else None), **purchase_options)
                 if player_mode:
                     result['controlled_company_ship_index'] = index
                     if company_source is not None:
@@ -467,6 +486,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         company_source.close()
                     except BaseException:
                         cleanup_errors.append('company_motion_source_cleanup_failed')
+                if purchase_source is not None:
+                    try:
+                        purchase_source.close()
+                    except OSError:
+                        cleanup_errors.append('company_purchase_source_cleanup_failed')
                 resources_stopped = download.stop_owned_resources([], processes, result, cleanup_errors)
                 cleanup_attempted = True
                 if watch is not None and ticket is not None:

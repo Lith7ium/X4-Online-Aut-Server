@@ -10,6 +10,7 @@ param(
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
     [switch] $ChooseCompanyShip,
     [switch] $CompanyMotion,
+    [switch] $CompanyPurchases,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
@@ -17,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
 }
-if (($ChooseCompanyShip -or $CompanyMotion) -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
+if (($ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases) -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
 }
 if ($ObserveSeconds -ge $TimeoutSeconds) {
@@ -85,6 +86,9 @@ if ($CompanyMotion) {
     }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'
+}
+if ($CompanyPurchases) {
+    $clientArgs += '--company-purchases'
 }
 & $Python $client @clientArgs
 exit $LASTEXITCODE

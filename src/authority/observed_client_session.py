@@ -61,7 +61,8 @@ class ObservedClientSession:
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                  apply_motion=None, registry_status=None, registry_nonce=None,
-                 motion_control=None, require_full_inspection=False, seat_index=None):
+                 motion_control=None, require_full_inspection=False, seat_index=None,
+                 company_purchase_exchange=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -101,6 +102,9 @@ class ObservedClientSession:
             self._bound, self._encoded = owner._offer, encoded
             self._load = owner._load
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
+            if company_purchase_exchange is not None and not callable(company_purchase_exchange):
+                raise ValueError('Company purchase callback must be callable')
+            self._purchase_exchange = company_purchase_exchange
             self._apply_motion = apply_motion
             self._motion_control = motion_control
             self._participant_timeout = controller.timeout + 2 * motion_timeout + 1
@@ -231,6 +235,8 @@ class ObservedClientSession:
             activate_options = {'participant_timeout': self._participant_timeout}
             if self._apply_motion is not None:
                 activate_options['apply_motion'] = self._checked_motion
+            if self._purchase_exchange is not None:
+                activate_options['company_purchase_exchange'] = self._purchase_exchange
             self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)
             self._state = 'active'
             if not self._check(): raise RuntimeError('client log became incomplete after claim')

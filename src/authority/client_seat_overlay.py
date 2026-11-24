@@ -3,6 +3,12 @@ import json
 
 from .client_registry_overlay import registry_receipt
 from .company_motion_source import CompanyMotionSource
+from .company_purchase_source import CompanyPurchaseSource
+
+COMPANY_PURCHASE_UI = {
+    f'{name}.lua': f'src/authority/lua/{name}.lua'
+    for name in ('company_trade_capture', 'company_purchase_source')
+}
 
 COMPANY_MOTION_UI = {
     'replica_motion_binding.lua': 'src/authority/lua/replica_motion_binding.lua',
@@ -66,7 +72,16 @@ def company_motion_config(source, index, full_registry):
     ) + '}'
 
 
-def extend_seat_gate(text, index, full_registry, *, company_motion=False):
+def company_purchase_config(source, index, full_registry):
+    if not isinstance(source, CompanyPurchaseSource) or full_registry is None or index is None:
+        raise ValueError('Company purchases require a verified selected seat')
+    settings = source.configure(full_registry['epoch'], index)
+    return ',authority_company_purchase={' + ','.join(
+        f'{key}={json.dumps(value, ensure_ascii=True)}' for key, value in settings.items()
+    ) + '}'
+
+
+def extend_seat_gate(text, index, full_registry, *, company_motion=False, company_purchases=False):
     """Run seat takeover after full inspection and before pause observation."""
     if full_registry is None:
         raise ValueError('client seat requires full registry inspection')
@@ -86,4 +101,6 @@ def extend_seat_gate(text, index, full_registry, *, company_motion=False):
 '''.replace('INDEX', str(index))
     if company_motion:
         gate += '  X4LAN_COMPANY_MOTION_SOURCE.arm(client_seat)\n'
+    if company_purchases:
+        gate += '  X4LAN_COMPANY_PURCHASE_SOURCE.arm(client_seat)\n'
     return text.replace(declaration, declaration + 'local client_seat=nil\n').replace(hook, hook + gate)

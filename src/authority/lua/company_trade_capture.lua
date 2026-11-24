@@ -18,7 +18,7 @@ local function cents(price)
     if positive_integer(exact) and math.abs(exact - scaled) <= 1e-7 then return exact end
 end
 
-local function stock_order(menu, data, o)
+local function stock_order(menu, data, o, station)
     if data.wareexchange or type(data.orders) ~= 'table' then return nil, 'unsupported_trade' end
     local id, quantity
     for key, amount in pairs(data.orders) do
@@ -34,7 +34,7 @@ local function stock_order(menu, data, o)
     local offer_id = o.decode_offer_id(tostring(id))
     local offer = offer_id and menu.getTradeOfferByID(offer_id)
     if type(offer) ~= 'table' or type(offer.ware) ~= 'string' or offer.ware == ''
-            or o.offer_station(offer_id) ~= o.station or offer.ismissionoffer or offer.isbuyoffer
+            or o.offer_station(offer_id) ~= station or offer.ismissionoffer or offer.isbuyoffer
             or offer.isselloffer ~= true or offer.active ~= true or offer.stale == true then
         return nil, 'stale_offer'
     end
@@ -61,10 +61,11 @@ end
 function M.install(o)
     if o.enabled ~= true then return nil, 'disabled' end
     local menu = o.menu
+    local dynamic_station = o.dynamic_station == true
     if type(menu) ~= 'table' or menu.name ~= 'MapMenu' or type(menu.getTradeOfferByID) ~= 'function'
-            or type(menu.buttonConfirmTrade) ~= 'function' or o.ship == nil or o.station == nil
-            or type(o.sector) ~= 'string' or o.sector == ''
-            or type(o.station_code) ~= 'string' or o.station_code == '' then
+            or type(menu.buttonConfirmTrade) ~= 'function' or o.ship == nil
+            or (not dynamic_station and (o.station == nil or type(o.sector) ~= 'string' or o.sector == ''
+                or type(o.station_code) ~= 'string' or o.station_code == '')) then
         return nil, 'unavailable'
     end
     for _, name in ipairs({'identity', 'read_dock', 'decode_offer_id', 'offer_station', 'request', 'notice'}) do
@@ -85,11 +86,12 @@ function M.install(o)
         local data = menu.contextMenuData
         if type(data) ~= 'table' then return original(...) end
         local ship, station = o.identity(data.currentShip), o.identity(data.component)
-        if (ship == o.ship and station == nil) or (station == o.station and ship == nil) then
+        if (ship == o.ship and station == nil) or (not dynamic_station and station == o.station and ship == nil)
+                or (dynamic_station and ship == nil) then
             o.notice('stale_identity')
             return
         end
-        if ship ~= o.ship or station ~= o.station then return original(...) end
+        if ship ~= o.ship or (not dynamic_station and station ~= o.station) then return original(...) end
         if phase ~= 'ready' then
             o.notice('already_attempted')
             return
@@ -104,17 +106,20 @@ function M.install(o)
         end
         local dock_ok, dock = pcall(o.read_dock, data.currentShip, data.component)
         if not dock_ok or type(dock) ~= 'table' or dock.ship ~= ship or dock.station ~= station
-                or dock.sector ~= o.sector or dock.station_code ~= o.station_code then
+                or type(dock.sector) ~= 'string' or dock.sector == ''
+                or type(dock.station_code) ~= 'string' or dock.station_code == ''
+                or (not dynamic_station and (dock.sector ~= o.sector or dock.station_code ~= o.station_code)) then
             o.notice('stale_dock')
             return
         end
-        local ok, intent, why = pcall(stock_order, menu, data, o)
+        local ok, intent, why = pcall(stock_order, menu, data, o, station)
         if not ok or not intent then
             o.notice(ok and why or 'stale_offer')
             return
         end
         intent.sector, intent.station_code = dock.sector, dock.station_code
-        if price_retry and intent.ware == price_retry.ware and intent.price_cents ~= price_retry.current_price then
+        if price_retry and intent.ware == price_retry.ware and intent.station_code == price_retry.station_code
+                and intent.sector == price_retry.sector and intent.price_cents ~= price_retry.current_price then
             local previous = price_retry.current_price
             price_retry.current_price = intent.price_cents
             show_price_change(previous, intent.price_cents, false)
@@ -145,7 +150,8 @@ function M.install(o)
                 local price = receipt.current_price_cents
                 if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
                     price_retry = {rejected_context = data, rejected_orders = submitted_orders,
-                        ware = intent.ware, current_price = price}
+                        ware = intent.ware, sector = intent.sector, station_code = intent.station_code,
+                        current_price = price}
                     show_price_change(intent.price_cents, price, true)
                 else
                     o.notice('refused')
@@ -229,14 +235,17 @@ function M.install_x4(o)
     local function lua_id(ref)
         return ConvertStringToLuaID(tostring(ref))
     end
-    local ship, station = id(o.ship), id(o.station)
+    local ship, expected_station = id(o.ship), id(o.station)
+    local dynamic_station = o.dynamic_station == true
     local ship_code
     if ship and C.IsComponentClass(ship, 'ship') then
         local native_ship_code = C.GetObjectIDCode(ship)
         if native_ship_code ~= nil then ship_code = ffi.string(native_ship_code) end
     end
     local function live_dock(ship_ref, station_ref)
-        if id(ship_ref) ~= ship or id(station_ref) ~= station or C.GetPlayerControlledShipID() ~= ship
+        local station = id(station_ref)
+        if id(ship_ref) ~= ship or not station or (not dynamic_station and station ~= expected_station)
+                or C.GetPlayerControlledShipID() ~= ship
                 or not C.IsComponentClass(ship, 'ship') or not C.IsComponentOperational(ship)
                 or not C.IsComponentClass(station, 'station') or not C.IsComponentOperational(station) then return end
         local ship_id, station_id = lua_id(ship), lua_id(station)
@@ -282,7 +291,8 @@ function M.install_x4(o)
         if text then C.ShowInfoLine(text, 4) end
     end
     return M.install({
-        enabled = true, menu = o.menu, ship = ship, station = station, sector = o.sector,
+        enabled = true, menu = o.menu, ship = ship, station = expected_station, sector = o.sector,
+        dynamic_station = dynamic_station,
         station_code = o.station_code, ship_code = ship_code, request = o.request, notice = o.notice or stock_notice,
         identity = id, read_dock = live_dock, decode_offer_id = ConvertStringToLuaID,
         offer_station = function(offer_id)
