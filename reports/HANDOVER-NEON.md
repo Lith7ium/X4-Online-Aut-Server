@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026. Last team check-in at 17:00 Berlin time.** Astra leads Lith7ium's
+**24 November 2026. Last team check-in at 18:00 Berlin time.** Astra leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -26,7 +26,13 @@ loopback check from the host LAN. We still need a Windows pilot on a separate
 Internet connection. Exchange session settings privately.
 [Playback measurements and package hashes](AUTHORITY-COMPANY-SHIP-PLAYBACK-20261124.md)
 [Windows flight procedure](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight)
-[17:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795536057617789)
+Cobalt completed the local Windows preflight on the flight build. The
+source-only package was reproducible, the extracted commands parsed and
+the pinned game executable matched. The host has the verified bundled
+network DLL and the matching Windows ZIP. Cobalt still needs the archive,
+Steam running and the coordinated outside-network session.
+[Windows preflight](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795536126403889)
+[18:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795539697756849)
 
 Cobalt's map investigation at `3167327b` is accepted for the current
 milestone. In two paused Windows runs the raw renderer list and screenshots
