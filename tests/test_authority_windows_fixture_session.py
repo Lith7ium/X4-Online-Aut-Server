@@ -176,7 +176,7 @@ class FixtureSessionTests(unittest.TestCase):
         reader.assert_called_once()
         self.assertIs(self.installed_registry_snapshot, snapshot)
 
-    def test_selected_ship_reaches_overlay_live_gate_and_final_audit(self):
+    def prepare_company_seat(self):
         ship = {'ship_index': 2, 'sector_macro': 'sector_b', 'code': 'ABC-123', 'name': None}
         snapshot = {'epoch': self.registry_status[1], 'issued_count': 2,
                     'mapping_sha256': self.registry_status[3], 'operational_bits': '11'}
@@ -185,6 +185,30 @@ class FixtureSessionTests(unittest.TestCase):
         self.log = self.log.replace(self.registry_log, inspection + self.registry_log + seat)
         self.owner.list_company_ships = lambda: (ship,)
         self.owner.choose_company_ship = lambda index: ship
+        return snapshot
+
+    def test_open_ended_pilot_stays_after_join_deadline_until_clean_x4_exit(self):
+        snapshot = self.prepare_company_seat()
+        clock = [100.0]
+        game_running = [True]
+        def stop():
+            if clock[0] > 101:
+                game_running[0] = False
+            clock[0] = 7200.0
+            return False
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
+             patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(self.process, 'is_running', side_effect=lambda: game_running[0]), \
+             patch.object(self.process, 'exit_code', create=True, return_value=0), \
+             patch.object(self.session, 'continue_until_exit', create=True) as admitted:
+            result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2,
+                                      play_until_exit=True, deadline=101, stop_requested=stop)
+        admitted.assert_called_once()
+        self.assertTrue(result['owned_cleanup_confirmed'])
+        self.assertIn(('session_poll', .1), self.calls)
+
+    def test_selected_ship_reaches_overlay_live_gate_and_final_audit(self):
+        snapshot = self.prepare_company_seat()
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
             result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
         self.assertEqual(result['controlled_company_ship_index'], 2)

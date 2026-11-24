@@ -71,7 +71,10 @@ def parser():
                            help='list free company ships and choose one in the terminal before joining')
     selection.add_argument('--company-ship-index', type=int,
                            help='select this exact free registry index before joining')
-    result.add_argument('--observe-seconds', type=float, default=30,
+    observe = result.add_mutually_exclusive_group()
+    observe.add_argument('--play-until-exit', action='store_true',
+                         help='keep playing after a bounded Company join until X4 exits')
+    observe.add_argument('--observe-seconds', type=float, default=30,
                         help='time to poll after admission; does not request a server resume')
     result.add_argument('--keepalive-seconds', type=float, default=5,
                         help='must fit the matching server keepalive configuration')
@@ -84,8 +87,10 @@ def run(args, *, on_stage=None):
     from authority.company_motion_source import validate_playback_index
     validate_playback_index(args.company_hull_playback_index,
                             company_motion=args.company_motion, own_index=args.company_ship_index)
-    for value, maximum in ((args.timeout, 3600), (args.observe_seconds, args.timeout),
-                           (args.keepalive_seconds, 300)):
+    durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
+    if not args.play_until_exit:
+        durations.append((args.observe_seconds, args.timeout))
+    for value, maximum in durations:
         if not math.isfinite(value) or not 0 < value <= maximum:
             raise ValueError('invalid diagnostic duration')
     if not re.fullmatch(r'[0-9a-f]{64}', args.network_dll_sha256):
@@ -118,12 +123,14 @@ def run(args, *, on_stage=None):
     motion_options = {'company_motion': True} if args.company_motion else {}
     if args.company_hull_playback_index is not None:
         motion_options['company_hull_playback_index'] = args.company_hull_playback_index
+    if args.play_until_exit:
+        motion_options['play_until_exit'] = True
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
         windows_dll=args.network_dll, dll_sha256=args.network_dll_sha256,
         deadline=time.monotonic() + args.timeout,
         keepalive_interval=args.keepalive_seconds,
-        stop_requested=ObservationWindow(args.observe_seconds),
+        stop_requested=(lambda: False) if args.play_until_exit else ObservationWindow(args.observe_seconds),
         motion_request=motion_request,
         require_registry_snapshot=args.require_registry_snapshot or select_ship is not None,
         select_ship=select_ship, on_stage=on_stage, **motion_options,

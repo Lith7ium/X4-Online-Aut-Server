@@ -121,6 +121,7 @@ class _Win32Job:
         self.get_process_id = self._api('GetProcessId', dword, handle)
         self.resume = self._api('ResumeThread', dword, handle)
         self.wait = self._api('WaitForSingleObject', dword, handle, dword)
+        self.get_exit_code = self._api('GetExitCodeProcess', wintypes.BOOL, handle, ctypes.POINTER(dword))
         self.terminate = self._api('TerminateJobObject', wintypes.BOOL, handle, wintypes.UINT)
         self.query = self._api('QueryInformationJobObject', wintypes.BOOL, handle, ctypes.c_int,
                                ctypes.c_void_p, dword, ctypes.POINTER(dword))
@@ -167,6 +168,13 @@ class _Win32Job:
             raise RuntimeError('X4 initial suspend count differs')
         return int(self.info.dwProcessId)
 
+    def exit_code(self):
+        if self.running():
+            return None
+        code = wintypes.DWORD()
+        self._require(self.get_exit_code(self.info.hProcess, ctypes.byref(code)), 'GetExitCodeProcess')
+        return code.value
+
     def running(self):
         result = self.wait(self.info.hProcess, 0)
         if result == 0:
@@ -174,6 +182,13 @@ class _Win32Job:
         if result == 258:  # WAIT_TIMEOUT
             return True
         raise OSError(ctypes.get_last_error(), 'WaitForSingleObject')
+
+    def exit_code(self):
+        """Read the retained root process handle. A running process returns None."""
+        self._check_thread()
+        if self._phase != 'running':
+            raise RuntimeError('X4 process has no live owner')
+        return self._job.exit_code()
 
     def owns_running_pid(self, pid):
         """Check a PID against the retained root handle and this specific job."""

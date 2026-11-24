@@ -9,6 +9,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -197,8 +199,11 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertTrue(session.start())
         self.assertIsNone(owner._participant._apply_motion)
         self.assertEqual(owner._participant._timeout, controller.timeout + 1)
-        while not self.replies:
-            session.poll(.1)
+        session.continue_until_exit()
+        later = SimpleNamespace(monotonic=lambda: deadline + 7200, sleep=time.sleep)
+        with patch('authority.observed_client_session.time', later):
+            while not self.replies:
+                session.poll(.1)
         self.assertEqual(self.replies[0]['status'], 'confirmed')
         self.assertEqual(stages, ['world_marker_confirmed', 'participant_admitted',
                                   'first_local_resume_confirmed'])

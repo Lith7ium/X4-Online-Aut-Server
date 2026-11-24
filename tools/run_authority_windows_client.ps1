@@ -22,10 +22,12 @@ if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) 
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
 }
-if (($ChooseCompanyShip -or $CompanyMotion) -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
+$companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
+$playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
+if ($companyPilot -and -not $playUntilExit -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
 }
-if ($ObserveSeconds -ge $TimeoutSeconds) {
+if (-not $playUntilExit -and $ObserveSeconds -ge $TimeoutSeconds) {
     throw 'Allow time for the initial join before the observation window.'
 }
 $packageRoot = Split-Path -Parent $PSScriptRoot
@@ -75,7 +77,6 @@ $runId = 'x4-authority-' + [guid]::NewGuid().ToString('N')
 $clientArgs = @(
     '--isolated-fixture-test',
     '--timeout', [string]$TimeoutSeconds,
-    '--observe-seconds', [string]$ObserveSeconds,
     '--game', $gameDirectory.FullName,
     '--connection-file', $connection.FullName,
     '--view-container', (Join-Path $parent.FullName "$runId-view"),
@@ -83,6 +84,11 @@ $clientArgs = @(
     '--network-dll', $dll.FullName,
     '--network-dll-sha256', $NetworkDllSha256.ToLowerInvariant()
 )
+if ($playUntilExit) {
+    $clientArgs += '--play-until-exit'
+} else {
+    $clientArgs += @('--observe-seconds', [string]$ObserveSeconds)
+}
 if ($BaseGameOnly) {
     $clientArgs += '--base-game-only'
 }

@@ -26,6 +26,10 @@ from .windows_x4_process import WindowsX4Process
 from .windows_motion_peer import WindowsMotionPeer
 
 
+class _GameClosed(Exception):
+    """The admitted pilot's owned X4 process returned exit code zero."""
+
+
 class FixtureCleanupError(RuntimeError):
     """An owned resource did not confirm cleanup; do not reuse the profile."""
 
@@ -105,7 +109,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
-                        company_hull_playback_index=None, on_stage=None):
+                        company_hull_playback_index=None, on_stage=None, play_until_exit=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -141,6 +145,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('company ship choice requires full registry inspection and a selector')
     if type(company_motion) is not bool or (company_motion and (select_ship is None or motion_request is not None)):
         raise ValueError('company motion requires a seat selection and its own transport')
+    if type(play_until_exit) is not bool or (play_until_exit and (select_ship is None or motion_request is not None)):
+        raise ValueError('open-ended play requires a Company pilot')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion)
     validate_motion_request(motion_request, participant_timeout)
 
@@ -221,10 +227,21 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 launch_attempted = True
                 process.start(workspace.view, profile_id=45841, guard=launch_guard)
 
+                # The initial deadline covers the entire join, including the claim.
+                # An admitted player still has finite participant and socket timeouts.
+                admission_complete = False
+
+                def expired():
+                    return not (play_until_exit and admission_complete) and time.monotonic() >= deadline
+
                 def running_guard():
-                    return (time.monotonic() < deadline and workspace.guard() is True and
-                            process.is_running() is True and workspace.guard() is True and
-                            time.monotonic() < deadline)
+                    if expired() or workspace.guard() is not True:
+                        return False
+                    if process.is_running() is not True:
+                        if play_until_exit and admission_complete and process.exit_code() == 0:
+                            raise _GameClosed()
+                        return False
+                    return workspace.guard() is True and not expired()
 
                 if motion_settings is not None:
                     motion = ParticipantMotion(motion_socket,
@@ -237,6 +254,9 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     apply_motion=motion, motion_control=motion, on_stage=on_stage)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
+                if play_until_exit:
+                    session.continue_until_exit()
+                admission_complete = True
                 if company_source is not None:
                     from .company_motion_reconnect import ReconnectingCompanyMotionClient
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
@@ -247,36 +267,41 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     'snapshots_received': 'first_remote_pose_received',
                 } if on_stage is not None else {}
                 commands = 0
-                while True:
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError('fixture session deadline expired')
-                    if running_guard() is not True:
-                        raise RuntimeError('fixture process or workspace changed')
-                    stop = stop_requested()
-                    if type(stop) is not bool:
-                        raise ValueError('stop callback must return a boolean')
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError('fixture session deadline expired')
-                    if running_guard() is not True:
-                        raise RuntimeError('fixture process or workspace changed')
-                    if stop:
-                        break
-                    poll_started = time.monotonic()
-                    if session.poll(.1):
-                        commands += 1
-                    if company_client is not None:
-                        company_client.poll()
-                        if first_traffic:
-                            counts = company_client.stats()
-                            for counter in tuple(first_traffic):
-                                if counts[counter] > 0:
-                                    on_stage(first_traffic.pop(counter))
-                    now = time.monotonic()
-                    if now >= deadline:
-                        raise TimeoutError('fixture session deadline expired')
-                    delay = min(.05 - (now - poll_started), deadline - now)
-                    if delay > 0:
-                        time.sleep(delay)
+                try:
+                    while True:
+                        if expired():
+                            raise TimeoutError('fixture session deadline expired')
+                        if running_guard() is not True:
+                            raise RuntimeError('fixture process or workspace changed')
+                        stop = stop_requested()
+                        if type(stop) is not bool:
+                            raise ValueError('stop callback must return a boolean')
+                        if expired():
+                            raise TimeoutError('fixture session deadline expired')
+                        if running_guard() is not True:
+                            raise RuntimeError('fixture process or workspace changed')
+                        if stop:
+                            break
+                        poll_started = time.monotonic()
+                        if session.poll(.1):
+                            commands += 1
+                        if company_client is not None:
+                            company_client.poll()
+                            if first_traffic:
+                                counts = company_client.stats()
+                                for counter in tuple(first_traffic):
+                                    if counts[counter] > 0:
+                                        on_stage(first_traffic.pop(counter))
+                        now = time.monotonic()
+                        if expired():
+                            raise TimeoutError('fixture session deadline expired')
+                        delay = .05 - (now - poll_started)
+                        if not play_until_exit:
+                            delay = min(delay, deadline - now)
+                        if delay > 0:
+                            time.sleep(delay)
+                except _GameClosed:
+                    pass
                 if motion is not None and motion.confirmed_samples == 0:
                     raise RuntimeError('client motion diagnostic consumed no source sample')
                 result = {'client_admitted': True, 'participant_receipts': commands}

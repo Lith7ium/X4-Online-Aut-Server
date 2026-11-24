@@ -150,7 +150,8 @@ class ObservedClientSession:
             self._busy = False
 
     def _invariants(self, state, *, pending_command):
-        if self._state != state or state not in ('waiting', 'activating', 'active') or time.monotonic() >= self._deadline:
+        if (self._state != state or state not in ('waiting', 'activating', 'active')
+                or (self._deadline is not None and time.monotonic() >= self._deadline)):
             raise TimeoutError('observed session unavailable or expired')
         if (self.owner._offer is not self._bound or encode_bound_offer(self._bound) != self._encoded or
                 self.controller.sock is not self._socket or self._socket.fileno() < 0 or
@@ -243,6 +244,13 @@ class ObservedClientSession:
             if not self._check(): raise RuntimeError('client log became incomplete after claim')
             return True
 
+    def continue_until_exit(self):
+        """End the admission time limit after a confirmed, guarded handoff."""
+        with self._operation(('active',)):
+            if not self._check():
+                raise RuntimeError('admission evidence incomplete')
+            self._deadline = None
+
     def poll(self, timeout=0):
         """Poll the existing participant after checking the evolving log."""
         with self._operation(('active',)):
@@ -250,7 +258,9 @@ class ObservedClientSession:
                 raise ValueError('bounded participant poll required')
             if not self._check():
                 return False
-            result = self.owner.poll(min(timeout, max(0, self._deadline - time.monotonic())))
+            if self._deadline is not None:
+                timeout = min(timeout, max(0, self._deadline - time.monotonic()))
+            result = self.owner.poll(timeout)
             if not self._check():
                 raise RuntimeError('client log became incomplete during poll')
             return result
