@@ -4,11 +4,13 @@ local function rig(options)
  options=options or {};local clock=0;local values={};local outputs={};local faults={};local healthy=true
  local x
  x=assert(mod.new({enabled=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
+  recover_expired_pending=options.recover_expired_pending,
   interval=.1,timeout=2,min_dt=.02,max_dt=1,include_orientation=options.include_orientation,real_time_motion=options.real_time_motion,clock=function()return clock end,
   guard=function()return healthy end,actor_key=function(a)return tostring(a)end,
   binding_guard=function(row,actor)return actor==row.index+40 end,
   reader_factory=function(row,actor,request)
-   return {start=function()return true end,tick=function()return true end,
+   return {start=function()return true end,tick=options.reader_tick or function()return true end,
+    close=options.reader_close or function()return true end,
     response=function(_,raw)
      assert(raw==request..'|response')
      local v=table.remove(values,1);assert(v)
@@ -107,6 +109,25 @@ do local x,add=rig();assert(add(1));assert(not add(1) and x:state()=='failed')en
 do local x,add=rig();assert(add(1));assert(x:tick());assert(not x:event(string.rep('f',32)..'|response') and x:state()=='failed')end
 do local x,add,_,_,_,clock=rig();assert(add(1));assert(x:tick());clock(3);assert(not x:tick() and x:state()=='failed')end
 do local x,add,_,_,_,_,health=rig();assert(add(1));health(false);assert(not x:tick() and x:state()=='failed')end
+-- Company timeout recovery cannot turn reader failures, clock regressions or
+-- failure to close the retired reader into a fresh request.
+do
+ local x,add=rig({recover_expired_pending=true,reader_tick=function()return false end})
+ assert(add(1) and x:tick() and not x:tick() and x:state()=='failed')
+end
+do
+ local x,add,_,_,faults,clock=rig({recover_expired_pending=true,reader_close=function()return false end})
+ assert(add(1) and x:tick());clock(2)
+ assert(not x:tick() and x:state()=='failed' and faults[1]=='discard_pending')
+end
+do
+ local x,add,_,_,_,clock=rig({recover_expired_pending=true})
+ assert(add(1) and x:tick());clock(2)
+ local ok,sample,gap=x:tick()
+ assert(ok and not sample and gap=='pending_timeout' and not x:expected_request())
+ clock(1.5)
+ assert(not x:tick() and x:state()=='failed')
+end
 -- Version 3 rates follow capture seconds, independently of game-clock speed.
 for _,game_rate in ipairs({0,.5,1,2}) do
  local x,add,sample,out=rig({real_time_motion=true});assert(add(1))

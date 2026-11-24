@@ -28,6 +28,7 @@ function M.new(o)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ assert(c.recover_expired_pending==nil or type(c.recover_expired_pending)=='boolean')
  assert(not (c.real_time_motion and c.include_orientation))
  local state,busy='ready',false
  local entries,order,actors={}, {}, {}
@@ -38,16 +39,32 @@ function M.new(o)
   if state~='failed' then state='failed';pcall(c.fault,reason)end
   return false
  end
+ -- A private sentinel distinguishes a measured deadline from guard failures
+ -- and arbitrary reader errors. Only the Company source opts in to recovery.
+ local expired_pending={}
+ local function before_deadline(t)
+  if not pending or t<pending.deadline then return true end
+  if c.recover_expired_pending then
+   last_clock=t
+   error(expired_pending,0)
+  end
+  return false
+ end
+ local function finish_failure(op,err)
+  if err~=expired_pending then return fail(op) end
+  if not api:discard_pending() then return false end
+  return true,nil,'pending_timeout'
+ end
  local function check()
   if state=='failed' or state=='closed' then return false end
   local before=state
   local ok,t=pcall(c.clock)
-  if not ok or state~=before or not finite(t) or t<0 or (last_clock and t<last_clock) or (pending and t>=pending.deadline)then return false end
+  if not ok or state~=before or not finite(t) or t<0 or (last_clock and t<last_clock) or not before_deadline(t)then return false end
   last_clock=t
   local g,v=pcall(c.guard)
   if not g or v~=true or state~=before then return false end
   local yes,u=pcall(c.clock)
-  if not yes or state~=before or not finite(u) or u<t or (pending and u>=pending.deadline)then return false end
+  if not yes or state~=before or not finite(u) or u<t or not before_deadline(u)then return false end
   last_clock=u;return true
  end
  local function row_ok(e)
@@ -79,7 +96,7 @@ function M.new(o)
  function api:tick()
   if busy or state=='failed' or state=='closed' then return fail('tick')end
   busy=true
-  local ok=pcall(function()
+  local ok,err=pcall(function()
    assert(check())
    if state=='pending' then assert(pending.reader:tick()==true and check());return end
    assert(state=='ready')
@@ -98,14 +115,14 @@ function M.new(o)
     end
    end
   end)
-  busy=false;if not ok then return fail('tick')end;return true
+  busy=false;if not ok then return finish_failure('tick',err)end;return true
  end
  function api:expected_request()return state=='pending' and pending.request or nil end
  function api:event(value)
   if busy or state~='pending' or type(value)~='string' or value:sub(1,32)~=pending.request or value:sub(33,33)~='|' then return fail('event')end
   busy=true
   local result
-  local ok=pcall(function()
+  local ok,err=pcall(function()
    assert(check());local e=pending.entry;assert(checked_binding(e))
    local accepted,sample=pending.reader:response(value)
    assert(accepted==true and type(sample)=='table' and getmetatable(sample)==nil and sample.epoch==c.epoch and sample.index==e.row.index
@@ -210,7 +227,7 @@ function M.new(o)
    else previous.last_time=t end
    pending=nil;state='ready'
   end)
-  busy=false;if not ok then return fail('sample')end;return true,result
+  busy=false;if not ok then return finish_failure('sample',err)end;return true,result
  end
  function api:state()return state end
  function api:discard_pending()

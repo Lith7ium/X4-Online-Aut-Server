@@ -4,23 +4,25 @@ local epoch, generation, nonce = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32)
 local index, actor = 1961, 716
 local selected, clock, frame, key, position = false, 1, 'sector_a', '111', 10
 local request, packets, closed = nil, {}, 0
+local binding, timeouts, faults = true, 0, {}
 
 local owner = source.new({
     epoch = epoch, index = index,
     actor = function() assert(selected); return actor end,
     available = function() return selected end,
+    pending_timeout = function() timeouts = timeouts + 1 end,
     send = function(payload) packets[#packets+1] = payload end,
     make_sampler = function(id, guard)
         assert(id == actor)
         return sampler.new({
             enabled = true, epoch = epoch, generation = generation, nonce = nonce,
             max_tracks = 1, scan_budget = 1, interval = .10, timeout = 1,
-            min_dt = .02, max_dt = 1, real_time_motion = true,
+            min_dt = .02, max_dt = 1, real_time_motion = true, recover_expired_pending = true,
             clock = function() return clock end, guard = guard, actor_key = tostring,
             binding_guard = function() return false end,
             saved_baseline_limit = 2000,
             saved_baseline_guard = function(row, value)
-                return row.index == index and value == actor and selected
+                return row.index == index and value == actor and selected and binding
             end,
             reader_factory = function(row, value, id)
                 assert(row.index == index and value == actor)
@@ -28,7 +30,8 @@ local owner = source.new({
                     start = function() request = id; return true end,
                     close = function() closed = closed + 1; return true end,
                     tick = function() return true end,
-                    response = function()
+                    response = function(_, raw)
+                        assert(raw == id .. '|reply')
                         return true, {epoch = epoch, index = index, sector_macro = frame,
                             local_sector_key = key, descriptor_atomic = false, sector_identity_proven = false,
                             game_before_pose = 10, game_after_pose = 10,
@@ -37,7 +40,7 @@ local owner = source.new({
                     end,
                 }
             end,
-            fault = function(reason) error(reason) end,
+            fault = function(reason) faults[#faults+1] = reason end,
         })
     end,
 })
@@ -77,6 +80,45 @@ assert(packets[6] == 'GAP')
 owner:tick()
 assert(#packets == 6)
 
+-- Once the owner is available again it must use fresh correlators, retain the
+-- outgoing sequence and establish a fresh rate baseline. Both a tick and a
+-- late matching MD event can be the first operation after the deadline.
+selected = true
+capture(4, 40)
+assert(packets[7]:match('|5|sector_b.-|%-|%-|%-|$'))
+for pass = 1, 2 do
+    clock = 5 + (pass-1)*3
+    owner:tick()
+    local late = request
+    clock = clock + 1
+    local before = #packets
+    if pass == 1 then owner:tick() else owner:event(late .. '|reply') end
+    assert(packets[before + 1] == 'GAP' and timeouts == pass)
+    assert(closed == 1 + pass and #faults == 0)
+    owner:event(late .. '|reply')
+    owner:tick()
+    assert(request ~= late)
+    owner:event(late .. '|reply')
+    assert(#packets == before + 1)
+    owner:event(request .. '|reply')
+    assert(packets[before + 2]:match('|' .. (5+pass) .. '|sector_b.-|%-|%-|%-|$'))
+end
+
+-- An expired request cannot hide a changed controlled actor. The next reset
+-- fails the binding check, and no further sample is emitted even if it returns.
+clock = 12
+owner:tick()
+binding = false
+clock = 13
+owner:tick()
+assert(timeouts == 3 and #faults == 0)
+owner:tick()
+assert(#faults == 1 and faults[1] == 'reset')
+local final_count = #packets
+binding = true
+capture(14, 40)
+assert(#packets == final_count and #faults == 1)
+
 -- Exercise the native adapter's actual diagnostic callback without invoking X4.
 local lines, native_options = {}, nil
 DebugError = function(line) lines[#lines + 1] = line end
@@ -87,7 +129,7 @@ source.new = function(options) native_options = options; return {} end
 source.new_x4({port = 1, lease = 'test', generation = generation, nonce = nonce, index = index},
               '/private/save', {epoch = epoch, issued_count = index}, {open = function() return {} end})
 local config = native_options.make_sampler(actor, function() return true end)
-assert(config.diagnostics == true)
+assert(config.diagnostics == true and config.recover_expired_pending == true)
 local prefix = '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED '
 for _, reason in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending',
                          'sample_dock_values', 'register_actor_key', 'reset_id_roundtrip',

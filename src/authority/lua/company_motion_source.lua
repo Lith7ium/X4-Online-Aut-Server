@@ -35,6 +35,18 @@ function M.new(options)
         options.send('GAP')
     end
 
+    local function sample_outcome(ok, gap)
+        if not ok then
+            failed = true
+        elseif gap == 'pending_timeout' then
+            if options.pending_timeout then options.pending_timeout() end
+        else
+            return true
+        end
+        suspend()
+        return false
+    end
+
     local function observe(enabled)
         if observer and not pcall(observer.tick, observer, enabled) then
             pcall(observer.close, observer)
@@ -56,9 +68,8 @@ function M.new(options)
             suspend()
             return
         end
-        local ok, sample = sampler:event(row)
-        if not ok then failed = true; suspend(); return end
-        if not sample then return end
+        local ok, sample, gap = sampler:event(row)
+        if not sample_outcome(ok, gap) or not sample then return end
         local rate = sample.real_velocity
         local function number(value) return string.format('%.17g', value) end
         options.send(table.concat({
@@ -88,7 +99,8 @@ function M.new(options)
             if not sampler:reset_baseline(options.index) then failed = true; suspend(); return end
             reset = false
         end
-        if not sampler:tick() then failed = true; suspend() end
+        local ok, _, gap = sampler:tick()
+        sample_outcome(ok, gap)
     end
 
     return api
@@ -132,6 +144,7 @@ function M.new_x4(config, save_path, pinned, udp)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({
         observer = observer, observer_fault = observer_fault,
+        pending_timeout = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP pending_timeout') end,
         epoch = pinned.epoch, index = config.index, available = available, actor = actor,
         send = function(payload) net:send(prefix .. payload) end,
         make_sampler = function(selected, guard)
@@ -139,7 +152,7 @@ function M.new_x4(config, save_path, pinned, udp)
                 enabled = true, epoch = pinned.epoch, generation = config.generation,
                 nonce = config.nonce, max_tracks = 1, scan_budget = 1,
                 interval = .10, timeout = 1, min_dt = .02, max_dt = 1,
-                real_time_motion = true, capture_clock = udp.monotonic,
+                real_time_motion = true, capture_clock = udp.monotonic, recover_expired_pending = true,
                 expected_save_path = expected, normalize_save_path = normalize,
                 guard = guard, binding_guard = function() return false end,
                 saved_baseline_limit = pinned.issued_count,
