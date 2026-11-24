@@ -84,8 +84,20 @@ class Supervisor(unittest.TestCase):
                 rows += [m.TAG+'RUNNING 3.0',m.TAG+'LOCAL_APPLIED 10055 3.1']
                 result=m.base.check_log_bytes(raw(rows),ticket,1);result['success']=True
                 m.base.result_finalizer(result);return result
-        args=types.SimpleNamespace(out=ROOT/'.local/test-unused-tcp-job-x4',store=m.archive.DEFAULT_STORE,timeout=300)
-        with (patch.object(m,'Worker',FakeWorker),patch.object(m.base,'run',side_effect=fake_run),
-              patch.object(m.base.load,'game_identity',return_value=(os.getpid(),123))):
-            result=m.run(args)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_root=Path(tmp)
+            store=fixture_root/'.local/source/checkpoints'
+            generation=store/m.archive.CHECKPOINT_ID
+            generation.mkdir(parents=True)
+            # The simulated loader never opens a checkpoint, but the real
+            # supervisor still checks that its archive files stay unchanged.
+            for name in ('CURRENT','CONFIRMED'):
+                (store/name).write_text(m.archive.CHECKPOINT_ID+'\n')
+            for name in ('manifest.json','save.xml.gz'):
+                (generation/name).touch()
+            args=types.SimpleNamespace(out=fixture_root/'.local/receiver',store=store,timeout=300)
+            with (patch.object(m,'Worker',FakeWorker),patch.object(m.base,'run',side_effect=fake_run),
+                  patch.object(m.base.base,'REPO',fixture_root),patch.object(m.base.snapshot,'REPO',fixture_root),
+                  patch.object(m.base.load,'game_identity',return_value=(os.getpid(),123))):
+                result=m.run(args)
         self.assertTrue(result['coordinator_reports_tcp_job_receipt'])
