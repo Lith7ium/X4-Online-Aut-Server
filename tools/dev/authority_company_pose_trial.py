@@ -1,0 +1,267 @@
+"""Apply and independently observe admitted cockpit motion in the isolated parked world."""
+import math
+import re
+import secrets
+import select
+import socket
+import time
+
+from authority_tcp_job_client_live import socket_owner
+
+PARKED_SAVE = '68dc79959984dbd3499b7b6360bde5b0e24d5cbc845b49d24a908d043a7612ca'
+# Stable identities of the two ships in the pinned disposable world.
+SHIP_CODES = {1970: 'WOO-831', 7354: 'WRN-302'}
+# Compare sector-space metres. Native UI coordinates use single precision.
+READBACK_METRES = 1.0
+_ACTOR = re.compile(r'0[xX][0-9a-fA-F]{1,16}')
+_TOKEN = re.compile(r'[0-9a-f]{32}')
+_SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
+
+
+def _xyz(values):
+    xyz = tuple(float(v) for v in values)
+    if len(xyz) != 3 or not all(math.isfinite(n) and abs(n) <= 1e7 for n in xyz):
+        raise ValueError('invalid company ship coordinates')
+    return xyz
+
+
+class GamePoseChannel:
+    """A single in-flight command to the owned game. Never replay an uncertain write."""
+
+    def __init__(self, epoch):
+        if not _TOKEN.fullmatch(epoch):
+            raise ValueError('invalid source registry epoch')
+        self.epoch, self.lease = epoch, secrets.token_hex(16)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.socket.bind(('127.0.0.1', 0))
+            self.socket.setblocking(False)
+        except BaseException:
+            self.socket.close()
+            raise
+        self.port = self.socket.getsockname()[1]
+        self.peer = self.process = self.guard = self.pending = None
+
+    def bind(self, process, guard):
+        self.process, self.guard = process, guard
+        deadline = time.monotonic() + 15
+        hello = f'P|{self.lease}|HELLO'.encode('ascii')
+        while time.monotonic() < deadline:
+            guard()
+            if select.select([self.socket], [], [], .1)[0]:
+                data, peer = self.socket.recvfrom(1025)
+                if data == hello and socket_owner(peer, self.socket.getsockname(), process):
+                    self.peer = peer
+                    return
+        raise TimeoutError('registered X4 pose channel did not bind')
+
+    def begin(self, action, sample, actor='0'):
+        if self.pending is not None:
+            raise RuntimeError('previous company pose command is still pending')
+        if action not in ('inspect', 'apply', 'verify') or not (actor == '0' or _ACTOR.fullmatch(actor)):
+            raise ValueError('invalid company pose action or actor')
+        self.guard()
+        if not socket_owner(self.peer, self.socket.getsockname(), self.process):
+            raise RuntimeError('owned X4 pose socket changed')
+        sequence = secrets.token_hex(16)
+        sector = sample['sector_macro']
+        if (sample['epoch'] != self.epoch or sample['index'] not in SHIP_CODES or
+                not _TOKEN.fullmatch(sample['generation']) or not _SECTOR.fullmatch(sector)):
+            raise ValueError('foreign pose identity or frame')
+        identity = (sequence, self.epoch, str(sample['index']), sample['generation'])
+        coordinates = _xyz(sample[key] for key in 'xyz')
+        fields = ('P', self.lease, action, *identity, sector, actor, *(format(n, '.17g') for n in coordinates))
+        packet = '|'.join(fields).encode('ascii')
+        if self.socket.sendto(packet, self.peer) != len(packet):
+            raise ConnectionError('could not send X4 pose command')
+        self.pending = (identity, action, sector, actor, time.monotonic() + 7)
+
+    def poll(self):
+        if self.pending is None:
+            return None
+        identity, action, sector, actor, deadline = self.pending
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f'X4 company pose {action} receipt expired')
+        for _ in range(64):
+            try:
+                packet, peer = self.socket.recvfrom(1025)
+            except BlockingIOError:
+                break
+            if peer != self.peer or not packet.startswith(f'P|{self.lease}|RESULT|'.encode('ascii')):
+                continue
+            fields = packet.decode('ascii').split('|')[3:]
+            if len(fields) != 15 or len(packet) > 1024:
+                raise ValueError('invalid pose response size')
+            if tuple(fields[:4]) != identity or fields[4] != action:
+                raise ValueError('pose receipt does not match the pending command')
+            status, actual_actor, frame = fields[5:8]
+            if status != {'inspect': 'INSPECTED', 'apply': 'DISPATCHED', 'verify': 'OBSERVED'}[action]:
+                detail = status if re.fullmatch(r'[A-Z_]{1,64}', status) else 'INVALID_STATUS'
+                raise ValueError(f'X4 refused {action} for ship {identity[2]}: {detail}')
+            if (frame != sector or not _ACTOR.fullmatch(actual_actor)
+                    or (actor != '0' and actual_actor != actor)):
+                raise ValueError('X4 pose receipt changed actor or sector')
+            md, ui = _xyz(fields[8:11]), _xyz(fields[11:14])
+            if action != 'apply' and (fields[14] != SHIP_CODES[int(identity[2])]
+                                      or math.dist(md, ui) > READBACK_METRES):
+                raise ValueError(f'independent pose readers disagree for ship {identity[2]}: {md}, {ui}')
+            self.pending = None
+            return {'actor': actual_actor, 'md': md, 'ui': ui, 'code': fields[14]}
+        return None
+
+    def wait(self):
+        while True:
+            reply = self.poll()
+            if reply is not None:
+                return reply
+            self.guard()
+            select.select([self.socket], [], [], .04)
+
+    def close(self):
+        self.socket.close()
+
+
+class CompanyPoseTrial:
+    """Inspect, apply, then read on a later game update. Control keeps its own channel."""
+
+    def __init__(self, channel, report):
+        self.channel = channel
+        self.report = report
+        self.active = None
+        self.last = {}
+        self.baselines = {}
+        report.update(writes_verified=0, within_tolerance=0, expired_before_write=0,
+                      max_verified_step_metres=0.0, max_source_travel_metres=0.0,
+                      max_source_speed_mps=0.0, last_verified={}, paused={})
+
+    def _start(self, record, service):
+        if not service.is_application_current(record):
+            self.report['expired_before_write'] += 1
+            return
+        sample = record.sample
+        index = sample['index']
+        target = _xyz(sample[key] for key in 'xyz')
+        base = self.baselines.setdefault(index, target)
+        self.report['max_source_travel_metres'] = max(self.report['max_source_travel_metres'],
+                                                    math.dist(target, base))
+        if sample['real_velocity'] is not None:
+            speed = math.hypot(*(sample['real_velocity'][key] for key in 'xyz'))
+            self.report['max_source_speed_mps'] = max(self.report['max_source_speed_mps'], speed)
+        self.report['last_attempt'] = {'index': index, 'sequence': sample['sequence'],
+                                       'sector_macro': sample['sector_macro'], 'target': target}
+        self.channel.begin('inspect', sample)
+        self.active = dict(record=record, sample=sample, target=target, stage='inspect')
+
+    def _advance(self, service, reply):
+        active = self.active
+        stage, sample, target = active['stage'], active['sample'], active['target']
+        if stage == 'inspect':
+            active['before'], active['actor'] = reply['ui'], reply['actor']
+            if not service.is_application_current(active['record']):
+                self.report['expired_before_write'] += 1
+                self.active = None
+                return
+            if math.dist(reply['ui'], target) > .10:
+                active['stage'] = 'apply'
+                self.channel.begin('apply', sample, active['actor'])
+                return
+            self.report['within_tolerance'] += 1
+        elif stage == 'apply':
+            active['stage'] = 'verify'
+            active['verify_deadline'] = time.monotonic() + 4
+            self.channel.begin('verify', sample, active['actor'])
+            return
+        elif stage == 'verify':
+            if max(math.dist(reply[name], target) for name in ('md', 'ui')) > READBACK_METRES:
+                if time.monotonic() < active['verify_deadline']:
+                    # The stock relocation can become visible several frames after dispatch.
+                    self.channel.begin('verify', sample, active['actor'])
+                    return
+                self.report['failed_readback'] = {'index': sample['index'], 'target': target, **reply}
+                raise ValueError('server pose did not match the accepted client sample on readback')
+            self.report['writes_verified'] += 1
+            step = math.dist(reply['ui'], active['before'])
+            if step > self.report['max_verified_step_metres']:
+                self.report['max_verified_step_metres'] = step
+                self.report['largest_verified_move'] = {
+                    'sequence': sample['sequence'], 'code': reply['code'], 'before': active['before'],
+                    'target': target, 'md': reply['md'], 'ui': reply['ui'],
+                }
+        self.last[sample['index']] = sample
+        self.report['last_verified'][str(sample['index'])] = {
+            'sequence': sample['sequence'], 'sector_macro': sample['sector_macro'], 'target': target,
+            'md': reply['md'], 'ui': reply['ui'], 'code': reply['code'], 'stage': stage,
+            'pre_write': active['before'],
+        }
+        self.active = None
+
+    def poll(self, service):
+        if self.active is not None:
+            reply = self.channel.poll()
+            if reply is not None:
+                self._advance(service, reply)
+        if self.active is None:
+            for record in service.take_application_batch(1):
+                self._start(record, service)
+
+    def _settle(self, service):
+        while self.active is not None:
+            self._advance(service, self.channel.wait())
+
+    def before_pause(self, service):
+        self._settle(service)
+        for record in service.freeze_application():
+            self._start(record, service)
+            self._settle(service)
+
+    def after_pause(self):
+        paused = {}
+        for index, sample in self.last.items():
+            self.channel.begin('inspect', sample)
+            reply = self.channel.wait()
+            target = self.report['last_verified'][str(index)]['target']
+            if math.dist(reply['ui'], target) > READBACK_METRES:
+                self.report['failed_pause'] = {'index': index, 'target': target, **reply}
+                raise ValueError('paused server pose diverged before saving')
+            paused[str(index)] = {'code': reply['code'], 'position': reply['ui'],
+                                  'sector_macro': sample['sector_macro'], 'sequence': sample['sequence']}
+        self.report['paused'] = paused
+
+    def start_window(self):
+        self.last.clear()
+        self.report['paused'] = {}
+        self.report.pop('saved_checkpoint_id', None)
+        self.report.pop('saved_checkpoint_sha256', None)
+
+    def checkpoint_published(self, checkpoint):
+        if self.report['paused']:
+            self.report.update(saved_checkpoint_id=checkpoint.checkpoint_id,
+                               saved_checkpoint_sha256=checkpoint.sha256)
+
+
+def verify_reloaded(channel, prior, checkpoint):
+    """Resolve saved indices afresh: runtime actor handles never cross a cold reload."""
+    report = prior.get('company_pose_trial', {})
+    if (prior.get('success') is not True or prior.get('final_checkpoint_sha256') != checkpoint.sha256
+            or prior.get('final_checkpoint_id') != checkpoint.checkpoint_id
+            or report.get('saved_checkpoint_id') != checkpoint.checkpoint_id
+            or report.get('saved_checkpoint_sha256') != checkpoint.sha256
+            or report.get('source_sha256') != PARKED_SAVE or not report.get('paused')
+            or not report.get('writes_verified')):
+        raise ValueError('cold pose check requires a confirmed checkpoint with a verified movement write')
+    verified = {}
+    for key, item in report['paused'].items():
+        index = int(key)
+        if index not in SHIP_CODES or item['code'] != SHIP_CODES[index]:
+            raise ValueError('unexpected saved company ship')
+        target = _xyz(item['position'])
+        sample = dict(index=index, epoch=channel.epoch, generation=secrets.token_hex(16),
+                      sector_macro=item['sector_macro'], **dict(zip('xyz', target)))
+        channel.begin('inspect', sample)
+        reply = channel.wait()
+        error = math.dist(reply['ui'], target)
+        if error > READBACK_METRES:
+            raise ValueError(f'cold pose differs for {item["code"]}: {error:.3f} m')
+        verified[key] = dict(code=reply['code'], sector_macro=sample['sector_macro'],
+                             expected=target, ui=reply['ui'], md=reply['md'], error_metres=error)
+    return verified

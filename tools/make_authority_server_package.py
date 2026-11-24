@@ -23,6 +23,7 @@ REQUIRED = {
     'src/authority/lua/company_ship_pose.lua',
     'src/authority/lua/replica_motion_binding.lua',
     'tools/dev/authority_company_pose_overlay.py',
+    'tools/dev/authority_company_pose_trial.py',
     'tools/dev/authority_connection_check.py',
     'tools/dev/authority_exec_gate.py',
     'tools/dev/authority_identity_fixture.xml',

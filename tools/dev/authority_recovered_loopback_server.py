@@ -632,7 +632,7 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
         return result
 
 
-def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1, motion_service=None):
+def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1, motion_service=None, pose_trial=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -666,6 +666,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
         host.tick(tick_interval)
         if motion_service is not None:
             motion_service.poll()
+            if pose_trial is not None and motion_service.running:
+                pose_trial.poll(motion_service)
         for peer in host._control._peers.values():
             if peer['stage'] == 'admitted' and peer['handle'] not in admitted_handles:
                 admitted_handles.add(peer['handle'])
@@ -854,6 +856,16 @@ def run(args):
         import authority_station_parking as parking_probe
         parking_probe.mode(args, require_snapshot=require_snapshot, tls=tls,
                            company_ships=require_company_ship, company_motion=company_motion)
+    pose_live = getattr(args, 'company_pose_trial', False)
+    pose_cold = getattr(args, 'verify_company_pose', False)
+    if pose_live or pose_cold:
+        if (not require_snapshot or parking is not None or (pose_live and pose_cold)
+                or (pose_live and not company_motion)
+                or (pose_cold and (company_motion or require_company_ship or tls is not None))):
+            raise ValueError('incompatible settings for the isolated company pose trial')
+        import authority_company_pose_overlay as pose_overlay
+        import authority_company_pose_trial as company_pose
+    pose_channel = pose_trial = None
     motion_service = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
@@ -1012,6 +1024,15 @@ def run(args):
         registry_snapshot_state = None
         if require_snapshot:
             fixture, saved_evidence = fixture
+            if pose_live or pose_cold:
+                if pose_live and checkpoint.sha256 != company_pose.PARKED_SAVE:
+                    raise ValueError('company pose trial requires the pinned parked source')
+                if pose_cold:
+                    prior_pose = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20))
+                pose_channel = company_pose.GamePoseChannel(saved_evidence['epoch'])
+                if pose_live:
+                    result['company_pose_trial'] = {'source_sha256': checkpoint.sha256}
+                    pose_trial = company_pose.CompanyPoseTrial(pose_channel, result['company_pose_trial'])
             registry_snapshot_state = registry_snapshots.RegistrySnapshotState(checkpoint, saved_evidence)
             result['registry_snapshot'] = registry_snapshot_state.metadata()
             if parking is not None:
@@ -1034,6 +1055,10 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if pose_channel is not None:
+                protected.extend(pose_overlay.install(case, profile, port=pose_channel.port,
+                                                      lease=pose_channel.lease, epoch=pose_channel.epoch,
+                                                      writable=pose_live))
             if parking is not None:
                 parking_nonce = secrets.token_hex(16)
                 protected.extend(parking_probe.install(case, parking_nonce, parking, parking_expected,
@@ -1220,6 +1245,14 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
+        if pose_channel is not None:
+            game_stat = (game/'X4').stat()
+            pose_channel.bind({'pid': identity[0], 'start_ticks': identity[1],
+                               'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}, check)
+            if pose_cold:
+                result['company_pose_reload'] = company_pose.verify_reloaded(pose_channel, prior_pose, checkpoint)
+                result.update(success=True, final_world_state='paused')
+                raise _WitnessFinished()
         def verify_checkpoint(store_arg, checkpoint_id, save_name):
             nonlocal registry_expected
             evidence=read_cycle_evidence(store_arg,checkpoint_id,save_name)
@@ -1318,10 +1351,20 @@ def run(args):
                     def call(*args):
                         verify_process()
                         if motion_service is not None and name == 'pause':
-                            motion_service.set_running(False)
+                            if pose_trial is None:
+                                motion_service.set_running(False)
+                            else:
+                                pose_trial.before_pause(motion_service)
                             motion_service.poll()
                         result = value(*args)
                         verify_process()
+                        if pose_trial is not None:
+                            if name == 'pause':
+                                pose_trial.after_pause()
+                            elif name == 'resume':
+                                pose_trial.start_window()
+                            elif name == 'checkpoint_published' and result is True:
+                                pose_trial.checkpoint_published(args[0])
                         if motion_service is not None and name == 'resume':
                             motion_service.set_running(True)
                         operations.append(name)
@@ -1802,7 +1845,7 @@ def run(args):
         def gateway_stopped():
             return gateway is not None and not gateway.running
 
-        result.update(serve(listener, host, deadline=deadline, check=check, motion_service=motion_service,
+        result.update(serve(listener, host, deadline=deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
                             should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
@@ -1865,6 +1908,8 @@ def run(args):
                 motion_service.close()
             except OSError as error:
                 errors.append('movement service cleanup: ' + type(error).__name__)
+        if pose_channel is not None:
+            pose_channel.close()
         services_stopped = True
         for service in services:
             try: owned.close_owned_file_service(service)
@@ -1918,6 +1963,8 @@ def run(args):
                 if require_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            require_registry_snapshot=True)
+                if pose_channel is not None:
+                    pose_overlay.archive_cue(case, out)
                 if parking is not None:
                     if parking_probe.verify_log(profile/'engine-output.log', parking_nonce, read_evidence) != parking_location:
                         raise ValueError('final parking receipt changed')
@@ -1980,6 +2027,11 @@ def main(argv=None):
     tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
     tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
     tls.add_argument('--tls-shared-key-file', type=Path, help='64 lowercase hex characters from 32 random bytes')
+    poses = parser.add_mutually_exclusive_group()
+    poses.add_argument('--company-pose-trial', action='store_true',
+                       help='adopt admitted flight samples on the isolated parked source')
+    poses.add_argument('--verify-company-pose', action='store_true',
+                       help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the separate participant-bound TLS movement channel')
     parser.add_argument('--require-company-ship', action='store_true',
