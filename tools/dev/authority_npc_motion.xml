@@ -10,8 +10,8 @@
    </actions>
   </cue>
 
-  <!-- Populate X4AuthorityShipRegistry across all operational ships in player.galaxy,
-       returning total enrolled count and up to 48 undocked non-player candidates. -->
+  <!-- Populate an already-initialized X4AuthorityShipRegistry across all operational ships in
+       player.galaxy, returning total enrolled count and up to 64 undocked non-player candidates. -->
   <cue name="PopulateUniverse" instantiate="true" namespace="this">
    <conditions>
     <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'PopulateUniverse'"/>
@@ -19,24 +19,22 @@
    <actions>
     <set_value name="$r" exact="event.param3"/>
     <set_value name="$epoch" exact="@$r.$epoch"/>
-    <do_if value="$r.$request_id? and $epoch?">
-     <set_value name="md.X4AuthorityShipRegistry.State.$epoch" exact="$epoch"/>
+    <do_if value="$r.$request_id? and $epoch? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $epoch and not @md.X4AuthorityShipRegistry.State.$faulted">
      <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
      <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
      <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="0"/>
-     <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="false"/>
      <find_ship name="$all" space="player.galaxy" multiple="true"/>
      <set_value name="$count" exact="0"/>
      <set_value name="$reported" exact="0"/>
      <set_value name="$rows" exact="''"/>
-     <set_value name="$stride" exact="if $all.count gt 96 then ($all.count / 48)i else 1"/>
+     <set_value name="$stride" exact="if $all.count gt 128 then ($all.count / 64)i else 1"/>
      <do_all exact="$all.count" counter="$i">
       <set_value name="$s" exact="$all.{$i}"/>
       <do_if value="@$s.isoperational and $s.isclass.ship">
        <set_value name="$count" exact="$count + 1"/>
        <set_value name="md.X4AuthorityShipRegistry.State.$ships.{$count}" exact="$s"/>
        <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$s}" exact="$count"/>
-       <do_if value="$reported lt 48 and (($i - 1) % $stride == 0 or $i gt $all.count - 96) and $s.owner != faction.player and $s != player.controlled and $s != player.ship and $s != player.occupiedship and $s != player.container and not $s.dock.exists and not $s.isinternallystored and @$s.sector.isclass.sector and @$s.parent.isclass.zone">
+       <do_if value="$reported lt 64 and (($i - 1) % $stride == 0 or $i gt $all.count - 128) and $s.owner != faction.player and $s != player.controlled and $s != player.ship and $s != player.occupiedship and $s != player.container and not $s.dock.exists and not $s.isinternallystored and @$s.sector.isclass.sector and @$s.parent.isclass.zone">
         <set_value name="$reported" exact="$reported + 1"/>
         <do_if value="$rows != ''">
          <set_value name="$rows" exact="$rows + ';'"/>
@@ -54,7 +52,25 @@
    </actions>
   </cue>
 
-  <!-- Guarded playback handoff: verify registry index, hold Wait order, and apply velocity. -->
+  <!-- Cold-reload lookup directly against the saved X4AuthorityShipRegistry (zero re-population). -->
+  <cue name="ResolveSavedShip" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'ResolveSavedShip'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <include_actions ref="GuardShip"/>
+    <do_if value="$valid">
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Resolved|%s|%s|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$index,$ship,$ship.sector,$ship.parent,$ship.sector.macro.id,$ship.idcode,$ship.owner.id,md.X4AuthorityShipRegistry.State.$last]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Refused|resolve_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <!-- Guarded playback handoff: verify registry index, hold Wait order, and lock constantvel
+       (default 0,0,0 so frame-by-frame X4LAN_NPC_HULL_PLAYBACK owns hull motion without AI drift). -->
   <cue name="PreparePlayback" instantiate="true" namespace="this">
    <conditions>
     <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'PreparePlayback'"/>
@@ -72,18 +88,19 @@
      </do_if>
      <do_if value="@State.$owned_ship != $ship or not @State.$owned_wait.exists">
       <create_order object="$ship" id="'Wait'" immediate="true" name="State.$owned_wait">
-       <param name="timeout" value="60s"/>
+       <param name="timeout" value="180s"/>
        <param name="skipalignment" value="true"/>
        <param name="fidget" value="false"/>
        <param name="noattackresponse" value="true"/>
       </create_order>
       <set_value name="State.$owned_ship" exact="$ship"/>
      </do_if>
-     <do_if value="$r.$vx? and $r.$vy? and $r.$vz?">
-      <set_object_velocity object="$ship" constantvel="true">
-       <linear value="vector.[$r.$vx * 1m, $r.$vy * 1m, $r.$vz * 1m]"/>
-      </set_object_velocity>
-     </do_if>
+     <set_value name="$vx" exact="if $r.$vx? then $r.$vx else 0"/>
+     <set_value name="$vy" exact="if $r.$vy? then $r.$vy else 0"/>
+     <set_value name="$vz" exact="if $r.$vz? then $r.$vz else 0"/>
+     <set_object_velocity object="$ship" constantvel="true">
+      <linear value="vector.[$vx * 1m, $vy * 1m, $vz * 1m]"/>
+     </set_object_velocity>
      <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|PlaybackReady|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$index,$ship,$ship.sector,$ship.parent,$ship.sector.macro.id,$ship.idcode]"/>
     </do_if>
     <do_else>

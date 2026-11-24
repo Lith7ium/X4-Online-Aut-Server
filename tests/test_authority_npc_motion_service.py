@@ -283,6 +283,84 @@ class AuthoritativeNpcMotionLoopbackTests(unittest.TestCase):
         self.pump_until(lambda: self.obs_a.stats()['snapshots_total'] == 64, timeout=5.0)
         self.assertEqual(len(self.obs_a.stats()['tracks']), 64)
 
+    def test_local_udp_playback_bridge_with_admitted_client_loss_and_reacquisition(self):
+        import socket
+        from authority.npc_motion_observer import NpcLocalPlaybackBridge
+
+        bridge = NpcLocalPlaybackBridge(EPOCH, 9001, lambda addr: addr[0] == '127.0.0.1')
+        peer_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        peer_sock.bind(('127.0.0.1', 0))
+        peer_sock.setblocking(False)
+        grant_c = self.service.admit(3, 'c3' * 16, 9001, SECTOR_A, SESSION, EPOCH)
+        client_c = CompanyMotionClient(
+            self.service.port, grant_c, IdlePlayerSource(EPOCH, 9001), lambda: True,
+            on_snapshot=bridge.observer.on_snapshot, on_end=bridge.observer.on_end,
+            on_transport_lost=bridge.observer.on_transport_lost,
+            on_view_reset=bridge.observer.on_view_reset,
+            trial_index=1318,
+        )
+        bridge.observer.bind_views(client_c.set_views)
+        prefix = f'N|{bridge.lease}|{EPOCH}|'.encode('ascii')
+        received = []
+
+        def pump_bridge():
+            bridge.poll()
+            self.service.poll()
+            client_c.poll()
+            while True:
+                try:
+                    data, _ = peer_sock.recvfrom(1024)
+                except BlockingIOError:
+                    break
+                if data.startswith(prefix):
+                    received.append(data[len(prefix):].decode('ascii'))
+
+        def wait_bridge(pred, timeout=3.0):
+            deadline = time.monotonic() + timeout
+            while not pred():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('bridge test timeout')
+                pump_bridge()
+                time.sleep(0.005)
+
+        try:
+            # 1. X4 peer HELLO + VIEW subscription over loopback UDP
+            peer_sock.sendto(prefix + b'HELLO', ('127.0.0.1', bridge.port))
+            wait_bridge(lambda: 'ACK|HELLO' in received and client_c._running)
+            peer_sock.sendto(prefix + f'VIEW|high_attention|1|{SECTOR_B}|1318'.encode('ascii'),
+                             ('127.0.0.1', bridge.port))
+            wait_bridge(lambda: 1318 in self.service.subscribed_npc_targets().get(SECTOR_B, ()))
+
+            # 2. Authority publishes baseline + moving sample -> REMOTE delivered over UDP -> X4 sends SEEN + READBACK
+            with patch('authority.company_motion_service.time.monotonic', return_value=200.0):
+                self.assertTrue(self.service.publish_npc_sample(make_npc_sample(1318, 1, SECTOR_B, 100.0)))
+                self.assertTrue(self.service.publish_npc_sample(
+                    make_npc_sample(1318, 2, SECTOR_B, 110.0, vel={'x': 20.0, 'y': 0.0, 'z': 0.0}),
+                ))
+                wait_bridge(lambda: any(m.startswith(f'REMOTE|1318|{GEN_NPC_1}|2|') for m in received))
+            peer_sock.sendto(prefix + f'SEEN|1318|{GEN_NPC_1}|2'.encode('ascii'), ('127.0.0.1', bridge.port))
+            peer_sock.sendto(
+                prefix + f'READBACK|readback|1318|{GEN_NPC_1}|2|interpolated|0.016|0.001|110|20|30|110|20|30|12.0|50.0'.encode('ascii'),
+                ('127.0.0.1', bridge.port),
+            )
+            wait_bridge(lambda: bridge.stats()['readback_count'] == 1)
+            self.assertEqual(bridge.stats()['seen_by_x4'][1318]['last_sequence'], 2)
+
+            # 3. Sample loss (MAX_SAMPLE_AGE expiry) -> motion_hidden -> UDP LOSS packet!
+            with patch('authority.company_motion_service.time.monotonic', return_value=200.0 + MAX_SAMPLE_AGE + 0.5):
+                self.service.poll()
+                wait_bridge(lambda: any(m.startswith(f'LOSS|1318|{GEN_NPC_1}|transport_lost') for m in received))
+            self.assertEqual(bridge.stats()['loss_sent'], 1)
+
+            # 4. Offscreen withdrawal -> UDP END|...|withdrawn and 0 deliveries while withdrawn
+            peer_sock.sendto(prefix + b'VIEW|high_attention|2|-|-', ('127.0.0.1', bridge.port))
+            wait_bridge(lambda: 1318 not in self.service.subscribed_npc_targets().get(SECTOR_B, ()))
+            self.assertTrue(any(m.startswith(f'END|1318|{GEN_NPC_1}|withdrawn') for m in received))
+        finally:
+            client_c.close()
+            peer_sock.close()
+            bridge.close()
+
 
 if __name__ == '__main__':
     unittest.main()

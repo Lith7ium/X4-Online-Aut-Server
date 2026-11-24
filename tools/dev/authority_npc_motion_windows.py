@@ -1,23 +1,33 @@
-"""Isolated native Windows X4 9.00 end-to-end NPC motion, visibility, playback, and profiling runner.
+"""Isolated native Windows X4 9.00 two-phase authoritative NPC capture-to-same-ship playback runner.
 
-Demonstrates on a real Windows X4 9.00 instance (disposable profile 45850,
-isolated x4ls view, 800x600 fast=True HWND_BOTTOM):
-  1. Full universe registry population via X4AuthorityShipRegistry (reporting exact
-     live universe ship count + populate time).
-  2. Real live moving-NPC V3 capture (game time, monotonic capture time, finite-
-     difference real_velocity) routed through CompanyMotionService to TWO admitted
-     CompanyMotionClient + NpcMotionObserver peers (two tracks on Pilot A across
-     high-attention + map views, plus Pilot B concurrently).
-  3. Offscreen interest withdrawal on Pilot A (0 deliveries while offscreen; Pilot A's
-     second track and Pilot B's stream continue uninterrupted) + reacquisition when
-     visible again, retaining the last nonzero-velocity sample.
-  4. Guarded local X4 hull playback (SetObjectSectorPos + constantvel, <= 50 m limit,
-     same-zone check, >50 m refusal) and independent later X4 readback.
-  5. Pause/save/resume clock transition (set_running False -> True) keeping both
-     pilots admitted and resuming live NPC delivery.
-  6. Native X4 multi-ship FFI capture profiling (N = 1, 5, 16, 32) plus a separate
-     explicitly labeled synthetic 10,082-entry loopback transport scalability sweep
-     (N = 1, 16, 64, 256 visible ships).
+Phase 1 (Authoritative Capture X4, disposable profile 45850, isolated x4ls view, 800x600 fast=True HWND_BOTTOM):
+  1. Enrolls the live universe (~9,900+ ships) into X4AuthorityShipRegistry via Initialize + PopulateUniverse.
+  2. Scouts real AI-flying NPCs, picks Primary S (moderate speed) and Secondary S2 (distinct sector if available).
+  3. Saves disposable checkpoint save_009 inside disposable profile 45850 (capturing X4AuthorityShipRegistry
+     and S's exact baseline pose), unpauses, and captures ~15 s of genuine live AI flight at ~6.7 Hz using
+     GetCurrentGameTime() + sub-ms GetCurRealTime().
+  4. Profiles sub-ms native X4 FFI capture cost across N = 1, 5, 16, 32, 48 enrolled ships via GetCurRealTime().
+
+Phase 2 (Observing Windows Client X4, fresh process loading save_009 from Phase 1):
+  1. Cold-reloads save_009 from the start menu; resolves the EXACT SAME registered ship S (same epoch,
+     same index, same idcode, same sector_macro) directly from the saved X4AuthorityShipRegistry without
+     re-populating, and verifies S's starting pose matches Phase 1's saved baseline.
+  2. Connects X4's real local UDP socket (x4lan_net_64.dll) to Pilot A's admitted CompanyMotionClient
+     (trial_index=S.index, on_transport_lost, NpcMotionObserver, NpcLocalPlaybackBridge with Windows
+     GetExtendedUdpTable PID validation) + concurrent Pilot B on real CompanyMotionService.
+  3. Stage A (Live capture-to-same-ship playback): Streams Phase 1's real captured V3 samples of S and S2
+     through CompanyMotionService -> TCP -> admitted CompanyMotionClient -> NpcMotionObserver -> UDP REMOTE
+     -> X4LAN_NPC_HULL_PLAYBACK (X4LAN_MOTION_BUFFER + X4LAN_MOTION_PLAYBACK) driving S's own local hull,
+     confirming SEEN receipts and delayed later-update readbacks (elapsed > 0).
+  4. Stage B (Sample loss & 5.0 s prediction cutoff): Stops publishing S -> CompanyMotionService MAX_SAMPLE_AGE
+     expiry fires motion_hidden -> on_transport_lost -> UDP LOSS -> X4 predicts S smoothly up to 5.0 s and
+     freezes dead-still at the 5.0 s cutoff (verified by pre-cutoff and post-cutoff readbacks while S2 continues).
+  5. Stage C (Offscreen withdrawal & reacquisition): X4 withdraws high_attention view -> 0 deliveries of S to
+     Pilot A while Pilot B & Pilot A's S2 continue -> re-subscribes high_attention -> verifies >50 m guard
+     refusal (PROBE_50M) -> streams fresh post-loss real captured samples of S -> single authorized reacquisition
+     alignment (when >50 m) confirmed by independent later readback -> resumes ordinary <=50 m continuous playback.
+  6. Stage D (Independent final MD+FFI readback & pause/save/resume): Independent later-update MD+FFI Readback
+     confirming S's identity, sector, zone, exact hull XYZ agreement, player_disp_m == 0.0, plus pause/save/resume.
 """
 import argparse
 import ctypes
@@ -36,10 +46,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src'), str(ROOT / 'tests'), str(ROOT / 'tools' / 'dev')]
 
 EXTENSION_ID = 'x4_neon_npc_motion'
-LOGFILE = 'neon-npc-motion.log'
+SAVE_SLOT = 'save_009'
 REGISTRY_XML = ROOT / 'tools/dev/authority_ship_registry.xml'
 MOTION_XML = ROOT / 'tools/dev/authority_npc_motion.xml'
 MOTION_LUA = ROOT / 'tools/dev/authority_npc_motion_x4.lua'
+MOTION_BUFFER_LUA = ROOT / 'src/authority/lua/motion_buffer.lua'
+MOTION_PLAYBACK_LUA = ROOT / 'src/authority/lua/motion_playback.lua'
+NPC_PLAYBACK_LUA = ROOT / 'src/authority/lua/npc_hull_playback.lua'
+X4LAN_NET_DLL = ROOT / 'src/lockstep/base/native/x4lan_net_64.dll'
 
 SW_SHOWNOACTIVATE = 4
 HWND_BOTTOM = 1
@@ -58,49 +72,86 @@ GEN_SECONDARY = '2' * 32
 CONTENT_XML = (
     '<?xml version="1.0" encoding="utf-8"?>\n'
     f'<content id="{EXTENSION_ID}" name="NPC motion milestone probe" '
-    'description="Disposable opt-in NPC motion capture, playback, and profiling harness" '
+    'description="Disposable opt-in NPC motion capture, same-ship playback, and profiling harness" '
     'author="Neon" version="100" date="2026-11-24" save="false">\n'
     '  <dependency version="900" />\n'
     '</content>\n'
 )
 
-UI_XML = (
-    '<?xml version="1.0" encoding="utf-8"?>\n'
-    f'<addon name="{EXTENSION_ID}">\n'
-    '  <environment type="menus">\n'
-    '    <dependency name="ego_detailmonitor" />\n'
-    '    <file name="ui/config.lua" />\n'
-    '    <file name="ui/authority_npc_motion_x4.lua" />\n'
-    '  </environment>\n'
-    '</addon>\n'
-)
 
-
-def config_lua(profile, gamestart, epoch):
+def ui_xml(mode):
+    extra = ''
+    if mode == 'observe':
+        extra = (
+            '    <file name="ui/motion_buffer.lua" />\n'
+            '    <file name="ui/motion_playback.lua" />\n'
+            '    <file name="ui/npc_hull_playback.lua" />\n'
+        )
     return (
-        'X4NEON_NPC_MOTION = {\n'
-        '  enabled = true,\n'
-        f'  extension_id = "{EXTENSION_ID}",\n'
-        f'  profile = "{int(profile)}",\n'
-        f'  gamestart = "{gamestart}",\n'
-        f'  epoch = "{epoch}",\n'
-        '}\n'
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        f'<addon name="{EXTENSION_ID}">\n'
+        '  <environment type="menus">\n'
+        '    <dependency name="ego_detailmonitor" />\n'
+        '    <file name="ui/config.lua" />\n'
+        f'{extra}'
+        '    <file name="ui/authority_npc_motion_x4.lua" />\n'
+        '  </environment>\n'
+        '</addon>\n'
     )
 
 
-def compose_extension(extensions_dir, *, profile, gamestart, epoch):
+def config_lua(profile, gamestart, epoch, *, mode='capture', extra=None):
+    lines = [
+        'X4NEON_NPC_MOTION = {',
+        '  enabled = true,',
+        f'  mode = "{mode}",',
+        f'  extension_id = "{EXTENSION_ID}",',
+        f'  save_slot = "{SAVE_SLOT}",',
+        f'  profile = "{int(profile)}",',
+        f'  gamestart = "{gamestart}",',
+        f'  epoch = "{epoch}",',
+    ]
+    for key, value in (extra or {}).items():
+        if isinstance(value, bool):
+            lines.append(f'  {key} = {"true" if value else "false"},')
+        elif isinstance(value, (int, float)):
+            lines.append(f'  {key} = {value!r},')
+        else:
+            lines.append(f'  {key} = {json.dumps(str(value))},')
+    lines.append('}\n')
+    return '\n'.join(lines)
+
+
+def compose_extension(extensions_dir, *, profile, gamestart, epoch, mode='capture', extra=None):
     if not gamestart.replace('_', '').isalnum():
         raise SystemExit('invalid gamestart id')
+    if mode not in ('capture', 'observe'):
+        raise ValueError(f'unsupported mode: {mode}')
     target = Path(extensions_dir) / EXTENSION_ID
+    if target.exists():
+        shutil.rmtree(target)
     target.mkdir()
     (target / 'ui').mkdir()
     (target / 'md').mkdir()
     shutil.copyfile(REGISTRY_XML, target / 'md' / 'authority_ship_registry.xml')
     shutil.copyfile(MOTION_XML, target / 'md' / 'authority_npc_motion.xml')
     shutil.copyfile(MOTION_LUA, target / 'ui' / 'authority_npc_motion_x4.lua')
-    (target / 'ui' / 'config.lua').write_text(config_lua(profile, gamestart, epoch), encoding='ascii')
+    if mode == 'observe':
+        (target / 'native').mkdir()
+        shutil.copyfile(X4LAN_NET_DLL, target / 'native' / 'x4lan_net_64.dll')
+        buf_text = MOTION_BUFFER_LUA.read_text(encoding='utf-8').replace('\r\n', '\n')
+        if 'X4LAN_MOTION_BUFFER' not in buf_text:
+            assert buf_text.rstrip().endswith('return M'), 'unexpected motion_buffer.lua ending'
+            idx = buf_text.rfind('return M')
+            buf_text = buf_text[:idx] + 'X4LAN_MOTION_BUFFER = M\n' + buf_text[idx:]
+        (target / 'ui' / 'motion_buffer.lua').write_text(buf_text, encoding='utf-8')
+        shutil.copyfile(MOTION_PLAYBACK_LUA, target / 'ui' / 'motion_playback.lua')
+        shutil.copyfile(NPC_PLAYBACK_LUA, target / 'ui' / 'npc_hull_playback.lua')
+    (target / 'ui' / 'config.lua').write_text(
+        config_lua(profile, gamestart, epoch, mode=mode, extra=extra), encoding='ascii',
+    )
     (target / 'content.xml').write_text(CONTENT_XML, encoding='utf-8')
-    (target / 'ui.xml').write_text(UI_XML, encoding='utf-8')
+    (target / 'ui.xml').write_text(ui_xml(mode), encoding='utf-8')
     return target
 
 
@@ -134,6 +185,36 @@ def x4_running():
     return 'x4.exe' in out.lower()
 
 
+def make_windows_pid_udp_validator(process):
+    """Validate that a local loopback UDP peer port belongs strictly to our spawned X4 child PID."""
+    from authority.windows_motion_peer import _AF_INET, _get_extended_udp_table, _load_udp_table_function
+
+    fn = _load_udp_table_function()
+    pid = int(process.pid)
+    bound_addr = {}
+
+    def validate(peer):
+        if process.poll() is not None:
+            return False
+        if not (isinstance(peer, tuple) and len(peer) == 2 and peer[0] == '127.0.0.1'
+                and isinstance(peer[1], int) and 1 <= peer[1] <= 65535):
+            return False
+        try:
+            rows = _get_extended_udp_table(_AF_INET, fn)
+        except OSError:
+            return False
+        matches = [r for r in rows if r[1] == peer[1] and r[2] == pid and r[0] in ('127.0.0.1', '0.0.0.0')]
+        if len(matches) == 1:
+            bound_addr['local_ip'] = matches[0][0]
+            bound_addr['port'] = matches[0][1]
+            bound_addr['pid'] = pid
+            return True
+        return False
+
+    validate.info = bound_addr
+    return validate
+
+
 def attach_kill_on_close_job(pid):
     """Attach child process to a Windows Job Object so even a hard Python exit kills X4."""
     if os.name != 'nt':
@@ -154,7 +235,7 @@ def attach_kill_on_close_job(pid):
                 ('LimitFlags', wintypes.DWORD),
                 ('MinimumWorkingSetSize', ctypes.c_size_t),
                 ('MaximumWorkingSetSize', ctypes.c_size_t),
-                ('ActiveProcessLimit', wintypes.DWORD),
+                ('ActiveProcessLimit', ctypes.c_uint32),
                 ('Affinity', ctypes.c_size_t),
                 ('PriorityClass', wintypes.DWORD),
                 ('SchedulingClass', wintypes.DWORD),
@@ -257,6 +338,7 @@ class X4MotionBridge:
         self._next_seq = 1
         self.ready_info = None
         self.responses = {}
+        self.traces = {'primary': [], 'secondary': []}
         self.events = []
         self.error = None
         self.done = False
@@ -299,6 +381,22 @@ class X4MotionBridge:
                             if payload.startswith('READY '):
                                 self.ready_info = parse_kv(payload[len('READY '):])
                                 self._cond.notify_all()
+                            elif payload.startswith('TRACE '):
+                                kv = parse_kv(payload[len('TRACE '):])
+                                ship = kv.get('ship')
+                                if ship in self.traces:
+                                    self.traces[ship].append({
+                                        'seq': int(kv['seq']),
+                                        'index': int(kv['index']),
+                                        'idcode': kv['idcode'],
+                                        'sector_macro': kv['sector'],
+                                        'zone_key': kv['zone'],
+                                        'game_time': float(kv['gt']),
+                                        'real_time': float(kv['rt']),
+                                        'x': float(kv['x']),
+                                        'y': float(kv['y']),
+                                        'z': float(kv['z']),
+                                    })
                             elif payload.startswith('RESP '):
                                 kv = parse_kv(payload[len('RESP '):])
                                 seq = int(kv['seq'])
@@ -316,19 +414,22 @@ class X4MotionBridge:
                         self.error = f'X4 exited unexpectedly with code {self.process.returncode}'
                     self._cond.notify_all()
                 return
-            time.sleep(0.05)
+            time.sleep(0.04)
 
-    def wait_ready(self, timeout=180.0):
+    def wait_ready(self, timeout=180.0, *, pump=None):
         deadline = time.monotonic() + timeout
-        with self._cond:
-            while self.ready_info is None and self.error is None:
+        while True:
+            if pump is not None:
+                pump()
+            with self._cond:
+                if self.ready_info is not None:
+                    return dict(self.ready_info)
+                if self.error is not None:
+                    raise RuntimeError(f'X4 error before READY: {self.error}')
                 rem = deadline - time.monotonic()
                 if rem <= 0:
                     raise TimeoutError('timed out waiting for X4 NPC motion READY')
-                self._cond.wait(min(0.25, rem))
-            if self.error is not None:
-                raise RuntimeError(f'X4 error before READY: {self.error}')
-            return dict(self.ready_info)
+                self._cond.wait(min(0.05 if pump else 0.25, rem))
 
     def _lua_value(self, value):
         if isinstance(value, bool):
@@ -339,7 +440,7 @@ class X4MotionBridge:
             return '{ ' + ', '.join(self._lua_value(item) for item in value) + ' }'
         return json.dumps(str(value))
 
-    def request(self, op, **params):
+    def request(self, op, *, pump=None, timeout=None, **params):
         with self._lock:
             seq = self._next_seq
             self._next_seq += 1
@@ -352,16 +453,19 @@ class X4MotionBridge:
         partial.write_text(body, encoding='ascii')
         os.replace(partial, self.ext_dir / f'req_{seq}.lua')
 
-        deadline = time.monotonic() + self.timeout
-        with self._cond:
-            while seq not in self.responses and self.error is None:
+        deadline = time.monotonic() + (timeout or self.timeout)
+        while True:
+            if pump is not None:
+                pump()
+            with self._cond:
+                if seq in self.responses:
+                    return dict(self.responses[seq])
+                if self.error is not None:
+                    raise RuntimeError(f'X4 error during seq={seq} op={op}: {self.error}')
                 rem = deadline - time.monotonic()
                 if rem <= 0:
                     raise TimeoutError(f'timed out waiting for X4 response to seq={seq} op={op}')
-                self._cond.wait(min(0.2, rem))
-            if self.error is not None:
-                raise RuntimeError(f'X4 error during seq={seq} op={op}: {self.error}')
-            return dict(self.responses[seq])
+                self._cond.wait(min(0.02 if pump else 0.2, rem))
 
     def stop(self):
         self._stop.set()
@@ -385,7 +489,9 @@ def compute_v3_sample(prev, curr, *, index, generation, sequence, epoch=EPOCH, r
     sector = curr['sector_macro']
     vel = None
     if not reset_baseline and prev is not None and prev['sector_macro'] == sector:
-        dt = gt - float(prev['game_time'])
+        dt_rt = rt - float(prev['real_time'])
+        dt_gt = gt - float(prev['game_time'])
+        dt = dt_rt if dt_rt >= 0.02 else dt_gt
         if 0.02 <= dt <= 2.0:
             vx = (x - float(prev['x'])) / dt
             vy = (y - float(prev['y'])) / dt
@@ -406,6 +512,20 @@ def compute_v3_sample(prev, curr, *, index, generation, sequence, epoch=EPOCH, r
         'z': z,
         'real_velocity': vel,
     }
+
+
+def build_trace_v3_samples(raw_rows, *, index, generation, epoch=EPOCH):
+    """Convert raw live X4 trace rows into a monotone V3 sample sequence with real velocities."""
+    samples = []
+    prev = None
+    for seq, row in enumerate(raw_rows, start=1):
+        sample = compute_v3_sample(
+            prev, row, index=index, generation=generation, sequence=seq,
+            epoch=epoch, reset_baseline=(prev is None),
+        )
+        samples.append(sample)
+        prev = row
+    return samples
 
 
 def benchmark_10082_scalability(counts=(1, 16, 64, 256), rounds=10):
@@ -433,7 +553,6 @@ def benchmark_10082_scalability(counts=(1, 16, 64, 256), rounds=10):
                 while not client._running:
                     service.poll()
                     client.poll()
-                # Spread N indices evenly across 1..10,082 (avoiding player seat 1970) across 2 sectors.
                 stride = max(1, (registry_size - 10) // max(n, 1))
                 picked = []
                 cur = 10
@@ -491,34 +610,160 @@ def benchmark_10082_scalability(counts=(1, 16, 64, 256), rounds=10):
     return rows
 
 
-def run_live_x4_session(bridge, ready_info):
-    """Drive real CompanyMotionService + 2 CompanyMotionClients against live X4 9.00 captures & playback."""
+def _spawn_x4_hidden(view, profile, log_path):
+    from lockstep.launcher import steam
+
+    command = [
+        str(view / 'X4.exe'),
+        '-personalfolderid', str(profile),
+        '-skipintro', '-noworkshopsync', '-nocputhrottle',
+        '-debug', 'scripts', '-logfile', log_path.name,
+    ]
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= STARTF_USESHOWWINDOW
+    si.wShowWindow = SW_SHOWNOACTIVATE
+    process = subprocess.Popen(
+        command, cwd=str(view), env=steam.client_environment(), startupinfo=si,
+    )
+    job = attach_kill_on_close_job(process.pid)
+    return process, job
+
+
+def _terminate_x4(process, job_handle):
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+    if job_handle is not None:
+        try:
+            ctypes.windll.kernel32.CloseHandle(job_handle)
+        except BaseException:
+            pass
+
+
+def _dist3(a, b):
+    return math.sqrt((a['x'] - b['x']) ** 2 + (a['y'] - b['y']) ** 2 + (a['z'] - b['z']) ** 2)
+
+
+def run_phase1_capture(view, profile_dir, out, args):
+    """Launch X4 #1 (Authoritative Capture): populate registry, save save_009, capture ~15 s real AI flight."""
+    save_dir = profile_dir / 'save'
+    if save_dir.is_dir():
+        for old in save_dir.glob(f'{SAVE_SLOT}*'):
+            old.unlink()
+    log_path = profile_dir / 'neon-npc-phase1-capture.log'
+    if log_path.exists():
+        log_path.unlink()
+
+    ext_dir = compose_extension(
+        view / 'extensions', profile=args.profile, gamestart=args.gamestart, epoch=EPOCH, mode='capture',
+    )
+    process, job_handle = _spawn_x4_hidden(view, args.profile, log_path)
+    bridge = X4MotionBridge(process, log_path, ext_dir, timeout=90.0)
+    try:
+        ready = bridge.wait_ready(timeout=args.timeout)
+        trace_resp = bridge.request('capture_trace', interval=0.10, duration_s=16.0, target_samples=160, timeout=55.0)
+        assert trace_resp.get('status') == 'trace_captured', f'trace capture failed: {trace_resp}'
+
+        native_profile = []
+        max_cand = int(ready['candidates'])
+        for n in (1, 5, 16, 32, 48):
+            if n <= max_cand:
+                native_profile.append(bridge.request('profile_capture', count=n, iters=40))
+
+        done_resp = bridge.request('done')
+        assert done_resp.get('status') == 'done'
+
+        primary_rows = list(bridge.traces['primary'])
+        secondary_rows = list(bridge.traces['secondary'])
+        assert len(primary_rows) >= 50, f'expected >=50 captured primary samples, got {len(primary_rows)}'
+        assert len(secondary_rows) >= 50, f'expected >=50 captured secondary samples, got {len(secondary_rows)}'
+
+        saved_files = sorted(p.name for p in save_dir.glob(f'{SAVE_SLOT}*')) if save_dir.is_dir() else []
+        assert saved_files, f'expected {SAVE_SLOT} in disposable profile {save_dir}'
+
+        return {
+            'ready': ready,
+            'trace_resp': trace_resp,
+            'primary_rows': primary_rows,
+            'secondary_rows': secondary_rows,
+            'native_profile': native_profile,
+            'saved_files': saved_files,
+            'log_path': str(log_path),
+            'events_count': len(bridge.events),
+        }
+    finally:
+        bridge.stop()
+        _terminate_x4(process, job_handle)
+        if log_path.is_file():
+            shutil.copyfile(log_path, out / log_path.name)
+
+
+def run_phase2_observe_playback(view, profile_dir, out, args, phase1):
+    """Launch X4 #2 (Observing Client): cold-load save_009, stream Phase 1 samples via admitted client to SAME ship."""
     from authority.company_motion_client import CompanyMotionClient
     from authority.company_motion_service import CompanyMotionService
-    from authority.npc_motion_observer import NpcMotionObserver
+    from authority.npc_motion_observer import NpcLocalPlaybackBridge, NpcMotionObserver
 
-    primary_idx = int(ready_info['primary_index'])
-    secondary_idx = int(ready_info['secondary_index'])
-    playback_idx = int(ready_info['playback_index'])
-    primary_sector = ready_info['primary_sector']
-    secondary_sector = ready_info['secondary_sector']
-    playback_sector = ready_info['playback_sector']
-    # Use synthetic admitted pilot seat indices guaranteed distinct from enrolled NPCs
-    pilot_a_seat = max(199001, int(ready_info['total_registry']) + 10)
+    ready1 = phase1['ready']
+    primary_idx = int(ready1['primary_index'])
+    secondary_idx = int(ready1['secondary_index'])
+    primary_sector = ready1['primary_sector']
+    secondary_sector = ready1['secondary_sector']
+    pilot_a_seat = max(199001, int(ready1['total_registry']) + 10)
     pilot_b_seat = pilot_a_seat + 1
 
+    primary_v3 = build_trace_v3_samples(phase1['primary_rows'], index=primary_idx, generation=GEN_PRIMARY)
+    secondary_v3 = build_trace_v3_samples(phase1['secondary_rows'], index=secondary_idx, generation=GEN_SECONDARY)
+
+    log_path = profile_dir / 'neon-npc-phase2-observe.log'
+    if log_path.exists():
+        log_path.unlink()
+
+    # Bind local UDP bridge first so config.lua knows the exact loopback port and lease.
+    holder = {'validator': None}
+
+    def deferred_validate(addr):
+        fn = holder['validator']
+        return fn(addr) is True if fn is not None else False
+
+    udp_bridge = NpcLocalPlaybackBridge(EPOCH, pilot_a_seat, deferred_validate)
     service = CompanyMotionService()
     client_a = client_b = None
+    process = job_handle = bridge = None
     try:
+        ext_dir = compose_extension(
+            view / 'extensions',
+            profile=args.profile,
+            gamestart=args.gamestart,
+            epoch=EPOCH,
+            mode='observe',
+            extra={
+                'primary_index': primary_idx,
+                'secondary_index': secondary_idx,
+                'own_index': pilot_a_seat,
+                'udp_port': udp_bridge.port,
+                'udp_lease': udp_bridge.lease,
+            },
+        )
+        process, job_handle = _spawn_x4_hidden(view, args.profile, log_path)
+        validator = make_windows_pid_udp_validator(process)
+        holder['validator'] = validator
+
         grant_a = service.admit(1, 'a1' * 16, pilot_a_seat, primary_sector, SESSION, EPOCH)
         grant_b = service.admit(2, 'b2' * 16, pilot_b_seat, primary_sector, SESSION, EPOCH)
         service.set_running(True)
 
-        obs_a = NpcMotionObserver(EPOCH, pilot_a_seat)
+        obs_a = udp_bridge.observer
         obs_b = NpcMotionObserver(EPOCH, pilot_b_seat)
         client_a = CompanyMotionClient(
             service.port, grant_a, _IdlePilotSource(EPOCH, pilot_a_seat), lambda: True,
-            on_snapshot=obs_a.on_snapshot, on_end=obs_a.on_end, on_view_reset=obs_a.on_view_reset,
+            on_snapshot=obs_a.on_snapshot, on_end=obs_a.on_end,
+            on_transport_lost=obs_a.on_transport_lost, on_view_reset=obs_a.on_view_reset,
+            trial_index=primary_idx,
         )
         client_b = CompanyMotionClient(
             service.port, grant_b, _IdlePilotSource(EPOCH, pilot_b_seat), lambda: True,
@@ -527,210 +772,331 @@ def run_live_x4_session(bridge, ready_info):
         obs_a.bind_views(client_a.set_views)
         obs_b.bind_views(client_b.set_views)
 
-        def pump_until(pred, timeout=10.0, label='condition'):
+        def pump_all():
+            udp_bridge.poll()
+            service.poll()
+            client_a.poll()
+            client_b.poll()
+
+        def pump_until(pred, timeout=15.0, label='condition'):
             deadline = time.monotonic() + timeout
             while not pred():
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'timed out waiting for {label}')
-                service.poll()
-                client_a.poll()
-                client_b.poll()
-                time.sleep(0.002)
+                pump_all()
+                time.sleep(0.005)
 
-        pump_until(lambda: client_a._running and client_b._running, label='clients_running')
+        def pump_for(seconds):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                pump_all()
+                time.sleep(0.005)
 
-        # Stage 1: Pilot A subscribes to BOTH Primary (high_attention) and Secondary (map); Pilot B subscribes to Primary.
-        obs_a.set_slot_view('high_attention', primary_sector, [primary_idx])
-        obs_a.set_slot_view('map', secondary_sector, [secondary_idx])
+        bridge = X4MotionBridge(process, log_path, ext_dir, timeout=60.0)
+        ready2 = bridge.wait_ready(timeout=args.timeout, pump=pump_all)
+        pump_until(lambda: client_a._running and client_b._running and udp_bridge.peer is not None,
+                   label='clients_and_udp_bound')
+
+        # Cold-reload identity & saved baseline pose verification!
+        assert int(ready2['primary_index']) == primary_idx
+        assert ready2['primary_idcode'] == ready1['primary_idcode']
+        assert ready2['primary_sector'] == primary_sector
+        assert int(ready2['total_registry']) == int(ready1['total_registry'])
+        saved_p0 = {
+            'x': float(ready1['primary_saved_x']),
+            'y': float(ready1['primary_saved_y']),
+            'z': float(ready1['primary_saved_z']),
+        }
+        loaded_p0 = {
+            'x': float(ready2['primary_init_x']),
+            'y': float(ready2['primary_init_y']),
+            'z': float(ready2['primary_init_z']),
+        }
+        cold_reload_offset_m = _dist3(saved_p0, loaded_p0)
+
+        # Subscribe Pilot B (second admitted observer) to primary; X4 #2 sends authenticated VIEW over UDP for Pilot A!
         obs_b.set_slot_view('high_attention', primary_sector, [primary_idx])
+        v1 = bridge.request('set_view', pump=pump_all, slot='high_attention',
+                            sector=primary_sector, indices=[primary_idx])
+        assert v1.get('status') == 'view_set'
+        v2 = bridge.request('set_view', pump=pump_all, slot='map',
+                            sector=secondary_sector, indices=[secondary_idx])
+        assert v2.get('status') == 'view_set'
         pump_until(lambda: (
             primary_idx in service.subscribed_npc_targets().get(primary_sector, ())
             and secondary_idx in service.subscribed_npc_targets().get(secondary_sector, ())
-        ), label='initial_views')
+            and primary_idx in (client_a._sent_view or {}).get(primary_sector, ())
+        ), label='initial_udp_views_synced')
 
-        prev_p = prev_s = None
-        seq_p = seq_s = 0
-        captured_primary = []
-        captured_secondary = []
+        # ==================== STAGE A: Live Capture-to-Same-Ship Playback ====================
+        # Pick ~3.0 s segment (~18-20 real captured samples) paced at their real capture_time deltas!
+        t_start = primary_v3[0]['capture_time']
+        seg1_end = 1
+        while seg1_end < len(primary_v3) - 35 and (primary_v3[seg1_end]['capture_time'] - t_start) < 2.7:
+            seg1_end += 1
+        seg1_end = max(12, seg1_end)
 
-        def capture_and_publish(reset_baseline=False, delay=0.25):
-            nonlocal prev_p, prev_s, seq_p, seq_s
-            raw_p = bridge.request('capture', index=primary_idx, min_game_delay=delay if prev_p else 0.0)
-            raw_s = bridge.request('capture', index=secondary_idx, min_game_delay=0.0)
-            seq_p += 1
-            seq_s += 1
-            sp = compute_v3_sample(prev_p, raw_p, index=primary_idx, generation=GEN_PRIMARY,
-                                   sequence=seq_p, reset_baseline=reset_baseline)
-            ss = compute_v3_sample(prev_s, raw_s, index=secondary_idx, generation=GEN_SECONDARY,
-                                   sequence=seq_s, reset_baseline=reset_baseline)
-            prev_p, prev_s = raw_p, raw_s
-            captured_primary.append(sp)
-            captured_secondary.append(ss)
-            assert service.publish_npc_sample(sp) is True
-            assert service.publish_npc_sample(ss) is True
-            return sp, ss
+        s2_cursor = 0
 
-        for i in range(4):
-            capture_and_publish(reset_baseline=(i == 0), delay=0.25)
-            pump_until(lambda q=seq_p, qs=seq_s: (
-                obs_a.stats()['tracks'].get(primary_idx, {}).get('last_sequence') == q
-                and obs_a.stats()['tracks'].get(secondary_idx, {}).get('last_sequence') == qs
-                and obs_b.stats()['tracks'].get(primary_idx, {}).get('last_sequence') == q
-            ), label=f'stage1_seq_{seq_p}')
+        def publish_secondary_next(reset_baseline=False):
+            nonlocal s2_cursor
+            if s2_cursor >= len(secondary_v3):
+                return None
+            raw = dict(secondary_v3[s2_cursor])
+            s2_cursor += 1
+            if reset_baseline or s2_cursor == 1:
+                raw['real_velocity'] = None
+            service.publish_npc_sample(raw)
+            return raw
 
-        stage1_primary = obs_a.stats()['tracks'][primary_idx]
-        assert stage1_primary['last_nonzero_velocity_confirmed'] is not None, 'expected retained moving sample'
+        for i in range(seg1_end):
+            sample_p = dict(primary_v3[i])
+            if i == 0:
+                sample_p['real_velocity'] = None
+            service.publish_npc_sample(sample_p)
+            publish_secondary_next(reset_baseline=(i == 0))
+            if i + 1 < seg1_end:
+                dt = max(0.05, min(0.35, primary_v3[i + 1]['capture_time'] - primary_v3[i]['capture_time']))
+                pump_for(dt)
+            else:
+                pump_for(0.25)
 
-        # Stage 2: Offscreen interest withdrawal on Pilot A (Secondary on Pilot A + Primary on Pilot B continue).
-        obs_a.clear_slot('high_attention')
+        pump_until(lambda: (
+            udp_bridge.stats()['seen_by_x4'].get(primary_idx, {}).get('last_sequence', 0) >= primary_v3[seg1_end - 1]['sequence']
+            and udp_bridge.stats()['readback_count'] >= 2
+        ), label='stage_a_playback_and_readback')
+
+        stage_a_probe = bridge.request('probe_pose', pump=pump_all, index=primary_idx)
+        stage_a_pose = {k: float(stage_a_probe[k]) for k in ('x', 'y', 'z')}
+        stage_a_disp_m = _dist3(loaded_p0, stage_a_pose)
+        stage_a_target_ref = primary_v3[seg1_end - 1]
+        stage_a_dist_to_target_m = _dist3(stage_a_pose, stage_a_target_ref)
+        stage_a_writes = int(stage_a_probe['writes'])
+        stage_a_readbacks = int(stage_a_probe['readbacks'])
+        stage_a_seen_seq = udp_bridge.stats()['seen_by_x4'].get(primary_idx, {}).get('last_sequence')
+        assert stage_a_writes > 0 and stage_a_readbacks > 0, f'expected active writes & readbacks: {stage_a_probe}'
+
+        # ==================== STAGE B: Sample Loss & 5.0 s Prediction Cutoff ====================
+        loss_started_at = time.monotonic()
+        # Probe at ~1.0 s (extrapolating), ~4.2 s (still extrapolating; >3.0 s triggers real motion_hidden!),
+        # ~5.4 s (past 5.0 s cutoff -> stale_5s!), and ~6.2 s (confirming 0.000 m post-cutoff drift!).
+        loss_probes = []
+        s2_loss_pushed = 0
+        for label, target_elapsed in (('1.0s_predicting', 1.0), ('4.2s_predicting_after_hidden', 4.2),
+                                      ('5.4s_post_cutoff', 5.4), ('6.2s_post_cutoff_hold', 6.2)):
+            while time.monotonic() - loss_started_at < target_elapsed:
+                if int((time.monotonic() - loss_started_at) / 0.8) > s2_loss_pushed:
+                    s2_loss_pushed += 1
+                    publish_secondary_next(reset_baseline=False)
+                pump_all()
+                time.sleep(0.01)
+            p = bridge.request('probe_pose', pump=pump_all, index=primary_idx)
+            loss_probes.append({
+                'label': label,
+                'elapsed_s': round(time.monotonic() - loss_started_at, 3),
+                'x': float(p['x']), 'y': float(p['y']), 'z': float(p['z']),
+                'ctrl_state': p['ctrl_state'],
+                'writes': int(p['writes']),
+                'readbacks': int(p['readbacks']),
+                'stale_cutoffs': int(p['stale_cutoffs']),
+                'player_disp_m': float(p['player_disp_m']),
+            })
+
+        pred_move_m = _dist3(loss_probes[0], loss_probes[1])
+        post_cutoff_drift_m = _dist3(loss_probes[2], loss_probes[3])
+        post_cutoff_extra_writes = loss_probes[3]['writes'] - loss_probes[2]['writes']
+        assert loss_probes[3]['stale_cutoffs'] >= 1, f'expected 5s stale cutoff: {loss_probes}'
+        assert post_cutoff_extra_writes == 0 and post_cutoff_drift_m < 0.01, (
+            f'hull moved after 5s cutoff: extra_writes={post_cutoff_extra_writes}, drift={post_cutoff_drift_m}'
+        )
+        assert obs_a.stats()['tracks'][primary_idx]['transport_loss_count'] >= 1, 'expected motion_hidden transport loss'
+
+        # ==================== STAGE C: Offscreen Withdrawal & Reacquisition ====================
+        # Withdraw high_attention view from X4 -> Pilot A drops S from motion_views.
+        w_resp = bridge.request('set_view', pump=pump_all, slot='high_attention', sector='-', indices=[])
+        assert w_resp.get('status') == 'view_set'
         pump_until(lambda: primary_idx not in (client_a._sent_view or {}).get(primary_sector, ()),
-                   label='stage2_withdraw')
+                   label='stage_c_withdraw_synced')
+
         seq_before_withdraw = obs_a.stats()['tracks'][primary_idx]['last_sequence']
-        for _ in range(2):
-            capture_and_publish(reset_baseline=False, delay=0.25)
-            pump_until(lambda q=seq_p, qs=seq_s: (
-                obs_a.stats()['tracks'][secondary_idx]['last_sequence'] == qs
-                and obs_b.stats()['tracks'][primary_idx]['last_sequence'] == q
-            ), label=f'stage2_offscreen_seq_{seq_p}')
-        # Verify Pilot A received ZERO deliveries of Primary while offscreen!
-        assert obs_a.stats()['tracks'][primary_idx]['last_sequence'] == seq_before_withdraw
-        assert obs_a.stats()['tracks'][primary_idx]['withdrawal_count'] == 1
+        seen_before_withdraw = udp_bridge.stats()['seen_by_x4'][primary_idx]['last_sequence']
 
-        # Stage 3: Reacquisition when Primary becomes visible again on Pilot A + local X4 hull playback & readback.
-        obs_a.set_slot_view('high_attention', primary_sector, [primary_idx])
+        # Advance the captured authority trace while Pilot A is offscreen so S moves cleanly ahead
+        # (>65 m past the 5 s frozen cutoff pose) while Pilot B AND Pilot A's S2 continue receiving!
+        frozen_pose = {'x': loss_probes[3]['x'], 'y': loss_probes[3]['y'], 'z': loss_probes[3]['z']}
+        seg2_start = seg1_end + 12
+        while seg2_start < len(primary_v3) - 18:
+            if _dist3(primary_v3[seg2_start - 1], frozen_pose) >= 65.0:
+                break
+            seg2_start += 1
+        seg2_start = min(seg2_start, len(primary_v3) - 18)
+
+        for i in range(seg1_end, seg2_start):
+            sample_p = dict(primary_v3[i])
+            if i == seg1_end:
+                # First sample after MAX_SAMPLE_AGE expiry must re-establish baseline velocity=None.
+                sample_p['real_velocity'] = None
+            service.publish_npc_sample(sample_p)
+            if i % 3 == 0:
+                publish_secondary_next(reset_baseline=False)
+            pump_for(0.03)
+
+        pump_until(lambda: obs_b.stats()['tracks'][primary_idx]['last_sequence'] == primary_v3[seg2_start - 1]['sequence'],
+                   label='stage_c_pilot_b_received_offscreen')
+        assert obs_a.stats()['tracks'][primary_idx]['last_sequence'] == seq_before_withdraw, (
+            'Pilot A received primary while withdrawn!'
+        )
+        assert udp_bridge.stats()['seen_by_x4'][primary_idx]['last_sequence'] == seen_before_withdraw
+
+        # Re-subscribe high_attention to S from X4!
+        re_resp = bridge.request('set_view', pump=pump_all, slot='high_attention',
+                                 sector=primary_sector, indices=[primary_idx])
+        assert re_resp.get('status') == 'view_set'
         pump_until(lambda: primary_idx in (client_a._sent_view or {}).get(primary_sector, ()),
-                   label='stage3_reacquire_view')
-        capture_and_publish(reset_baseline=False, delay=0.25)
-        pump_until(lambda q=seq_p: obs_a.stats()['tracks'][primary_idx]['last_sequence'] == q,
-                   label='stage3_reacquired_sample')
-        reacquired_track = obs_a.stats()['tracks'][primary_idx]
-        assert reacquired_track['reacquisition_count'] == 1
-        assert reacquired_track['reacquired_after_withdrawal'] is True
+                   label='stage_c_reacquire_view_synced')
 
-        # Local X4 playback on registered playback_idx driven by the retained real moving velocity (clamped to <=25 m/s
-        # along its real direction so it stays inside the same zone and <=50 m step limit), then later X4 readback.
-        retained_vel = reacquired_track['last_nonzero_velocity_confirmed']['real_velocity']
-        speed = math.sqrt(retained_vel['x'] ** 2 + retained_vel['y'] ** 2 + retained_vel['z'] ** 2)
-        scale = min(1.0, 20.0 / speed) if speed > 1e-6 else 0.0
-        play_vx = round(retained_vel['x'] * scale, 4)
-        play_vy = round(retained_vel['y'] * scale, 4)
-        play_vz = round(retained_vel['z'] * scale, 4)
-        play_speed = math.sqrt(play_vx ** 2 + play_vy ** 2 + play_vz ** 2)
+        # Explicitly probe the >50 m guard on S (read-only refusal check)!
+        refusals_before = int(bridge.request('probe_pose', pump=pump_all, index=primary_idx)['refusals_50m'])
+        assert udp_bridge.send_command('PROBE_50M', primary_idx, '120.0') is True
+        pump_until(lambda: any(e['kind'] == 'probe_50m' for e in udp_bridge.stats()['events']),
+                   label='stage_c_probe_50m')
+        refusals_after = int(bridge.request('probe_pose', pump=pump_all, index=primary_idx)['refusals_50m'])
+        assert refusals_after > refusals_before, 'expected >50 m guard refusal increment'
 
-        pb_before = bridge.request('capture', index=playback_idx)
-        target_x = float(pb_before['x']) + (play_vx * 0.5)
-        target_y = float(pb_before['y']) + (play_vy * 0.5)
-        target_z = float(pb_before['z']) + (play_vz * 0.5)
-        pb_apply = bridge.request(
-            'playback_step', index=playback_idx, expected_sector=playback_sector,
-            x=target_x, y=target_y, z=target_z, vx=play_vx, vy=play_vy, vz=play_vz,
-        )
-        assert pb_apply.get('status') == 'playback_applied', f'playback failed: {pb_apply}'
+        # Stream the remaining real captured samples (seg2_start .. len-3) at real capture cadence!
+        # Leave 2 samples for post-pause/resume verification in Stage D.
+        seg2_end = len(primary_v3) - 2
+        reacquire_gap_m = _dist3(frozen_pose, primary_v3[seg2_start - 1])
+        for i in range(seg2_start, seg2_end):
+            sample_p = dict(primary_v3[i])
+            service.publish_npc_sample(sample_p)
+            if i + 1 < seg2_end:
+                dt = max(0.05, min(0.35, primary_v3[i + 1]['capture_time'] - primary_v3[i]['capture_time']))
+                pump_for(dt)
+            else:
+                pump_for(0.35)
 
-        pb_over = bridge.request(
-            'playback_step', index=playback_idx, expected_sector=playback_sector,
-            x=target_x + 120.0, y=target_y, z=target_z,
-        )
-        assert pb_over.get('status') == 'refused_over_50m', f'expected 50m refusal: {pb_over}'
+        pump_until(lambda: (
+            udp_bridge.stats()['seen_by_x4'].get(primary_idx, {}).get('last_sequence', 0) >= primary_v3[seg2_end - 1]['sequence']
+        ), label='stage_c_reacquired_playback_seen')
+        stage_c_seen_seq = udp_bridge.stats()['seen_by_x4'].get(primary_idx, {}).get('last_sequence')
 
-        pb_readback = bridge.request('readback', index=playback_idx, min_game_delay=1.2)
-        assert pb_readback.get('status') == 'readback'
-        dt_pb = float(pb_readback['game_time']) - float(pb_apply['game_time'])
-        disp_m = math.sqrt(
-            (float(pb_readback['x']) - float(pb_apply['x'])) ** 2 +
-            (float(pb_readback['y']) - float(pb_apply['y'])) ** 2 +
-            (float(pb_readback['z']) - float(pb_apply['z'])) ** 2
-        )
-        expected_disp_m = play_speed * dt_pb
+        # ==================== STAGE D: Independent Later MD+FFI Readback & Pause/Save/Resume ====================
+        final_readback = bridge.request('readback', pump=pump_all, index=primary_idx, min_game_delay=0.25)
+        assert final_readback.get('status') == 'readback', f'final readback failed: {final_readback}'
+        final_pose = {k: float(final_readback[k]) for k in ('x', 'y', 'z')}
+        final_target_sample = primary_v3[seg2_end - 1]
+        total_hull_displacement_m = _dist3(loaded_p0, final_pose)
+        final_player_disp_m = float(final_readback['player_disp_m'])
+        assert final_player_disp_m < 0.01, f'player ship moved during NPC playback: {final_player_disp_m}'
 
-        # Stage 4: Pause / save / resume window transition keeping both admitted observers alive.
+        # Pause / save / resume window transition verifying both admitted clients stay admitted & resume!
         service.set_running(False)
-        pump_until(lambda: not client_a._running and not client_b._running, label='stage4_paused')
+        pump_until(lambda: not client_a._running and not client_b._running, label='stage_d_paused')
         service.set_running(True)
         pump_until(lambda: (
             client_a._running and client_b._running
             and primary_idx in service.subscribed_npc_targets().get(primary_sector, ())
             and secondary_idx in service.subscribed_npc_targets().get(secondary_sector, ())
-        ), label='stage4_resumed')
-        capture_and_publish(reset_baseline=True, delay=0.2)
-        capture_and_publish(reset_baseline=False, delay=0.25)
-        pump_until(lambda q=seq_p, qs=seq_s: (
-            obs_a.stats()['tracks'][primary_idx]['last_sequence'] == q
-            and obs_a.stats()['tracks'][secondary_idx]['last_sequence'] == qs
-            and obs_b.stats()['tracks'][primary_idx]['last_sequence'] == q
-        ), label='stage4_post_resume_delivery')
+        ), label='stage_d_resumed')
+        for offset, idx_row in enumerate(range(seg2_end, len(primary_v3))):
+            sample_p = dict(primary_v3[idx_row])
+            if offset == 0:
+                sample_p['real_velocity'] = None
+            service.publish_npc_sample(sample_p)
+            publish_secondary_next(reset_baseline=(offset == 0))
+            pump_for(0.15)
+        pump_until(lambda: (
+            obs_a.stats()['tracks'][primary_idx]['last_sequence'] == primary_v3[-1]['sequence']
+            and obs_b.stats()['tracks'][primary_idx]['last_sequence'] == primary_v3[-1]['sequence']
+        ), label='stage_d_post_resume_confirmed')
 
-        # Stage 5: Native X4 multi-ship FFI capture profile across N = 1, 5, 16, 32 enrolled ships.
-        native_profile = []
-        max_cand = int(ready_info['candidates'])
-        for n in (1, 5, 16, 32):
-            if n <= max_cand:
-                native_profile.append(bridge.request('profile_capture', count=n, iters=20))
-
-        done_resp = bridge.request('done')
+        done_resp = bridge.request('done', pump=pump_all)
         assert done_resp.get('status') == 'done'
+
+        bridge_stats = udp_bridge.stats()
+        readbacks = bridge_stats['readbacks']
+        max_readback_err_m = max((r['error'] for r in readbacks), default=None)
+        min_readback_elapsed_s = min((r['elapsed'] for r in readbacks), default=None)
+        alignment_readbacks = [r for r in readbacks if r['kind'] == 'alignment_readback']
 
         return {
             'accepted': True,
-            'universe_registry': {
-                'total_enrolled_ships': int(ready_info['total_registry']),
-                'populate_ms': float(ready_info['populate_ms']),
-                'candidates_sampled': max_cand,
+            'cold_reload': {
+                'save_slot': SAVE_SLOT,
+                'total_registry': int(ready2['total_registry']),
+                'primary_index': primary_idx,
+                'primary_idcode': ready2['primary_idcode'],
+                'primary_sector': primary_sector,
+                'phase1_saved_pose': saved_p0,
+                'phase2_loaded_pose': loaded_p0,
+                'cold_reload_offset_m': round(cold_reload_offset_m, 4),
+                'udp_peer_validation': dict(validator.info),
             },
-            'ships': {
-                'primary': {
-                    'index': primary_idx, 'idcode': ready_info['primary_idcode'],
-                    'actor_key': ready_info['primary_actor'], 'sector': primary_sector,
-                    'scout_speed_mps': float(ready_info['primary_speed']),
-                },
-                'secondary': {
-                    'index': secondary_idx, 'idcode': ready_info['secondary_idcode'],
-                    'actor_key': ready_info['secondary_actor'], 'sector': secondary_sector,
-                    'scout_speed_mps': float(ready_info['secondary_speed']),
-                },
-                'playback': {
-                    'index': playback_idx, 'idcode': ready_info['playback_idcode'],
-                    'actor_key': ready_info['playback_actor'], 'sector': playback_sector,
-                },
+            'stage_a_same_ship_playback': {
+                'samples_streamed': seg1_end,
+                'x4_seen_seq': stage_a_seen_seq,
+                'writes': stage_a_writes,
+                'readbacks': stage_a_readbacks,
+                'hull_displacement_m': round(stage_a_disp_m, 3),
+                'pose_at_stage_a_end': stage_a_pose,
+                'captured_sample_at_stage_a_end': {k: stage_a_target_ref[k] for k in ('sequence', 'x', 'y', 'z', 'real_velocity')},
+                'dist_to_latest_captured_sample_m': round(stage_a_dist_to_target_m, 3),
             },
-            'stage1_retained_moving_sample': stage1_primary['last_nonzero_velocity_confirmed'],
-            'stage2_withdrawal': {
+            'stage_b_loss_and_5s_cutoff': {
+                'transport_loss_notifications': obs_a.stats()['tracks'][primary_idx]['transport_loss_count'],
+                'loss_packets_sent_to_x4': bridge_stats['loss_sent'],
+                'predicted_displacement_1s_to_4_2s_m': round(pred_move_m, 3),
+                'post_cutoff_drift_5_4s_to_6_2s_m': round(post_cutoff_drift_m, 4),
+                'post_cutoff_extra_writes': post_cutoff_extra_writes,
+                'probes': loss_probes,
+            },
+            'stage_c_withdrawal_and_reacquisition': {
                 'pilot_a_seq_before_and_during_offscreen': seq_before_withdraw,
                 'pilot_a_withdrawal_count': obs_a.stats()['tracks'][primary_idx]['withdrawal_count'],
-                'pilot_a_secondary_continued': True,
-                'pilot_b_primary_continued': True,
-            },
-            'stage3_reacquisition_and_playback': {
                 'pilot_a_reacquisition_count': obs_a.stats()['tracks'][primary_idx]['reacquisition_count'],
-                'pilot_a_reacquired_after_withdrawal': obs_a.stats()['tracks'][primary_idx]['reacquired_after_withdrawal'],
-                'requested_playback_velocity_mps': {'x': play_vx, 'y': play_vy, 'z': play_vz, 'speed': round(play_speed, 4)},
-                'playback_apply': pb_apply,
-                'over_50m_refusal': pb_over,
-                'later_readback': pb_readback,
-                'readback_dt_game_s': round(dt_pb, 4),
-                'measured_displacement_m': round(disp_m, 3),
-                'expected_displacement_m': round(expected_disp_m, 3),
+                'pilot_b_seq_during_offscreen': primary_v3[seg2_start - 1]['sequence'],
+                'reacquire_gap_from_frozen_m': round(reacquire_gap_m, 3),
+                'over_50m_refusals': int(final_readback['refusals_50m']),
+                'alignments_performed': int(final_readback['alignments']),
+                'alignment_readbacks': alignment_readbacks,
+                'post_reacquire_samples_streamed': seg2_end - seg2_start,
+                'x4_seen_seq_after_reacquire': stage_c_seen_seq,
             },
-            'stage4_pause_save_resume': {
-                'pilot_a_world_resets': obs_a.stats()['world_resets'],
-                'pilot_b_world_resets': obs_b.stats()['world_resets'],
+            'stage_d_independent_readback_and_resume': {
+                'independent_md_ffi_readback': final_readback,
+                'final_captured_sample_before_pause': {k: final_target_sample[k] for k in ('sequence', 'x', 'y', 'z', 'real_velocity')},
+                'total_hull_displacement_m': round(total_hull_displacement_m, 3),
+                'player_displacement_m': round(final_player_disp_m, 4),
+                'total_x4_writes': int(final_readback['writes']),
+                'total_x4_readbacks': int(final_readback['readbacks']),
+                'udp_readbacks_logged': len(readbacks),
+                'max_udp_readback_error_m': round(max_readback_err_m, 5) if max_readback_err_m is not None else None,
+                'min_udp_readback_elapsed_s': round(min_readback_elapsed_s, 5) if min_readback_elapsed_s is not None else None,
+                'pause_resume_world_resets_pilot_a': obs_a.stats()['world_resets'],
                 'post_resume_primary_seq': obs_a.stats()['tracks'][primary_idx]['last_sequence'],
                 'post_resume_secondary_seq': obs_a.stats()['tracks'][secondary_idx]['last_sequence'],
             },
-            'stage5_native_x4_capture_profile': native_profile,
-            'observer_a_stats': obs_a.stats(),
-            'observer_b_stats': obs_b.stats(),
+            'udp_events': bridge_stats['events'],
+            'udp_readbacks_sample': readbacks[:12] + (readbacks[-6:] if len(readbacks) > 12 else []),
             'service_totals': {
                 'accepted_npc_samples': service.accepted_npc_samples,
                 'npc_samples_with_velocity': service.npc_samples_with_velocity,
             },
+            'log_path': str(log_path),
         }
     finally:
+        if bridge is not None:
+            bridge.stop()
+        _terminate_x4(process, job_handle)
         if client_a is not None:
             client_a.close()
         if client_b is not None:
             client_b.close()
         service.close()
+        udp_bridge.close()
+        if log_path.is_file():
+            shutil.copyfile(log_path, out / log_path.name)
 
 
 def main(argv=None):
@@ -780,13 +1146,9 @@ def main(argv=None):
         'view': str(view),
         'outcome': 'started',
     }
-    process = log_path = bridge = job_handle = None
     ctypes.windll.user32.SetProcessDPIAware()
     try:
         game_mod.create_view(game, view)
-        ext_dir = compose_extension(
-            view / 'extensions', profile=args.profile, gamestart=args.gamestart, epoch=EPOCH,
-        )
         profile_dir = profile_mod.prepare(
             args.profile,
             [*game_mod.dlc_ids(view), EXTENSION_ID],
@@ -794,55 +1156,69 @@ def main(argv=None):
             height=args.height,
             fast=True,
         )
-        log_path = profile_dir / LOGFILE
-        command = [
-            str(view / 'X4.exe'),
-            '-personalfolderid', str(args.profile),
-            '-skipintro', '-noworkshopsync', '-nocputhrottle',
-            '-debug', 'scripts', '-logfile', LOGFILE,
-        ]
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= STARTF_USESHOWWINDOW
-        si.wShowWindow = SW_SHOWNOACTIVATE
-        process = subprocess.Popen(
-            command, cwd=view, env=steam.client_environment(), startupinfo=si,
-        )
-        job_handle = attach_kill_on_close_job(process.pid)
-        result['pid'] = process.pid
-        bridge = X4MotionBridge(process, log_path, ext_dir, timeout=60.0)
-        ready_info = bridge.wait_ready(timeout=args.timeout)
-        result['native_run'] = run_live_x4_session(bridge, ready_info)
-        result['synthetic_10082_scalability'] = benchmark_10082_scalability()
+
+        # Phase 1: Native authoritative X4 universe capture + disposable save_009 + GetCurRealTime profiling.
+        phase1 = run_phase1_capture(view, profile_dir, out, args)
+        (out / 'captured-trace.json').write_text(json.dumps({
+            'ready': phase1['ready'],
+            'primary_rows': phase1['primary_rows'],
+            'secondary_rows': phase1['secondary_rows'],
+        }, indent=1))
+
+        # Wait briefly to confirm Phase 1 X4 process has completely exited before launching Phase 2.
+        for _ in range(40):
+            if not x4_running():
+                break
+            time.sleep(0.25)
+        if x4_running():
+            raise RuntimeError('Phase 1 X4.exe still running before Phase 2 launch')
+
+        # Phase 2: Fresh observing Windows client X4 cold-loading save_009 and playing back SAME ship via admitted client!
+        phase2 = run_phase2_observe_playback(view, profile_dir, out, args, phase1)
+
+        result['phase1_capture'] = {
+            'universe_registry': {
+                'total_enrolled_ships': int(phase1['ready']['total_registry']),
+                'populate_ms': float(phase1['ready']['populate_ms']),
+                'candidates_sampled': int(phase1['ready']['candidates']),
+            },
+            'primary': {
+                'index': int(phase1['ready']['primary_index']),
+                'idcode': phase1['ready']['primary_idcode'],
+                'actor_key': phase1['ready']['primary_actor'],
+                'sector': phase1['ready']['primary_sector'],
+                'scout_speed_mps': float(phase1['ready']['primary_speed']),
+                'captured_samples': len(phase1['primary_rows']),
+            },
+            'secondary': {
+                'index': int(phase1['ready']['secondary_index']),
+                'idcode': phase1['ready']['secondary_idcode'],
+                'actor_key': phase1['ready']['secondary_actor'],
+                'sector': phase1['ready']['secondary_sector'],
+                'scout_speed_mps': float(phase1['ready']['secondary_speed']),
+                'captured_samples': len(phase1['secondary_rows']),
+            },
+            'saved_files': phase1['saved_files'],
+            'native_ffi_capture_profile': phase1['native_profile'],
+        }
+        result['phase2_same_ship_playback'] = phase2
+        result['synthetic_10082_scalability'] = benchmark_10082_scalability(counts=(1, 16, 64, 256), rounds=10)
         result['outcome'] = 'done'
     except BaseException as exc:
         result['outcome'] = 'error'
         result['error'] = f'{type(exc).__name__}: {exc}'
-        if bridge is not None:
-            result['x4_events'] = list(bridge.events)
+        raise
     finally:
-        if bridge is not None:
-            bridge.stop()
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(25)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(25)
-        if job_handle:
-            try:
-                ctypes.windll.kernel32.CloseHandle(job_handle)
-            except BaseException:
-                pass
-        if process is not None:
-            result['exit_code'] = process.returncode
-        time.sleep(1.5)
-        if log_path is not None and log_path.is_file():
-            shutil.copyfile(log_path, out / LOGFILE)
+        # Remove disposable save_009 after run to leave disposable lane clean.
         try:
+            disp_save = profile_mod.profile_dir(args.profile) / 'save'
+            if disp_save.is_dir():
+                for f in disp_save.glob(f'{SAVE_SLOT}*'):
+                    f.unlink()
+        except OSError:
+            pass
+        if view.exists():
             remove_view_patiently(game_mod, view)
-        except OSError as exc:
-            result['cleanup_error'] = f'{type(exc).__name__}: {exc}'
         protected_after = {
             'other_profiles': {
                 entry.name: tree_metadata(entry)
@@ -851,14 +1227,19 @@ def main(argv=None):
             },
             'game_extensions': sorted(entry.name for entry in (game / 'extensions').iterdir()),
         }
-        (out / 'protected-after.json').write_text(json.dumps(protected_after, indent=1, sort_keys=True))
-        result['protected_unchanged'] = protected_after == protected_before
+        result['protected_unchanged'] = (protected_after == protected_before)
         result['view_removed'] = not view.exists()
         result['x4_running_after'] = x4_running()
-        (out / 'result.json').write_text(json.dumps(result, indent=2, default=str), encoding='utf-8')
-        print(json.dumps(result, indent=2, default=str))
-    return 0 if (result['outcome'] == 'done' and result['protected_unchanged']
-                 and result['view_removed'] and not result['x4_running_after']) else 1
+        (out / 'result.json').write_text(json.dumps(result, indent=1, sort_keys=True))
+    print(json.dumps({
+        'outcome': result['outcome'],
+        'accepted': result.get('phase2_same_ship_playback', {}).get('accepted'),
+        'protected_unchanged': result['protected_unchanged'],
+        'view_removed': result['view_removed'],
+        'x4_running_after': result['x4_running_after'],
+        'out': str(out),
+    }, indent=2))
+    return 0
 
 
 if __name__ == '__main__':
