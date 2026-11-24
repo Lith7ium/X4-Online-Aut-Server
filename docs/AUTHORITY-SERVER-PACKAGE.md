@@ -163,6 +163,17 @@ new flight samples. After the last departure, the paused MD/UI readings
 and the positions independently read from the next confirmed save agreed
 for both ships (`checkpoint-4a14017bcb6741df8743143a6080e410`).
 
+On `35567bf4`, two synthetic TLS pilots started together in the saved
+world. HVC-420 stayed at (20720, 100000, -1340) in
+`cluster_06_sector002_macro`. KHI-630 reported a sector change and the
+native provider verified one transfer to `cluster_06_sector001_macro`.
+After the last pilot left, KHI-630 was at (31520, 115000, -3960). Both
+ships' MD and UI position readings matched the saved coordinates with
+zero measured error. The confirmed checkpoint was
+`checkpoint-90a606d278ee438b9d2d3f9fc63be0c6`. A player flying through
+the gate in a real cockpit and an observer seeing the crossing remain to
+be tested.
+
 For new pose trials, `company_pose_trial.application_drops` in `result.json`
 counts observed discards and keeps the latest ship index, source sequence and
 seconds since server acceptance under `by_reason`. The `last_reason` field
