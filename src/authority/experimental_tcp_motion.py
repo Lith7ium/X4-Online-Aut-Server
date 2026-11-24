@@ -370,49 +370,59 @@ class ExperimentalTCPMotion:
             del reentries[identity]
             del cancellations[key]
 
-        def stage(operation, status, accepted, sample=None):
-            active = peer['motion_active']
-            if active['key'] != key:
-                raise RuntimeError('motion reentry lost its poll lane')
-            data, expected = wire(operation, status, sample)
-            active.update(data=data, input=b'', sent=0, expected=expected, accepted=accepted)
-            transaction['phase'] = operation
+        def queue_cancel():
+            data, expected = wire('cancel', 'canceled')
+            transaction['phase'] = 'cancel'
+            peer.setdefault('motion_cancel_pending', {})[key] = (data, expected, finish, guard)
 
         def cancel():
             transaction['canceled'] = True
+            phase = transaction['phase']
+            if phase == 'cancel':
+                return
             active = peer.get('motion_active')
-            if active is None or active['key'] != key:
+            active_is_self = active is not None and active['key'] == key
+            if phase == 'prepare':
+                if active_is_self:
+                    if active['sent'] == 0:
+                        peer['motion_active'] = None
+                        finish()
+                    return
                 pending = peer.get('motion_pending', {}).pop(key, None)
                 if pending is not None:
                     pending[3]()
                 return
-            phase = transaction['phase']
-            if phase == 'prepare' and active['sent'] == 0:
-                peer['motion_active'] = None
-                finish()
-            elif phase == 'prepared' or (phase == 'align' and active['sent'] == 0):
-                stage('cancel', 'canceled', finish)
+            if phase == 'align':
+                if active_is_self:
+                    if active['sent'] > 0:
+                        return
+                    peer['motion_active'] = None
+                else:
+                    peer.get('motion_pending', {}).pop(key, None)
+                queue_cancel()
+                return
+            if phase == 'prepared':
+                queue_cancel()
 
         def prepared():
             check_context()
-            active = peer['motion_active']
-            active['reentry_started'] = True
             # No frame can be written until we have a source response from a
             # genuinely later PULL, even if an earlier PULL responds after ACK.
+            # Release the peer's movement lane while waiting so other tracks on
+            # the same participant continue flowing without hitting the wire timeout.
             transaction['prepared_after_pull'] = self._source_owner._next
             transaction['phase'] = 'prepared'
-            active.update(data=b'', input=b'', sent=0)
             if transaction['canceled']:
-                cancel()
-            return True
+                queue_cancel()
 
-        def advance(sample, capture_request):
+        def advance(sample, capture_request, step_guard):
             if (transaction['phase'] != 'prepared' or transaction['canceled'] or
                     capture_request <= transaction['prepared_after_pull']):
-                return False
+                return None
             if sample['sequence'] <= prepared_sequence or sample['sector_macro'] != sector:
                 raise ValueError('invalid post-prepare alignment sample')
             digest = motion_digest(sample)
+            data, expected = wire('align', 'aligned', sample)
 
             def aligned():
                 finish()
@@ -421,8 +431,12 @@ class ExperimentalTCPMotion:
                 state['peer_samples'][identity] = (sample['sequence'], digest)
                 state['reentry_absent'].pop(identity, None)
 
-            stage('align', 'aligned', aligned, sample)
-            return True
+            def discarded_align():
+                if transaction['phase'] == 'align':
+                    transaction['phase'] = 'prepared'
+
+            transaction['phase'] = 'align'
+            return conn, peer, key, data, expected, aligned, discarded_align, step_guard
 
         transaction.update(cancel=cancel, advance=advance)
         data, expected = wire('prepare', 'prepared', prepare_sample)
@@ -512,12 +526,17 @@ class ExperimentalTCPMotion:
                         active is not None and active['key']==key and active['sent']>0):
                     reserved.pop(identity,None)
             entries.append((conn,peer,key,data,expected,accepted,discarded,_guard))
-        advanced = False
         for identity, conn, peer, active_reentry in reentry_work:
             if active_reentry is None:
+                # Participant clients allow one prepared reentry at a time; defer
+                # a second track's prepare until the open reentry finishes/cancels.
+                if peer.get('motion_reentry_cancel'):
+                    continue
                 entries.append(self._begin_reentry(state, key, identity, conn, peer, value, request_epoch, _guard))
             else:
-                advanced = active_reentry['advance'](value, _capture_request) or advanced
+                entry = active_reentry['advance'](value, _capture_request, _guard)
+                if entry is not None:
+                    entries.append(entry)
         survivors=latest.enqueue(entries)
         state['sequence']=value['sequence'];state['time']=value['source_time'];state['frame']=value['sector_macro']
         state['version'] = value['version']
@@ -525,7 +544,7 @@ class ExperimentalTCPMotion:
         for h in ordinary:
             if peers[h][0] in survivors:reserved[('peer_'+str(h),incarnations[h])]=value['sector_macro']
         self._preflight=None
-        return bool(survivors or advanced)
+        return bool(survivors)
 
     def apply_once(self, raw, *, guard=None, _source=None):
         """Opt-in one-peer apply/readback after an exactly confirmed motion sample.

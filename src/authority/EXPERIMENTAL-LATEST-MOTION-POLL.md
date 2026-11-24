@@ -40,14 +40,19 @@ For a compatible private participant, the host can opt into
 `ExperimentalTCPMotion(..., allow_sector_reentry=True)` on the latest source
 path. The selector must have previously excluded that exact peer incarnation
 from a confirmed source observation in the destination sector. Lifecycle
-fences do not count as exclusion. Prepare carries no rate and must confirm
-destination binding without movement. Align carries a newer sample from a
-PULL dispatched after the prepare receipt. It preserves the sample version
-and destination-frame rate. The host commits the peer frame only on the
-correlated aligned receipt. A visibility loss or lifecycle barrier cancels a
-prepared alignment when its write request is still unsent. If bytes of that
-request have been sent, the owner drains the correlated receipt or fences the
-socket. Other peers retain their own motion queues.
+fences do not count as exclusion. Prepare carries no rate and must confirm destination binding without movement.
+Once the prepare receipt completes, the peer's active movement lane is released
+while waiting for the later PULL so other active tracks on the same admitted
+socket continue flowing without triggering the per-request wire timeout. A
+second track's reentry prepare on the same peer waits until the open reentry
+aligns or cancels. Align carries a newer sample from a PULL dispatched after
+the prepare receipt. It preserves the sample version and destination-frame
+rate. The host commits the peer frame only on the correlated aligned receipt.
+A visibility loss or lifecycle barrier cancels a prepared alignment when its
+write request is still unsent, draining any currently in-flight frame and the
+correlated cancel receipt before world pause/save/resume or barrier release.
+If bytes of an align request have been sent, the owner drains the correlated
+receipt or fences the socket. Other peers retain their own motion queues.
 
 The feature has no integrated interest discovery, authority transfer, remote
 security, Internet or Windows validation. `tests/test_authority_latest_motion_poll.py`

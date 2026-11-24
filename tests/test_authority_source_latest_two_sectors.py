@@ -593,5 +593,315 @@ class EnhancedNpc870ReacquisitionLoopback(unittest.TestCase):
                          [1, 2, 3])
 
 
+class SameObserverDelayedReentryLoopback(unittest.TestCase):
+    """Focused loopback cases: delayed/omitted post-prepare sample while the
+    same admitted observer has a second active track, including pause/save/resume.
+    """
+    epoch = '4ba7be438ebb04ec5bb85fdb95b5a488'
+    reentry_track = 1318
+    second_track = 10055
+    third_track = 10057
+    saved_baseline = 10082
+    origin_sector = 'cluster_06_sector001_macro'
+    target_sector = 'cluster_14_sector001_macro'
+    second_sector = 'cluster_01_sector001_macro'
+    third_origin = 'cluster_02_sector001_macro'
+    third_target = 'cluster_03_sector001_macro'
+    short_peer_timeout = 0.25
+
+    wait_for = SourceLatestTwoSectors.wait_for
+    _begin_pull = SourceLatestTwoSectors._begin_pull
+    pull_v3 = EnhancedNpc870ReacquisitionLoopback.pull_v3
+
+    def setUp(self):
+        participant_fixture.ParticipantTCPTest.setUp(self)
+        self.stop = threading.Event()
+        self.threads = []
+        self.errors = []
+        self.received = []
+        self.expected_disconnect = set()
+        self.peer2_control_ops = []
+        self.hold_second_track = threading.Event()
+        self.second_track_inflight = threading.Event()
+        self.release_second_track = threading.Event()
+        self.release_second_track.set()
+
+        first = participant_fixture.ParticipantTCPTest.connect(self)
+        second = participant_fixture.ParticipantTCPTest.connect(self)
+        self.addCleanup(fixture.MotionTCP.finish, self)
+        self.addCleanup(self.release_second_track.set)
+        participant_fixture.ParticipantTCPTest.offer_and_claim(self, first)
+        participant_fixture.ParticipantTCPTest.offer_and_claim(self, second)
+        fixture.MotionTCP.client(self, first, 1)
+        self._start_peer2(second)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'running')
+
+        self.control.enable_latest_motion(enabled=True, timeout=self.short_peer_timeout)
+        self.delivery = ExperimentalTCPJobDelivery(self.host, enabled=True, timeout=PEER_TIMEOUT)
+        self.motion = ExperimentalTCPMotion(
+            self.delivery, enabled=True, min_interval=MOTION_INTERVAL, allow_sector_reentry=True,
+        )
+
+        local = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        remote = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(local.close)
+        self.addCleanup(remote.close)
+        local.bind(('127.0.0.1', 0))
+        remote.bind(('127.0.0.1', 0))
+        local.connect(remote.getsockname())
+        remote.connect(local.getsockname())
+        remote.settimeout(TEST_TIMEOUT)
+        self.remote = remote
+
+        members = self.delivery.membership()
+        self.peer1 = members[0]
+        self.peer2 = members[1]
+        self.identity2 = (self.peer2['id'], self.peer2['incarnation'])
+        # Route both tracks to the SAME admitted observer (peer 2).
+        self.recipients = {
+            self.origin_sector: self.peer2,
+            self.second_sector: self.peer2,
+            self.third_origin: self.peer2,
+        }
+
+        def select_recipients(sample, _members):
+            member = self.recipients.get(sample['sector_macro'])
+            return [dict(member)] if member is not None else []
+
+        self.bridge = ExperimentalSourceMotionIPC(
+            local, self.motion, enabled=True, lease='1' * 32, attempt='2' * 32,
+            epoch=self.epoch, generation=GENERATION, guard=lambda: True,
+            validate_peer=lambda peer: peer == remote.getsockname(), timeout=SOURCE_TIMEOUT,
+            select_recipients=select_recipients, latest=True,
+            saved_baseline=self.saved_baseline,
+            saved_guard=lambda epoch, count: epoch == self.epoch and count == self.saved_baseline,
+            saved_lifetime_guard=lambda epoch, count: epoch == self.epoch and count == self.saved_baseline,
+        )
+        self.bridge.bind_confirmed(self.reentry_track)
+        self.bridge.bind_confirmed(self.second_track)
+        self.bridge.bind_confirmed(self.third_track)
+
+    def _start_peer2(self, conn):
+        self.game_callback = MotionReentryController()
+        control_ops = self.peer2_control_ops
+
+        class RecordingController:
+            def pause(self, handles):
+                control_ops.append(('pause', tuple(handles)))
+                return True
+
+            def resume(self, handles):
+                control_ops.append(('resume', tuple(handles)))
+                return True
+
+        def run():
+            try:
+                conn.settimeout(3)
+                frame = b''
+                while not frame.endswith(b'\n'):
+                    part = conn.recv(1)
+                    if not part:
+                        raise RuntimeError('missing admission')
+                    frame += part
+                assert json.loads(frame)['kind'] == 'accepted'
+
+                def accept(sample, despawn):
+                    self.received.append((2, dict(sample), despawn))
+                    if self.hold_second_track.is_set() and sample['index'] == self.second_track:
+                        self.second_track_inflight.set()
+                        return self.release_second_track.wait(TEST_TIMEOUT)
+                    return True
+
+                app = ExperimentalTCPParticipantClient(
+                    conn, RecordingController(), enabled=True, epoch='a' * 32,
+                    handle=2, timeout=PEER_TIMEOUT, apply_motion=accept,
+                    apply_job=lambda _: True, motion_reentry_controller=self.game_callback,
+                )
+                while not self.stop.is_set():
+                    app.poll(.02)
+                app.close()
+            except BaseException as error:
+                if not self.stop.is_set() and 2 not in self.expected_disconnect:
+                    self.errors.append(error)
+
+        thread = threading.Thread(target=run)
+        self.threads.append(thread)
+        thread.start()
+
+    def _prepare_track1(self):
+        track1 = self.motion._tracks[(self.epoch, GENERATION, self.reentry_track)]
+        track2 = self.motion._tracks[(self.epoch, GENERATION, self.second_track)]
+        init1 = self.pull_v3(self.reentry_track, 1, self.origin_sector, 100.0, 10.0,
+                             (1000.0, 20.0, -50.0), ('-', '-', '-'))
+        init2 = self.pull_v3(self.second_track, 1, self.second_sector, 100.5, 10.5,
+                             (10.0, 20.0, 30.0), ('15', '0', '0'))
+        self.wait_for(lambda: track1['peer_samples'].get(self.identity2) == (1, motion_digest(init1)) and
+                              track2['peer_samples'].get(self.identity2) == (1, motion_digest(init2)))
+
+        # Unseen sector change on track 1 -> re-sight -> prepare confirmed on peer 2.
+        self.assertIsNone(self.pull_v3(self.reentry_track, 2, self.target_sector, 102.0, 12.0,
+                                       (5000.0, 100.0, -200.0), ('-', '-', '-')))
+        self.recipients[self.target_sector] = self.peer2
+        self.pull_v3(self.reentry_track, 3, self.target_sector, 103.0, 13.0,
+                     (5120.0, 100.0, -200.0), ('120', '0', '0'))
+        self.wait_for(lambda: track1['reentries'][self.identity2]['phase'] == 'prepared')
+        return track1, track2
+
+    def test_delayed_post_prepare_sample_keeps_second_track_and_connection_alive(self):
+        track1, track2 = self._prepare_track1()
+        peer2_state = next(p for p in self.control._peers.values() if p['handle'] == 2)
+        self.assertIsNone(peer2_state.get('motion_active'))
+        self.assertFalse(self.control._motion_idle())
+
+        # Delay track 1's post-prepare sample well beyond short_peer_timeout (0.25s)
+        # while continuously streaming track 2 to the SAME admitted observer.
+        deadline = time.monotonic() + (self.short_peer_timeout * 2.2)
+        seq2 = 1
+        while time.monotonic() < deadline:
+            seq2 += 1
+            s2 = self.pull_v3(self.second_track, seq2, self.second_sector, 103.0 + seq2, 13.0 + seq2,
+                              (10.0 + seq2 * 15.0, 20.0, 30.0), ('15', '0', '0'))
+            self.wait_for(lambda s=s2, q=seq2: track2['peer_samples'].get(self.identity2) == (q, motion_digest(s)))
+            time.sleep(0.08)
+
+        # Peer 2 survived past the per-request wire timeout and received every track 2 sample.
+        self.assertGreaterEqual(seq2, 4)
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+        self.assertEqual(track1['reentries'][self.identity2]['phase'], 'prepared')
+        self.assertEqual(track1['peer_frames'][self.identity2], self.origin_sector)
+        self.assertEqual(self.errors, [])
+
+        # Deliver the delayed fresh sample for track 1 -> aligns cleanly, both tracks keep flowing.
+        fresh = self.pull_v3(self.reentry_track, 4, self.target_sector, 120.0, 30.0,
+                             (5480.0, 100.0, -200.0), ('120', '0', '0'))
+        self.wait_for(lambda: track1['peer_samples'].get(self.identity2) == (4, motion_digest(fresh)))
+        self.assertEqual(track1['peer_frames'][self.identity2], self.target_sector)
+        self.assertEqual(self.game_callback.calls[-1][0], 'align')
+
+        post1 = self.pull_v3(self.reentry_track, 5, self.target_sector, 121.0, 31.0,
+                             (5600.0, 100.0, -200.0), ('120', '0', '0'))
+        seq2 += 1
+        post2 = self.pull_v3(self.second_track, seq2, self.second_sector, 121.5, 31.5,
+                             (10.0 + seq2 * 15.0, 20.0, 30.0), ('15', '0', '0'))
+        self.wait_for(self.control._motion_idle)
+        self.assertEqual(track1['peer_samples'][self.identity2], (5, motion_digest(post1)))
+        self.assertEqual(track2['peer_samples'][self.identity2], (seq2, motion_digest(post2)))
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+
+    def test_omitted_post_prepare_sample_survives_second_track_and_pause_save_resume(self):
+        track1, track2 = self._prepare_track1()
+        prepared_sample = self.game_callback.calls[0][2]
+
+        # Omit track 1's post-prepare sample completely; wait past wire timeout while track 2 flows.
+        deadline = time.monotonic() + (self.short_peer_timeout * 1.8)
+        seq2 = 1
+        while time.monotonic() < deadline:
+            seq2 += 1
+            s2 = self.pull_v3(self.second_track, seq2, self.second_sector, 103.0 + seq2, 13.0 + seq2,
+                              (10.0 + seq2 * 15.0, 20.0, 30.0), ('15', '0', '0'))
+            self.wait_for(lambda s=s2, q=seq2: track2['peer_samples'].get(self.identity2) == (q, motion_digest(s)))
+            time.sleep(0.08)
+
+        # Trigger a real WorldCoordinator pause -> save -> resume cycle via a joining peer.
+        calls_before = len(self.engine.calls)
+        ops_before = len(self.peer2_control_ops)
+        joiner = participant_fixture.ParticipantTCPTest.connect(self)
+        self.wait_for(lambda: self.world.session.state == 'paused' and self.world.session.pending is None)
+        self.assertEqual(self.game_callback.calls[1], ('cancel', self.origin_sector, prepared_sample))
+        self.assertEqual(self.engine.calls[calls_before:], ['pause', 'save'])
+        self.assertEqual(self.peer2_control_ops[ops_before:], [('pause', (2,))])
+        self.assertIn(2, {p['handle'] for p in self.control._peers.values()})
+
+        # Drop the unadmitted joiner so the world resumes for the surviving admitted observers.
+        joiner.close()
+        self.wait_for(lambda: self.world.session.state == 'running' and
+                              not self.control._latest_motion.world_blocked)
+        self.assertEqual(self.engine.calls[calls_before:], ['pause', 'save', 'resume'])
+        self.assertEqual(self.peer2_control_ops[ops_before:], [('pause', (2,)), ('resume', (2,))])
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+        self.assertEqual(track1['peer_frames'][self.identity2], self.origin_sector)
+        self.assertNotIn(self.identity2, track1['reentries'])
+
+        # Track 2 resumes immediately after pause/save/resume, and track 1 can re-prepare & align cleanly.
+        seq2 += 1
+        after_resume2 = self.pull_v3(self.second_track, seq2, self.second_sector, 130.0, 40.0,
+                                     (500.0, 20.0, 30.0), ('15', '0', '0'))
+        self.wait_for(lambda: track2['peer_samples'].get(self.identity2) == (seq2, motion_digest(after_resume2)))
+
+        self.pull_v3(self.reentry_track, 4, self.target_sector, 131.0, 41.0,
+                     (5500.0, 100.0, -200.0), ('120', '0', '0'))
+        self.wait_for(lambda: track1['reentries'][self.identity2]['phase'] == 'prepared')
+        fresh = self.pull_v3(self.reentry_track, 5, self.target_sector, 132.0, 42.0,
+                             (5620.0, 100.0, -200.0), ('120', '0', '0'))
+        self.wait_for(self.control._motion_idle)
+        self.assertEqual(track1['peer_samples'][self.identity2], (5, motion_digest(fresh)))
+        self.assertEqual(track1['peer_frames'][self.identity2], self.target_sector)
+        self.assertEqual(self.errors, [])
+
+    def test_pause_save_resume_with_second_track_inflight_and_second_reentry_deferred(self):
+        track1, track2 = self._prepare_track1()
+        track3 = self.motion._tracks[(self.epoch, GENERATION, self.third_track)]
+
+        # Establish track 3 on peer 2, move it unseen to third_target, then re-sight it while
+        # track 1 is still prepared: track 3's prepare must defer cleanly instead of overlapping.
+        init3 = self.pull_v3(self.third_track, 1, self.third_origin, 101.0, 11.0,
+                             (200.0, 0.0, 0.0), ('-', '-', '-'))
+        self.wait_for(lambda: track3['peer_samples'].get(self.identity2) == (1, motion_digest(init3)))
+        self.assertIsNone(self.pull_v3(self.third_track, 2, self.third_target, 102.0, 12.0,
+                                       (900.0, 0.0, 0.0), ('-', '-', '-')))
+        self.recipients[self.third_target] = self.peer2
+        self.assertIsNone(self.pull_v3(self.third_track, 3, self.third_target, 104.0, 14.0,
+                                       (950.0, 0.0, 0.0), ('10', '0', '0')))
+        self.assertNotIn(self.identity2, track3['reentries'])
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+
+        # Put track 2 actively in flight on peer 2's socket when a world pause/save/resume starts.
+        self.hold_second_track.set()
+        self.release_second_track.clear()
+        inflight2 = self.pull_v3(self.second_track, 2, self.second_sector, 105.0, 15.0,
+                                 (40.0, 20.0, 30.0), ('15', '0', '0'))
+        self.wait_for(self.second_track_inflight.is_set)
+
+        calls_before = len(self.engine.calls)
+        ops_before = len(self.peer2_control_ops)
+        joiner = participant_fixture.ParticipantTCPTest.connect(self)
+        # While track 2's callback is still held, the world barrier holds pause back.
+        self.host.tick(POLL_INTERVAL)
+        self.assertEqual(self.world.session.state, 'pausing')
+        self.assertTrue(self.control._latest_motion.world_blocked)
+        self.assertEqual(len(self.engine.calls), calls_before)
+        self.assertEqual(len(self.peer2_control_ops), ops_before)
+
+        # Release track 2 -> its receipt finishes, then track 1's cancel drains, then pause/save complete.
+        self.hold_second_track.clear()
+        self.release_second_track.set()
+        self.wait_for(lambda: self.world.session.state == 'paused' and self.world.session.pending is None)
+        self.assertEqual(track2['peer_samples'][self.identity2], (2, motion_digest(inflight2)))
+        self.assertEqual(self.game_callback.calls[-1][0], 'cancel')
+        self.assertEqual(self.engine.calls[calls_before:], ['pause', 'save'])
+        self.assertEqual(self.peer2_control_ops[ops_before:], [('pause', (2,))])
+        self.assertIn(2, {p['handle'] for p in self.control._peers.values()})
+
+        joiner.close()
+        self.wait_for(lambda: self.world.session.state == 'running' and
+                              not self.control._latest_motion.world_blocked)
+        self.assertEqual(self.engine.calls[calls_before:], ['pause', 'save', 'resume'])
+        self.assertEqual(self.peer2_control_ops[ops_before:], [('pause', (2,)), ('resume', (2,))])
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+
+        # Now that track 1 was canceled, track 3 can cleanly prepare and align on peer 2.
+        self.pull_v3(self.third_track, 4, self.third_target, 108.0, 18.0,
+                     (990.0, 0.0, 0.0), ('10', '0', '0'))
+        self.wait_for(lambda: track3['reentries'][self.identity2]['phase'] == 'prepared')
+        fresh3 = self.pull_v3(self.third_track, 5, self.third_target, 109.0, 19.0,
+                              (1000.0, 0.0, 0.0), ('10', '0', '0'))
+        self.wait_for(self.control._motion_idle)
+        self.assertEqual(track3['peer_samples'][self.identity2], (5, motion_digest(fresh3)))
+        self.assertEqual(track3['peer_frames'][self.identity2], self.third_target)
+        self.assertEqual(self.delivery.membership()[1], self.peer2)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()

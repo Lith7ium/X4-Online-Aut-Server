@@ -21,7 +21,8 @@ class LatestMotionPoll:
         self.generation = 0
 
     def busy(self):
-        return any(p.get('motion_active') or p.get('motion_pending')
+        return any(p.get('motion_active') or p.get('motion_pending') or
+                   p.get('motion_cancel_pending') or p.get('motion_reentry_cancel')
                    for p in self.control._peers.values())
 
     def enqueue(self, entries):
@@ -37,7 +38,8 @@ class LatestMotionPoll:
                 raise RuntimeError('motion peer changed')
             pending = peer.setdefault('motion_pending', {})
             active = peer.get('motion_active')
-            replaces_active = active is not None and active['key'] == key and active['sent'] == 0
+            replaces_active = (active is not None and active['key'] == key and
+                               active['sent'] == 0 and not active.get('reentry_started'))
             if not replaces_active and key not in pending and len(pending) >= self.limit:
                 overflow.append(conn)
         for conn in overflow:self.control._drop(conn)
@@ -46,7 +48,8 @@ class LatestMotionPoll:
             for conn, peer, key, data, expected, accepted, discarded, guard in entries:
                 if conn in overflow:continue
                 active = peer.get('motion_active')
-                if active is not None and active['key'] == key and active['sent'] == 0:
+                if (active is not None and active['key'] == key and
+                        active['sent'] == 0 and not active.get('reentry_started')):
                     # Keep the original deadline so replacement cannot defer
                     # the timeout. Nothing has been sent on this frame yet.
                     active['discarded']()
@@ -78,8 +81,6 @@ class LatestMotionPoll:
             self.blocked = True
         try:
             for peer in self.control._peers.values():
-                for cancel in tuple(peer.get('motion_reentry_cancel', {}).values()):
-                    cancel()
                 active = peer.get('motion_active')
                 if active is not None and active['sent'] == 0 and not active.get('reentry_started'):
                     peer['motion_active'] = None
@@ -87,6 +88,8 @@ class LatestMotionPoll:
                 pending = peer.get('motion_pending', {})
                 for _, _, _, discarded, _ in pending.values(): discarded()
                 pending.clear()
+                for cancel in tuple(peer.get('motion_reentry_cancel', {}).values()):
+                    cancel()
         except BaseException as error:
             self.control._fatal(error)
         return not self.busy()
@@ -97,7 +100,18 @@ class LatestMotionPoll:
         else: self.blocked = False
 
     def prepare(self, peer):
-        if self.blocked or self.world_blocked or peer.get('motion_active') or peer['out']:
+        if peer.get('motion_active') or peer['out']:
+            return
+        cancels = peer.get('motion_cancel_pending')
+        if cancels:
+            key = next(iter(cancels))
+            data, expected, accepted, guard = cancels.pop(key)
+            peer['motion_active'] = {'key': key, 'data': data, 'sent': 0, 'input': b'',
+                                     'expected': expected, 'accepted': accepted, 'discarded': None,
+                                     'guard': guard, 'reentry_started': True,
+                                     'deadline': time.monotonic() + self.timeout}
+            return
+        if self.blocked or self.world_blocked:
             return
         pending = peer.get('motion_pending', {})
         if pending:
@@ -136,8 +150,7 @@ class LatestMotionPoll:
             if (type(reply) is not dict or set(reply) != set(expected) or
                     any(type(reply.get(k)) is not type(v) or reply[k] != v for k, v in expected.items())):
                 raise ValueError('invalid motion receipt')
-            keep_active = active['accepted']() is True
+            active['accepted']()
         except (ValueError, UnicodeError, RecursionError):
             self.control._drop(conn); return
-        if not keep_active:
-            peer['motion_active'] = None
+        peer['motion_active'] = None
