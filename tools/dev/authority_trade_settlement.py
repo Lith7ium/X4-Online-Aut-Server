@@ -83,7 +83,8 @@ def _ledger(rows):
     return header
 
 
-def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, quantity, debit):
+def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, quantity, debit,
+                     *, live=False):
     trade_id = ledger['trade_id']
     if ledger['status'] != 'observed' or not trade_id or trade_id <= 0:
         return 'ledger_unavailable', None
@@ -94,10 +95,19 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, q
     # before that rounded value, while all journal timestamps retain precision.
     same_dock_tick = (Decimal('0') < dock_time - start <= Decimal('0.0005')
                       and start.quantize(Decimal('0.001'), rounding=ROUND_HALF_UP) == dock_time)
-    if (start < dock_time and not same_dock_tick) or not start < completed <= end or end - start > 30:
+    if live:
+        # The live provider samples the start before raising the MD Buy event.
+        # MD observes binding and quote together, possibly on the next update.
+        invalid_start = start > dock_time + Decimal('0.0005')
+    else:
+        invalid_start = start < dock_time and not same_dock_tick
+    if invalid_start or not start < completed <= end or end - start > 30:
         return 'ledger_window_disagrees', None
     if any(not start < _time(entry['time']) <= end for entry in ledger['entries']):
         return 'ledger_entry_outside_window', None
+    if live and any(_time(entry['time']) + Decimal('0.0005') < dock_time
+                    for entry in ledger['entries'] if entry['linked']):
+        return 'ledger_entry_predates_native_binding', None
     trade_entries = [entry for entry in ledger['entries']
                      if entry['trade_id'] == trade_id and entry['linked']]
     completed_entries = [entry for entry in ledger['entries'] if entry['role'] == 'completed_trade']
@@ -139,7 +149,37 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, q
     return 'verified', list(copies.values())
 
 
-def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=False):
+def bound_dock(dock, nonce):
+    """Read the native READY binding shared by ledgers and price refusals."""
+    if len(dock) != 7 or dock[:3] != ['DOCK', nonce, 'READY']:
+        raise ValueError(f'unbound native docking receipt: {dock!r}')
+    buyer, seller, bay = map(_component, dock[3:6])
+    if len({buyer, seller, bay}) != 3:
+        raise ValueError(f'overlapping native docking handles: {dock!r}')
+    return buyer, seller, bay, _time(dock[6])
+
+
+def live_purchase_before(parts, nonce, epoch):
+    """Validate the MD pre-submission cargo/account observation for one buy."""
+    fields = ('purchase_id', 'registry_epoch', 'buyer', 'seller', 'bay', 'ware', 'quantity',
+              'price_cents', 'cargo_units', 'player_balance_cents', 'company_balance_cents', 'game_time')
+    dock, quote, before = parts[:3]
+    ship, station, bay, bound_at = bound_dock(dock, nonce)
+    state = _fields(before, fields)
+    if (before[0] != 'BEFORE' or state['purchase_id'] != nonce or state['registry_epoch'] != epoch
+            or state['ware'] != WARE or _time(state['game_time']) != bound_at
+            or [_component(state[key]) for key in ('buyer', 'seller', 'bay')] != [ship, station, bay]
+            or quote != ['RESULT', nonce, 'quote', state['price_cents']]):
+        raise ValueError('unbound native pre-purchase observation')
+    for field in ('quantity', 'price_cents', 'cargo_units', 'player_balance_cents', 'company_balance_cents'):
+        state[field] = _integer(state[field], field)
+    if (state['quantity'] != 6 or state['price_cents'] <= 0 or state['cargo_units'] < 0
+            or state['player_balance_cents'] < 0 or state['company_balance_cents'] != state['player_balance_cents']):
+        raise ValueError('invalid native pre-purchase amounts')
+    return state
+
+
+def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=False, live=False):
     """Parse unprefixed driver payloads and retain ambiguous economic evidence.
 
     Malformed sequences or unbound primary receipts raise ValueError. Monetary
@@ -149,23 +189,26 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
     records = list(rows)
     parts = [row.split('|') for row in records]
     steps = [part[0] for part in parts]
-    opening = ['START', 'DOCK', 'RESULT', 'RESULT', 'DEAL', 'OBSERVED', 'RESULT', 'LEDGER']
-    if (not 9 <= len(parts) <= 201 or steps[:8] != opening
-            or any(step != 'ENTRY' for step in steps[8:-1])
-            or parts[0] != ['START'] or parts[-1] != ['DONE']):
+    if live:
+        opening = ['DOCK', 'RESULT', 'BEFORE', 'RESULT', 'DEAL', 'OBSERVED', 'LEDGER']
+        ledger_start = 6
+    else:
+        opening = ['START', 'DOCK', 'RESULT', 'RESULT', 'DEAL', 'OBSERVED', 'RESULT', 'LEDGER']
+        ledger_start = 7
+    if (not ledger_start + 2 <= len(parts) <= 201 or steps[:len(opening)] != opening
+            or any(step != 'ENTRY' for step in steps[len(opening):-1])
+            or (not live and parts[0] != ['START']) or parts[-1] != ['DONE']):
         raise ValueError(f'unexpected native trade sequence: {records!r}')
 
-    _, dock, quote, submitted, raw_deal, observed, duplicate, *_ = parts
-    if len(dock) != 7 or dock[1:3] != [nonce, 'READY']:
-        raise ValueError(f'unbound native docking receipt: {dock!r}')
-    # READY has ship, station, external bay and later observation time.
-    buyer, seller, bay = map(_component, dock[3:6])
-    dock_time = _time(dock[6])
-    if len({buyer, seller, bay}) != 3:
-        raise ValueError(f'overlapping native docking handles: {dock!r}')
+    if live:
+        before = live_purchase_before(parts, nonce, epoch)
+        dock, quote, _, submitted, raw_deal, observed = parts[:6]
+    else:
+        dock, quote, submitted, raw_deal, observed = parts[1:6]
+    buyer, seller, _, dock_time = bound_dock(dock, nonce)
     if (len(quote) != 4 or quote[1:3] != [nonce, 'quote']
             or submitted != ['RESULT', nonce, 'submitted', quote[3]]
-            or duplicate != ['RESULT', nonce, 'already_attempted', '0']):
+            or (not live and parts[6] != ['RESULT', nonce, 'already_attempted', '0'])):
         raise ValueError(f'unbound native quote, submission or duplicate receipt: {records[:7]!r}')
     quoted_unit = _integer(quote[3], 'quoted price')
     if quoted_unit <= 0:
@@ -184,7 +227,7 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
         raise ValueError(f'unbound native deal: {raw_deal!r}')
     quoted_at = _time(deal['quote_game_time'])
     completed_at = _time(deal['complete_game_time'])
-    if not dock_time <= quoted_at < completed_at:
+    if not dock_time <= quoted_at < completed_at or (live and dock_time != quoted_at):
         raise ValueError(f'native deal time is out of sequence: {raw_deal!r}')
     for field in ('requested_qty', 'quote_unit_ct', 'transferred_qty', 'destroyed_qty',
                   'deal_unit_ct', 'deal_nominal_ct', 'player_before_ct', 'player_after_ct',
@@ -201,12 +244,16 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
         _integer(value, 'observed delta') for value in observed[3:8]
     )
     docked, parked = map(_bool, observed[8:])
-    ledger = _ledger(parts[7:-1])
+    ledger = _ledger(parts[ledger_start:-1])
     nominal = deal['deal_unit_ct'] * deal['transferred_qty']
     debit = deal['player_before_ct'] - deal['player_after_ct']
     faction_debit = deal['faction_before_ct'] - deal['faction_after_ct']
     if not docked or not parked:
         reason = 'docking_or_avatar_disagrees'
+    elif live and (deal['player_before_ct'] != before['player_balance_cents']
+          or deal['faction_before_ct'] != before['company_balance_cents']
+          or not has_absolute_cargo or deal['ship_ware_before'] != before['cargo_units']):
+        reason = 'pre_purchase_snapshot_disagrees'
     elif deal['transferred_qty'] != quantity or deal['destroyed_qty'] != 0 or ship_cargo != quantity:
         reason = 'cargo_or_transfer_disagrees'
     elif has_absolute_cargo and (deal['ship_ware_before'] < 0 or deal['ship_ware_after'] < 0
@@ -226,7 +273,8 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
 
     purchase = None
     if reason is None:
-        reason, purchase = _purchase_reason(ledger, buyer, seller, dock_time, completed_at, quoted_unit, quantity, debit)
+        reason, purchase = _purchase_reason(
+            ledger, buyer, seller, dock_time, completed_at, quoted_unit, quantity, debit, live=live)
     verified = reason == 'verified'
     result = {
         'verified': verified, 'reason': reason,
@@ -243,6 +291,8 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
         'matched_purchase_entries': purchase, 'records': records,
     }
 
+    if live:
+        result['before'] = before
     if has_absolute_cargo:
         result['ship_ware_units_after'] = deal['ship_ware_after'] if verified else None
     return result
