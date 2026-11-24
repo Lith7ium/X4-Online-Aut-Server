@@ -32,7 +32,7 @@ ffi.cdef[[
 local C = ffi.C
 local screen = 'X4AuthorityPlayerDockObserver'
 local pinned = {nonce = cfg.authority_player_dock_flight_nonce,
-    epoch = '4ba7be438ebb04ec5bb85fdb95b5a488', issued_count = 10054}
+    epoch = '4ba7be438ebb04ec5bb85fdb95b5a488', issued_count = 10082}
 local index = 7354
 local phase, deadline = 'init'
 local binding, observation, seat, capture, before, intent
