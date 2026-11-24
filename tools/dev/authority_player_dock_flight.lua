@@ -310,12 +310,14 @@ local function frame(registry)
         assert(matching_observation() and listed_at_station(), 'dock_changed_before_capture')
         binding.bay = observation.bay
         capture = X4LAN_AUTHORITY_TRADE_CAPTURE_FROM_DOCK(binding.ship, binding.station, binding.bay)
-        phase, deadline = 'capture', now + 15
+        phase, deadline = 'capture', now + 35
     elseif phase == 'capture' then
         assert(now < deadline and control_matches(), 'capture_timeout_or_control_lost')
-        local outcome, failure, ready = capture(false)
+        local outcome, failure, ready, _, _, dock_trade_entry = capture(false)
         assert(not failure and not outcome, 'stock_capture_prepare_failed')
         if ready then
+            assert(dock_trade_entry, 'stock_dock_trade_entry_unobserved')
+            log('DOCK_TRADE_ENTRY|' .. dock_trade_entry)
             phase, deadline = 'before_confirm_wait', now + 8
             observe(now)
         end

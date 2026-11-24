@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
-from authority_player_dock_observation import CONFIRM_PATH, verify_player_flight
+from authority_player_dock_observation import CONFIRM_PATH, DOCK_TRADE_ENTRY, verify_player_flight
 
 
 class PlayerDockFlightTests(unittest.TestCase):
@@ -52,3 +52,15 @@ class PlayerDockFlightTests(unittest.TestCase):
             with self.subTest(marker=marker), self.assertRaises(ValueError):
                 rows = self.rows[:7] + (['CONFIRM_PATH|' + marker] if marker else []) + self.rows[8:]
                 verify_player_flight(rows)
+
+    def test_new_runs_require_stock_docked_menu_entry(self):
+        with self.assertRaises(ValueError):
+            verify_player_flight(self.rows, require_dock_trade_entry=True)
+        before = next(i for i, row in enumerate(self.rows) if row.startswith('BEFORE_CONFIRM|'))
+        rows = self.rows[:before] + ['DOCK_TRADE_ENTRY|' + DOCK_TRADE_ENTRY] + self.rows[before:]
+        result = verify_player_flight(rows, require_dock_trade_entry=True)
+        self.assertEqual(result['stock_dock_trade_entry'], DOCK_TRADE_ENTRY)
+        bad = rows.copy()
+        bad[before] = 'DOCK_TRADE_ENTRY|direct_map'
+        with self.assertRaises(ValueError):
+            verify_player_flight(bad, require_dock_trade_entry=True)

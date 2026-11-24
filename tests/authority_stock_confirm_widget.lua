@@ -1,4 +1,4 @@
-local registered_confirm = dofile('tools/dev/authority_trade_cockpit_probe.lua')
+local registered_confirm, registered_dock_trade = dofile('tools/dev/authority_trade_cockpit_probe.lua')
 local called = 0
 local function capture() called = called + 1 end
 local cell = {type='button', id=30, properties={uiTriggerID='confirmtrade', active=true},
@@ -39,4 +39,21 @@ expect_failure('unbound_confirm_cell')
 cell.id = 30
 menu.buttonScriptMap[2] = entry
 expect_failure('ambiguous_confirm_script')
+assert(called == 1)
+
+menu.buttonScriptMap[2] = nil
+menu.frame, menu.shown = frame, false
+menu.currentplayership, menu.currentcontainer = 50, 60
+menu.buttonTrade = function() error('direct fallback is prohibited') end
+cell.properties.uiTriggerID = 'docked_trade'
+assert(registered_dock_trade(menu, 50, 60) == nil)
+menu.shown = true
+assert(registered_dock_trade(menu, 50, 60) == entry)
+assert(not pcall(registered_dock_trade, menu, 51, 60))
+assert(not pcall(registered_dock_trade, menu, 50, 61))
+cell.properties.active = false
+assert(not pcall(registered_dock_trade, menu, 50, 60))
+cell.properties.active = true
+cell.properties.uiTriggerID = nil
+assert(not pcall(registered_dock_trade, menu, 50, 60))
 assert(called == 1)

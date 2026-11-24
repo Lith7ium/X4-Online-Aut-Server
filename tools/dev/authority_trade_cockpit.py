@@ -16,6 +16,7 @@ def _insert(path, anchor, replacement):
     path.write_text(contents.replace(anchor, replacement), encoding='utf-8')
 
 
+DOCK_TRADE_ENTRY = 'registered_docked_menu_callback|descriptor_active|physical_click_unobserved'
 CONFIRM_PATH = 'registered_widget_callback|descriptor_active|physical_click_unobserved'
 
 
@@ -77,7 +78,12 @@ def result_from_rows(rows, mode):
             raise ValueError('stock purchase confirmation lacks a matching client intent')
         before_intent = rows[:rows.index(intents[0])]
         path = 'CONFIRM_PATH|' + CONFIRM_PATH
-        if [row for row in rows if row.startswith('CONFIRM_PATH|')] != [path] or path not in before_intent:
+        entry = 'DOCK_TRADE_ENTRY|' + DOCK_TRADE_ENTRY
+        if ([row for row in rows if row.startswith('DOCK_TRADE_ENTRY|')] != [entry]
+                or entry not in before_intent or path not in before_intent
+                or before_intent.index(entry) >= before_intent.index(path)):
+            raise ValueError('stock confirmation lacks the native DockedMenu entry')
+        if [row for row in rows if row.startswith('CONFIRM_PATH|')] != [path]:
             raise ValueError('stock confirmation lacks a registered active widget callback')
         ship, station, dock, captain = inspections[0][2:6]
         permission = [row for row in before_intent if re.fullmatch(r'PERMISSION\|[^|]+\|granted', row)]

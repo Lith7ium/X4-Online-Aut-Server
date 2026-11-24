@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
-from authority_trade_cockpit import CONFIRM_PATH, read_probe_rows
+from authority_trade_cockpit import CONFIRM_PATH, DOCK_TRADE_ENTRY, read_probe_rows
 
 
 PREFIX = b'[X4LAN] AUTH_PLAYER_DOCK_FLIGHT '
@@ -98,7 +98,7 @@ def _verify_approach(stages, source):
         raise ValueError('native quick docking command lacks its receipt')
 
 
-def verify_player_flight(rows, *, prepare_berth=False):
+def verify_player_flight(rows, *, prepare_berth=False, require_dock_trade_entry=False):
     docking = (('ROUTE', 'PLACEMENT', 'PLAYER_DOCK_REQUEST', 'BERTH|REQUESTED', 'BERTH|ASSIGNED', 'BERTH|DISPATCHED')
                if prepare_berth else ('AUTOPILOT', 'DEPARTURE', 'QUICKDOCK'))
     names = ('START', 'SEAT', *docking, 'DOCKED', 'BEFORE_CONFIRM', 'CONFIRM_PATH', 'AFTER_CONFIRM', 'DONE')
@@ -125,18 +125,27 @@ def verify_player_flight(rows, *, prepare_berth=False):
         _verify_approach(stages, source)
     if before.water != after.water or before.balance != after.balance:
         raise ValueError('cargo or Company account changed during the capture-only confirmation')
+    dock_entries = [row for row in rows if row.startswith('DOCK_TRADE_ENTRY|')]
+    if dock_entries or require_dock_trade_entry:
+        entry_index, path = _once(rows, 'DOCK_TRADE_ENTRY')
+        if (path != DOCK_TRADE_ENTRY
+                or not stages['DOCKED'][0] < entry_index < stages['BEFORE_CONFIRM'][0]):
+            raise ValueError('invalid native DockedMenu trade entry')
     if stages['CONFIRM_PATH'][1] != CONFIRM_PATH:
         raise ValueError('stock confirmation lacks a registered active widget callback')
     intent_index, intent = _once(rows, 'INTENT')
     match = re.fullmatch(r'cluster_01_sector001_macro\|BIM-169\|water\|6\|([1-9][0-9]*)', intent)
     if not match or not stages['AFTER_CONFIRM'][0] < intent_index < stages['DONE'][0]:
         raise ValueError('missing stock intent for six water at BIM-169')
-    return {'client_intent_captured': True, 'purchase_executed': False, 'admitted': False,
+    result = {'client_intent_captured': True, 'purchase_executed': False, 'admitted': False,
             'start_distance_m': source.distance, 'docked_distance_m': docked.distance,
             'docking_route': 'nearby_assigned_berth_fixture' if prepare_berth else 'piloted_approach',
             'flight_game_seconds': None if prepare_berth else float(docked.age - source.age), 'unit_price_cents': int(match[1]),
             'water_units': after.water, 'company_balance_cents': after.balance,
             'stock_confirm_path': CONFIRM_PATH, 'records': rows}
+    if dock_entries:
+        result['stock_dock_trade_entry'] = DOCK_TRADE_ENTRY
+    return result
 
 
 def observe_player_flight(log, deadline, guard, *, prepare_berth=False):
@@ -144,4 +153,4 @@ def observe_player_flight(log, deadline, guard, *, prepare_berth=False):
                            error_markers=(b'[X4LAN] AUTH_REGISTRY_FULL_INSPECT_ERROR ',
                                           b'[X4LAN] AUTH_RECOVERY ERROR',
                                           b'[X4LAN] AUTH_CLIENT_SEAT_REFUSED '))
-    return verify_player_flight(rows, prepare_berth=prepare_berth)
+    return verify_player_flight(rows, prepare_berth=prepare_berth, require_dock_trade_entry=True)

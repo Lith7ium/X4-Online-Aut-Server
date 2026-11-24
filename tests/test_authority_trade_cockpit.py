@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
-from authority_trade_cockpit import CONFIRM_PATH, result_from_rows
+from authority_trade_cockpit import CONFIRM_PATH, DOCK_TRADE_ENTRY, result_from_rows
 
 
 class TradeCockpitEvidenceTests(unittest.TestCase):
@@ -26,11 +26,14 @@ class TradeCockpitEvidenceTests(unittest.TestCase):
         steps = [self.binding, self.quote, 'PERMISSION|research|granted',
                  'TAKE|DISPATCHED|0x11|0x22|0x33|0x44|0|0|0x55']
         path = 'CONFIRM_PATH|' + CONFIRM_PATH
-        rows = [*steps, self.controlled, path, self.intent, 'DONE|intent_captured']
+        entry = 'DOCK_TRADE_ENTRY|' + DOCK_TRADE_ENTRY
+        rows = [*steps, self.controlled, entry, path, self.intent, 'DONE|intent_captured']
         self.assertTrue(result_from_rows(rows, 'cockpit')['client_intent_captured'])
         for mutation in (
             [*steps, path, self.intent, rows[-1]],
-            [*steps, self.controlled, self.intent, rows[-1]],
+            [*steps, self.controlled, path, self.intent, rows[-1]],
+            [*steps, self.controlled, entry, self.intent, rows[-1]],
+            [*steps, self.controlled, path, entry, self.intent, rows[-1]],
             [*steps, self.controlled.replace('0x44', '0x78'), path, self.intent, rows[-1]],
             [*steps, self.controlled, path, self.intent.replace('BIM-169', 'XPJ-169'), rows[-1]],
         ):

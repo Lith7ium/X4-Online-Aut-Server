@@ -1,6 +1,5 @@
 -- Private recovered-world offer/cockpit probe. No trade is dispatched.
-local function registered_confirm(menu, previous_frame, capture_handler)
-    local frame = menu.contextFrame
+local function registered_button(menu, frame, previous_frame, trigger, label, handler)
     if not frame or frame == previous_frame or not frame.id or frame.id == 0
             or frame.id ~= GetActiveFrame()
             or not menu.frames or menu.frames[frame.properties.layer] ~= frame.id then return end
@@ -9,36 +8,49 @@ local function registered_confirm(menu, previous_frame, capture_handler)
         if widget.type == 'table' then
             for row_index, row in ipairs(widget.rows) do
                 for column, cell in ipairs(row) do
-                    if cell.type == 'button' and cell.properties.uiTriggerID == 'confirmtrade' then
-                        assert(not found, 'ambiguous_confirm_widget')
-                        assert(cell.properties.active == true, 'inactive_confirm_widget')
-                        assert(menu.buttonConfirmTrade == capture_handler
-                            and cell.handlers.onClick == capture_handler, 'unexpected_confirm_handler')
+                    if cell.type == 'button' and cell.properties.uiTriggerID == trigger then
+                        assert(not found, 'ambiguous_' .. label .. '_widget')
+                        assert(cell.properties.active == true, 'inactive_' .. label .. '_widget')
+                        assert(type(cell.handlers.onClick) == 'function'
+                            and (not handler or cell.handlers.onClick == handler),
+                            'unexpected_' .. label .. '_handler')
                         local id = cell.id
                         assert(widget.id and widget.id ~= 0 and id and id ~= 0
-                            and id == GetCellContent(widget.id, row_index, column), 'unbound_confirm_cell')
+                            and id == GetCellContent(widget.id, row_index, column), 'unbound_' .. label .. '_cell')
                         for _, entry in ipairs(menu.buttonScriptMap or {}) do
                             if entry.layer == frame.properties.layer and entry.tableobj == widget.id
                                     and entry.row == row_index and entry.col == column and entry.button == id
                                     and entry.type == 'onClick' then
-                                assert(not found and type(entry.script) == 'function', 'ambiguous_confirm_script')
+                                assert(not found and type(entry.script) == 'function', 'ambiguous_' .. label .. '_script')
                                 found = entry
                             end
                         end
-                        assert(found, 'unbound_confirm_script')
+                        assert(found, 'unbound_' .. label .. '_script')
                     end
                 end
             end
         end
     end
-    assert(found, 'missing_confirm_widget')
+    assert(found, 'missing_' .. label .. '_widget')
     return found
+end
+
+local function registered_confirm(menu, previous_frame, capture_handler)
+    assert(menu.buttonConfirmTrade == capture_handler, 'unexpected_confirm_handler')
+    return registered_button(menu, menu.contextFrame, previous_frame, 'confirmtrade', 'confirm', capture_handler)
+end
+
+local function registered_dock_trade(menu, ship, station)
+    if not menu or menu.shown ~= true then return end
+    assert(menu.currentplayership == ship and menu.currentcontainer == station, 'dock_trade_identity_changed')
+    assert(type(menu.buttonTrade) == 'function', 'missing_dock_trade_handler')
+    return registered_button(menu, menu.frame, nil, 'docked_trade', 'dock_trade')
 end
 
 local cfg = X4LAN_CONFIG
 local mode = cfg and cfg.authority_trade_probe_mode
 local from_flight = cfg and cfg.authority_player_dock_flight == true
-if not from_flight and mode ~= 'offer' and mode ~= 'cockpit' then return registered_confirm end
+if not from_flight and mode ~= 'offer' and mode ~= 'cockpit' then return registered_confirm, registered_dock_trade end
 
 local ffi = require('ffi')
 if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
@@ -63,7 +75,7 @@ local phase, deadline, take_time, next_verify = 'init'
 local last_md_seat
 local binding, menu, hook, captured, parked
 local failed = false
-local final_status, prepared, capture_handler, confirm_path
+local final_status, prepared, capture_handler, confirm_path, dock_trade_entry
 
 local function log(row) DebugError('[X4LAN] AUTH_TRADE_COCKPIT ' .. row) end
 
@@ -232,10 +244,31 @@ local function begin_map(read_only)
         }))
         capture_handler = menu.buttonConfirmTrade
     end
-    deadline = GetCurRealTime() + 8
-    phase = read_only and 'wait_remote_map' or 'wait_map'
-    OpenMenu('MapMenu', {0, 0, true, nil, nil, 'tradecontext',
-        {binding.station_lua, binding.ship_lua, 0}}, nil)
+    if read_only then
+        deadline, phase = GetCurRealTime() + 8, 'wait_remote_map'
+        OpenMenu('MapMenu', {0, 0, true, nil, nil, 'tradecontext',
+            {binding.station_lua, binding.ship_lua, 0}}, nil)
+    else
+        deadline, phase = GetCurRealTime() + 15, 'wait_dock_trade'
+    end
+end
+
+local function open_dock_trade(now)
+    assert(now < deadline and controlled() and external_dock(), 'dock_trade_menu_timeout_or_identity_changed')
+    local dock
+    for _, candidate in ipairs(Menus) do
+        if candidate.name == 'DockedMenu' then
+            assert(not dock, 'ambiguous_dock_menu')
+            dock = candidate
+        end
+    end
+    local entry = registered_dock_trade(dock, binding.ship, binding.station)
+    if not entry then return end
+    deadline, phase = now + 8, 'wait_map'
+    local answer = entry.script(entry.button)
+    assert(answer ~= 0 and answer ~= false, 'dock_trade_blocked')
+    dock_trade_entry = 'registered_docked_menu_callback|descriptor_active|physical_click_unobserved'
+    log('DOCK_TRADE_ENTRY|' .. dock_trade_entry)
 end
 
 local function capture_remote_quote(data)
@@ -389,6 +422,8 @@ local function frame(allow_confirm)
     elseif phase == 'begin_remote_map' then
         local ok, failure = pcall(begin_map, true)
         if not ok then map_unavailable(failure) end
+    elseif phase == 'wait_dock_trade' then
+        open_dock_trade(now)
     elseif phase == 'wait_map' or phase == 'wait_remote_map' then
         local data = menu.contextMenuData
         if menu.contextMenuMode == 'trade' and type(data) == 'table'
@@ -426,7 +461,7 @@ if from_flight then
         phase = 'begin_map'
         return function(allow_confirm)
             guarded(frame, allow_confirm)
-            return final_status, failed, phase == 'confirm_map', captured, confirm_path
+            return final_status, failed, phase == 'confirm_map', captured, confirm_path, dock_trade_entry
         end
     end
 else
