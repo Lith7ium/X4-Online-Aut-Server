@@ -58,6 +58,10 @@ class MotionTCP(unittest.TestCase):
         self.delivery=ExperimentalTCPJobDelivery(self.case.host,enabled=True,timeout=2)
         self.motion=ExperimentalTCPMotion(self.delivery,enabled=True,min_interval=min_interval,max_tracks=max_tracks)
         self.motion.track('b'*32,'c'*32,10055)
+    def wait_interval(self):
+        start=time.monotonic()
+        while time.monotonic()-start<self.motion._min_interval:
+            time.sleep(.005)
     @staticmethod
     def sample(seq=1,frame='sector_a',t=1,velocity=None):
         return {'version':1,'epoch':'b'*32,'generation':'c'*32,'index':10055,'sequence':seq,
@@ -219,10 +223,10 @@ class MotionTCP(unittest.TestCase):
         self.setup_pair();members=self.delivery.membership()
         self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]))
         self.assertEqual([item[0] for item in self.received],[1])
-        time.sleep(.01)
+        self.wait_interval()
         self.assertTrue(self.motion.send(self.sample(2,t=2),recipients=[members[1]]))
         self.assertEqual([item[0] for item in self.received],[1,2])
-        time.sleep(.01)
+        self.wait_interval()
         self.assertTrue(self.motion.send(self.sample(3,t=3)))
         self.assertEqual([item[0] for item in self.received],[1,2,1,2])
         self.assertEqual([item[1]['sequence'] for item in self.received],[1,2,3,3])
@@ -254,14 +258,14 @@ class MotionTCP(unittest.TestCase):
         job={'epoch':'b'*32,'generation':'d'*32,'sequence':1,'index':10055,
              'descriptor':{'macro':'ship_a','faction':'argon','sector_macro':'sector_a','x':1,'y':2,'z':3}}
         self.assertTrue(self.delivery.deliver(job,self.delivery.membership(),lambda *_:True))
-        time.sleep(.01)
+        self.wait_interval()
         with self.assertRaises(ValueError):self.motion.send(self.sample(2,'sector_b',2))
         self.assertEqual([v[1]['sector_macro'] for v in self.received],['sector_a','sector_a'])
         self.assertTrue(self.case.host._failed)
     def recipient_frame_change_fails_before_send(self,velocity):
         self.setup_pair();members=self.delivery.membership()
-        self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]));time.sleep(.01)
-        self.assertTrue(self.motion.send(self.sample(2,'sector_b',2),recipients=[members[1]]));time.sleep(.01)
+        self.assertTrue(self.motion.send(self.sample(),recipients=[members[0]]));self.wait_interval()
+        self.assertTrue(self.motion.send(self.sample(2,'sector_b',2),recipients=[members[1]]));self.wait_interval()
         with self.assertRaises(ValueError):self.motion.send(self.sample(3,'sector_b',3,velocity),recipients=[members[0]])
         self.assertEqual([(r[0],r[1]['sector_macro']) for r in self.received],[(1,'sector_a'),(2,'sector_b')])
         self.assertTrue(self.case.host._failed)
