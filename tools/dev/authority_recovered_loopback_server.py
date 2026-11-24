@@ -1353,17 +1353,21 @@ def run(args):
                 adapter.pause()
                 if cockpit_purchase is not None:
                     receipt = cockpit_receipt(cockpit_purchase, records, trade_nonce, saved_evidence['epoch'])
+                    evidence = receipt.pop('native_evidence')
                     trial_result['cockpit_receipt'] = receipt
                     if receipt['outcome'] == 'refused':
+                        trial_result['refusal_evidence'] = evidence
                         verify()
                         result.update(success=True, final_world_state='paused')
                         raise _WitnessFinished()
+                    settlement = evidence
                 raw_save = adapter.save()
                 verify()
                 trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
                                                'marker': adapter.pending_marker}
-                settlement = purchase_settlement(records, trade_nonce, saved_evidence['epoch'],
-                                                 trade_mode, require_absolute_cargo=True)
+                if cockpit_purchase is None:
+                    settlement = purchase_settlement(records, trade_nonce, saved_evidence['epoch'],
+                                                     trade_mode, require_absolute_cargo=True)
                 trial_result['settlement'] = settlement
                 if settlement['verified'] is not True:
                     raise ValueError(f"trade accounting unverified: {settlement['reason']}")
