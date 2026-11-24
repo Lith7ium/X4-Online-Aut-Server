@@ -179,18 +179,25 @@ class ExperimentalTCPControl:
             peer['deadline'] += credit
             peer['host_blocked_grace'] += credit
 
-    def _revoke_ship_motion(self, handle):
+    def _revoke_ship_motion(self, handle, *, transport_lost=False):
         if self._motion_service is not None and handle is not None:
             try:
-                self._motion_service.revoke(handle)
+                revoke = self._motion_service.revoke
+                if transport_lost:
+                    on_loss = getattr(self._motion_service, 'transport_lost', None)
+                    if callable(on_loss):
+                        revoke = on_loss
+                revoke(handle)
             except Exception:
                 raise RuntimeError('ship motion revocation failed') from None
 
-    def _drop(self, conn):
+    def _drop(self, conn, *, transport_lost=False):
         try:
             peer = self._peers[conn]
             handle = peer['handle']
-            self._revoke_ship_motion(handle)
+            # Only an admitted peer could have published a pose. The motion
+            # service withdraws authorization immediately in either case.
+            self._revoke_ship_motion(handle, transport_lost=transport_lost and peer['stage'] == 'admitted')
             self._peers.pop(conn)
             if handle is not None:
                 self._session.disconnect(conn)
@@ -326,7 +333,7 @@ class ExperimentalTCPControl:
             active = peer.get('motion_active')
             if ((peer['deadline'] is not None and now >= peer['deadline']) or
                     (active is not None and now >= active['deadline'])):
-                self._drop(conn)
+                self._drop(conn, transport_lost=True)
         if not self._peers:
             return
         sockets = tuple(self._peers)
@@ -344,17 +351,17 @@ class ExperimentalTCPControl:
             active = peer.get('motion_active')
             if ((peer['deadline'] is not None and now >= peer['deadline']) or
                     (active is not None and now >= active['deadline'])):
-                self._drop(conn)
+                self._drop(conn, transport_lost=True)
         for conn in exceptional:
-            if conn in self._peers: self._drop(conn)
+            if conn in self._peers: self._drop(conn, transport_lost=True)
         for conn in readable:
             if conn not in self._peers: continue
             try: chunk = conn.recv(MAX_MESSAGE + 1)
             except BlockingIOError: continue
             except OSError:
-                self._drop(conn); continue
+                self._drop(conn, transport_lost=True); continue
             if not chunk:
-                self._drop(conn); continue
+                self._drop(conn, transport_lost=True); continue
             peer = self._peers[conn]
             if peer.get('motion_active'):
                 self._latest_motion.receive(conn, peer, chunk)
@@ -385,8 +392,8 @@ class ExperimentalTCPControl:
             try: sent = conn.send(peer['out'])
             except BlockingIOError: continue
             except OSError:
-                self._drop(conn); continue
-            if sent <= 0: self._drop(conn)
+                self._drop(conn, transport_lost=True); continue
+            if sent <= 0: self._drop(conn, transport_lost=True)
             else:
                 peer['out'] = peer['out'][sent:]
                 if not peer['out'] and peer['stage'] == 'admitted':
@@ -407,24 +414,27 @@ class ExperimentalTCPControl:
             if peer['handle'] is None:
                 continue
             if peer['deadline'] is not None and time.monotonic() >= peer['deadline']:
-                self._drop(conn)
+                self._drop(conn, transport_lost=True)
                 ready = False
                 continue
             try:
                 readable, _, exceptional = select.select([conn], [], [conn], 0)
                 if exceptional:
-                    self._drop(conn)
+                    self._drop(conn, transport_lost=True)
                     ready = False
                     continue
                 if readable:
                     try: data = conn.recv(1, socket.MSG_PEEK)
                     except BlockingIOError: data = None
                     if data == b'':
-                        self._drop(conn)
+                        self._drop(conn, transport_lost=True)
                     ready = False
                 if peer['in'] or peer['out']:
                     ready = False
-            except (OSError, ValueError):
+            except OSError:
+                self._drop(conn, transport_lost=True)
+                ready = False
+            except ValueError:
                 self._drop(conn)
                 ready = False
         return ready

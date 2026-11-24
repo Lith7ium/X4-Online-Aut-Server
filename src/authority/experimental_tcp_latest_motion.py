@@ -110,8 +110,11 @@ class LatestMotionPoll:
         if active['guard'] is not None: active['guard']()
         try: count = conn.send(active['data'][active['sent']:])
         except BlockingIOError: return
+        except OSError:
+            self.control._drop(conn, transport_lost=True)
+            return
         if count <= 0:
-            self.control._drop(conn)
+            self.control._drop(conn, transport_lost=True)
             return
         active['sent'] += count
 

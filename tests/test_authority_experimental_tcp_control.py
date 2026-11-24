@@ -198,8 +198,11 @@ class TCPControlTest(unittest.TestCase):
         self.assertEqual(self.world.session.players, ())
         self.assertEqual(peer.recv(1), b'')
 
-    def setup_motion(self):
-        service = Mock()
+    def setup_motion(self, *, distinguish_transport=False):
+        methods = ['admit', 'revoke']
+        if distinguish_transport:
+            methods.append('transport_lost')
+        service = Mock(spec=methods)
         service.admit.return_value = {'ticket': 'f' * 64, 'generation': 'b' * 32,
             'epoch': 'e' * 32, 'index': 7, 'session_epoch': '1' * 32}
         self.read_company_ships.return_value = CompanyShipCatalogue(
@@ -228,6 +231,55 @@ class TCPControlTest(unittest.TestCase):
         peer.close()
         self.owner.poll(.1)
         service.revoke.assert_called_once_with(offer.connection_handle)
+
+    def test_admitted_control_eof_releases_only_failed_player_with_soft_motion_end(self):
+        service = self.setup_motion(distinguish_transport=True)
+        catalogue = self.read_company_ships.return_value
+        self.read_company_ships.return_value = CompanyShipCatalogue(catalogue.registry_epoch, (
+            *catalogue.ships, CompanyShip(8, '[0x346]', 'sector_01_macro', 'Scout', 'ABC-124'),
+        ))
+
+        def grant(_handle, _attempt, index, _sector, session_epoch, registry_epoch):
+            return {'ticket': f'{index:064x}', 'generation': f'{index:032x}', 'epoch': registry_epoch,
+                    'index': index, 'session_epoch': session_epoch}
+
+        service.admit.side_effect = grant
+        publisher, viewer = self.connect(), self.connect()
+        self.ready_world()
+        first_checkpoint = self.store.latest_marked_confirmed()
+        offers = [self.offer(peer).offer for peer in (publisher, viewer)]
+        for peer, offer, index in zip((publisher, viewer), offers, (7, 8)):
+            self.deliver(peer, self.company_request('choose_company_ship', offer, ship_index=index))
+            self.assertEqual(json.loads(self.output(peer))['kind'], 'company_ship_chosen')
+            self.deliver(peer, encode_load_claim(claim_for(offer), ship_motion=True) + b'\n')
+            self.assertEqual(json.loads(self.output(peer))['kind'], 'accepted')
+        self.world._participants = Mock()
+        self.world._participants.resume.return_value = True
+        with patch.object(self.world._engine, 'resume'):
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'running')
+
+        publisher.shutdown(socket.SHUT_WR)
+        self.owner.poll(.1)
+        self.assertEqual(publisher.recv(1), b'')
+        service.transport_lost.assert_called_once_with(offers[0].connection_handle)
+        service.revoke.assert_not_called()
+        self.assertEqual([handle for handle, _ in self.world.session.ready_players],
+                         [offers[1].connection_handle])
+        self.assertEqual([ship.ship_index for ship in self.session._admitted_ships.values()], [8])
+        self.assertEqual(self.world.session.state, 'running')
+        self.assertIsNone(self.world.session.pending)
+
+        # A malformed frame still hard-revokes the remaining peer. Last leave
+        # must pause and publish a checkpoint just as before.
+        self.deliver(viewer, b'{}\n')
+        self.assertEqual(viewer.recv(1), b'')
+        service.transport_lost.assert_called_once()
+        service.revoke.assert_called_once_with(offers[1].connection_handle)
+        self.assertEqual(self.world.session.ready_players, ())
+        self.assertEqual(self.world.session.pending.operation, 'pause')
+        self.ready_world()
+        self.assertNotEqual(self.store.latest_marked_confirmed(), first_checkpoint)
 
     def test_plain_claim_with_motion_service_keeps_exact_ack(self):
         service = self.setup_motion()
