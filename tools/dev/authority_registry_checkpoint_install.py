@@ -133,12 +133,12 @@ def verify_bridge_observation(log_path, nonce, evidence, *, previous_run_id=None
     return True
 
 
-def install(case, nonce, evidence):
+def install(case, nonce, evidence, *, timeout=110):
     """Install reload inspection and BeginNext from verified format-3 evidence."""
-    return _install(case, nonce, evidence=evidence)
+    return _install(case, nonce, evidence=evidence, timeout=timeout)
 
 
-def install_first_capture(case, nonce, *, source_marker, epoch, issued_count):
+def install_first_capture(case, nonce, *, source_marker, epoch, issued_count, timeout=110):
     """Prepare Initialize from a separately verified confirmed registry seed.
 
     This installs a one-save lower-level capture owner. The caller must verify
@@ -146,11 +146,13 @@ def install_first_capture(case, nonce, *, source_marker, epoch, issued_count):
     A later ordinary recovery must freshly inspect the resulting format-3 save.
     The source marker identifies the older save, never a prior snapshot.
     """
-    return _install(case, nonce, first_capture={
+    return _install(case, nonce, timeout=timeout, first_capture={
         'source_marker': source_marker, 'epoch': epoch, 'issued_count': issued_count})
 
 
-def _install(case, nonce, *, evidence=None, first_capture=None):
+def _install(case, nonce, *, timeout, evidence=None, first_capture=None):
+    if type(timeout) is not int or not 1 <= timeout <= 300:
+        raise ValueError('invalid registry snapshot timeout')
     if (not isinstance(nonce, str) or not _TOKEN.fullmatch(nonce)
             or (evidence is None) == (first_capture is None)):
         raise ValueError('invalid registry checkpoint configuration')
@@ -200,7 +202,7 @@ local registry_checkpoint, registry_checkpoint_pause_time, registry_checkpoint_s
   registry_checkpoint = X4LAN_AUTHORITY_REGISTRY_CHECKPOINT_GATE.new({
    enabled=true, epoch="EPOCH", issued_count=COUNT, nonce="NONCE",
    MODE_OPTIONS clock=GetCurRealTime,
-   timeout=110,
+   timeout=SNAPSHOT_TIMEOUT,
    guard=function()
     return C.IsPlayerValid() and C.IsGamePaused()
      and engine.game_time() == registry_checkpoint_pause_time
@@ -243,6 +245,7 @@ local registry_checkpoint, registry_checkpoint_pause_time, registry_checkpoint_s
                    "assert(registry_checkpoint:tick(), 'registry checkpoint update failed')\n"
                    ' if not activated and not registry_checkpoint:ready() then return end')
     replacements = {'EPOCH': epoch, 'COUNT': str(count), 'NONCE': nonce,
+                    'SNAPSHOT_TIMEOUT': str(timeout),
                     'RUN_ID': run_id, 'BINDING_BITS': binding_bits,
                     'OPERATIONAL_BITS': operational_bits,
                     'MODE_OPTIONS': mode_options, 'START_ACTION': start_action,

@@ -63,7 +63,7 @@ function M.new(options)
         and options.issued_count >= 1 and options.issued_count <= 200000,
         'issued_count is outside the supported range')
     assert(type(options.timeout) == 'number' and options.timeout > 0
-        and options.timeout <= 120 and options.timeout == options.timeout,
+        and options.timeout <= 300 and options.timeout == options.timeout,
         'timeout is outside the supported range')
     if not first_capture then
         assert(bits(options.expected_binding_bits, options.issued_count), 'invalid expected binding bits')

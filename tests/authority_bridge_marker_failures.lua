@@ -12,7 +12,9 @@ local function scenario(kind)
   saving_possible=function()return true end,save=function()saves=saves+1 end}
  local requested
  local bridge=assert(X4LAN_AUTHORITY_LOCAL_CONTROL_BRIDGE.new({enabled=true,empty_owned_slot=true,
-  lease=lease,world_epoch=epoch,marker_required=true,store_marker=function(m)requested=m end},engine,net))
+  lease=lease,world_epoch=epoch,marker_required=true,
+  marker_timeout_seconds=kind=='provider' and 330 or nil,
+  store_marker=function(m)requested=m end},engine,net))
  queue[1]='CMD|'..lease..'|'..epoch..'|1|pause';assert(bridge:update())
  time=.2;assert(bridge:update())
  queue[1]='CMD|'..lease..'|'..epoch..'|2|save|'..marker;assert(bridge:update())
@@ -23,10 +25,15 @@ local function scenario(kind)
   time=121;local ok=bridge:update();assert(not ok)
  elseif kind=='late' then
   time=121;local ok=bridge:marker_stored(marker);assert(not ok)
+ elseif kind=='provider' then
+  time=300;assert(bridge:update())
+  assert(bridge:marker_stored(marker));assert(saves==1)
+  time=421;local ok=bridge:update();assert(not ok, 'native save still has a 120-second deadline')
+  return
  elseif kind=='duplicate' then
   assert(bridge:marker_stored(marker));assert(saves==1)
   local ok=bridge:marker_stored(marker);assert(not ok);return
  end
  assert(saves==0);local ok=bridge:update();assert(not ok)
 end
-for _,kind in ipairs({'wrong','timeout','late','duplicate'}) do scenario(kind) end
+for _,kind in ipairs({'wrong','timeout','late','duplicate','provider'}) do scenario(kind) end

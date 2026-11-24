@@ -97,7 +97,7 @@ class RegistrySnapshotState:
         self.initial_inspect_verified = False
         self.save_count = 0
 
-    def install(self, case, *, reserved_tokens, read_source):
+    def install(self, case, *, reserved_tokens, read_source, timeout=110):
         if self.nonce is not None:
             raise ValueError('registry gate already installed')
         registry_md = _install_source_registry(case, read_source)
@@ -105,7 +105,7 @@ class RegistrySnapshotState:
         nonce = secrets.token_hex(16)
         while nonce in reserved:
             nonce = secrets.token_hex(16)
-        protected = bridge_gate.install(case, nonce, self.latest_evidence)
+        protected = bridge_gate.install(case, nonce, self.latest_evidence, timeout=timeout)
         self.nonce = nonce
         return [registry_md, *protected]
 
@@ -144,7 +144,7 @@ class FirstCaptureState:
         self.nonce = None
         self.final_receipt = None
 
-    def install(self, case, *, reserved_tokens, read_source):
+    def install(self, case, *, reserved_tokens, read_source, timeout=110):
         if self.nonce is not None:
             raise ValueError('first capture already installed')
         registry_md = _install_source_registry(case, read_source)
@@ -155,7 +155,7 @@ class FirstCaptureState:
             nonce = secrets.token_hex(16)
         protected = bridge_gate.install_first_capture(case, nonce,
             source_marker=self.source_checkpoint.marker, epoch=self.status[1],
-            issued_count=self.status[2])
+            issued_count=self.status[2], timeout=timeout)
         self.nonce = nonce
         return [registry_md, *protected]
 

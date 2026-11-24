@@ -45,8 +45,10 @@ def replace_once(text, old, new):
     return text.replace(old, new)
 
 
-def install_probe(case, profile, port, lease, epoch, *, early_pause=False):
+def install_probe(case, profile, port, lease, epoch, *, early_pause=False, marker_timeout=None):
     """Install modified copies only in a new disposable case."""
+    if marker_timeout is not None and (type(marker_timeout) is not int or not 1 <= marker_timeout <= 330):
+        raise ValueError('invalid recovery marker timeout')
     bridge_install.install_probe(case, port, lease, epoch, marker_required=True)
     lab = case/'extensions/x4_lan_lab'; ui = lab/'ui'
     marker = (ROOT/'tools/dev/authority_checkpoint_marker_probe.lua').read_text()
@@ -65,6 +67,10 @@ end)
         " if not ok then failed=true;log('ERROR') end\nend\n")
     (ui/'authority_recovery_probe.lua').write_text(probe)
     probe = (ui/'authority_world_bridge_probe.lua').read_text()
+    if marker_timeout is not None:
+        probe = replace_once(probe, '   marker_required=cfg.authority_marker_required,\n',
+                             '   marker_required=cfg.authority_marker_required,\n'
+                             f'   marker_timeout_seconds={marker_timeout},\n')
     probe = replace_once(probe, "SetScript('onUpdate',function()\n if stopped then return end\n",
         "SetScript('onUpdate',function()\n if stopped then return end\n X4LAN_AUTHORITY_RECOVERY_UPDATE()\n")
     probe = replace_once(probe, 'local started,bridge,net,engine,next_hello,loaded_at=false,nil,nil,nil,0,nil\n',

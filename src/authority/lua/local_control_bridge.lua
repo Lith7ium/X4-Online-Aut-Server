@@ -9,6 +9,10 @@ function M.new(cfg,engine,net)
  local owner='isolated-supervisor';local epoch=cfg.world_epoch;local lease=cfg.lease
  assert(cfg.marker_required==nil or type(cfg.marker_required)=='boolean')
  if cfg.marker_required then assert(type(cfg.store_marker)=='function') end
+ local marker_timeout=cfg.marker_timeout_seconds
+ if marker_timeout==nil then marker_timeout=120 end
+ assert(type(marker_timeout)=='number' and marker_timeout>0 and marker_timeout<=330,
+  'invalid marker timeout')
  local verified=false;local faulted=false;local state;local waiting_marker=nil
  local function send(s) assert(net:send(s)==true,'control send failed') end
  local function report(row)
@@ -70,7 +74,7 @@ function M.new(cfg,engine,net)
       if not marker or #marker~=32 then faulted=true;return false,'marker_required' end
       local now=engine.real_time()
       if type(now)~='number' or now~=now then faulted=true;return false,'clock' end
-      waiting_marker={number=number,marker=marker,deadline=now+120}
+      waiting_marker={number=number,marker=marker,deadline=now+marker_timeout}
       local ok=pcall(cfg.store_marker,marker)
       if not ok then faulted=true;return false,'marker_store' end
      else

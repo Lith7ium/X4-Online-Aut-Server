@@ -842,6 +842,13 @@ def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
     tls = gateway_settings(args)
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
+    software_icd = getattr(args, 'software_vulkan_icd', None)
+    # Software rendering can slow the full paused registry pass. Extend only
+    # that pass and the two deadlines which enclose it before native SAVE.
+    software_snapshot = software_icd is not None and (require_snapshot or bootstrap_snapshot)
+    snapshot_timeout = 300 if software_snapshot else 110
+    marker_timeout = 330 if software_snapshot else None
+    save_timeout = 480 if software_snapshot else None
     if sys.platform != 'linux' or os.geteuid() == 0:
         raise ValueError('unprivileged Linux user required')
     out = snapshot.output_path(args.out)
@@ -1002,13 +1009,13 @@ def run(args):
         lease, epoch = secrets.token_hex(16), secrets.token_hex(16)
         protected = (fixture_helpers.install_server(case, profile, fixture_scripts, sock.getsockname()[1], lease, epoch)
                      if fixture_mode else bridge.install_probe(case, profile, sock.getsockname()[1], lease, epoch,
-                                                               early_pause=require_snapshot))
+                                                               early_pause=require_snapshot, marker_timeout=marker_timeout))
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
-                                                             read_source=read_evidence))
+                                                             read_source=read_evidence, timeout=snapshot_timeout))
         if bootstrap_snapshot:
             protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch),
-                                                         read_source=read_evidence))
+                                                         read_source=read_evidence, timeout=snapshot_timeout))
         sample_writer = None
         if sample_write_slot is not None:
             import authority_fixture_player_sample_install as sample_install
@@ -1128,7 +1135,6 @@ def run(args):
         pos = command.index('--die-with-parent')
         for path in protected:
             command[pos:pos] = ['--ro-bind',str(path),str(path)]; pos += 3
-        software_icd = getattr(args, 'software_vulkan_icd', None)
         if software_icd is not None:
             import authority_software_vulkan as software_vulkan
             command = software_vulkan.constrain(command, display=args.display, authorization=auth,
@@ -1211,7 +1217,7 @@ def run(args):
             return evidence
         adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
             profile=profile, store=store, verify_checkpoint=verify_checkpoint, timeout=130, marker_required=True,
-            marker_script=marker_script)
+            marker_script=marker_script, save_timeout=save_timeout)
         if registry_check is not None:
             result['registry_status']={'source_checkpoint_id':checkpoint.checkpoint_id,
                 'source_sha256':checkpoint.sha256,'state':registry_expected[0],

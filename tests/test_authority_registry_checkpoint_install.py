@@ -21,14 +21,15 @@ class RegistryCheckpointInstallationTests(unittest.TestCase):
         self.ui = self.case / 'extensions/x4_lan_lab/ui'
         self.ui.mkdir(parents=True)
         (self.ui.parent / 'md').mkdir()
-        profile = self.case / 'home/.config/EgoSoft/X4/45841'
+        self.profile = self.case / 'home/.config/EgoSoft/X4/45841'
 
         def install_base(*_args, **_kwargs):
             shutil.copyfile(ROOT / 'tools/dev/authority_world_bridge_probe.lua',
                             self.ui / 'authority_world_bridge_probe.lua')
 
+        self.install_base = install_base
         with patch.object(recovery.bridge_install, 'install_probe', side_effect=install_base):
-            recovery.install_probe(self.case, profile, 1234, 'a' * 32, 'b' * 32)
+            recovery.install_probe(self.case, self.profile, 1234, 'a' * 32, 'b' * 32)
         self.evidence = {'format': 3, 'epoch': 'c' * 32, 'run_id': 'd' * 32,
                          'issued_count': 3, 'availability_bits': '110',
                          'operational_bits': '100'}
@@ -42,6 +43,24 @@ class RegistryCheckpointInstallationTests(unittest.TestCase):
                                          str(self.ui), scenario], cwd=ROOT,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_provider_timeout_overrides_are_bounded_and_generated(self):
+        with patch.object(recovery.bridge_install, 'install_probe', side_effect=self.install_base):
+            with self.assertRaises(ValueError):
+                recovery.install_probe(self.case, self.profile, 1234, 'a' * 32, 'b' * 32,
+                                       marker_timeout=331)
+            recovery.install_probe(self.case, self.profile, 1234, 'a' * 32, 'b' * 32,
+                                   marker_timeout=330)
+        with self.assertRaises(ValueError):
+            installer.install(self.case, 'e' * 32, self.evidence, timeout=301)
+        installer.install(self.case, 'e' * 32, self.evidence, timeout=300)
+        probe = self.ui / 'authority_world_bridge_probe.lua'
+        self.assertIn('timeout=300,', probe.read_text())
+        self.assertIn('marker_timeout_seconds=330,', probe.read_text())
+        result = subprocess.run(['luajit', 'tests/authority_registry_checkpoint_bridge.lua',
+                                 str(self.ui), 'two_saves'], cwd=ROOT,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_bad_hooks_and_configuration_do_not_modify_case(self):
         before = {path: path.read_bytes() for path in self.case.rglob('*') if path.is_file()}

@@ -122,6 +122,20 @@ class BridgeTests(unittest.TestCase):
                 worker.join(timeout=2);self.assertFalse(worker.is_alive());self.assertEqual(len(received),1)
                 with self.assertRaises(RuntimeError):adapter.pause()
 
+    def test_save_only_timeout_leaves_other_operations_unchanged(self):
+        options = dict(enabled=True, sock=self.sock, peer=('127.0.0.1', 12345),
+                       lease=self.lease, world_epoch=self.epoch, profile=self.profile,
+                       store=self.store, verify_checkpoint=read_cycle_evidence)
+        with self.assertRaises(ValueError):
+            LocalControlBridge(**options, save_timeout=601)
+        adapter = LocalControlBridge(**options, save_timeout=480)
+        with mock.patch.object(adapter, '_exchange') as exchange:
+            adapter.pause()
+            adapter.resume()
+            adapter.save()
+        self.assertEqual([call.kwargs['timeout'] for call in exchange.call_args_list],
+                         [None, None, 480])
+
     def test_disposable_overlay_installs_ui_probe_in_order(self):
         case=Path(self.temp.name)/'case'; lab=case/'extensions/x4_lan_lab'
         for folder in ('ui','md','native'):(lab/folder).mkdir(parents=True,exist_ok=True)

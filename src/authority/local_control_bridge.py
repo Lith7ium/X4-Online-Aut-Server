@@ -21,7 +21,7 @@ _MAX_QUEUED_PACKETS = 4096
 class LocalControlBridge:
     def __init__(self, *, enabled, sock, peer, lease, world_epoch, profile, store,
                  verify_checkpoint, timeout=130, marker_required=False,
-                 marker_script='X4AuthorityCheckpointMarker'):
+                 marker_script='X4AuthorityCheckpointMarker', save_timeout=None):
         if enabled is not True:
             raise ValueError('local control bridge requires explicit opt-in')
         if (not _HEX.fullmatch(lease) or not _HEX.fullmatch(world_epoch)
@@ -31,6 +31,10 @@ class LocalControlBridge:
                 or not 1 <= peer[1] <= 65535 or not 0 < timeout <= 600
                 or not callable(verify_checkpoint)):
             raise ValueError('invalid local bridge configuration')
+        if save_timeout is not None and (type(save_timeout) not in (int, float)
+                                         or not 0 < save_timeout <= 600):
+            raise ValueError('invalid native SAVE timeout')
+        self._save_timeout = save_timeout
         if type(marker_required) is not bool:
             raise ValueError('invalid marker setting')
         if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
@@ -51,11 +55,11 @@ class LocalControlBridge:
         self._store, self._verify, self._timeout = store, verify_checkpoint, timeout
         self._next, self._pending_save, self._poisoned = 1, None, False
 
-    def _exchange(self, command, expected):
+    def _exchange(self, command, expected, *, timeout=None):
         if self._poisoned:
             raise RuntimeError('bridge is fenced after an indeterminate operation')
         self._poisoned = True
-        deadline = time.monotonic() + self._timeout
+        deadline = time.monotonic() + (self._timeout if timeout is None else timeout)
 
         def remaining():
             seconds = deadline - time.monotonic()
@@ -104,7 +108,8 @@ class LocalControlBridge:
         self._next += 1
         prefix = f'{self._lease}|{self._epoch}|{number}'
         suffix = '' if marker is None else f'|{marker}'
-        self._exchange(f'CMD|{prefix}|{operation}{suffix}', f'RECEIPT|{prefix}|{operation}|{status}')
+        self._exchange(f'CMD|{prefix}|{operation}{suffix}', f'RECEIPT|{prefix}|{operation}|{status}',
+                       timeout=self._save_timeout if operation == 'save' else None)
         return number
 
     def pause(self):
