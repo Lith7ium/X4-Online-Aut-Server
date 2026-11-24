@@ -5,9 +5,8 @@ import os
 from pathlib import Path
 import sys
 
-from authority.company_motion_source import validate_playback_index
-
 import authority_client_native as native
+from authority.company_motion_source import validate_playback_index
 from authority_client_options import prompt_company_ship, read_connection_settings
 
 
