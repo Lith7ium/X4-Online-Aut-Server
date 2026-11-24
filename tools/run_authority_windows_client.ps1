@@ -13,6 +13,7 @@ param(
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
     [switch] $CompanyPurchases,
+    [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
@@ -22,6 +23,17 @@ if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) 
 }
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
+}
+if ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
+    if (-not $CompanyMotion) {
+        throw 'CompanyCockpitPlaybackIndex requires CompanyMotion.'
+    }
+    if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {
+        throw 'Choose either CompanyCockpitPlaybackIndex or CompanyHullPlaybackIndex.'
+    }
+    if ($PSBoundParameters.ContainsKey('CompanyShipIndex') -and $CompanyCockpitPlaybackIndex -eq $CompanyShipIndex) {
+        throw 'CompanyCockpitPlaybackIndex requires the other Company ship index.'
+    }
 }
 $companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
 $playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
@@ -100,6 +112,8 @@ if ($CompanyMotion) {
     $clientArgs += '--company-motion'
     if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {
         $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)
+    } elseif ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
+        $clientArgs += @('--company-cockpit-playback-index', [string]$CompanyCockpitPlaybackIndex)
     }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'

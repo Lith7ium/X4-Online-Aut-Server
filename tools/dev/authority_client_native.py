@@ -245,13 +245,15 @@ def error_code(error):
 
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
-        company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False):
+        company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
+        cockpit_radar_playback=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
     if type(company_purchases) is not bool or (company_purchases and not player_mode):
         raise ValueError('Company purchases require player mode')
-    validate_playback_index(company_hull_playback_index, company_motion=company_motion)
+    validate_playback_index(company_hull_playback_index, company_motion=company_motion,
+                            cockpit_radar_playback=cockpit_radar_playback)
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
     if software_vulkan_icd is not None and (
@@ -389,7 +391,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     source_options = dict(software_rendered=software_vulkan_icd is not None)
                     if company_motion:
-                        company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
+                        company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
+                                                            cockpit_radar_playback=cockpit_radar_playback)
                         source_options['company_motion'] = company_source
                     if company_purchases:
                         purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,

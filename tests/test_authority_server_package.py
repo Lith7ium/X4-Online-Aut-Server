@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as directory:
     library = root / 'test.so'
     library.write_bytes(b'synthetic library')
     participant = native.Participant()
-    source = CompanyMotionSource()
+    source = CompanyMotionSource(playback_index=1, cockpit_radar_playback=True)
     try:
         native.download.install_probe(case, profile, native.ticket_for(bound))
         participant.server_library = library
@@ -58,7 +58,10 @@ with tempfile.TemporaryDirectory() as directory:
                 profile / 'save/save_009.xml.gz', 2, lambda: None, company_motion=source)
         lab = case / 'extensions/x4_lan_lab'
         modules = {node.attrib['name'] for node in ET.parse(lab / 'ui.xml').iter('file')}
-        assert 'ui/company_motion_source.lua' in modules
+        assert {'ui/company_motion_source.lua', 'ui/company_cockpit_observer.lua',
+                'ui/company_cockpit_playback.lua'} <= modules
+        assert lab / 'md/company_cockpit_observer.xml' in paths
+        assert 'cockpit_radar_playback=true' in (lab / 'ui/config.lua').read_text()
         assert all((lab / name).is_file() for name in modules)
         assert lab / 'md/client_seat.xml' in paths
         assert lab / 'md/authority_job_descriptor_probe.xml' in paths
@@ -202,6 +205,8 @@ class AuthorityServerPackageTest(unittest.TestCase):
                     if role == 'server':
                         self.assertIn('--park-server-avatar {prepare,verify}', result.stdout)
                         self.assertIn('--persistent', result.stdout)
+                    else:
+                        self.assertIn('--company-cockpit-playback-index', result.stdout)
 
             # Compose both parking variants using only extracted source assets.
             subprocess.run([sys.executable, '-c', PARKING_OVERLAY],

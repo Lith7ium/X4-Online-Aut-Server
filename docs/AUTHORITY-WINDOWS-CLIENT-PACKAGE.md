@@ -131,7 +131,27 @@ matching sample is confirmed in that slot. Compare these fields with the
 Linux pilot's source capture. This measures delivery to the selected local
 hull. Verifying visible motion also requires a later read of its actual pose.
 
-### Try playback in the same sector
+### Two-pilot cockpit playback
+
+Use the matching player package and the provider's private base-game Pulsar
+seed. Add the following to the normal Windows launcher invocation:
+
+```powershell
+-BaseGameOnly -CompanyMotion -CompanyShipIndex 1074 -CompanyCockpitPlaybackIndex 1073
+```
+
+This selects KHI-630 and follows the other pilot in HVC-420. Use the offered
+registry indices for other checkpoints. Start with both ships near their saved
+positions in the same sector. Target the other pilot on the HUD, then clear
+the target once movement is visible and check that playback continues within
+radar range. The map remains separately selectable. The game log records
+`AUTH_COMPANY_COCKPIT_READBACK` with the active HUD or radar mode. On Linux, use
+`--base-game-only --company-motion --company-ship-index 1073
+--company-cockpit-playback-index 1074`. If the other pilot disconnects during
+steady flight, check that the visible ship stops receiving corrections within
+five real seconds of the last usable sample. Two-machine validation is pending.
+
+### Run the isolated HUD playback diagnostic
 
 Use an isolated world and matching playback-capable packages. Get both pilots
 into the same sector and within cockpit sensor range. The observer flying

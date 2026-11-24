@@ -129,7 +129,9 @@ function M.new_x4(config, save_path, pinned, udp)
     end
     local ok, observer = pcall(function()
         local cockpit, trial
-        if config.cockpit_radar_playback == true and X4LAN_COMPANY_COCKPIT_OBSERVER then
+        local factory = X4LAN_COMPANY_HULL_TRIAL
+        if config.cockpit_radar_playback == true then
+            factory = assert(X4LAN_COMPANY_COCKPIT_PLAYBACK)
             cockpit = X4LAN_COMPANY_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
                 radar_fallback = true,
                 target_index = config.playback_index,
@@ -140,8 +142,6 @@ function M.new_x4(config, save_path, pinned, udp)
         end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
         if config.playback_index then
-            local factory = (config.cockpit_radar_playback == true and X4LAN_COMPANY_COCKPIT_PLAYBACK)
-                or X4LAN_COMPANY_HULL_TRIAL
             local created, candidate = pcall(factory and factory.new_x4,
                                              config, pinned, cockpit,
                                              available, udp.monotonic)

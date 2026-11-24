@@ -1,8 +1,10 @@
 """Private cockpit trial cancellation through the ordinary observer callbacks."""
 import socket
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from authority import company_motion_observer
 from authority.company_motion_client import CompanyMotionClient
 from authority.company_motion_observer import CompanyMotionObserver
 
@@ -56,7 +58,8 @@ class CockpitTrialEndTests(unittest.TestCase):
 
     def test_transport_loss_clears_pending_but_only_world_reset_sends_end(self):
         observer, messages = self.make()
-        with patch('authority.company_motion_observer.time.monotonic', return_value=100.0) as clock:
+        with (patch.object(company_motion_observer, 'sys', SimpleNamespace(platform='linux')),
+              patch('authority.company_motion_observer.time.monotonic', return_value=100.0) as clock):
             self.view(observer)
             clock.side_effect = (100.25, 100.5, 100.75)
             observer.snapshot(self.sample(1))
@@ -74,6 +77,20 @@ class CockpitTrialEndTests(unittest.TestCase):
         self.assertEqual(observer.stats()['samples_confirmed'], 1)
         observer.reset_world()
         self.assertEqual(messages[-1], self.end())
+
+    def test_windows_trial_uses_the_native_qpc_clock_for_playback_only(self):
+        observer, messages = self.make()
+        self.view(observer)
+        self.view(observer, slot='map')
+        with (patch.object(company_motion_observer, 'sys', SimpleNamespace(platform='win32')),
+              patch('authority.company_motion_observer.time.perf_counter', return_value=15.5)):
+            observer.snapshot(self.sample(1))
+        cockpit, map_view = messages
+        self.assertEqual(cockpit[-1], '15.5')
+        self.assertEqual(len(map_view), 16)
+        for row in messages:
+            self.seen(observer, row)
+        self.assertEqual(observer.stats()['samples_confirmed'], 2)
 
     def test_generation_replacement_ends_old_pending_and_preserves_current_seen(self):
         observer, messages = self.make()

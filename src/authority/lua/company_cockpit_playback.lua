@@ -296,12 +296,13 @@ function M.new(options)
 
         -- Strict generation check: never mix poses across two active grants without prior END/retirement.
         if active_generation ~= nil and sample.generation ~= active_generation then
-            if controller then
+            if controller or pending_align then
                 stats.generation_rejections = stats.generation_rejections + 1
                 emit('generation_mismatch', {expected = active_generation, actual = sample.generation})
                 return false, 'generation_mismatch'
             end
-            -- Previous track ended/staled cleanly; switch to new generation cleanly.
+            -- A replacement after retirement must never revive the previous grant.
+            revoked_generations[active_generation] = true
             active_generation = sample.generation
             stats.active_generation = active_generation
             last = nil

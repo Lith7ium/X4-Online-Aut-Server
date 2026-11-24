@@ -3,6 +3,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 import re
+import sys
 import time
 
 from .company_motion_frames import MAX_COUNTER, SECTOR
@@ -165,7 +166,9 @@ class CompanyMotionObserver:
             return
 
     def snapshot(self, sample):
-        received_at = time.monotonic()
+        # The X4 UDP module uses QPC on Windows, including with Python 3.11/3.12
+        # where time.monotonic uses GetTickCount64 instead.
+        received_at = time.perf_counter() if sys.platform == 'win32' else time.monotonic()
         self.expire()
         sample = motion_value(sample)
         if sample['version'] != 3 or sample['epoch'] != self._epoch:

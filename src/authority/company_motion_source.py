@@ -12,7 +12,9 @@ from .experimental_tcp_motion import check_motion_progress, motion_value
 _MAX_SAMPLER_DATAGRAM = 512
 
 
-def validate_playback_index(index, *, company_motion, own_index=None):
+def validate_playback_index(index, *, company_motion, own_index=None, cockpit_radar_playback=False):
+    if type(cockpit_radar_playback) is not bool or (cockpit_radar_playback and index is None):
+        raise ValueError('cockpit radar playback requires an explicit playback index')
     if index is not None and (
         company_motion is not True or type(index) is not int or not 1 <= index <= 200000 or index == own_index
     ):
@@ -23,11 +25,8 @@ class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False):
-        validate_playback_index(playback_index, company_motion=True)
-        if type(cockpit_radar_playback) is not bool:
-            raise ValueError('cockpit_radar_playback must be a boolean')
-        if cockpit_radar_playback and playback_index is None:
-            raise ValueError('cockpit_radar_playback requires an explicit playback_index')
+        validate_playback_index(playback_index, company_motion=True,
+                                cockpit_radar_playback=cockpit_radar_playback)
         if on_stage is not None and not callable(on_stage):
             raise ValueError('invalid company motion stage reporter')
         self._on_stage = on_stage

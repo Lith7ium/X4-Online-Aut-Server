@@ -511,8 +511,8 @@ def run_live_cockpit_trial(view, profile_dir, out, args):
 
         pump_until(lambda: client_recv._running and client_remote._running and client_map._running, label='clients_running')
 
-        # Start real X4 production observer + stream + cockpit playback stack synchronized to Python monotonic clock!
-        r_start = bridge.request('start_stream', pump=pump_all, clock_base=time.monotonic())
+        # The playback IPC timestamp and the native UDP module use QPC.
+        r_start = bridge.request('start_stream', pump=pump_all, clock_base=time.perf_counter())
         assert r_start.get('status') == 'stream_started'
 
         # ==================== STAGE 1: Selected HUD Target Playback (mode='hud') ====================

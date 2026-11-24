@@ -110,7 +110,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False,
-                        play_until_exit=False):
+                        play_until_exit=False, cockpit_radar_playback=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -150,7 +150,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('open-ended play requires a Company pilot')
     if type(company_purchases) is not bool or (company_purchases and (select_ship is None or not require_registry_snapshot)):
         raise ValueError('Company purchases require a verified selected seat')
-    validate_playback_index(company_hull_playback_index, company_motion=company_motion)
+    validate_playback_index(company_hull_playback_index, company_motion=company_motion,
+                            cockpit_radar_playback=cockpit_radar_playback)
     validate_motion_request(motion_request, participant_timeout)
 
     outer_error = None
@@ -214,6 +215,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_motion:
                     from .company_motion_source import CompanyMotionSource
                     company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
+                                                        cockpit_radar_playback=cockpit_radar_playback,
                                                         on_stage=on_stage)
                     source_options['company_motion'] = company_source
                 if company_purchases:

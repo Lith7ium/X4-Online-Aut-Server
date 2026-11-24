@@ -330,6 +330,40 @@ confirmed sample for each view. Each slot also retains
 This stage reads the local hull. See the
 [two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
 
+### Two-pilot cockpit playback
+
+Use matching player packages and the provider's private base-game Pulsar seed.
+Add these options to the Linux command above:
+
+```sh
+--company-ship-index 1073 --company-cockpit-playback-index 1074
+```
+
+The Windows pilot uses `-BaseGameOnly -CompanyMotion -CompanyShipIndex 1074
+-CompanyCockpitPlaybackIndex 1073` with the usual connection and game options.
+Each cockpit follows the specified other pilot. For a later checkpoint, use
+the two indices shown in the offered ship list.
+
+1. Join both cockpits and wait for the server to resume. Keep both ships in the
+   same sector, within radar range, and near their starting positions.
+2. Target the other pilot on the HUD. Have that pilot fly a short pass, then
+   clear your target and check that the ship continues moving while it remains
+   on radar. Swap roles and repeat on the other machine.
+3. Open the map and select a Company ship independently. Check
+   `company_observer.slots.map` in the launcher result for map receipts when
+   the selected ship has a live pilot.
+4. To check sample loss while the hull remains visible, have the other pilot
+   disconnect during steady flight. Position predictions stop within five
+   real seconds of the last usable sample. Check the receiving X4 log for
+   `AUTH_COMPANY_COCKPIT_READBACK` with `mode=hud` and then `mode=radar`.
+   Compare the last recorded position after loss with a later observation.
+   Ordinary corrections are limited to 50 m, with one guarded alignment
+   allowed on reacquisition after loss or withdrawal.
+
+The initial playback bind also checks the 50 m bound. Establish the view before
+the other pilot flies away from the receiver's saved position. Two-machine
+validation is pending.
+
 For the isolated same-sector playback trial, the Linux observer can also
 pass `--company-hull-playback-index 7354` with `--company-motion`. Choose
 WOO-831 as the local ship and target WRN-302 in the cockpit. Match the index

@@ -61,8 +61,11 @@ def parser():
                         help='choose a company ship and use the separate authenticated motion channel')
     result.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
-    result.add_argument('--company-hull-playback-index', type=int,
-                        help='isolated test only: follow another company ship in the same cockpit sector')
+    playback = result.add_mutually_exclusive_group()
+    playback.add_argument('--company-cockpit-playback-index', type=int,
+                          help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
+    playback.add_argument('--company-hull-playback-index', type=int,
+                          help='isolated test only: follow another company ship in the same cockpit sector')
     result.add_argument('--base-game-only', action='store_true',
                         help='exclude official DLC from the private game view and profile')
     result.add_argument('--require-registry-snapshot', action='store_true',
@@ -87,8 +90,10 @@ def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
     from authority.company_motion_source import validate_playback_index
-    validate_playback_index(args.company_hull_playback_index,
-                            company_motion=args.company_motion, own_index=args.company_ship_index)
+    cockpit_radar_playback = args.company_cockpit_playback_index is not None
+    playback_index = args.company_cockpit_playback_index if cockpit_radar_playback else args.company_hull_playback_index
+    validate_playback_index(playback_index, company_motion=args.company_motion,
+                            own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
     if not args.play_until_exit:
         durations.append((args.observe_seconds, args.timeout))
@@ -125,8 +130,10 @@ def run(args, *, on_stage=None):
     motion_options = {'company_motion': True} if args.company_motion else {}
     if args.company_purchases:
         motion_options['company_purchases'] = True
-    if args.company_hull_playback_index is not None:
-        motion_options['company_hull_playback_index'] = args.company_hull_playback_index
+    if playback_index is not None:
+        motion_options['company_hull_playback_index'] = playback_index
+    if cockpit_radar_playback:
+        motion_options['cockpit_radar_playback'] = True
     if args.play_until_exit:
         motion_options['play_until_exit'] = True
     return run_fixture_session(

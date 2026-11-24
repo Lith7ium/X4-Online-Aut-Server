@@ -267,7 +267,8 @@ class FixtureSessionTests(unittest.TestCase):
             (0, ('company_ship_reserved', 2)), (2, ('first_own_sample_acknowledged',)),
             (3, ('first_remote_pose_received',)),
         ])
-        source_factory.assert_called_once_with(playback_index=None, on_stage=note_stage)
+        source_factory.assert_called_once_with(playback_index=None, cockpit_radar_playback=False,
+                                               on_stage=note_stage)
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)
         self.assertEqual(result['company_motion'], counts)

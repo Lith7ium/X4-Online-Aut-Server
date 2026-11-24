@@ -80,11 +80,11 @@ with tempfile.TemporaryDirectory() as directory:
     assert 'ui/company_motion_source.lua' in manifest
     assert 'md/authority_job_descriptor_probe.xml' in manifest
 
-    for playback_index in (None, 1317):
-        private = view / ('observer' if playback_index is None else 'playback')
+    for playback_index, radar in ((None, False), (1317, False), (1317, True)):
+        private = view / f'playback-{playback_index}-{radar}'
         (private / 'extensions').mkdir(parents=True)
         (private / '.x4ls-view').touch()
-        source = CompanyMotionSource(playback_index=playback_index)
+        source = CompanyMotionSource(playback_index=playback_index, cockpit_radar_playback=radar)
         try:
             assets = install_fixture_overlay(
                 private, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
@@ -104,6 +104,13 @@ with tempfile.TemporaryDirectory() as directory:
             if playback_index is not None:
                 assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
         assert ('playback_index=' in config) == (playback_index is not None)
+        assert ('cockpit_radar_playback=true' in config) == radar
+        assert ('md/company_cockpit_observer.xml' in assets) == radar
+        for name in ('company_cockpit_observer.lua', 'company_cockpit_playback.lua'):
+            assert ('ui/' + name in assets) == radar
+            assert (lab / 'ui' / name).is_file() == radar
+            if radar:
+                assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
         if playback_index is not None:
             assert 'playback_index=1317' in config
             assert 'X4LAN_MOTION_BUFFER=M' in (lab / 'ui/motion_buffer.lua').read_text()
@@ -163,6 +170,7 @@ class WindowsClientPackageTest(unittest.TestCase):
                     self.assertIn('--connection-file', result.stdout)
                     if entry == 'authority_windows_fixture_client.py':
                         self.assertIn('--company-hull-playback-index', result.stdout)
+                        self.assertIn('--company-cockpit-playback-index', result.stdout)
             subprocess.run([sys.executable, '-c', OVERLAY_SMOKE], cwd=extracted, env=environment,
                            check=True, timeout=10)
 

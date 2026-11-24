@@ -5,6 +5,7 @@ import json
 import socket
 from pathlib import Path
 import ssl
+import sys
 import tempfile
 import time
 import unittest
@@ -154,9 +155,9 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         viewer_grant = self.grant(1, 1970, 'sector_a')
         publisher_grant = self.grant(2, 7354, 'sector_a')
         publisher, cockpit, _, _ = self.attach(publisher_port, publisher_grant)
-        viewer_source = CompanyMotionSource()
+        viewer_source = CompanyMotionSource(playback_index=7354, cockpit_radar_playback=True)
         self.addCleanup(viewer_source.close)
-        config = viewer_source.configure(REGISTRY_EPOCH, viewer_grant['index'])
+        config = viewer_source.configure(REGISTRY_EPOCH, viewer_grant['index'], operational_bits='1' * 7354)
         overlay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addCleanup(overlay.close)
         overlay.bind(('127.0.0.1', 0))
@@ -191,18 +192,26 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
             return True
 
         def seen(row):
-            send('|'.join(('SEEN', *row[1:8], actor, code, *row[8:])))
+            send('|'.join(('SEEN', *row[1:8], actor, code, *row[8:16])))
 
         send(f'VIEW|cockpit|1|{REGISTRY_EPOCH}|sector_a|7354|{actor}|{code}')
         send(f'VIEW|map|1|{REGISTRY_EPOCH}|sector_a|7354|{actor}|{code}')
         self.service.set_running(True)
         await self.drive(lambda: publisher._running and viewer_peer() is not None and
                          viewer_peer().view_id == 1)
+        self.assertEqual(viewer_peer().trial_index, 7354)
         cockpit.stage(1, 'sector_a', 10)
         await self.drive(lambda: collect(2))
         self.assertEqual({row[1] for row in remote}, {'cockpit', 'map'})
-        self.assertTrue(all(row[5] == publisher_grant['generation'] and row[11:] == ['-', '-', '-', '0.5', '1']
-                            for row in remote))
+        for row in remote:
+            self.assertEqual(row[5], publisher_grant['generation'])
+            self.assertEqual(row[11:16], ['-', '-', '-', '0.5', '1'])
+            if row[1] == 'cockpit':
+                self.assertEqual(len(row), 17)
+                now = time.perf_counter() if sys.platform == 'win32' else time.monotonic()
+                self.assertLess(float(row[16]), now)
+            else:
+                self.assertEqual(len(row), 16)
         for row in remote:
             seen(row)
         await self.drive(lambda: viewer_source.observer_stats()['samples_confirmed'] == 2)
@@ -214,7 +223,7 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         cockpit.stage(2, 'sector_a', 26)
         await self.drive(lambda: collect(1))
         self.assertEqual(remote[0][1], 'cockpit')
-        self.assertEqual(remote[0][11:], ['16', '3', '-2', '1', '2'])
+        self.assertEqual(remote[0][11:16], ['16', '3', '-2', '1', '2'])
         seen(remote[0])
         await self.drive(lambda: viewer_source.observer_stats()['velocity_samples_confirmed'] == 1)
 

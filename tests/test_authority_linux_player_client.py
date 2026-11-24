@@ -99,15 +99,15 @@ class SeatLogTests(unittest.TestCase):
                     'epoch': STATUS[1], 'issued_count': STATUS[2], 'mapping_sha256': STATUS[3],
                     'availability_bits': '1' * STATUS[2], 'operational_bits': '1' * STATUS[2],
                     'available_count': STATUS[2], 'unavailable_count': 0, 'operational_count': STATUS[2]}
-        for target in (None, INDEX + 1):
-            with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
+        for target, radar in ((None, False), (INDEX + 1, False), (INDEX + 1, True)):
+            with self.subTest(target=target, radar=radar), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 (root / 'game/extensions').mkdir(parents=True)
                 (root / 'home').mkdir()
                 case, profile, _, _ = native.snapshot.prepare_case(root / 'run', root / 'game', root / 'home')
                 native.download.install_probe(case, profile, native.ticket_for(bound))
                 native.marked.install_marked_load_probe(case)
-                source = CompanyMotionSource(playback_index=target)
+                source = CompanyMotionSource(playback_index=target, cockpit_radar_playback=radar)
                 self.addCleanup(source.close)
                 with patch.object(company_seat, 'verify_join_snapshot', return_value=snapshot):
                     paths, _ = company_seat.install(case, profile, bound, profile / 'save/save_009.xml.gz',
@@ -117,6 +117,14 @@ class SeatLogTests(unittest.TestCase):
                 manifest = (lab / 'ui.xml').read_text()
                 self.assertEqual('playback_index=' in config, target is not None)
                 self.assertIn('ui/company_observer_stream.lua', manifest)
+                self.assertEqual('cockpit_radar_playback=true' in config, radar)
+                self.assertEqual(lab / 'md/company_cockpit_observer.xml' in paths, radar)
+                for name in ('company_cockpit_observer.lua', 'company_cockpit_playback.lua'):
+                    asset = lab / 'ui' / name
+                    self.assertEqual(asset in paths, radar)
+                    self.assertEqual(asset.exists(), radar)
+                    if radar:
+                        self.assertLess(manifest.index('ui/' + name), manifest.index('ui/company_motion_source.lua'))
                 for name in COMPANY_PLAYBACK_UI:
                     asset = lab / 'ui' / name
                     self.assertEqual(asset.exists(), target is not None)
@@ -237,11 +245,20 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *option]), 0)
             self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
+            self.assertNotIn('cockpit_radar_playback', run.call_args.kwargs)
+            cockpit = ['--company-cockpit-playback-index', str(INDEX + 1)]
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', *cockpit]), 0)
+            self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
+            self.assertIs(run.call_args.kwargs['cockpit_radar_playback'], True)
             with patch.object(native, 'run') as run, redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    cli.main([*args, *option])
-                with self.assertRaises(SystemExit):
-                    cli.main([*args, '--company-motion', '--company-hull-playback-index', str(INDEX)])
+                for invalid in (
+                    option, cockpit, ['--company-motion', *option, *cockpit],
+                    ['--company-motion', '--company-hull-playback-index', str(INDEX)],
+                    ['--company-motion', '--company-cockpit-playback-index', str(INDEX)],
+                ):
+                    with self.assertRaises(SystemExit):
+                        cli.main([*args, *invalid])
             run.assert_not_called()
 
             connection.chmod(0o644)
