@@ -18,9 +18,13 @@ native run with Astra when the ordinary player path is ready. [Scope and accepta
 
 **Cobalt owns map-visibility research and the ordinary Windows player
 preflight** ahead of the coordinated Internet test. The initial observer
-build was `cf57d0b1`. For the joint flight, use the matching Linux and
-Windows packages at `2a2b569d`. They retain a confirmed moving sample when
-the observed pilot comes to rest. Exchange session settings privately.
+build was `cf57d0b1`. The `2a2b569d` packages retain a confirmed moving
+sample when the observed pilot comes to rest. For the joint flight, use
+the matching packages at `e38cfbea`. They also support the optional
+same-sector cockpit playback trial. The gateway has passed a public-address
+loopback check from the host LAN. We still need a Windows pilot on a separate
+Internet connection. Exchange session settings privately.
+[Playback measurements and package hashes](AUTHORITY-COMPANY-SHIP-PLAYBACK-20261124.md)
 [Windows flight procedure](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight)
 [16:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795532461739279)
 

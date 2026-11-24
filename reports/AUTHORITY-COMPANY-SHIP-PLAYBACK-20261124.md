@@ -68,3 +68,42 @@ the source save byte-identical.
 This tests actual engine behavior under deliberate local sample loss.
 Internet loss and recovery with two live pilots remain open. Private
 result SHA-256 `7aa433e3936dc06b37e508ccaa27e6ce426253492b2fa70cdf668cfd37fe0701`.
+
+## Ordinary client and gateway at `e38cfbea`
+
+The opt-in cockpit trial runs on the ordinary Linux and Windows client paths.
+The operator selects a second pilot's ship by registry index. Its cockpit
+target, sector, actor and pilot generation must still agree when X4 applies
+the movement. The map remains available to inspect a separate sector.
+[Windows invocation](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#try-playback-in-the-same-sector)
+
+In the TLS regression, two clients claimed distinct seats. Dropping the
+publisher's real control socket immediately invalidated its movement ticket.
+The second pilot remained admitted, received the temporary-loss notice and
+continued publishing. During this alpha, closing a running client normally
+also closes the control socket, so that case follows the same prediction rule.
+When the world pauses, the target leaves view or the seat changes hands,
+the old track ends. After simple sample loss, playback can resume on a newer
+complete sample received after the deadline. It rechecks the original
+identity, the ordering of both samples and the 50 m correction limit before
+moving the ship again. The network tests used real sockets and simulated
+game callbacks. Reacquisition after five seconds still needs a live flight.
+
+For the host network preflight, the router reported one active IPv4 TCP
+forward for the chosen port. The host route to the Internet used Ethernet.
+The production gateway and client exchanged random challenges over the
+control, file and motion services, first on the LAN address and then on the
+router's public address from the same LAN. Each service used certificate
+pinning and the shared key with a temporary local responder. The gateway
+closed after all six exchanges. A connection from an independent Internet
+uplink and a Windows game admission remain outstanding.
+
+Both internal archives are built from the same commit, `e38cfbea13bc5016cb4f8e5a06beab0f36c60a18`.
+Their archived source files matched that revision. The Windows archive
+also contains the previously verified project network DLL. Each tester
+supplies a licensed installation of X4 and private session settings.
+
+| Archive | Bytes | SHA-256 |
+| --- | ---: | --- |
+| X4-Linux-Provider-and-Player.tar.gz | 1,372,186 | `5a6b1b6846cf59fb082f72a1439d6db100e4aada49b161631590a21568d2b596` |
+| X4-Windows-Player.zip | 2,593,593 | `42db7d089110aca376e360eeade82ad5e866a1be9d58f8e579eae0b19dbfd85b` |
