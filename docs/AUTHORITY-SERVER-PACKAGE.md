@@ -69,6 +69,45 @@ For a remote fixture client, add the explicit TLS options from the
 Keep the generated `connection.json` private. With no TLS flags, server
 endpoints are loopback only. No router or firewall is configured by the package.
 
+## Check the deployment from the host
+
+Start a loopback run as above. Once its private `endpoint.json` appears, use a
+second shell in the extracted directory:
+
+```sh
+python3 tools/dev/authority_loopback_simulated_client.py \
+  --endpoint .local/provider-run-01/endpoint.json \
+  --out .local/provider-probe-01 --count 2 --timeout 600
+```
+
+This downloads two actual checkpoints and compares their markers. The probe
+simulates both client loads and the participant receipts, so it exercises the
+server and transfer path without launching a second X4. Run it only against
+the disposable server and check its final `result.json` after shutdown.
+
+In TLS mode the server publishes `connection.json`. The separate connection
+check verifies the TLS pin and authenticates to both backend services without
+claiming a participant or launching a client:
+
+```sh
+python3 tools/dev/authority_connection_check.py \
+  --connection-file .local/provider-run-01/connection.json
+```
+
+The normal launch compiles `src/native/net.c` into the disposable extension
+automatically, using `cc` from the host's `PATH`. To check compiler and libc
+availability independently, build a copy outside the extraction with the
+same arguments:
+
+```sh
+build_dir=$(mktemp -d)
+cc -std=c11 -O2 -Wall -Wextra -Werror -shared -fPIC \
+  src/native/net.c -ldl -o "$build_dir/x4lan_net.so"
+```
+
+The independent output is for compiler verification. The provider still builds
+the module into each fresh run, and the archive contains the source only.
+
 Use SIGTERM or the configured timeout to stop the trial. The supervisor
 processes participant departure and confirms its final checkpoint when it can.
 Check the private run's `result.json`; successful process startup alone does not
