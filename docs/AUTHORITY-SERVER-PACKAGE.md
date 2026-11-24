@@ -31,10 +31,19 @@ cd x4-authority-test-server
 mkdir -m 700 -p .local
 ```
 
-A clean archive extraction does not have a recovery world. Obtain a separately
-authorized, compatible, confirmed disposable fixture from the test owner.
-Stage the verified source under the extraction's `.local` directory with the
-fixture's original layout. The ordinary previous-supervisor source uses this layout.
+## Restore the disposable test world
+
+Obtain the separate private format-3 seed ZIP from the test owner. Restore
+it into a fresh directory under `.local`. The tool checks the seed's file
+hashes, checkpoint marker and saved registry evidence.
+
+```sh
+python3 tools/dev/authority_portable_seed.py restore \
+  --archive /path/to/private-format3-seed.zip --out .local/source-run
+```
+
+If the test owner supplies an ordinary confirmed supervisor fixture instead
+of the format-3 ZIP, stage its source files with this layout.
 
 ```text
 .local/source-run/
@@ -67,8 +76,12 @@ verified fixture. Use a new output path for each run.
 tools/run_authority_server.sh \
   --game '/path/to/X4 Foundations' \
   --store "$PWD/.local/source-run/checkpoints" \
-  --out .local/provider-run-01 --timeout 1800
+  --out .local/provider-run-01 --timeout 1800 --require-registry-snapshot
 ```
+
+Use `--require-registry-snapshot` for the portable format-3 seed. Omit it for
+the ordinary fixture shown above. The saved DLC selection must match the
+licensed game installation.
 
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
