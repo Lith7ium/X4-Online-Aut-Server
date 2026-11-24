@@ -47,6 +47,8 @@ class BerthAdoptionCue(unittest.TestCase):
         for mutation in ('create_ship', 'create_order', 'create_cue_actor', 'assign_control_entity',
                          'undock', 'destroy_object'):
             self.assertFalse(list(self.script.iter(mutation)))
+        readback = self.script.find(".//cue[@name='Readback']")
+        self.assertEqual(readback.attrib['checkinterval'], '1s')
         select = self.script.find(".//library[@name='ChooseBerth']/actions")
         duplicate = select.find(".//set_value[@exact=\"'already_docked'\"]")
         self.assertIsNotNone(duplicate)

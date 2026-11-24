@@ -58,7 +58,7 @@
             </do_if>
           </actions>
           <cues>
-            <cue name="Readback">
+            <cue name="Readback" checkinterval="1s">
               <conditions>
                 <check_value value="@$Status == 'dispatched'"/>
               </conditions>
