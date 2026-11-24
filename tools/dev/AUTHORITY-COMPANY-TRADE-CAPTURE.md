@@ -19,7 +19,7 @@ Call `settle` once with the original intent fields and an `outcome` of
 `confirmed` or `refused` after checking the authoritative result. A confirmed
 receipt must carry the actual booked debit as a positive, exactly represented
 integer `settled_total_cents`. The info line displays this amount. For example,
-six units quoted at 5819 cents and booked at 34900 cents display 349.00 Cr.
+six units quoted at 5819 cents and booked at 34900 cents display 349 Cr. An actual fractional credit would retain its cents.
 `price_cents` remains the original unit quote used to match the receipt.
 A missing, malformed or mismatched receipt is uncertain. Call `settle(nil)`
 if the request owner reaches its deadline. Pending or refused notices have

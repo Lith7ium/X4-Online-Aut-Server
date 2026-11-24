@@ -198,7 +198,9 @@ function M.install_x4(o)
         if status == 'confirmed' then
             local remainder = settled_total_cents % 100
             local credits = (settled_total_cents - remainder) / 100
-            text = string.format('Company purchase confirmed. Paid %d.%02d Cr.', credits, remainder)
+            local amount = string.format('%d', credits)
+            if remainder ~= 0 then amount = amount .. string.format('.%02d', remainder) end
+            text = 'Company purchase confirmed. Paid ' .. amount .. ' Cr.'
         end
         if text then C.ShowInfoLine(text, 4) end
     end

@@ -97,3 +97,25 @@ faction's account amount of 9,651 Cr. Its SHA-256 is
 `91cc4875213273715f2dc53c63b36a115c54f73ac788a88b5de7c356feefd879`
 and its load marker is `667dc29dbeab841d88bc769c00b31783`. This is a
 private diagnostic save.
+
+## Native cold restart after the purchase
+
+The saved-state comparison found a debit of 34,900 cents and six units of
+water in the buyer's ship storage. A fresh GPU-free X4 process then loaded
+the retained diagnostic world in a private profile. Its load event returned
+the expected marker and the process paused. The first native observations
+at game age 455.683 s were:
+
+| Observation | X4 cold readback |
+| --- | --- |
+| Company account and player balance | 9,651 Cr each |
+| WRN-302, Grand Exchange I | Docked externally at BIM-169, six water, room for another 19 |
+| WOO-831 | Undocked in its original sector, zero water, room for 90 |
+| Server avatar | On foot at XPJ-169, Black Hole Sun V |
+| Ship registry | 10,082 entries |
+
+The audit made no purchase, admitted no client and left no test processes.
+The original failed supervisor result and unpublished save remain available
+for diagnosis. The opt-in client adapter can display the actual booked
+amount from a receipt; this display was tested with LuaJIT. A purchase
+submitted from a connected cockpit still needs an end-to-end test.

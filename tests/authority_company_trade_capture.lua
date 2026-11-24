@@ -126,7 +126,8 @@ local function report(outcome, total, expect_notice)
     assert(lines[#lines] == expect_notice, lines[#lines])
     assert(adapter.detach())
 end
-report('confirmed', 34900, 'Company purchase confirmed. Paid 349.00 Cr.')
+report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr.')
+report('confirmed', 34905, 'Company purchase confirmed. Paid 349.05 Cr.')
 report('refused', nil, 'Company purchase refused.')
 local uncertain = 'Company purchase status uncertain. Check the authoritative receipt.'
 report(nil, nil, uncertain)
