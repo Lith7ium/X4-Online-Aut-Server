@@ -52,6 +52,49 @@ class ProviderParkingTest(unittest.TestCase):
                 display.assert_not_called()
                 run.assert_not_called()
 
+    def test_company_pose_modes_forward_only_their_expected_options(self):
+        cases = (
+            (['--company-pose-trial', '--tls-port', '0'],
+             ['--tls-port', '0', '--require-registry-snapshot', '--require-company-ship',
+              '--company-motion', '--company-pose-trial']),
+            (['--verify-company-pose'], ['--require-registry-snapshot', '--verify-company-pose']),
+        )
+        for options, expected in cases:
+            with (
+                self.subTest(options=options),
+                patch.object(provider.os, 'geteuid', return_value=1000),
+                patch.dict(provider.os.environ),
+                patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
+                patch.object(provider, 'lavapipe_icd', return_value=Path(__file__)),
+                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth'))),
+                patch.object(provider.supervisor, 'main', return_value=0) as run,
+            ):
+                self.assertEqual(provider.main([*ARGS, *options]), 0)
+                flags, = run.call_args.args
+                self.assertEqual(flags[:flags.index('--game')], expected)
+
+    def test_conflicting_company_pose_modes_and_verify_hosting_flags_fail_before_display(self):
+        cases = (
+            ['--company-pose-trial', '--verify-company-pose'],
+            ['--company-pose-trial', '--park-server-avatar', 'prepare'],
+            ['--verify-company-pose', '--park-server-avatar', 'verify'],
+            ['--verify-company-pose', '--tls-port', '0'],
+            ['--verify-company-pose', '--company-motion'],
+            ['--verify-company-pose', '--require-company-ship'],
+        )
+        for options in cases:
+            with (
+                self.subTest(options=options),
+                redirect_stderr(StringIO()),
+                patch.object(provider, 'private_display') as display,
+                patch.object(provider.supervisor, 'main') as run,
+            ):
+                with self.assertRaises(SystemExit) as refused:
+                    provider.main([*ARGS, *options])
+                self.assertEqual(refused.exception.code, 2)
+                display.assert_not_called()
+                run.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

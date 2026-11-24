@@ -85,8 +85,13 @@ def main(argv=None):
     parser.add_argument('--registry-status', action='store_true', help='verify saved registry status')
     parser.add_argument('--require-registry-snapshot', action='store_true',
                         help='require and verify format-3 saved registry snapshots')
-    parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
-                        help='prepare or verify the parked avatar on the isolated two-ship fixture')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
+                      help='prepare or verify the parked avatar on the isolated two-ship fixture')
+    mode.add_argument('--company-pose-trial', action='store_true',
+                      help='run the isolated two-ship pose trial with authenticated company motion')
+    mode.add_argument('--verify-company-pose', action='store_true',
+                      help='cold-check the saved company pose in an isolated run with no clients')
     tls = parser.add_argument_group('optional TLS gateway')
     tls.add_argument('--tls-bind', help='IPv4 address for the TLS listener')
     tls.add_argument('--tls-port', type=int, help='TLS listener port; 0 selects an available port')
@@ -102,18 +107,27 @@ def main(argv=None):
         value = getattr(args, 'tls_' + flag.replace('-', '_'))
         if value is not None:
             server_flags.extend(('--tls-' + flag, str(value)))
-    if args.park_server_avatar and (server_flags or args.require_company_ship or args.company_motion):
-        parser.error('--park-server-avatar uses an isolated fixture with no TLS or Company hosting options')
+    if server_flags or args.require_company_ship or args.company_motion:
+        if args.park_server_avatar:
+            parser.error('--park-server-avatar uses an isolated fixture with no TLS or Company hosting options')
+        if args.verify_company_pose:
+            parser.error('--verify-company-pose uses an isolated fixture with no TLS or Company hosting options')
+    company_motion = args.company_motion or args.company_pose_trial
+    require_ship = args.require_company_ship or company_motion
     if args.registry_status:
         server_flags.append('--registry-status')
-    if args.require_registry_snapshot or args.require_company_ship or args.company_motion or args.park_server_avatar:
+    if args.require_registry_snapshot or require_ship or args.park_server_avatar or args.verify_company_pose:
         server_flags.append('--require-registry-snapshot')
     if args.park_server_avatar:
         server_flags.extend(('--park-server-avatar', args.park_server_avatar))
-    if args.require_company_ship or args.company_motion:
+    if require_ship:
         server_flags.append('--require-company-ship')
-    if args.company_motion:
+    if company_motion:
         server_flags.append('--company-motion')
+    if args.company_pose_trial:
+        server_flags.append('--company-pose-trial')
+    if args.verify_company_pose:
+        server_flags.append('--verify-company-pose')
     xvfb, xauth, xdpyinfo = (shutil.which(name) for name in (args.xvfb or 'Xvfb', 'xauth', 'xdpyinfo'))
     icd = args.vulkan_icd or lavapipe_icd()
     if sys.platform != 'linux' or os.geteuid() == 0:
