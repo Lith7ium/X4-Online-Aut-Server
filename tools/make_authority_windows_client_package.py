@@ -60,6 +60,9 @@ REQUIRED = {
 }
 COMPANY_SEAT = {
     'src/authority/lua/client_seat.lua', 'src/authority/md/client_seat.xml',
+    'src/authority/lua/company_observer_target.lua', 'src/authority/md/company_observer_target.xml',
+    'src/authority/lua/company_observer_map.lua', 'src/authority/lua/map_render_observation.lua',
+    'src/authority/lua/company_observer_stream.lua',
     'src/authority/lua/company_motion_source.lua', 'src/authority/lua/source_motion_sampler.lua',
     'tools/dev/authority_job_descriptor_probe.lua', 'tools/dev/authority_job_descriptor_probe.xml',
 }

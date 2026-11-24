@@ -8,9 +8,16 @@ COMPANY_MOTION_UI = {
     'replica_motion_binding.lua': 'src/authority/lua/replica_motion_binding.lua',
     'authority_job_descriptor_probe.lua': 'tools/dev/authority_job_descriptor_probe.lua',
     'source_motion_sampler.lua': 'src/authority/lua/source_motion_sampler.lua',
+    'map_render_observation.lua': 'src/authority/lua/map_render_observation.lua',
+    'company_observer_target.lua': 'src/authority/lua/company_observer_target.lua',
+    'company_observer_map.lua': 'src/authority/lua/company_observer_map.lua',
+    'company_observer_stream.lua': 'src/authority/lua/company_observer_stream.lua',
     'company_motion_source.lua': 'src/authority/lua/company_motion_source.lua',
 }
-COMPANY_MOTION_MD = {'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml'}
+COMPANY_MOTION_MD = {
+    'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml',
+    'company_observer_target.xml': 'src/authority/md/company_observer_target.xml',
+}
 
 SEAT_TAG = b'[X4LAN] AUTH_CLIENT_SEAT '
 SEAT_REFUSED_TAG = b'[X4LAN] AUTH_CLIENT_SEAT_REFUSED '

@@ -10,6 +10,7 @@ end
 function M.new(options)
     local running, active, reset, failed = false, false, false, false
     local sampler, actor
+    local observer = options.observer
     local api = {}
 
     local function available()
@@ -23,9 +24,17 @@ function M.new(options)
         options.send('GAP')
     end
 
+    local function observe(enabled)
+        if observer and not pcall(observer.tick, observer, enabled) then
+            pcall(observer.close, observer)
+            observer = nil
+            options.observer_fault()
+        end
+    end
+
     function api:set_running(value)
         running = value
-        if not running then suspend() end
+        if not running then suspend(); observe(false) end
     end
 
     function api:event(row)
@@ -52,7 +61,9 @@ function M.new(options)
     end
 
     function api:tick()
-        if not available() then suspend(); return end
+        local enabled = available()
+        observe(enabled)
+        if not enabled then suspend(); return end
         if not sampler then
             actor = options.actor()
             if not actor then return end
@@ -90,7 +101,18 @@ function M.new_x4(config, save_path, pinned, udp)
         return actual ~= nil and actual ~= ffi.NULL and normalize(ffi.string(actual)) == expected
     end
     local prefix = 'C|' .. config.lease .. '|' .. config.generation .. '|'
+    local function observer_fault()
+        DebugError('[X4LAN] AUTH_COMPANY_OBSERVER_UNAVAILABLE')
+    end
+    local ok, observer = pcall(function()
+        local cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
+        local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
+        return X4LAN_COMPANY_OBSERVER_STREAM.new({cockpit = cockpit, map = map},
+                                                  pinned.epoch, net, prefix, udp.monotonic)
+    end)
+    if not ok then observer = nil; observer_fault() end
     local source = M.new({
+        observer = observer, observer_fault = observer_fault,
         epoch = pinned.epoch, index = config.index, available = available, actor = actor,
         send = function(payload) net:send(prefix .. payload) end,
         make_sampler = function(selected, guard)
