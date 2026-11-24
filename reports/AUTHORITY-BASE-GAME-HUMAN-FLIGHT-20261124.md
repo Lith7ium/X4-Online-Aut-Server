@@ -1,6 +1,7 @@
 # Two human pilots in Black Hole Sun V, 24 November 2026
 
-The pilots saw one another's ships. They reported that remote movement failed.
+The pilots saw one another's ships. The Bazzite pilot explicitly selected
+the Windows pilot's ship as the HUD target and still saw no movement.
 The Bazzite pilot fired on the Windows pilot's ship and saw damage locally.
 The Windows pilot saw no corresponding damage. The pilots did not distinguish
 shield loss from hull damage in their report.
@@ -39,10 +40,13 @@ exited with no owned process remaining.
 * The cockpit observer in this build reads the selected HUD target and checks
   its visibility. An untargeted ship can be visible in the world without gaining
   a motion subscription. The earlier native playback test explicitly selected
-  the other ship. Target selection during the human flight was not recorded.
+  the other ship. The Bazzite pilot's follow-up rules out failure to select
+  the target on Bazzite as an explanation for this result. A selection does
+  not prove that X4 resolved it to the registered ship or subscribed to it.
   [Cockpit reader](../src/authority/lua/company_observer_target.lua) ·
   [Earlier native replay](AUTHORITY-COMPANY-SHIP-PLAYBACK-20261124.md)
-* Record admission, movement-channel binding, accepted source samples, view
+* Trace the Windows source first. Fedora's complete movement count is already
+  accounted for by Bazzite. Record admission, channel binding, source samples, view
   subscriptions and remote receipts per pilot. To pass the next flight test,
   both pilots' X4 instances must independently read back the other ship's
   displacement and velocity-based playback while their own ship remains under
