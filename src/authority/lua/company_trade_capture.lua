@@ -114,17 +114,11 @@ function M.install(o)
             return
         end
         intent.sector, intent.station_code = dock.sector, dock.station_code
-        if price_retry then
-            if intent.ware ~= price_retry.ware then
-                o.notice('fresh_offer_required')
-                return
-            end
-            if intent.price_cents ~= price_retry.current_price then
-                local previous = price_retry.current_price
-                price_retry.current_price = intent.price_cents
-                show_price_change(previous, intent.price_cents, false)
-                return
-            end
+        if price_retry and intent.ware == price_retry.ware and intent.price_cents ~= price_retry.current_price then
+            local previous = price_retry.current_price
+            price_retry.current_price = intent.price_cents
+            show_price_change(previous, intent.price_cents, false)
+            return
         end
 
         local attempt = {}

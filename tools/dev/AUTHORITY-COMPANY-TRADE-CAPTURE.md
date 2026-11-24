@@ -36,7 +36,8 @@ For a matching refused receipt, `reason = "price_changed"` and a valid
 both unit prices. The custom notice still receives status `refused`, with
 no settled total and an optional third argument carrying the reason,
 `price_cents`, `current_price_cents` and a boolean `reopen`. Close and reopen
-the stock trade context, then reselect the ware and explicitly confirm. A
+the stock trade context, then select a ware and explicitly confirm. A new
+ware follows the normal confirmation flow in the fresh basket. A
 further price change in the fresh context prompts for another explicit
 confirmation at the newly displayed price. A missing or invalid price uses
 the generic refusal. Callbacks are scoped to their original submission.

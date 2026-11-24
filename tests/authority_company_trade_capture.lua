@@ -268,3 +268,31 @@ for _, case in ipairs({{5800, false}, {5877, false}, {5877, true}}) do
     assert(adapter.detach())
 end
 assert(native_calls == 4)
+
+offer.ware, offer.price = 'water', 58.19
+local rejected_context = fresh_context()
+menu.contextMenuData = rejected_context
+local different_ware_attempts = {}
+options.request = function(intent, settle)
+    different_ware_attempts[#different_ware_attempts + 1] = {intent = intent, settle = settle}
+    return true
+end
+options.notice = function(status) notices[#notices + 1] = status end
+local adapter = assert(module.install_x4(options))
+menu.buttonConfirmTrade()
+local rejected_attempt = different_ware_attempts[1]
+reply(rejected_attempt, 'refused', {reason = 'price_changed', current_price_cents = 5877})
+offer.ware, offer.price = 'energycells', 14.20
+menu.buttonConfirmTrade()
+assert(#different_ware_attempts == 1 and notices[#notices] == 'fresh_offer_required')
+menu.contextMenuData = fresh_context(rejected_context.orders)
+menu.buttonConfirmTrade()
+assert(#different_ware_attempts == 1 and notices[#notices] == 'fresh_offer_required')
+menu.contextMenuData = fresh_context()
+menu.buttonConfirmTrade()
+assert(#different_ware_attempts == 2 and different_ware_attempts[2].intent.ware == 'energycells')
+assert(different_ware_attempts[2].intent.price_cents == 1420 and notices[#notices] == 'pending')
+reply(rejected_attempt, 'confirmed', {settled_total_cents = 34900})
+assert(notices[#notices] == 'pending')
+reply(different_ware_attempts[2], 'confirmed', {settled_total_cents = 8500})
+assert(notices[#notices] == 'confirmed' and adapter.detach() and native_calls == 4)
