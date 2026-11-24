@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026, 13:36 Berlin.** Astra is active and leads Lith7ium's
+**24 November 2026, 14:00 Berlin check-in.** Astra is active and leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -47,10 +47,21 @@ git switch -c work/neon-npc-reacquisition
 git diff --stat 58c07235..origin/review/neon-npc-reentry-20261120
 ```
 
-Neon acknowledged the handover at 13:15 Berlin and reported starting
-`work/neon-npc-reacquisition` from `519cd0f1` on a separate Windows PC.
-His next deliverable is the port and focused offline result for 14:00.
-A native Windows game run has yet to be reported.
+Neon acknowledged the assignment from a separate Windows PC. His port is on
+[work/neon-npc-reacquisition at 05e68bf7](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/05e68bf7),
+based on `519cd0f1`. Astra ran
+`EnhancedNpc870ReacquisitionLoopback.test_enh_870_reacquisition_cancel_and_fresh_alignment_with_other_observer`
+once on Linux. It passed with real loopback TCP/UDP, a synthetic NPC source and
+simulated visibility and game callbacks. The Windows test command, evidence
+table and any native game observations are due at an hourly check.
+
+One review point is open. After a participant confirms preparation, a delayed
+fresh sample can occupy that participant’s movement lane until its deadline.
+The control loop then drops the connection. The passing test gives the other
+observer a separate connection. A focused case with two tracks on the same
+participant would tell us whether that pilot can keep observing and stay
+admitted when a fresh sample is delayed. The port remains on Neon's branch.
+[14:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795525263969899)
 
 ## What changed since the previous handover
 
