@@ -63,14 +63,18 @@ local function unit_cents(price)
     return cents
 end
 
-local function external_dock()
+local function external_dock(report)
     local ship, station = binding.ship, binding.station
     if not C.IsComponentClass(ship, 'ship') or not C.IsComponentOperational(ship)
-            or not C.IsComponentClass(station, 'station') or not C.IsComponentOperational(station)
-            or C.GetContextByClass(binding.dock, 'station', true) ~= station then return false end
+            or not C.IsComponentClass(station, 'station') or not C.IsComponentOperational(station) then return false end
+    local parent = C.GetContextByClass(binding.dock, 'station', true)
     local owner, docked, docking, stored = GetComponentData(binding.ship_lua,
         'owner', 'isdocked', 'isdocking', 'isinternallystored')
-    if owner ~= 'player' or docked ~= true or docking ~= false or stored ~= false then return false end
+    if report then
+        log(('DOCK|owner=%s|docked=%s|docking=%s|stored=%s|parent=%s|expected=%s'):format(
+            tostring(owner), tostring(docked), tostring(docking), tostring(stored), tostring(parent), tostring(station)))
+    end
+    if owner ~= 'player' or docked ~= true or docking ~= false or stored ~= false or parent ~= station then return false end
     local count = tonumber(C.GetNumDockedShips(station, nil))
     if not count or count < 1 or count > 4096 then return false end
     local ships = ffi.new('UniverseID[?]', count)
@@ -102,12 +106,18 @@ local function find_water(rows)
 end
 
 local function read_offer()
-    assert(external_dock(), 'dock_binding')
     local row = find_water(GetTradeList(binding.station_lua, binding.ship_lua))
     assert(integer(row.amount) and integer(row.minamount), 'offer_amounts')
     local tradable = CanTradeWith(row.id, binding.ship_lua, quantity, true)
     log(('OFFER|%d|%d|%d|%d'):format(unit_cents(row.price), row.amount, row.minamount, tradable and 1 or 0))
+    local checked, at_dock = pcall(external_dock, true)
+    if not checked or not at_dock then log('DOCK|unverified') end
     if mode == 'offer' then finish('offer_read'); return end
+    if not checked or not at_dock then
+        log('SEAT|unavailable|dock_binding')
+        finish('seat_unavailable')
+        return
+    end
 
     local function permission(force)
         local value = C.CanTeleportPlayerTo(binding.ship, true, force)
@@ -170,6 +180,9 @@ local function capture_menu(data)
     end
     assert(waredata and type(data.orders) == 'table', 'water_slider_or_basket')
     for _, amount in pairs(data.orders) do assert(amount == 0, 'basket_not_empty') end
+    local prior = data.currentcargo.water or 0
+    assert(integer(prior), 'water_cargo_before')
+    -- A stock slider takes the movement, with the row callback's zero basis.
     menu.slidercellShipCargo(waredata.sell.id, waredata.buy and waredata.buy.id, 'water', 0, quantity)
     menu.slidercellTradeConfirmed('water')
     assert(menu.contextMenuData == data and controlled() and external_dock(), 'context_changed')
@@ -182,6 +195,7 @@ local function capture_menu(data)
         end
     end
     assert(selected, 'stock_slider_no_quantity')
+    log(('SLIDER|%d|%d|%d'):format(prior, prior + quantity, -quantity))
     local cents = unit_cents(selected.price)
     menu.buttonConfirmTrade()
     assert(captured and captured.price_cents == cents and hook.detach(), 'intent_not_captured')
