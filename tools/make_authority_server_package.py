@@ -21,6 +21,7 @@ REQUIRED = {
     'tools/dev/authority_identity_fixture.xml',
     'tools/dev/authority_loopback_simulated_client.py',
     'tools/dev/authority_provider_server.py',
+    'tools/dev/authority_portable_seed.py',
     'tools/dev/authority_software_vulkan.py',
     'tools/run_authority_server.sh',
     'tools/dev/authority_recovered_loopback_server.py',
