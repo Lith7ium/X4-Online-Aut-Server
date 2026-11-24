@@ -9,7 +9,8 @@ _MAX_FRAME = 512
 _MAX_INTEGER = 2147483647
 _MAX_EXACT = 9007199254740991
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
-_WORD = re.compile(r'[a-zA-Z0-9_]{1,96}')
+_SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
+_WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
 
 
 def _amount(value, low, high):
@@ -74,14 +75,14 @@ class CompanyPurchaseSource:
                 raise ValueError('invalid settled Company ship code')
             fields.extend((_amount(receipt.get('settled_total_cents'), 1, _MAX_EXACT),
                            _amount(receipt.get('company_balance_cents'), 0, _MAX_EXACT),
-                           _amount(receipt.get('cargo_units'), self._intent['quantity'], _MAX_INTEGER), ship))
+                           _amount(receipt.get('cargo_units'), self._intent['quantity'], _MAX_EXACT), ship))
         elif outcome == 'refused':
             reason = receipt.get('reason')
             if reason == 'price_changed':
                 price = receipt.get('current_price_cents')
                 if price == self._intent['price_cents']:
                     raise ValueError('stale Company quote did not change')
-                fields.extend((reason, _amount(price, 1, _MAX_INTEGER)))
+                fields.extend((reason, _amount(price, 1, _MAX_EXACT)))
         elif outcome != 'unknown':
             raise ValueError('invalid Company purchase outcome')
         answer = self._prefix + '|'.join(('RECEIPT', str(self._sequence), *fields)).encode('ascii')
@@ -111,7 +112,7 @@ class CompanyPurchaseSource:
                 sequence, sector, station, ware, quantity, price = packet[len(self._prefix):].decode('ascii').split('|')
             except (ValueError, UnicodeError):
                 continue
-            if (not _WORD.fullmatch(sector) or not _CODE.fullmatch(station) or not _WORD.fullmatch(ware)
+            if (not _SECTOR.fullmatch(sector) or not _CODE.fullmatch(station) or not _WARE.fullmatch(ware)
                     or not all(re.fullmatch(r'[1-9][0-9]{0,9}', value) for value in (sequence, quantity, price))):
                 continue
             sequence, quantity, price = map(int, (sequence, quantity, price))

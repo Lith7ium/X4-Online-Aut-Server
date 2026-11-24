@@ -296,3 +296,56 @@ reply(rejected_attempt, 'confirmed', {settled_total_cents = 34900})
 assert(notices[#notices] == 'pending')
 reply(different_ware_attempts[2], 'confirmed', {settled_total_cents = 8500})
 assert(notices[#notices] == 'confirmed' and adapter.detach() and native_calls == 4)
+
+-- The live bridge intercepts the selected ship at its actual berth and assigns
+-- independent stock baskets only after a conclusive receipt.
+local live_attempts = {}
+local live_capture = assert(module.install_x4({
+    enabled = true, dynamic_station = true, menu = menu, ship = ship_id,
+    notice = function(status) notices[#notices + 1] = status end,
+    request = function(intent, settle)
+        live_attempts[#live_attempts + 1] = {intent = intent, settle = settle}
+        return true
+    end,
+}))
+local originals = native_calls
+menu.contextMenuData = nil
+menu.buttonConfirmTrade()
+assert(notices[#notices] == 'stale_identity' and native_calls == originals)
+menu.contextMenuData = fresh_context()
+menu.contextMenuData.component = other_station_id
+menu.buttonConfirmTrade()
+assert(notices[#notices] == 'stale_dock' and #live_attempts == 0 and native_calls == originals)
+menu.contextMenuData = fresh_context()
+local first_context = menu.contextMenuData
+offer.price = 58.19
+menu.buttonConfirmTrade()
+assert(#live_attempts == 1 and live_attempts[1].intent.station_code == 'BIM-169')
+reply(live_attempts[1], 'refused', {reason = 'price_changed', current_price_cents = 5800})
+offer.price = 58
+menu.buttonConfirmTrade()
+assert(#live_attempts == 1)
+menu.contextMenuData = fresh_context()
+menu.buttonConfirmTrade()
+assert(#live_attempts == 2 and live_attempts[2].intent.price_cents == 5800)
+reply(live_attempts[1], 'confirmed', {settled_total_cents = 34900, company_balance_cents = 965100,
+    ship_code = 'WRN-302', cargo_units = 6})
+assert(notices[#notices] == 'pending')
+local second_context = menu.contextMenuData
+reply(live_attempts[2], 'confirmed', {settled_total_cents = 34800, company_balance_cents = 965200,
+    ship_code = 'WRN-302', cargo_units = 6})
+assert(notices[#notices] == 'confirmed')
+menu.buttonConfirmTrade()
+menu.contextMenuData = first_context
+menu.buttonConfirmTrade()
+assert(#live_attempts == 2 and notices[#notices] == 'already_attempted')
+menu.contextMenuData = fresh_context()
+menu.buttonConfirmTrade()
+assert(#live_attempts == 3)
+reply(live_attempts[3], 'confirmed', {settled_total_cents = 34800, company_balance_cents = 965200,
+    ship_code = 'WOO-831', cargo_units = 6})
+assert(notices[#notices] == 'uncertain')
+menu.contextMenuData = second_context
+menu.buttonConfirmTrade()
+assert(#live_attempts == 3 and native_calls == originals)
+assert(live_capture.detach())

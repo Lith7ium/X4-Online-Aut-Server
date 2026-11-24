@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from authority.client_seat_overlay import COMPANY_PLAYBACK_UI
 from authority.company_motion_source import CompanyMotionSource
+from authority.company_purchase_source import CompanyPurchaseSource
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
 import authority_client_native as native
@@ -51,6 +52,11 @@ class SeatLogTests(unittest.TestCase):
             home.mkdir()
             case, profile, _, _ = native.snapshot.prepare_case(root / 'run', game, home)
             native.download.install_probe(case, profile, native.ticket_for(bound))
+            participant = native.NativeParticipant(Mock(), 100, Mock())
+            self.addCleanup(participant.close)
+            participant.server_library = root / 'x4lan_net.so'
+            participant.server_library.write_bytes(b'synthetic library')
+            participant.install(case, include_identity=False)
             native.marked.install_marked_load_probe(case)
             snapshot = {'format': 3, 'source_registry_checked': True,
                         'evidence_scope': 'saved checkpoint bytes only', 'run_id': MARKER,
@@ -59,19 +65,29 @@ class SeatLogTests(unittest.TestCase):
                         'available_count': STATUS[2], 'unavailable_count': 0, 'operational_count': STATUS[2]}
             target = profile / 'save/save_009.xml.gz'
             keepalive = Mock()
+            source = CompanyPurchaseSource(expected_epoch=STATUS[1])
+            self.addCleanup(source.close)
             with patch.object(company_seat, 'verify_join_snapshot', return_value=snapshot) as read, \
                     patch.object(company_seat.secrets, 'token_hex', return_value=NONCE):
-                paths, watch = company_seat.install(case, profile, bound, target, INDEX, keepalive)
+                paths, watch = company_seat.install(case, profile, bound, target, INDEX, keepalive,
+                                                    company_purchase=source)
             self.assertEqual(read.call_args.args[0].path, target)
             self.assertIs(read.call_args.kwargs['pump'], keepalive)
             lab = case / 'extensions/x4_lan_lab'
             manifest = (lab / 'ui.xml').read_text()
             self.assertLess(manifest.index('ui/client_seat.lua'), manifest.index('ui/authority_download_load_probe.lua'))
             self.assertIn(lab / 'md/client_seat.xml', paths)
+            self.assertIn(lab / 'ui/company_trade_capture.lua', paths)
+            self.assertIn(lab / 'ui/company_purchase_source.lua', paths)
+            self.assertLess(manifest.index('ui/company_purchase_source.lua'),
+                            manifest.index('ui/authority_two_x4_participant_probe.lua'))
+            self.assertIn('authority_company_purchase={', (lab / 'ui/config.lua').read_text())
             self.assertIn('cfg.authority_registry_snapshot,1970', (lab / 'ui/authority_download_load_probe.lua').read_text())
             self.assertIn('authority_registry_snapshot={', (lab / 'ui/config.lua').read_text())
             watch.path.write_bytes(b'\n'.join(receipt_lines()) + b'\n')
             watch.verify()
+            participant.redact()
+            self.assertNotIn('authority_company_purchase={', (lab / 'ui/config.lua').read_text())
 
     def test_company_playback_modules_only_in_opted_in_private_overlay(self):
         bound = MarkerBoundOffer(OFFER, MARKER)
@@ -203,6 +219,10 @@ class PlayerClientTests(unittest.TestCase):
             self.assertEqual(options['select_ship']([], None), INDEX)
             self.assertNotIn('b' * 64, stdout.getvalue())
             self.assertNotIn('company_motion', options)
+            self.assertNotIn('company_purchases', options)
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-purchases']), 0)
+            self.assertTrue(run.call_args.kwargs['company_purchases'])
             with patch.object(native, 'run', return_value={'success': True}) as run, \
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion']), 0)

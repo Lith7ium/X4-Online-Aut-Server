@@ -1,4 +1,4 @@
--- Opt-in owner of a single docked purchase through the stock MapMenu.
+-- Opt-in owner of docked purchases through the stock MapMenu.
 local M = {}
 local max_integer = 2147483647
 local max_exact_lua_integer = 9007199254740991
@@ -74,6 +74,8 @@ function M.install(o)
     local original = menu.buttonConfirmTrade
     local phase = 'ready'
     local active_attempt, price_retry
+    local completed_contexts = setmetatable({}, {__mode = 'k'})
+    local completed_orders = setmetatable({}, {__mode = 'k'})
 
     local function show_price_change(previous, current, reopen)
         phase = 'reporting_price_change'
@@ -84,7 +86,10 @@ function M.install(o)
 
     local function confirm(...)
         local data = menu.contextMenuData
-        if type(data) ~= 'table' then return original(...) end
+        if type(data) ~= 'table' then
+            if dynamic_station then o.notice('stale_identity'); return end
+            return original(...)
+        end
         local ship, station = o.identity(data.currentShip), o.identity(data.component)
         if (ship == o.ship and station == nil) or (not dynamic_station and station == o.station and ship == nil)
                 or (dynamic_station and ship == nil) then
@@ -92,7 +97,7 @@ function M.install(o)
             return
         end
         if ship ~= o.ship or (not dynamic_station and station ~= o.station) then return original(...) end
-        if phase ~= 'ready' then
+        if phase ~= 'ready' or completed_contexts[data] or completed_orders[data.orders] then
             o.notice('already_attempted')
             return
         end
@@ -141,17 +146,28 @@ function M.install(o)
             if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt)
                     and exact_cents(receipt.settled_total_cents) and receipt.settled_total_cents > 0 then
                 local snapshot = resulting_snapshot(intent, receipt, o.ship_code)
+                if dynamic_station and not snapshot then
+                    o.notice('uncertain')
+                    return
+                end
+                if dynamic_station then
+                    completed_contexts[data], completed_orders[submitted_orders] = true, true
+                end
                 if snapshot then
                     o.notice('confirmed', receipt.settled_total_cents, snapshot)
                 else
                     o.notice('confirmed', receipt.settled_total_cents)
                 end
+                if dynamic_station then phase = 'ready' end
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
                 local price = receipt.current_price_cents
                 if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
                     price_retry = {rejected_context = data, rejected_orders = submitted_orders,
                         ware = intent.ware, sector = intent.sector, station_code = intent.station_code,
                         current_price = price}
+                    if dynamic_station then
+                        completed_contexts[data], completed_orders[submitted_orders] = true, true
+                    end
                     show_price_change(intent.price_cents, price, true)
                 else
                     o.notice('refused')
@@ -241,6 +257,9 @@ function M.install_x4(o)
     if ship and C.IsComponentClass(ship, 'ship') then
         local native_ship_code = C.GetObjectIDCode(ship)
         if native_ship_code ~= nil then ship_code = ffi.string(native_ship_code) end
+    end
+    if dynamic_station and (not ship_code or not ship_code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$')) then
+        return nil, 'unavailable'
     end
     local function live_dock(ship_ref, station_ref)
         local station = id(station_ref)

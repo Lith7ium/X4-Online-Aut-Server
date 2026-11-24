@@ -25,7 +25,6 @@ local function frame()
      company_motion:set_running(true)
     end
     if company_purchase and row.operation=='resume' and row.status=='confirmed' then
-     assert(company_purchase:prepare_seat(), 'Company purchase seat unavailable after resume')
      company_purchase:set_running(true)
     end
     assert(net:send('RECEIPT|'..cfg.authority_participant_lease..'|'..cfg.authority_ticket.world_epoch..'|'..
@@ -43,7 +42,13 @@ local function frame()
   assert(lease==cfg.authority_participant_lease and epoch==cfg.authority_ticket.world_epoch)
   assert(id and #id<=16 and not id:match('^0') and (op=='pause' or op=='resume'))
   if company_motion and op=='pause' then company_motion:set_running(false) end
-  if company_purchase and op=='pause' then company_purchase:set_running(false) end
+  if company_purchase then
+   if op=='pause' then
+    company_purchase:set_running(false)
+   else
+    assert(company_purchase:prepare_seat(), 'Company purchase seat unavailable before resume')
+   end
+  end
   assert(state:submit('isolated-client',epoch,tonumber(id),op))
  end
  assert(state:on_update())
