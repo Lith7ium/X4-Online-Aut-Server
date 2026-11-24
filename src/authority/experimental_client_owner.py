@@ -166,7 +166,7 @@ class ExperimentalClientOwner:
 
     def activate(self, attempt, controller, *, participant_timeout=30,
                  authority_grant=None, authority_guard=None, pull_authority_motion=None,
-                 apply_motion=None):
+                 apply_motion=None, on_stage=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
@@ -180,6 +180,8 @@ class ExperimentalClientOwner:
         with self._operation('loading'):
             if self._offer is None:
                 raise RuntimeError('participant requires an offered connection')
+            if on_stage is not None and not callable(on_stage):
+                raise ValueError('invalid admission observer')
             if apply_motion is not None and not callable(apply_motion):
                 raise ValueError('motion consumer must be callable')
             checked_grant = None
@@ -197,6 +199,11 @@ class ExperimentalClientOwner:
             if self._invalidated:
                 raise RuntimeError('client owner changed during participant validation')
             credential = self._load.claim(attempt)
+            # claim() has verified the server's accepted frame for this attempt.
+            if on_stage is not None:
+                on_stage('participant_admitted')
+                if credential is not None:
+                    on_stage('company_motion_granted')
             conn = self._load.take_connection()
             try:
                 self._participant = ExperimentalTCPParticipantClient(

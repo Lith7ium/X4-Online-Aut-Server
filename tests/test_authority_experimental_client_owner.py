@@ -210,7 +210,9 @@ class ClientOwnerTests(unittest.TestCase):
             ({'kind': 'choose_company_ship', 'ship_index': 1970}, self.company_reply('company_ship_chosen', ship=public)),
         ), motion_claim=True, motion_ack=credential)
         bound = self.observe_motion_choice(owner)
-        owner.activate(bound.offer.attempt_id, Controller())
+        stages = []
+        owner.activate(bound.offer.attempt_id, Controller(), on_stage=stages.append)
+        self.assertEqual(stages, ['participant_admitted', 'company_motion_granted'])
         self.assertEqual(owner.ship_motion_credential, credential)
         copy_credential = owner.ship_motion_credential
         copy_credential.clear()
@@ -233,8 +235,10 @@ class ClientOwnerTests(unittest.TestCase):
                     ({'kind': 'choose_company_ship', 'ship_index': 1970}, self.company_reply('company_ship_chosen', ship=public)),
                 ), motion_claim=True, motion_ack=credential)
                 bound = self.observe_motion_choice(owner)
+                stages = []
                 with self.assertRaises(ValueError):
-                    owner.activate(bound.offer.attempt_id, Controller())
+                    owner.activate(bound.offer.attempt_id, Controller(), on_stage=stages.append)
+                self.assertEqual(stages, [])
                 self.assertEqual(client.fileno(), -1)
                 self.assertIsNone(owner.ship_motion_credential)
                 thread.join(3)

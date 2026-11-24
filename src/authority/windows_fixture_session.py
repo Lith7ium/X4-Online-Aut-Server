@@ -105,7 +105,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
-                        company_hull_playback_index=None):
+                        company_hull_playback_index=None, on_stage=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -122,6 +122,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
     this does not independently prove runtime actor identity.
     """
     if (enabled is not True or type(require_registry_snapshot) is not bool or not callable(stop_requested) or
+            (on_stage is not None and not callable(on_stage)) or
             type(deadline) not in (int, float) or not math.isfinite(deadline) or
             not 0 < deadline - time.monotonic() <= 3600 or
             type(keepalive_interval) not in (int, float) or not math.isfinite(keepalive_interval) or
@@ -164,6 +165,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace unavailable')
                 bound = owner.request_offer()
                 seat_index = None if select_ship is None else reserve_company_ship(owner, select_ship)
+                if on_stage is not None and seat_index is not None:
+                    on_stage('company_ship_reserved', seat_index)
                 validate_playback_index(company_hull_playback_index,
                                         company_motion=company_motion, own_index=seat_index)
                 if company_motion:
@@ -230,7 +233,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,
                     require_full_inspection=require_registry_snapshot, seat_index=seat_index,
-                    apply_motion=motion, motion_control=motion)
+                    apply_motion=motion, motion_control=motion, on_stage=on_stage)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
                 if company_source is not None:
@@ -238,6 +241,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
                     company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
                         owner.ship_motion_credential, company_source, validate_peer)
+                first_traffic = {
+                    'samples_acknowledged': 'first_own_sample_acknowledged',
+                    'snapshots_received': 'first_remote_pose_received',
+                } if on_stage is not None else {}
                 commands = 0
                 while True:
                     if time.monotonic() >= deadline:
@@ -258,6 +265,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         commands += 1
                     if company_client is not None:
                         company_client.poll()
+                        if first_traffic:
+                            counts = company_client.stats()
+                            for counter in tuple(first_traffic):
+                                if counts[counter] > 0:
+                                    on_stage(first_traffic.pop(counter))
                     now = time.monotonic()
                     if now >= deadline:
                         raise TimeoutError('fixture session deadline expired')

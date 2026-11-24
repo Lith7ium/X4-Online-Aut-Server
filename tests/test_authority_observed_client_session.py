@@ -410,6 +410,23 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertEqual(controller.sock.fileno(), -1)
         self.assertEqual(self.claims, [])
 
+    def test_guard_failure_after_acceptance_keeps_only_confirmed_stages(self):
+        owner, client, bound, deadline = self.connect(disconnect=True)
+        controller = LocalParticipantControl(enabled=True, timeout=2)
+        self.addCleanup(controller.close)
+        self.start_fake_participant(controller)
+        self.log = b''.join(self.log_parts())
+        stages = []
+        session = ObservedClientSession(owner, bound, controller, slot='save_009',
+            read_log=lambda: self.log, guard=lambda: owner._phase != 'active', deadline=deadline,
+            on_stage=stages.append)
+        self.addCleanup(session.close)
+        with self.assertRaisesRegex(RuntimeError, 'guard failed'):
+            session.start()
+        self.assertEqual(stages, ['world_marker_confirmed', 'participant_admitted'])
+        self.assertEqual(len(self.claims), 1)
+        self.assertEqual(client.fileno(), -1)
+
     def test_disconnect_after_claim_fences_owners(self):
         owner, client, bound, deadline = self.connect(disconnect=True)
         controller = LocalParticipantControl(enabled=True, timeout=2)

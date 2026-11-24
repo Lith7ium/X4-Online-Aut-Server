@@ -116,7 +116,7 @@ class FixtureSessionTests(unittest.TestCase):
 
         class Session:
             def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
-                         registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control, seat_index=None):
+                         registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control, seat_index=None, on_stage=None):
                 test.assertEqual(seat_index, test.installed_seat)
                 test.assertEqual(require_full_inspection, test.installed_registry_snapshot is not None)
                 test.assertIsNone(apply_motion)
@@ -206,12 +206,19 @@ class FixtureSessionTests(unittest.TestCase):
         source = SimpleNamespace(socket=object(), close=lambda: self.calls.append('source_close'),
                                  observer_stats=lambda: observation)
         validate_peer = object()
-        counts = dict(samples_acknowledged=2, velocity_samples_acknowledged=1,
+        counts = dict(samples_acknowledged=0, velocity_samples_acknowledged=0,
                       snapshots_received=0, visibility_ends=0)
+        progress = []
+        def poll():
+            self.calls.append('motion_poll')
+            n = self.calls.count('motion_poll')
+            if n == 2:
+                counts['samples_acknowledged'] = 1
+            if n == 3:
+                counts['snapshots_received'] = 1
 
-        def stats():
-            self.assertIn('motion_close', self.calls)
-            return counts
+        def note_stage(*event):
+            progress.append((self.calls.count('motion_poll'), event))
 
         def start_motion(port, credential, source_for_client, validator):
             self.assertIn('session_start', self.calls)
@@ -220,8 +227,8 @@ class FixtureSessionTests(unittest.TestCase):
             self.assertIs(source_for_client, source)
             self.assertIs(validator, validate_peer)
             self.calls.append('motion_start')
-            return SimpleNamespace(poll=lambda: self.calls.append('motion_poll'),
-                                   close=lambda: self.calls.append('motion_close'), stats=stats, failure=None)
+            return SimpleNamespace(poll=poll, close=lambda: self.calls.append('motion_close'),
+                                   stats=counts.copy, failure=None)
 
         motion_module = SimpleNamespace(ReconnectingCompanyMotionClient=SimpleNamespace(observing=start_motion))
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
@@ -229,7 +236,13 @@ class FixtureSessionTests(unittest.TestCase):
              patch('authority.company_motion_source.CompanyMotionSource', return_value=source), \
              patch.dict(sys.modules, {'authority.company_motion_reconnect': motion_module}):
             result = self.run_session(require_registry_snapshot=True,
-                                      select_ship=lambda ships, pump: 2, company_motion=True)
+                                      select_ship=lambda ships, pump: 2, company_motion=True,
+                                      stop_requested=lambda: self.calls.count('motion_poll') == 4,
+                                      on_stage=note_stage)
+        self.assertEqual(progress, [
+            (0, ('company_ship_reserved', 2)), (2, ('first_own_sample_acknowledged',)),
+            (3, ('first_remote_pose_received',)),
+        ])
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)
         self.assertEqual(result['company_motion'], counts)
@@ -238,8 +251,8 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertIs(peer_factory.call_args.args[1], source.socket)
         first_download = self.calls.index(('download', self.workspace.download_dir))
         self.assertLess(self.calls.index('request_ship_motion'), first_download)
-        order = ['session_start', 'motion_start', ('session_poll', .1), 'motion_poll',
-                 'motion_close', 'source_close', 'process_close', 'tls_exit']
+        order = (['session_start', 'motion_start'] + [('session_poll', .1), 'motion_poll'] * 4 +
+                 ['motion_close', 'source_close', 'process_close', 'tls_exit'])
         self.assertEqual([call for call in self.calls if call in order], order)
 
     def test_race_refreshes_available_company_ships_without_choosing_for_the_player(self):

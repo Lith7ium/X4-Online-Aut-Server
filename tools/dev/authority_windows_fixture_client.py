@@ -77,7 +77,7 @@ def parser():
     return result
 
 
-def run(args):
+def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
     from authority.company_motion_source import validate_playback_index
@@ -125,7 +125,7 @@ def run(args):
         stop_requested=ObservationWindow(args.observe_seconds),
         motion_request=motion_request,
         require_registry_snapshot=args.require_registry_snapshot or select_ship is not None,
-        select_ship=select_ship, **motion_options,
+        select_ship=select_ship, on_stage=on_stage, **motion_options,
     )
 
 
@@ -142,8 +142,20 @@ def main(argv=None):
         print(json.dumps({'game': str(game)}))
         return 0
     args = parser().parse_args(argv)
+    confirmed = {}
+
+    def report_stage(stage, ship_index=None):
+        confirmed[stage] = True if ship_index is None else ship_index
+        progress = {'status': 'pilot_progress', 'stage': stage}
+        if ship_index is not None:
+            progress['ship_index'] = ship_index
+        try:
+            print(json.dumps(progress), flush=True)
+        except (OSError, ValueError):
+            pass  # Losing the console must not terminate the pilot session.
+
     try:
-        result = run(args)
+        result = run(args, on_stage=report_stage)
     except (Exception, KeyboardInterrupt) as error:
         # Exception text can contain credentials supplied by a peer or file.
         # Report only its type and source location, never locals or arguments.
@@ -151,7 +163,7 @@ def main(argv=None):
         site = frames[-1] if frames else None
         report = {'status': 'failed', 'error_type': type(error).__name__,
                   'failure_site': f'{Path(site.filename).name}:{site.lineno}' if site else None,
-                  'run_directory': str(args.out)}
+                  'confirmed_stages': confirmed, 'run_directory': str(args.out)}
         from authority.experimental_client_owner import CompanyShipChoiceDenied
         if isinstance(error, CompanyShipChoiceDenied) and error.reason in (
                 'no_free_company_ships', 'company_ship_unavailable', 'stale_ship_choice',
@@ -160,7 +172,7 @@ def main(argv=None):
         print(json.dumps(report), file=sys.stderr)
         return 1
     print(json.dumps({'status': 'fixture_observation_complete', **result,
-                      'run_directory': str(args.out)}))
+                      'confirmed_stages': confirmed, 'run_directory': str(args.out)}))
     return 0
 
 

@@ -61,7 +61,7 @@ class ObservedClientSession:
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                  apply_motion=None, registry_status=None, registry_nonce=None,
-                 motion_control=None, require_full_inspection=False, seat_index=None):
+                 motion_control=None, require_full_inspection=False, seat_index=None, on_stage=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -102,6 +102,7 @@ class ObservedClientSession:
             self._load = owner._load
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
             self._apply_motion = apply_motion
+            self._on_stage = on_stage
             self._motion_control = motion_control
             self._participant_timeout = controller.timeout + 2 * motion_timeout + 1
             self._socket, self._lease = controller.sock, controller.lease
@@ -111,7 +112,7 @@ class ObservedClientSession:
             self._snapshot = b''
             self._records = BoundReceiptStream(bound, slot=slot,
                 registry_status=registry_status, registry_nonce=registry_nonce,
-                require_full_inspection=require_full_inspection, seat_index=seat_index)
+                require_full_inspection=require_full_inspection, seat_index=seat_index, on_stage=on_stage)
         except BaseException as error:
             self._fail(error)
             raise
@@ -229,6 +230,8 @@ class ObservedClientSession:
             # A first pause may need both lazy READY and STOPPED before the
             # native pause. Each IPC has its own timeout, plus framing time.
             activate_options = {'participant_timeout': self._participant_timeout}
+            if self._on_stage is not None:
+                activate_options['on_stage'] = self._on_stage
             if self._apply_motion is not None:
                 activate_options['apply_motion'] = self._checked_motion
             self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)

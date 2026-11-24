@@ -76,7 +76,7 @@ class BoundReceiptStream:
     """
 
     def __init__(self, bound, *, slot, registry_status=None, registry_nonce=None,
-                 require_full_inspection=False, seat_index=None):
+                 require_full_inspection=False, seat_index=None, on_stage=None):
         encode_bound_offer(bound)
         offer = Offer(**{name: getattr(bound.offer, name) for name in Offer.__dataclass_fields__})
         if (type(slot) is not str or len(slot) != 8 or not slot.startswith('save_') or
@@ -110,6 +110,8 @@ class BoundReceiptStream:
             self._seat_prefix = seat_prefix(seat_index, registry_nonce, registry_status)
             self._expected.append(('seat', self._seat_prefix + b'controlled'))
         self._expected.append(('load', ('pause_observed|' + fields).encode('ascii')))
+        self._on_stage = on_stage
+        self._seat_index = seat_index
         self._stage = 0
         self._carry = b''
         self._size = 0
@@ -164,6 +166,11 @@ class BoundReceiptStream:
                     if self._stage >= len(self._expected) or row != self._expected[self._stage]:
                         raise ValueError('load and marker observations differ or are out of order')
                     self._stage += 1
+                    if self._on_stage is not None:
+                        if row[0] == 'marker':
+                            self._on_stage('world_marker_confirmed')
+                        elif row[0] == 'seat':
+                            self._on_stage('cockpit_control_confirmed', self._seat_index)
             return self._stage == len(self._expected) and not self._carry
         except BaseException:
             self._failed = True

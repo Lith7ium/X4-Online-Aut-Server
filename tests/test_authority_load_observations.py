@@ -155,13 +155,17 @@ class ClientLoadObservations(unittest.TestCase):
         refused = observations.SEAT_REFUSED_TAG + prefix + b'PILOT_PRESENT\n'
         before_seat = self.request + self.marker + inspected + header
 
-        def stream():
+        def stream(on_stage=None):
             return observations.BoundReceiptStream(self.bound, slot='save_009',
                 registry_status=status, registry_nonce=nonce, require_full_inspection=True,
-                seat_index=18)
+                seat_index=18, on_stage=on_stage)
 
-        checked = stream()
-        self.assertFalse(checked.feed(before_seat + ready))
+        stages = []
+        checked = stream(lambda *event: stages.append(event))
+        self.assertFalse(checked.feed(before_seat + ready[:-1]))
+        self.assertEqual(stages, [('world_marker_confirmed',)])
+        self.assertFalse(checked.feed(ready[-1:]))
+        self.assertEqual(stages, [('world_marker_confirmed',), ('cockpit_control_confirmed', 18)])
         self.assertTrue(checked.feed(self.pause))
         with self.assertRaisesRegex(ValueError, 'client seat refused: PILOT_PRESENT'):
             checked.feed(refused)

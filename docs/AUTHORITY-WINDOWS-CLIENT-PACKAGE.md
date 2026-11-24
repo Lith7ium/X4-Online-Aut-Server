@@ -47,6 +47,15 @@ python .\tools\dev\authority_connection_check.py --connection-file C:\X4Test\con
   -ConnectionFile 'C:\X4Test\connection.json'
 ```
 
+During the join, the console emits one `pilot_progress` line per confirmed event.
+A ship reservation identifies the selected registry index. The world marker
+and cockpit control each have a separate native receipt. The server's accepted
+reply confirms `participant_admitted` and can grant Company movement for the
+selected ship. `first_own_sample_acknowledged` records the server's first
+acknowledgment of a local movement sample. `first_remote_pose_received`
+records an incoming pose for another ship in the selected view. The final
+JSON includes `confirmed_stages` on success and on failure.
+
 Without `-Game`, the launcher checks Steam's configured libraries for
 X4 Foundations. Pass `-Game 'D:\SteamLibrary\steamapps\common\X4 Foundations'`
 to select a specific installation. The same pinned executable check applies
