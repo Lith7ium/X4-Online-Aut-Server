@@ -80,8 +80,9 @@ class LocalParticipantControl:
 
         def check_while_waiting(*, force=False):
             nonlocal next_check
-            if self.wait_hook is not None and (force or time.monotonic() >= next_check):
-                self.wait_hook()
+            wait_hook = getattr(self, 'wait_hook', None)
+            if wait_hook is not None and (force or time.monotonic() >= next_check):
+                wait_hook()
                 next_check = time.monotonic() + _WAIT_HOOK_INTERVAL
 
         # The client repeats HELLO even after enrollment. A long idle period
