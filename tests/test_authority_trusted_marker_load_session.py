@@ -1,5 +1,5 @@
 """Synthetic marked checkpoint and trusted client claims; no X4 or listener."""
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import gzip
 import hashlib
 from pathlib import Path
@@ -14,7 +14,9 @@ from authority.checkpoints import CheckpointStore
 from authority.experimental_client_load import ExperimentalClientLoad, HonestClientLoadClaim
 from authority.load_messages import Receipt
 from authority.save_transfer import SaveOffers
-from authority.trusted_marker_load_session import TrustedMarkerLoadSession
+from authority.trusted_marker_load_session import (
+    CompanyShipCatalogUnavailable, CompanyShipUnavailable, StaleShipChoice, TrustedMarkerLoadSession,
+)
 from authority.world import WorldCoordinator
 
 MARKER = 'a' * 32
@@ -22,6 +24,12 @@ XML = ('<savegame><script><refs type="string"><ref id="42" string="' + MARKER +
        '"/></refs></script><md><script name="X4AuthorityCheckpointMarker">'
        '<cue name="MarkerState"><vars><value name="$marker" type="string" value="42"/>'
        '<value name="$loaded" type="integer"/></vars></cue></script></md></savegame>')
+
+
+@dataclass(frozen=True)
+class ShipRow:
+    ship_index: int
+    component_ref: str
 
 
 class FakeEngine:
@@ -60,10 +68,95 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         self.service = FakeService()
         self.world = WorldCoordinator('epoch-1', FakeEngine(self.root), self.store,
                                       SaveOffers(self.service, self.store))
-        self.adapter = TrustedMarkerLoadSession(self.world, enabled=True)
+        self.catalogue = (ShipRow(1, '[0x11]'), ShipRow(2, '[0x22]'))
+        self.catalogue_reads = []
+        self.adapter = TrustedMarkerLoadSession(self.world, enabled=True,
+                                                company_ship_reader=self.read_catalogue)
         self.a, self.b = object(), object()
         self.handle_a = self.adapter.attach(self.a); self.handle_b = self.adapter.attach(self.b)
         self.world.step(); self.world.step()
+
+    def read_catalogue(self, checkpoint):
+        self.assertEqual(checkpoint, self.store.latest_marked_confirmed())
+        self.catalogue_reads.append(checkpoint)
+        return self.catalogue
+
+    def test_shared_ship_reservations_retry_switch_and_reoffer(self):
+        attempt_a = self.adapter.begin(self.a).offer.attempt_id
+        attempt_b = self.adapter.begin(self.b).offer.attempt_id
+        first, second = self.catalogue
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a), self.catalogue)
+        self.assertEqual(self.adapter.choose_company_ship(self.a, attempt_a, 1), first)
+        self.assertEqual(self.adapter.choose_company_ship(self.a, attempt_a, 1), first)
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a), self.catalogue)
+        self.assertEqual(self.adapter.list_company_ships(self.b, attempt_b), (second,))
+        self.assertEqual(self.adapter.list_company_ships(self.b, attempt_b, limit=1), (second,))
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a, after_index=1, limit=1),
+                         (second,))
+        self.assertEqual(self.adapter.list_company_ships(self.b, attempt_b, after_index=2, limit=1), ())
+        self.assertEqual(len(self.catalogue_reads), 1)
+        with self.assertRaises(StaleShipChoice):
+            self.adapter.choose_company_ship(self.b, attempt_a, 2)
+        self.assertEqual(self.adapter.choose_company_ship(self.b, attempt_b, 2), second)
+        for bad_index in (2, 3, True):
+            with self.assertRaises(CompanyShipUnavailable):
+                self.adapter.choose_company_ship(self.a, attempt_a, bad_index)
+        self.assertEqual(self.adapter.list_company_ships(self.b, attempt_b), (second,))
+
+        new_attempt_b = self.adapter.begin(self.b).offer.attempt_id
+        with self.assertRaises(StaleShipChoice):
+            self.adapter.list_company_ships(self.b, attempt_b)
+        self.assertEqual(self.adapter.choose_company_ship(self.a, attempt_a, 2), second)
+        self.assertEqual(self.adapter.list_company_ships(self.b, new_attempt_b), (first,))
+        self.adapter.disconnect(self.a)
+        self.assertEqual(self.adapter.list_company_ships(self.b, new_attempt_b), self.catalogue)
+
+    def test_admitted_reservation_survives_world_resume_and_new_checkpoint(self):
+        class Participants:
+            def pause(self, handles):
+                return True
+
+            def resume(self, handles):
+                return True
+
+        self.world._participants = Participants()
+        self.world._engine.resume = lambda: None
+        offer_a = self.adapter.begin(self.a).offer
+        offer_b = self.adapter.begin(self.b).offer
+        self.adapter.choose_company_ship(self.a, offer_a.attempt_id, 1)
+        self.adapter.accept(self.a, claim_for(offer_a))
+        with self.assertRaises(CompanyShipUnavailable):
+            self.adapter.choose_company_ship(self.b, offer_b.attempt_id, 1)
+        self.adapter.accept(self.b, claim_for(offer_b))  # Legacy peer.
+        self.world.step()
+        self.assertEqual(self.world.session.state, 'running')
+
+        waiting = object()
+        self.adapter.attach(waiting)
+        self.world.step()
+        self.world.step()
+        offer_waiting = self.adapter.begin(waiting).offer
+        self.assertNotEqual(offer_a.checkpoint_id, offer_waiting.checkpoint_id)
+        # Bindings may differ in a later snapshot. Keep the reserved identity
+        # excluded by component reference as well as by issued index.
+        alias = ShipRow(3, '[0x11]')
+        self.catalogue += (alias,)
+        self.assertEqual(self.adapter.list_company_ships(waiting, offer_waiting.attempt_id),
+                         (self.catalogue[1],))
+        self.assertEqual(len(self.catalogue_reads), 2)
+        self.adapter.disconnect(self.a)
+        self.assertEqual(self.adapter.list_company_ships(waiting, offer_waiting.attempt_id), self.catalogue)
+
+    def test_ship_catalogue_unavailable_or_confirmed_checkpoint_changed(self):
+        offer = self.adapter.begin(self.a).offer
+        with patch.object(self.adapter, '_company_ship_reader', side_effect=ValueError('bad save')):
+            with self.assertRaises(CompanyShipCatalogUnavailable):
+                self.adapter.list_company_ships(self.a, offer.attempt_id)
+        self.adapter.choose_company_ship(self.a, offer.attempt_id, 1)
+        replacement = self.store.publish(self.root / 'source.gz', marker=MARKER)
+        self.store.confirm(replacement)
+        with self.assertRaises(StaleShipChoice):
+            self.adapter.choose_company_ship(self.a, offer.attempt_id, 2)
 
     def test_explicit_opt_in_and_untrusted_primitives(self):
         with self.assertRaises(ValueError): TrustedMarkerLoadSession(self.world)

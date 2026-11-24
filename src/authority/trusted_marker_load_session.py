@@ -6,16 +6,30 @@ offer service, and bind each opaque connection object to the intended live
 transport. A claim is an assertion by that trusted client, not independent
 proof of bytes read, a continuous pause, or a consistent game world.
 """
+from bisect import bisect_right
 from dataclasses import dataclass
+from itertools import islice
 import re
 import threading
 
 from .experimental_load_session import ExperimentalLoadSession
 from .experimental_client_load import HonestClientLoadClaim
-from .load_messages import Offer, Receipt
+from .load_messages import MAX_INTEGER, Offer, Receipt
 from .marker_evidence import verify_saved_marker
 
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
+
+
+class StaleShipChoice(ValueError):
+    """The supplied connection and attempt do not have a current offer."""
+
+
+class CompanyShipUnavailable(ValueError):
+    """The requested ship cannot be reserved by this attempt."""
+
+
+class CompanyShipCatalogUnavailable(ValueError):
+    """The current checkpoint could not provide verified company ships."""
 
 
 @dataclass(frozen=True)
@@ -43,7 +57,8 @@ class TrustedMarkerLoadSession:
     a possible mutation faults the wrapper; the owner must fence outstanding
     operations and retire or safely settle the coordinator and offer service.
     """
-    def __init__(self, world, *, enabled=False, marker_script='X4AuthorityCheckpointMarker'):
+    def __init__(self, world, *, enabled=False, marker_script='X4AuthorityCheckpointMarker',
+                 company_ship_reader=None):
         if enabled is not True:
             raise ValueError('trusted marker session requires explicit opt-in')
         if marker_script not in ('X4AuthorityCheckpointMarker', 'X4AuthorityPlayerFixtureMarker'):
@@ -57,6 +72,12 @@ class TrustedMarkerLoadSession:
         self._failed = False
         self._marker_script = marker_script
         self._verified_marker_checkpoint = None
+        if company_ship_reader is not None and not callable(company_ship_reader):
+            raise ValueError('company ship reader must be callable')
+        self._company_ship_reader = company_ship_reader
+        self._ship_catalog = None
+        self._pending_ships = {}
+        self._admitted_ships = {}
 
     def _live(self):
         if self._failed or self._inner._failed:
@@ -93,6 +114,8 @@ class TrustedMarkerLoadSession:
             try:
                 self._inner.disconnect(peer)
                 self._markers.pop(peer, None)
+                self._pending_ships.pop(peer, None)
+                self._admitted_ships.pop(peer, None)
                 del self._connections[id(connection)]
             except BaseException:
                 self._failed = True
@@ -116,6 +139,7 @@ class TrustedMarkerLoadSession:
                         raise ValueError('checkpoint marker not verified')
                     self._verified_marker_checkpoint = checkpoint
                 self._markers.pop(peer, None)
+                self._pending_ships.pop(peer, None)
                 offer = self._inner.begin(peer)
                 if (self._world._baseline != baseline or offer.checkpoint_id != checkpoint.checkpoint_id
                         or offer.sha256 != checkpoint.sha256 or offer.size != checkpoint.size):
@@ -125,6 +149,88 @@ class TrustedMarkerLoadSession:
             except BaseException:
                 self._failed = True
                 raise
+
+    def _ship_offer(self, connection, attempt_id):
+        try:
+            peer = self._peer(connection)
+            bound = self._markers[peer]
+            if bound[0] != attempt_id:
+                raise ValueError('attempt ID changed')
+            self._current_offer(peer)
+        except (KeyError, ValueError):
+            raise StaleShipChoice('no matching current ship choice offer') from None
+        checkpoint = bound[1]
+        try:
+            confirmed = self._world._store.latest_marked_confirmed()
+        except (ValueError, OSError):
+            raise StaleShipChoice('confirmed checkpoint unavailable') from None
+        if confirmed != checkpoint:
+            raise StaleShipChoice('confirmed checkpoint changed')
+        return peer, checkpoint
+
+    def _current_offer(self, peer):
+        _, offer = self._inner._active[peer]
+        receipt = Receipt(**{field: getattr(offer, field) for field in Receipt.__dataclass_fields__})
+        self._inner._current(peer, receipt)
+
+    def _available_ships(self, peer, checkpoint, after_index):
+        # An admitted peer keeps its allocation across subsequent saves. A
+        # pending peer can block only a still-usable offer for this generation.
+        if self._ship_catalog is None or self._ship_catalog[0] != checkpoint:
+            reader = self._company_ship_reader
+            if reader is None:
+                from .company_ships import read_company_ships
+                reader = read_company_ships
+            try:
+                ships = tuple(sorted(reader(checkpoint), key=lambda ship: ship.ship_index))
+                self._ship_catalog = (checkpoint, ships, tuple(ship.ship_index for ship in ships))
+            except (ValueError, OSError):
+                raise CompanyShipCatalogUnavailable('company ship catalogue unavailable') from None
+
+        occupied = [ship for holder, ship in self._admitted_ships.items() if holder != peer]
+        for holder, ship in self._pending_ships.items():
+            if holder != peer and self._markers.get(holder, (None, None))[1] == checkpoint:
+                try:
+                    self._current_offer(holder)
+                except (KeyError, ValueError):
+                    continue
+                occupied.append(ship)
+        occupied_indices = {ship.ship_index for ship in occupied}
+        occupied_components = {ship.component_ref for ship in occupied}
+        _, ships, indices = self._ship_catalog
+        admitted = self._admitted_ships.get(peer)
+        for offset in range(bisect_right(indices, after_index), len(ships)):
+            ship = ships[offset]
+            if admitted is not None and (ship.ship_index, ship.component_ref) != (
+                    admitted.ship_index, admitted.component_ref):
+                continue
+            if ship.ship_index not in occupied_indices and ship.component_ref not in occupied_components:
+                yield ship
+
+    def list_company_ships(self, connection, attempt_id, *, after_index=0, limit=None):
+        """List verified company ships available to this still-offered connection."""
+        with self._lock:
+            self._live()
+            peer, checkpoint = self._ship_offer(connection, attempt_id)
+            if type(after_index) is not int or not 0 <= after_index <= MAX_INTEGER:
+                raise ValueError('invalid company ship page cursor')
+            if limit is not None and (type(limit) is not int or not 1 <= limit <= MAX_INTEGER):
+                raise ValueError('invalid company ship page size')
+            return tuple(islice(self._available_ships(peer, checkpoint, after_index), limit))
+
+    def choose_company_ship(self, connection, attempt_id, ship_index):
+        """Reserve one available ship; a failed switch keeps the earlier choice."""
+        with self._lock:
+            self._live()
+            peer, checkpoint = self._ship_offer(connection, attempt_id)
+            if type(ship_index) is not int or not 1 <= ship_index <= MAX_INTEGER:
+                raise CompanyShipUnavailable('invalid company ship index')
+            ship = next(self._available_ships(peer, checkpoint, ship_index - 1), None)
+            if ship is None or ship.ship_index != ship_index:
+                raise CompanyShipUnavailable('company ship unavailable')
+            if peer not in self._admitted_ships:
+                self._pending_ships[peer] = ship
+            return ship
 
     def accept(self, connection, claim, *, pre_accept=None):
         """Accept one trusted claim; an optional side-effect-free guard runs last.
@@ -157,6 +263,9 @@ class TrustedMarkerLoadSession:
                     trusted_marker_claim=True)
                 del self._inner._active[peer]
                 del self._markers[peer]
+                reserved = self._pending_ships.pop(peer, None)
+                if reserved is not None:
+                    self._admitted_ships[peer] = reserved
             except BaseException:
                 self._failed = True
                 raise
