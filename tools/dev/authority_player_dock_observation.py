@@ -77,18 +77,23 @@ def _verify_berth(stages, source, docked):
         previous = age
 
 
-def _verify_approach(stages, source):
+def _verify_approach(stages, source, *, prepare_berth):
     start, later = map(int, stages['DEPARTURE'][1].split('|'))
     if start != source.distance or start - later < 1000 or later < 0:
         raise ValueError('normal flight lacks an observed kilometre of approach')
-    if not stages['AUTOPILOT'][1].startswith('started|') or stages['QUICKDOCK'][1] != 'dispatched':
-        raise ValueError('native approach or docking command lacks its correlated receipt')
+    if not stages['AUTOPILOT'][1].startswith('started|'):
+        raise ValueError('native approach lacks an autopilot receipt')
+    if prepare_berth:
+        if stages['PLAYER_DOCK_REQUEST'][1] not in ('granted', 'queued'):
+            raise ValueError('native station docking request was refused')
+    elif stages['QUICKDOCK'][1] != 'dispatched':
+        raise ValueError('native quick docking command lacks its receipt')
 
 
 def verify_player_flight(rows, *, prepare_berth=False):
-    approach = (('ROUTE', 'BERTH|REQUESTED', 'BERTH|ASSIGNED', 'BERTH|DISPATCHED')
-                if prepare_berth else ('AUTOPILOT', 'DEPARTURE', 'QUICKDOCK'))
-    names = ('START', 'SEAT', *approach, 'DOCKED', 'BEFORE_CONFIRM', 'AFTER_CONFIRM', 'DONE')
+    docking = (('PLAYER_DOCK_REQUEST', 'ROUTE', 'BERTH|REQUESTED', 'BERTH|ASSIGNED', 'BERTH|DISPATCHED')
+                if prepare_berth else ('QUICKDOCK',))
+    names = ('START', 'SEAT', 'AUTOPILOT', 'DEPARTURE', *docking, 'DOCKED', 'BEFORE_CONFIRM', 'AFTER_CONFIRM', 'DONE')
     stages = {name: _once(rows, name) for name in names}
     order = [stage[0] for stage in stages.values()]
     if order != sorted(order) or rows[-1] != 'DONE|intent_captured':
@@ -106,10 +111,9 @@ def verify_player_flight(rows, *, prepare_berth=False):
             or not docked.bay == before.bay == after.bay
             or not source.age < docked.age <= before.age <= after.age or docked.distance >= source.distance):
         raise ValueError('pilot or physical docking observations disagree')
+    _verify_approach(stages, source, prepare_berth=prepare_berth)
     if prepare_berth:
         _verify_berth(stages, source, docked)
-    else:
-        _verify_approach(stages, source)
     if before.water != after.water or before.balance != after.balance:
         raise ValueError('cargo or Company account changed during the capture-only confirmation')
     intent_index, intent = _once(rows, 'INTENT')
@@ -119,7 +123,7 @@ def verify_player_flight(rows, *, prepare_berth=False):
     return {'client_intent_captured': True, 'purchase_executed': False, 'admitted': False,
             'start_distance_m': source.distance, 'docked_distance_m': docked.distance,
             'docking_route': 'assigned_berth_fixture' if prepare_berth else 'piloted_approach',
-            'flight_game_seconds': None if prepare_berth else float(docked.age - source.age), 'unit_price_cents': int(match[1]),
+            'flight_game_seconds': float(docked.age - source.age), 'unit_price_cents': int(match[1]),
             'water_units': after.water, 'company_balance_cents': after.balance, 'records': rows}
 
 

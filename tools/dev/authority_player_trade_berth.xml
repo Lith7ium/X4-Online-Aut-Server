@@ -14,22 +14,10 @@
      <do_if value="@$Args.$ship != '%s'.[$Ship] or @$Args.$station != '%s'.[$Station]">
       <set_value name="$Status" exact="'BINDING_MISMATCH'"/>
      </do_if>
-     <do_elseif value="@$Ship.assigneddock.exists">
-      <set_value name="$Status" exact="'PREEXISTING_ASSIGNMENT'"/>
-     </do_elseif>
      <do_else>
-      <find_dockingbay name="$Bay" object="$Station" checkoperational="true" multiple="false" required="false" sortbydistanceto="$Ship">
-       <match_dock size="$Ship.docksize" free="true" trading="true" allowplayeronly="false" showroom="false" storage="false"/>
-       <match_relation_to object="$Ship" comparison="not" relation="enemy"/>
-      </find_dockingbay>
-      <do_if value="not @$Bay.isclass.dockingbay or $Bay.container != $Station or $Bay.isstorage or not $Bay.isdockingallowed or not $Bay.istradingallowed">
-       <set_value name="$Status" exact="'NO_FREE_TRADE_BAY'"/>
-      </do_if>
-      <do_else>
-       <request_docking_at_dock ship="$Ship" dockingbay="$Bay" queuedresult="$Queued" grantedresult="$Granted"/>
-       <set_value name="$Deadline" exact="player.age + 15s"/>
-       <set_value name="$Status" exact="if $Queued or $Granted then 'REQUESTED' else 'REQUEST_REFUSED'"/>
-      </do_else>
+      <!-- The cockpit already requested permission using the stock station action. -->
+      <set_value name="$Deadline" exact="player.age + 25s"/>
+      <set_value name="$Status" exact="'REQUESTED'"/>
      </do_else>
     </do_if>
     <include_actions ref="Reply"/>
@@ -42,6 +30,7 @@
       <check_value value="player.age ge $Deadline or @$Ship.assigneddock.exists"/>
      </conditions>
      <actions>
+      <set_value name="$Bay" exact="@$Ship.assigneddock"/>
       <include_actions ref="CheckAssignment"/>
       <do_if value="$Status == 'READY'">
        <set_value name="$Status" exact="'ASSIGNED'"/>

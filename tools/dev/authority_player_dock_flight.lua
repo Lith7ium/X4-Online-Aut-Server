@@ -23,6 +23,7 @@ ffi.cdef[[
     UniverseID GetContextByClass(UniverseID,const char*,bool);
     const char* GetObjectIDCode(UniverseID);
     bool RequestDockAt(UniverseID,bool);
+    const char* RequestDockAtReason(UniverseID,bool);
     bool SetSofttarget(UniverseID,const char*const);
     SofttargetDetails2 GetSofttarget2(void);
     bool QuickDock(void);
@@ -225,19 +226,11 @@ local function frame(registry)
     elseif phase == 'await_unpause' then
         assert(now < deadline and control_matches(), 'unpause_or_control')
         if not C.IsGamePaused() and tonumber(C.GetCurrentGameTime()) > start_time then
-            if use_berth then
-                phase, deadline, next_sample, berth_stage = 'berth_wait', now + 30, now + 5, 'START'
-                log('ROUTE|berth')
-                assert(AddUITriggeredEvent(berth_screen, 'Prepare', {
-                    ship = binding.ship_hex, station = binding.station_hex,
-                }) ~= false, 'berth_dispatch')
-            else
-                local accepted = StartAutoPilot(binding.station_lua)
-                assert(accepted ~= false, 'autopilot_refused')
-                autopilot = true
-                phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
-                log('AUTOPILOT|started|' .. tostring(accepted))
-            end
+            local accepted = StartAutoPilot(binding.station_lua)
+            assert(accepted ~= false, 'autopilot_refused')
+            autopilot = true
+            phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
+            log('AUTOPILOT|started|' .. tostring(accepted))
         end
     elseif phase == 'berth_wait' then
         assert(now < deadline and control_matches(), 'berth_timeout_or_control_lost')
@@ -260,9 +253,22 @@ local function frame(registry)
                 autopilot = false
                 assert(C.SetSofttarget(binding.station, '') and C.GetSofttarget2().softtargetID == binding.station
                     and C.RequestDockAt(binding.station, true), 'dock_target_or_range_changed')
-                assert(control_matches() and C.QuickDock(), 'quickdock_refused')
-                phase, deadline = 'dock_wait', now + docking_timeout
-                log('QUICKDOCK|dispatched')
+                if use_berth then
+                    local reason = C.RequestDockAtReason(binding.station, true)
+                    reason = reason ~= nil and ffi.string(reason)
+                    assert(reason == 'granted' or reason == 'queued', 'player_dock_reason_' .. tostring(reason))
+                    assert(control_matches() and C.RequestDockAt(binding.station, false), 'player_dock_request_refused')
+                    log('PLAYER_DOCK_REQUEST|' .. reason)
+                    phase, deadline, next_sample, berth_stage = 'berth_wait', now + 35, now + 5, 'START'
+                    log('ROUTE|berth')
+                    assert(AddUITriggeredEvent(berth_screen, 'Prepare', {
+                        ship = binding.ship_hex, station = binding.station_hex,
+                    }) ~= false, 'berth_dispatch')
+                else
+                    assert(control_matches() and C.QuickDock(), 'quickdock_refused')
+                    phase, deadline = 'dock_wait', now + docking_timeout
+                    log('QUICKDOCK|dispatched')
+                end
             end
         end
     elseif phase == 'begin_capture' then

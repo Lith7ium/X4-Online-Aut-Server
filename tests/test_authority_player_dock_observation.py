@@ -24,17 +24,17 @@ class PlayerDockFlightTests(unittest.TestCase):
         self.assertFalse(result['purchase_executed'])
 
     def test_assigned_berth_must_be_the_same_bay_observed_while_piloting(self):
-        stages = ['ROUTE|berth']
+        stages = ['PLAYER_DOCK_REQUEST|granted', 'ROUTE|berth']
         for status in ('REQUESTED', 'ASSIGNED', 'DISPATCHED'):
             stages.append('BERTH|' + status + '|0x10|0x20|0x30|0x10|0x10|0x10|305')
-        rows = self.rows[:2] + stages + self.rows[5:]
+        rows = self.rows[:4] + stages + self.rows[5:]
         result = verify_player_flight(rows, prepare_berth=True)
-        self.assertIsNone(result['flight_game_seconds'])
+        self.assertGreater(result['flight_game_seconds'], 0)
         with self.assertRaises(ValueError):
             verify_player_flight(rows)
-        stages[2] = stages[2].replace('0x30', '0x31')
+        stages[3] = stages[3].replace('0x30', '0x31')
         with self.assertRaises(ValueError):
-            verify_player_flight(self.rows[:2] + stages + self.rows[5:], prepare_berth=True)
+            verify_player_flight(self.rows[:4] + stages + self.rows[5:], prepare_berth=True)
 
     def test_rejects_other_ship_or_cargo_changes(self):
         for original, altered in (('SEAT|controlled|16ULL', 'SEAT|controlled|17ULL'),
