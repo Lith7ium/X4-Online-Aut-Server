@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Opt-in disposable authority fixture. No paths from the multiplayer wire. -->
+<mdscript name="X4AuthorityCompanyStockTrade" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="State">
+      <actions><set_value name="$attempted" exact="false"/></actions>
+      <cues>
+        <cue name="Request" instantiate="true">
+          <conditions>
+            <check_any>
+              <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Quote'"/>
+              <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Buy'"/>
+            </check_any>
+          </conditions>
+          <actions>
+            <set_value name="$v" exact="event.param3"/>
+            <set_value name="$ship" exact="@$v.$ship"/>
+            <set_value name="$station" exact="@$v.$station"/>
+            <set_value name="$parking" exact="@$v.$parking"/>
+            <set_value name="$ware" exact="ware.water"/>
+            <set_value name="$owner" exact="@$v.$owner_id"/>
+            <set_value name="$request" exact="@$v.$request_id"/>
+            <set_value name="$status" exact="'invalid_fixture'"/>
+            <set_value name="$quote" exact="0"/>
+            <do_if value="typeof $request == datatype.string and $request and $owner and @$ship.isclass.ship and @$ship.isoperational and @$ship.pilot and $ship.owner.id == $owner and $ship.idcode == 'WRN-302' and $ship != player.ship and $ship != player.container and @$station.isclass.station and @$station.isoperational and $station.owner != $ship.owner and $station.owner != faction.player and $station.idcode == 'BIM-169' and @$parking.isclass.station and $parking.idcode == 'XPJ-169' and $parking != $station and player.station == $parking and player.entity.hascontext.{$parking} and not player.controlled and not player.occupiedship and @player.room.exists and @$ship.dock.container == $station and @$ship.dock.istradingallowed">
+              <set_value name="$status" exact="'no_unique_offer'"/>
+              <find_sell_offer result="$offers" multiple="true" tradepartner="$ship" seller="$station" wares="$ware" excludemissions="true"/>
+              <do_if value="$offers.count == 1">
+                <set_value name="$offer" exact="$offers.{1}"/>
+                <set_value name="$price" exact="$offer.unitprice"/>
+                <clamp_trade_amount result="$amount" trade="$offer" amount="1" buyer="$ship" seller="$station" unbundle="false"/>
+                <set_value name="$status" exact="'not_tradeable'"/>
+                <do_if value="$price gt 0Cr and $amount == 1 and $offer.offeramount.{$ship} ge 1 and $ship.money ge $price">
+                  <set_value name="$quote" exact="($price / 1ct)i"/>
+                  <set_value name="$status" exact="'quote'"/>
+                  <do_if value="event.param2 == 'Buy'">
+                    <do_if value="@State.$attempted">
+                      <set_value name="$status" exact="'already_attempted'"/>
+                    </do_if>
+                    <do_elseif value="not @$v.$price_cents or $v.$price_cents * 1ct != $price">
+                      <set_value name="$status" exact="'price_changed'"/>
+                    </do_elseif>
+                    <do_else>
+                      <set_value name="State.$attempted" exact="true"/>
+                      <set_value name="State.$request" exact="$request"/>
+                      <set_value name="State.$ship" exact="$ship"/>
+                      <set_value name="State.$station" exact="$station"/>
+                      <set_value name="State.$parking" exact="$parking"/>
+                      <set_value name="State.$ware" exact="$ware"/>
+                      <set_value name="State.$price" exact="$price"/>
+                      <set_value name="State.$ship_cargo" exact="$ship.cargo.{$ware}.count"/>
+                      <set_value name="State.$station_cargo" exact="$station.cargo.{$ware}.count"/>
+                      <set_value name="State.$ship_money" exact="$ship.money"/>
+                      <set_value name="State.$station_money" exact="$station.money"/>
+                      <set_value name="State.$player_money" exact="player.money"/>
+                      <signal_cue_instantly cue="Monitor"/>
+                      <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="1" price="$price" bundle="false" unbundle="false" immediate="true"/>
+                      <set_value name="State.$deal" exact="@State.$order.trade"/>
+                      <set_value name="$status" exact="if @State.$deal then 'submitted' else 'order_refused'"/>
+                    </do_else>
+                  </do_if>
+                </do_if>
+              </do_if>
+            </do_if>
+            <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|%s|%s'.[$request,$status,$quote]"/>
+          </actions>
+        </cue>
+        <cue name="Monitor">
+          <conditions><event_cue_signalled/></conditions>
+          <cues>
+            <cue name="Completed" instantiate="true">
+              <conditions>
+                <event_trade_completed buyer="State.$ship" seller="State.$station" ware="State.$ware"/>
+                <check_value value="@State.$deal and (event.param == State.$deal or event.param2 == State.$deal) and not State.$completion_seen?"/>
+              </conditions>
+              <actions>
+                <set_value name="State.$completion_seen" exact="true"/>
+                <set_value name="$ship_cargo" exact="State.$ship.cargo.{State.$ware}.count - State.$ship_cargo"/>
+                <set_value name="$station_cargo" exact="State.$station.cargo.{State.$ware}.count - State.$station_cargo"/>
+                <set_value name="$ship_money" exact="((State.$ship.money - State.$ship_money) / 1ct)i"/>
+                <set_value name="$station_money" exact="((State.$station.money - State.$station_money) / 1ct)i"/>
+                <set_value name="$player_money" exact="((player.money - State.$player_money) / 1ct)i"/>
+                <set_value name="$docked" exact="@State.$ship.dock.container == State.$station"/>
+                <set_value name="$parked" exact="player.station == State.$parking and not player.controlled and not player.occupiedship and @player.room.exists"/>
+                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)i,$ship_cargo,$station_cargo,$ship_money,$station_money,$player_money,$docked,$parked]"/>
+              </actions>
+            </cue>
+          </cues>
+        </cue>
+      </cues>
+    </cue>
+  </cues>
+</mdscript>
