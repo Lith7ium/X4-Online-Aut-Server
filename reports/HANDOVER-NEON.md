@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026, 13:16 Berlin.** Astra is active and leads Lith7ium's
+**24 November 2026, 13:36 Berlin.** Astra is active and leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -32,7 +32,7 @@ other observers receiving their latest samples.
    the NPC leaving view, cancellation where applicable and the fresh alignment
    after return. Label simulator, native Linux, Windows under Proton and
    native Windows observations separately. Coordinate any shared-host X4 use
-   with Astra first. Astra currently owns the station parking test slot.
+   with Astra first. The station parking and cold-reload runs have finished.
 
 If your account can only read Lith7ium’s fork, push the work branch to your
 own fork and open a PR targeting `experiment/authoritative-server-20261115`,
@@ -46,6 +46,11 @@ cd x4-neon
 git switch -c work/neon-npc-reacquisition
 git diff --stat 58c07235..origin/review/neon-npc-reentry-20261120
 ```
+
+Neon acknowledged the handover at 13:15 Berlin and reported starting
+`work/neon-npc-reacquisition` from `519cd0f1` on a separate Windows PC.
+His next deliverable is the port and focused offline result for 14:00.
+A native Windows game run has yet to be reported.
 
 ## What changed since the previous handover
 
@@ -83,3 +88,24 @@ Major design decisions still go to Lith7ium. The shared account, independently
 occupied sectors, one high-attention owner per area, visibility-based movement
 updates and pause/save on last departure remain the working constraints.
 Saves, connection files, TLS credentials and native logs stay private.
+
+## Internal operator kit and validation
+
+The owner has the private archive
+`X4-Authority-GPU-Free-Company-Trial-20261124.zip` (30,185,896 bytes,
+SHA-256 `e4ccf955f2bafa800d534141dce45b0b1e17f24f4916fc186b6ab9b59bec4294`).
+It pairs the Linux provider and Linux/Windows players from `519cd0f1`
+with the cold-verified parked world. The packaged restore reproduced the
+expected save digest. The handover repository contains the project code
+and reports. The operator supplies a private connection file and a licensed
+matching game installation separately.
+
+The strict Linux check at the package revision collected 5,480 cases. Its
+first run had one packaging-test error and 56 environment skips. The test
+had omitted the defence evidence required by the real parking installer.
+Its fixture was corrected in `4022460d`, and the 12 focused parking/package
+tests passed. Of the skipped cases, 30 passed using the existing local
+validation environment and two more passed against the locally resolved
+stock XML. Across these runs 5,456 distinct cases passed. The remaining
+24 require Windows (12), external reference data (11), or the released
+lane runner (1). A completely passing strict suite remains outstanding.
