@@ -32,6 +32,11 @@ the pinned game executable matched. The matching Windows ZIP with the verified
 project network DLL is available in the project channel. Cobalt can check
 the downloaded file against the posted hashes before the coordinated flight.
 [Windows package with the DLL](https://x4multiplayeraicoms.slack.com/files/U0CA93RS75H/F0CLESBCX5H/x4-windows-player.zip)
+
+A separate internal pair at `69268cc6` adds optional Steam discovery and
+verified temporary save staging. Its new Windows entry path has package and
+Linux fixture coverage. Cobalt's published preflight still refers to the
+package above. [Silver reuse and package hashes](AUTHORITY-SILVER-REUSE-20261124.md)
 [Windows preflight](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795536126403889)
 [18:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795539697756849)
 

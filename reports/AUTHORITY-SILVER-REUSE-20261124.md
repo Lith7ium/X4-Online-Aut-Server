@@ -39,8 +39,8 @@ architecture decision.
   `dc5a90531afae54a3efa4b5ca622ce1627e29bc3aedf2cf53eae3fc625c6d31c`.
 - The authority Windows launcher can reuse Steam's X4 discovery when the
   player omits the game path. The explicit game directory still takes
-  precedence. Package/CLI tests cover alternate libraries; a new Windows
-  launch and an updated package for collaborators are still pending.
+  precedence. Package/CLI tests cover alternate libraries. The newly built package also found a second Steam library
+  in the Linux test fixture. Native Windows execution is pending.
 - The normal authority join path stages a verified temporary file beside
   the destination. The supported no-clobber publication uses a hard link on
   Unix and a rename on Windows. A Unix filesystem without hard-link support
@@ -54,3 +54,16 @@ Company fighter, issue a stock move order and compare the requested destination
 with its observed arrival. Follow with a stock Attack order against a named NPC
 and measure its shields or hull. The acceptance evidence must come from the
 authoritative game and both participants' observations.
+
+## Internal packages
+
+Both archives were built from `69268cc6ee41992a016fe5332cbd4e40af034351`.
+The archived source bytes matched Git. The Windows ZIP includes the previously
+verified project network DLL. Clients supply their own licensed X4 installation
+and private connection settings. Cobalt's earlier Windows preflight applies
+to the earlier package. This revision has no Windows Internet playtest yet.
+
+| Package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| X4-Windows-Player.zip | 2,595,632 | `2cf7d999f579300e1632b334208e5c5a32e82a9dd0dcbc7b4dff1ddc7bfca399` |
+| X4-Linux-Provider-and-Player.tar.gz | 1,409,000 | `217a548b59aaa2363f5d33e896c767eb73c7379feb2d582787aa58ec5cb46ec0` |
