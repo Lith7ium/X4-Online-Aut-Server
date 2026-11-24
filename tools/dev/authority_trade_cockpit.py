@@ -87,7 +87,8 @@ def result_from_rows(rows, mode):
             'client_intent_captured': bool(intents), 'records': rows}
 
 
-def observe(log, mode, deadline, guard):
+def read_probe_rows(log, prefix, deadline, guard, *, max_records):
+    """Read complete tagged records from the owned game's append-only log."""
     rows = []
     pending = b''
     with log.open('rb') as stream:
@@ -98,16 +99,21 @@ def observe(log, mode, deadline, guard):
                 lines = (pending + chunk).split(b'\n')
                 pending = lines.pop()
                 if len(pending) > 65536:
-                    raise ValueError('unbounded stock-menu log line')
+                    raise ValueError('unbounded native probe log line')
                 for line in lines:
-                    if PREFIX not in line:
+                    if prefix not in line:
                         continue
-                    row = line.split(PREFIX, 1)[1].strip().decode('ascii')
+                    row = line.split(prefix, 1)[1].strip().decode('ascii')
                     rows.append(row)
-                    if len(rows) > 160 or row.startswith('ERROR|'):
-                        raise ValueError(f'native stock menu inspection stopped: {rows}')
+                    if len(rows) > max_records or row.startswith('ERROR|'):
+                        raise ValueError(f'native probe stopped: {rows[-12:]}')
                     if row.startswith('DONE|'):
-                        return result_from_rows(rows, mode)
+                        return rows
             else:
                 time.sleep(.25)
-    raise TimeoutError(f'native stock menu inspection timed out: {rows}')
+    raise TimeoutError(f'native probe timed out: {rows[-12:]}')
+
+
+def observe(log, mode, deadline, guard):
+    rows = read_probe_rows(log, PREFIX, deadline, guard, max_records=160)
+    return result_from_rows(rows, mode)
