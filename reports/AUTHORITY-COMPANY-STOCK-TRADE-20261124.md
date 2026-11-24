@@ -262,3 +262,42 @@ the same checks. The original result file, SHA-256
 remains a failed run with no save. Rechecking its native rows yields the
 confirmed 352 Cr receipt. Later trials preserve a private native save once
 a submission has occurred even if reconciliation fails.
+
+## Direct berth placement on 25 November
+
+An isolated Linux provider reloaded the original confirmed world and placed
+the existing WRN-302 at an external S berth on BIM-169 using the stock MD
+action `spawn_docked`. WRN began in space with no captain. The test selected
+bay seed `507326418098681806` from the source save and passed it as text to
+preserve its exact value. The second native lookup matched the station,
+sector and available bay immediately before placement.
+
+The action ran at game age 302.948 s. At 305.613 s a subsequent game update
+reported the same registered ship occupying that bay. The Company account
+and water aboard WRN were unchanged. The server avatar stayed at XPJ-169.
+The experiment issued no docking order and added no crew.
+
+The confirmed save placed WRN under that bay's `dock` connection and
+preserved its cargo and crew. A fresh native X4 process loaded the checkpoint
+and found WRN-302 externally docked at BIM-169 with an empty water hold.
+The save provided the exact bay seed. The cold in-game observer independently
+reported the station and dock state.
+
+| Isolated checkpoint | SHA-256 of the saved world |
+| --- | --- |
+| `checkpoint-25fd1e920d914e87b9ec18147c8f1cf9` | `9a3c6b8d5953c768e7a634f09626b417a271e87e65e3b64462cb5576ecc6260e` |
+
+In a separate native client run, X4 loaded the same source bytes, let the
+pilot take control of WRN-302 and assigned the ship a berth through its
+stock docking path. The client read the persistent seed from the actual
+occupied bay. The sector, station code, dock-area macro, bay macro and all
+18 digits of the seed matched the server's saved berth. The controlled
+ship remained the occupant through the stock trade confirmation callback.
+The client captured an intent, spent zero credits and exited cleanly.
+Its private result SHA-256 was
+`8f240ee0c8d45ef132a6ea21b150d82e5102910e0dc68ea88e6121868981b252`.
+
+The provider used a descriptor derived from the source save and the client
+measured its own berth independently. Delivery of that descriptor over a
+pilot's live multiplayer connection, and a bay already occupied on the
+provider, remain separate cases.

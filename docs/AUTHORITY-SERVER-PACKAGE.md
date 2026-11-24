@@ -172,9 +172,9 @@ ships' MD and UI position readings matched the saved coordinates with
 zero measured error. The confirmed checkpoint was
 `checkpoint-90a606d278ee438b9d2d3f9fc63be0c6`. A fresh GPU-free Linux
 X4 process then loaded that checkpoint. Both the UI and Mission Director
-read back each ship in its saved sector with 0 m of position error. A player flying through
-the gate in a real cockpit and an observer seeing the crossing remain to
-be tested.
+read back each ship in its saved sector with 0 m of position error. A gate
+crossing in a real cockpit and its appearance to another pilot remain to be
+tested.
 
 For new pose trials, `company_pose_trial.application_drops` in `result.json`
 counts observed discards and keeps the latest ship index, source sequence and
@@ -383,8 +383,10 @@ add `-CompanyPurchases` and select the same index you reserved for that pilot.
 
 Open the stock Docked menu, choose Trade, select a single ware and quantity,
 review the price, and confirm. The provider checks the reserved ship's
-identity, external berth, idle Company captain, free cargo space, funds and
-current station offer. Its native bridge currently allows one completed order
+identity, external berth, empty order queue, free cargo space, funds and
+current station offer. For a captain-less ship it checks the ship is on the
+berth and attempts to run the queued order with X4's stock trade computer.
+An idle Company captain can also execute the order. The native bridge currently allows one completed order
 per run. A missing receipt after dispatch also closes it to further orders.
 The native reference purchase used WRN-302 (7354) and six units of water at
 BIM-169 in Grand Exchange I. Other purchase baskets have protocol and
