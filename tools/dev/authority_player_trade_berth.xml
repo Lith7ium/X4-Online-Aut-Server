@@ -9,7 +9,7 @@
     <set_value name="$StationM" exact="-1"/>
     <set_value name="$BayM" exact="-1"/>
     <do_if value="$Status == 'READY'">
-     <do_if value="@Prepare.$Status? or @$Ship.assigneddock.exists">
+     <do_if value="@Prepare.$Status or @$Ship.assigneddock.exists">
       <set_value name="$Status" exact="'DOCK_REQUEST_ALREADY_STARTED'"/>
      </do_if>
      <do_else>
@@ -24,7 +24,7 @@
     <cue name="MeasurePlacement" checkinterval="0.5s">
      <conditions>
       <check_value value="@Position.$Status == 'MOVING'"/>
-      <check_value value="player.age ge $CheckAfter and (player.age ge $Deadline or @$Ship.distanceto.{$Bay} le 2km)"/>
+      <check_value value="player.age ge $CheckAfter and (player.age ge $Deadline or (@$Ship.distanceto.{$Bay} ge 250m and @$Ship.distanceto.{$Bay} le 2km))"/>
      </conditions>
      <actions>
       <include_actions ref="CheckBinding"/>
