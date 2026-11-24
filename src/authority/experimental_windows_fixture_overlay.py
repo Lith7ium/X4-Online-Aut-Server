@@ -1,14 +1,16 @@
 """Build a Windows load/participant overlay for isolated fixture diagnostics.
 
-The saved checkpoint must contain the two identity-fixture ships and the
-checkpoint marker used by the existing Linux diagnostic. This does not start
-X4, establish process ownership, authenticate log messages or admit a player.
+Every saved checkpoint must contain the offered checkpoint marker. Legacy
+fixture-only runs also check the original two identity-fixture ships. A
+Company seat instead requires its operational entry in the full registry and
+the native seat takeover. This does not start X4, establish process ownership,
+authenticate log messages or admit a player.
 The caller must establish that the supplied path names the intended private
 physical profile before installation and X4 startup; a path ending in
 ``45841/save`` can also name an ordinary profile. The caller owns the view,
 profile and their ancestors, and keeps them exclusive throughout use. The
-participant probe can listen before marker and identity observations complete:
-the caller must withhold all commands until correlated admission. The config
+participant probe can listen before load observations complete. The caller
+must withhold all commands until correlated admission. The config
 contains a plaintext ticket and lease; the caller must restrict access using
 private ACLs and securely clean up its owned configuration after X4 stops.
 Checks here cannot prevent concurrent replacement or establish these duties.
@@ -101,7 +103,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     and clean up the owned configuration after X4 stops.
     Optional registry status must come from the verified offered checkpoint;
     the Lua gate checks its epoch/count before the ordinary pause receipt.
-    The optional seat index selects one operational entry in the full saved registry.
+    The optional seat index selects one operational entry in the full saved
+    registry and replaces the legacy named fixture probe with a seat gate.
     Optional motion settings reuse the Linux client's modules and update hooks.
     They require this registry gate and a distinct UDP port/context. The caller
     must stop motion before pause/exit; this builder starts no process or socket.
@@ -147,6 +150,10 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         'md/authority_identity_fixture.xml': ROOT / 'tools/dev/authority_identity_fixture.xml',
         'md/authority_checkpoint_marker.xml': ROOT / 'src/authority/md/checkpoint_marker.xml',
     }
+    legacy_identity = seat_index is None
+    if not legacy_identity:
+        del sources['ui/authority_identity_probe.lua']
+        del sources['md/authority_identity_fixture.xml']
     # Fixture saves were made with the tracked faction pool. Preserve those
     # definitions and icon paths when loading the same world on a client.
     # The offered session still assigns players to the shared player faction.
@@ -156,13 +163,15 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     hook = b" elseif state=='observing' then\n"
     if load_probe.count(hook) != 1:
         raise ValueError('unexpected load probe hook')
-    files['ui/authority_download_load_probe.lua'] = load_probe.replace(
-        hook, hook + b'  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'
-                     b'  if not X4LAN_IDENTITY_READY() then return end\n')
+    marker_hook = b'  if not X4LAN_AUTHORITY_MARKER_READY() then return end\n'
+    if legacy_identity:
+        marker_hook += b'  if not X4LAN_IDENTITY_READY() then return end\n'
+    files['ui/authority_download_load_probe.lua'] = load_probe.replace(hook, hook + marker_hook)
     if registry_status is not None or registry_nonce is not None:
         files['ui/authority_download_load_probe.lua'] = extend_load_probe(
             files['ui/authority_download_load_probe.lua'].decode('utf-8'),
-            registry_nonce, registry_status).encode('utf-8')
+            registry_nonce, registry_status,
+            load_gate='identity' if legacy_identity else 'marker').encode('utf-8')
         for target, source in (
                 ('ui/recovery_registry_status.lua', 'src/authority/lua/recovery_registry_status.lua'),
                 ('md/authority_ship_registry.xml', 'tools/dev/authority_ship_registry.xml')):
@@ -200,8 +209,9 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         return json.dumps(value, ensure_ascii=True)
     ticket_lua = ','.join(key + '=' + (str(ticket[key]) if type(ticket[key]) is int else lua_string(ticket[key]))
                           for key in _FIELDS)
+    identity_config = 'authority_identity_phase="load",' if legacy_identity else ''
     config = ('X4LAN_CONFIG = {enabled=false,test_profile="45841",authority_download_load=true,'
-              'authority_identity_phase="load",authority_marker_phase="load",'
+              f'{identity_config}authority_marker_phase="load",'
               f'authority_load_save_path={lua_string(save_path)},authority_ticket={{{ticket_lua}}},'
               f'authority_participant_port={participant_port},authority_participant_lease={lua_string(participant_lease)}' + '}\n')
     ui_files = [name for name in sources if name.startswith('ui/')]

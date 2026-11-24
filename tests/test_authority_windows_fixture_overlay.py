@@ -138,10 +138,17 @@ class FixtureOverlayTest(unittest.TestCase):
         manifest = self.install(**options, registry_snapshot=snapshot, seat_index=8)
         target = self.view / 'extensions/x4_lan_lab'
         self.assertIn('md/client_seat.xml', manifest)
+        self.assertIn('md/authority_checkpoint_marker.xml', manifest)
+        self.assertNotIn('md/authority_identity_fixture.xml', manifest)
+        self.assertNotIn('ui/authority_identity_probe.lua', manifest)
+        self.assertNotIn('authority_identity_phase', (target / 'ui/config.lua').read_text())
         paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
+        self.assertNotIn('ui/authority_identity_probe.lua', paths)
         self.assertLess(paths.index('ui/client_seat.lua'),
                         paths.index('ui/authority_download_load_probe.lua'))
         load = (target / 'ui/authority_download_load_probe.lua').read_text()
+        self.assertNotIn('X4LAN_IDENTITY_READY', load)
+        self.assertLess(load.index('X4LAN_AUTHORITY_MARKER_READY()'), load.index('full_registry_inspect:ready()'))
         self.assertLess(load.index('full_registry_inspect:ready()'), load.index('client_seat:tick()'))
         self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
