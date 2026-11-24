@@ -1,8 +1,44 @@
 -- Private recovered-world offer/cockpit probe. No trade is dispatched.
+local function registered_confirm(menu, previous_frame, capture_handler)
+    local frame = menu.contextFrame
+    if not frame or frame == previous_frame or not frame.id or frame.id == 0
+            or frame.id ~= GetActiveFrame()
+            or not menu.frames or menu.frames[frame.properties.layer] ~= frame.id then return end
+    local found
+    for _, widget in ipairs(frame.content) do
+        if widget.type == 'table' then
+            for row_index, row in ipairs(widget.rows) do
+                for column, cell in ipairs(row) do
+                    if cell.type == 'button' and cell.properties.uiTriggerID == 'confirmtrade' then
+                        assert(not found, 'ambiguous_confirm_widget')
+                        assert(cell.properties.active == true, 'inactive_confirm_widget')
+                        assert(menu.buttonConfirmTrade == capture_handler
+                            and cell.handlers.onClick == capture_handler, 'unexpected_confirm_handler')
+                        local id = cell.id
+                        assert(widget.id and widget.id ~= 0 and id and id ~= 0
+                            and id == GetCellContent(widget.id, row_index, column), 'unbound_confirm_cell')
+                        for _, entry in ipairs(menu.buttonScriptMap or {}) do
+                            if entry.layer == frame.properties.layer and entry.tableobj == widget.id
+                                    and entry.row == row_index and entry.col == column and entry.button == id
+                                    and entry.type == 'onClick' then
+                                assert(not found and type(entry.script) == 'function', 'ambiguous_confirm_script')
+                                found = entry
+                            end
+                        end
+                        assert(found, 'unbound_confirm_script')
+                    end
+                end
+            end
+        end
+    end
+    assert(found, 'missing_confirm_widget')
+    return found
+end
+
 local cfg = X4LAN_CONFIG
 local mode = cfg and cfg.authority_trade_probe_mode
 local from_flight = cfg and cfg.authority_player_dock_flight == true
-if not from_flight and mode ~= 'offer' and mode ~= 'cockpit' then return end
+if not from_flight and mode ~= 'offer' and mode ~= 'cockpit' then return registered_confirm end
 
 local ffi = require('ffi')
 if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
@@ -27,7 +63,7 @@ local phase, deadline, take_time, next_verify = 'init'
 local last_md_seat
 local binding, menu, hook, captured, parked
 local failed = false
-local final_status, prepared
+local final_status, prepared, capture_handler, confirm_path
 
 local function log(row) DebugError('[X4LAN] AUTH_TRADE_COCKPIT ' .. row) end
 
@@ -194,6 +230,7 @@ local function begin_map(read_only)
             end,
             notice = function(status) log('NOTICE|' .. status) end,
         }))
+        capture_handler = menu.buttonConfirmTrade
     end
     deadline = GetCurRealTime() + 8
     phase = read_only and 'wait_remote_map' or 'wait_map'
@@ -237,10 +274,11 @@ local function capture_menu(data)
     assert(integer(free_after), 'virtual_free_after')
     log(('SLIDER_LIMIT|%d'):format(max_select))
     log(('VIRTUAL_FREE|%d|%d'):format(free_before, free_after))
+    local previous_frame = menu.contextFrame
     menu.slidercellTradeConfirmed('water')
     assert(menu.contextMenuData == data and controlled() and external_dock(), 'context_changed')
-    prepared = {data = data, offer = offer}
-    phase = 'confirm_map'
+    prepared = {data = data, offer = offer, previous_frame = previous_frame}
+    phase, deadline = 'wait_confirm_widget', GetCurRealTime() + 8
 end
 
 local function confirm_map()
@@ -259,9 +297,12 @@ local function confirm_map()
     assert(selected, 'stock_slider_no_quantity')
     log(('STOCK_BASKET|%d|%d'):format(-quantity, unit_cents(data.totalsellcost)))
     local cents = unit_cents(selected.price)
-    log('CONFIRM_PATH|direct_callback|button_state_unobserved')
-    menu.buttonConfirmTrade()
+    local entry = registered_confirm(menu, prepared.previous_frame, capture_handler)
+    assert(entry and entry == prepared.confirm_widget, 'confirm_widget_changed')
+    entry.script(entry.button)
     assert(captured and captured.price_cents == cents and hook.detach(), 'intent_not_captured')
+    confirm_path = 'registered_widget_callback|descriptor_active|physical_click_unobserved'
+    log('CONFIRM_PATH|' .. confirm_path)
     log(('INTENT|%s|%s|water|%d|%d'):format(captured.sector, captured.station_code, quantity, cents))
     finish('intent_captured')
 end
@@ -363,6 +404,13 @@ local function frame(allow_confirm)
             if phase == 'wait_remote_map' then map_unavailable('map_context_timeout')
             else error('map_context_timeout', 0) end
         end
+    elseif phase == 'wait_confirm_widget' then
+        assert(now < deadline, 'confirm_widget_render_timeout')
+        local entry = registered_confirm(menu, prepared.previous_frame, capture_handler)
+        if entry then
+            prepared.confirm_widget = entry
+            phase = 'confirm_map'
+        end
     elseif phase == 'confirm_map' then
         if not from_flight or allow_confirm then confirm_map() end
     elseif phase == 'inspect_reply' then
@@ -378,7 +426,7 @@ if from_flight then
         phase = 'begin_map'
         return function(allow_confirm)
             guarded(frame, allow_confirm)
-            return final_status, failed, phase == 'confirm_map', captured
+            return final_status, failed, phase == 'confirm_map', captured, confirm_path
         end
     end
 else

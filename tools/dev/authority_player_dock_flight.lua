@@ -286,8 +286,9 @@ local function frame(registry)
         end
     elseif phase == 'confirm' then
         assert(now < deadline and control_matches(), 'confirm_timeout_or_control_lost')
-        local outcome, failure, _, captured = capture(true)
-        assert(not failure and outcome == 'intent_captured' and captured, 'stock_capture_failed')
+        local outcome, failure, _, captured, confirm_path = capture(true)
+        assert(not failure and outcome == 'intent_captured' and captured and confirm_path, 'stock_capture_failed')
+        log('CONFIRM_PATH|' .. confirm_path)
         intent = captured
         phase, deadline = 'after_confirm_wait', now + 8
         observe(now)

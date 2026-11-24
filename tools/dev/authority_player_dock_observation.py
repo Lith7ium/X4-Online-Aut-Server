@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
-from authority_trade_cockpit import read_probe_rows
+from authority_trade_cockpit import CONFIRM_PATH, read_probe_rows
 
 
 PREFIX = b'[X4LAN] AUTH_PLAYER_DOCK_FLIGHT '
@@ -93,7 +93,7 @@ def _verify_approach(stages, source, *, prepare_berth):
 def verify_player_flight(rows, *, prepare_berth=False):
     docking = (('PLAYER_DOCK_REQUEST', 'ROUTE', 'BERTH|REQUESTED', 'BERTH|ASSIGNED', 'BERTH|DISPATCHED')
                 if prepare_berth else ('QUICKDOCK',))
-    names = ('START', 'SEAT', 'AUTOPILOT', 'DEPARTURE', *docking, 'DOCKED', 'BEFORE_CONFIRM', 'AFTER_CONFIRM', 'DONE')
+    names = ('START', 'SEAT', 'AUTOPILOT', 'DEPARTURE', *docking, 'DOCKED', 'BEFORE_CONFIRM', 'CONFIRM_PATH', 'AFTER_CONFIRM', 'DONE')
     stages = {name: _once(rows, name) for name in names}
     order = [stage[0] for stage in stages.values()]
     if order != sorted(order) or rows[-1] != 'DONE|intent_captured':
@@ -116,15 +116,18 @@ def verify_player_flight(rows, *, prepare_berth=False):
         _verify_berth(stages, source, docked)
     if before.water != after.water or before.balance != after.balance:
         raise ValueError('cargo or Company account changed during the capture-only confirmation')
+    if stages['CONFIRM_PATH'][1] != CONFIRM_PATH:
+        raise ValueError('stock confirmation lacks a registered active widget callback')
     intent_index, intent = _once(rows, 'INTENT')
     match = re.fullmatch(r'cluster_01_sector001_macro\|BIM-169\|water\|6\|([1-9][0-9]*)', intent)
-    if not match or not stages['BEFORE_CONFIRM'][0] < intent_index < stages['DONE'][0]:
+    if not match or not stages['AFTER_CONFIRM'][0] < intent_index < stages['DONE'][0]:
         raise ValueError('missing stock intent for six water at BIM-169')
     return {'client_intent_captured': True, 'purchase_executed': False, 'admitted': False,
             'start_distance_m': source.distance, 'docked_distance_m': docked.distance,
             'docking_route': 'assigned_berth_fixture' if prepare_berth else 'piloted_approach',
             'flight_game_seconds': float(docked.age - source.age), 'unit_price_cents': int(match[1]),
-            'water_units': after.water, 'company_balance_cents': after.balance, 'records': rows}
+            'water_units': after.water, 'company_balance_cents': after.balance,
+            'stock_confirm_path': CONFIRM_PATH, 'records': rows}
 
 
 def observe_player_flight(log, deadline, guard, *, prepare_berth=False):

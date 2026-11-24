@@ -16,6 +16,9 @@ def _insert(path, anchor, replacement):
     path.write_text(contents.replace(anchor, replacement), encoding='utf-8')
 
 
+CONFIRM_PATH = 'registered_widget_callback|descriptor_active|physical_click_unobserved'
+
+
 def install(case, mode):
     if mode not in ('offer', 'cockpit'):
         raise ValueError('unknown stock purchase inspection mode')
@@ -73,12 +76,16 @@ def result_from_rows(rows, mode):
                                  intents[0])):
             raise ValueError('stock purchase confirmation lacks a matching client intent')
         before_intent = rows[:rows.index(intents[0])]
+        path = 'CONFIRM_PATH|' + CONFIRM_PATH
+        if [row for row in rows if row.startswith('CONFIRM_PATH|')] != [path] or path not in before_intent:
+            raise ValueError('stock confirmation lacks a registered active widget callback')
         ship, station, dock, captain = inspections[0][2:6]
         permission = [row for row in before_intent if re.fullmatch(r'PERMISSION\|[^|]+\|granted', row)]
         take = [row for row in before_intent if row.startswith(f'TAKE|DISPATCHED|{ship}|{station}|{dock}|')]
         controlled = f'VERIFY|CONTROLLED|{ship}|{station}|{dock}|{captain}|{ship}|{ship}|{ship}'
         if (len(permission) != 1 or len(take) != 1 or controlled not in before_intent
-                or not before_intent.index(permission[0]) < before_intent.index(take[0]) < before_intent.index(controlled)):
+                or not before_intent.index(permission[0]) < before_intent.index(take[0])
+                        < before_intent.index(controlled) < before_intent.index(path)):
             raise ValueError('stock purchase confirmation lacks permission, takeover or matching native cockpit')
     elif intents:
         raise ValueError('unexpected stock purchase intent')
