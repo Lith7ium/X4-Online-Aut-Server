@@ -118,7 +118,7 @@ def verify_source(store_dir,checkpoint,profile):
             raise ValueError('source and recovery extension configuration differs')
 
 
-def stop_recovery_process(proc, started, launch_attempted):
+def stop_recovery_process(proc, started, launch_attempted, *, owned_launch=None, result=None):
     """Return (survivors, error); None means that process cleanup is unconfirmed.
 
     This older runner starts the launcher without an exec gate. If its start
@@ -143,6 +143,16 @@ def stop_recovery_process(proc, started, launch_attempted):
             raise ValueError('invalid owned cleanup result')
     except BaseException:
         return None, 'process cleanup failed'
+    if remaining and owned_launch is not None:
+        try:
+            cleanup = live.stop_owned_game_descendants(owned_launch)
+            if result is not None:
+                result['owned_descendant_cleanup'] = cleanup
+            remaining = live.wait_owned_groups({proc.pid: started}).get(proc.pid, [])
+            if cleanup['refused']:
+                return remaining, 'owned descendant identity refused'
+        except (OSError, RuntimeError, ValueError) as error:
+            return None, 'owned descendant cleanup failed: ' + str(error)
     if remaining:
         return remaining, 'owned processes remain'
     return remaining, None
@@ -163,7 +173,7 @@ def run(args):
     user=pwd.getpwuid(os.geteuid());home=Path(user.pw_dir);steam=live.steam_identity(home,user.pw_uid)
     out.mkdir(mode=0o700,parents=True,exist_ok=False)
     result={'success':False,'scope':'one isolated Linux X4 restart; no client, admission, multiplayer or gameplay'}
-    proc=started=lock_fd=lock_stat=None;handlers={};launch_attempted=False
+    proc=started=lock_fd=lock_stat=owned_launch=None;handlers={};launch_attempted=False
     try:
         case,profile,binds,lock=snapshot.prepare_case(out,game,home)
         stage=out/'staged-profile';stage.mkdir(mode=0o700)
@@ -206,6 +216,7 @@ def run(args):
                 launch_attempted=True
                 proc=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
                 started=live.start_ticks(proc.pid)
+                owned_launch=live.record_owned_game(proc,started,case/'home',game/'X4',user.pw_uid)
             finally:
                 for number,handler in previous_handlers.items(): signal.signal(number,handler)
             if pending_signal[0] is not None:
@@ -251,7 +262,10 @@ def run(args):
         for number in handlers:
             try: signal.signal(number, signal.SIG_IGN)
             except BaseException: cleanup_errors.append('cannot fence cleanup signals')
-        remaining, process_error = stop_recovery_process(proc, started, launch_attempted)
+        remaining, process_error = stop_recovery_process(
+            proc, started, launch_attempted, owned_launch=owned_launch, result=result)
+        if proc is not None and started is not None and owned_launch is None:
+            cleanup_errors.append('owned game launch identity unavailable')
         result['owned_processes_remaining'] = remaining
         if process_error is not None: cleanup_errors.append(process_error)
         if cleanup_errors: result['success'] = False

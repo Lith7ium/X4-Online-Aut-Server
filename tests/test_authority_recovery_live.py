@@ -127,6 +127,9 @@ class RecoveryLiveTests(unittest.TestCase):
                         return proc
                     popen=replace(recovery.subprocess,'Popen',Mock(side_effect=spawn))
                     replace(recovery.live,'start_ticks',Mock(side_effect=RuntimeError('no identity')) if mode=='unknown_identity' else lambda _:7)
+                    replace(recovery.live,'record_owned_game',Mock(return_value={'leader':123}))
+                    replace(recovery.live,'stop_owned_game_descendants',Mock(return_value={'refused':[]}))
+                    replace(recovery.live,'wait_owned_groups',Mock(return_value={123:[99]}))
                     replace(recovery.prior,'game_identity',Mock(side_effect=RuntimeError('end observation')))
                     stop=replace(recovery.snapshot,'stop_owned',Mock(side_effect=RuntimeError('uncertain')) if mode=='raises' else Mock(return_value=[99] if mode=='survives' else (None if mode=='invalid' else [])))
                     result=recovery.run(args)
@@ -144,6 +147,28 @@ class RecoveryLiveTests(unittest.TestCase):
                 if mode=='interrupted_spawn':
                     self.assertEqual(result['error'],'signal '+str(recovery.signal.SIGTERM))
                     stop.assert_called_once_with(proc,7)
+
+    def test_stopped_leader_reuses_authenticated_descendant_cleanup(self):
+        process = Mock(pid=123)
+        launch = {'leader': 123}
+        for refused, remaining, expected in (
+            ([], [], None),
+            ([{'pid': 99}], [], 'owned descendant identity refused'),
+            ([], [99], 'owned processes remain'),
+        ):
+            with self.subTest(refused=refused, remaining=remaining):
+                result = {}
+                evidence = {'refused': refused, 'processes': [{'pid': 99}]}
+                groups = {123: remaining} if remaining else {}
+                with (patch.object(recovery.snapshot, 'stop_owned', return_value=[99]),
+                      patch.object(recovery.live, 'stop_owned_game_descendants',
+                                   return_value=evidence) as cleanup,
+                      patch.object(recovery.live, 'wait_owned_groups', return_value=groups)):
+                    found = recovery.stop_recovery_process(
+                        process, 7, True, owned_launch=launch, result=result)
+                cleanup.assert_called_once_with(launch)
+                self.assertEqual(found, (remaining, expected))
+                self.assertEqual(result['owned_descendant_cleanup'], evidence)
 
     def test_source_requires_exact_confirmed_last_departure_and_matching_extensions(self):
         with tempfile.TemporaryDirectory() as d:
