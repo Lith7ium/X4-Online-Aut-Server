@@ -126,7 +126,8 @@ local function test_replay_marker_and_incomplete_capture_never_store()
     -- The capture remains partial and its request deadline expires.
     set_time(31)
     assert(not gate:tick())
-    assert(#stores == 0 and gate:state().stopped and #faults > 0)
+    assert(#stores == 0 and gate:state().stopped and #faults == 1)
+    assert(faults[1] == 'registry checkpoint operation timed out')
 
     local cursor
     gate, requests, stores, _, _, cursor = initialized_gate()
@@ -187,7 +188,8 @@ local function test_report_deadline_and_store_refusal_fence()
     local cursor = complete_active(gate, requests, 1, 'inspect')
     assert(gate:prepare(string.rep('6', 32)) and gate:tick())
     complete_active(gate, requests, cursor, 'capture')
-    assert(gate:state().stopped and #stores == 0 and #faults > 0)
+    assert(gate:state().stopped and #stores == 0 and #faults == 1)
+    assert(faults[1] == 'registry checkpoint operation timed out')
 
     local attempted = 0
     requests, stores, faults = {}, {}, {}
@@ -207,6 +209,38 @@ local function test_report_deadline_and_store_refusal_fence()
     assert(gate:prepare(string.rep('5', 32)) and gate:tick())
     complete_active(gate, requests, next_cursor, 'capture')
     assert(gate:state().stopped and attempted == 1 and #stores == 0 and #faults > 0)
+end
+
+local function test_tick_fault_diagnosis_is_bounded()
+    for _, scenario in ipairs({
+        {reason = 'registry checkpoint operation timed out', time = 110},
+        {reason = 'registry checkpoint invalid or regressed clock', time = -1},
+        {reason = 'registry checkpoint invalid or regressed clock', time = math.huge},
+        {reason = 'registry checkpoint invalid or regressed clock', time = 'private clock data'},
+        {reason = 'registry checkpoint invalid or regressed clock', clock_throws = true},
+        {reason = 'snapshot owner tick failed', owner_throws = true},
+    }) do
+        local time, armed = 0, false
+        local gate, _, stores, _, faults = make_gate({
+            clock = function()
+                if armed and scenario.clock_throws then error('private clock callback data') end
+                return time
+            end,
+            guard = function()
+                if armed and scenario.owner_throws then
+                    error('private owner callback data:123: request timed out')
+                end
+                return true
+            end,
+        })
+        assert(gate:start())
+        time, armed = scenario.time or 0, true
+        local ok, status = gate:tick()
+        assert(not ok and status == 'faulted')
+        assert(gate:state().stopped and #stores == 0)
+        assert(#faults == 1 and faults[1] == scenario.reason, faults[1])
+        assert(not gate:tick() and #faults == 1)
+    end
 end
 
 local function make_first_gate()
@@ -277,6 +311,7 @@ test_replay_marker_and_incomplete_capture_never_store()
 test_reentrant_report_faults_before_store()
 test_guard_reentry_stops_before_issue()
 test_report_deadline_and_store_refusal_fence()
+test_tick_fault_diagnosis_is_bounded()
 test_first_capture_and_second_save_linkage()
 test_first_capture_collisions_and_failed_initialize()
 print('authority registry checkpoint gate: ok')

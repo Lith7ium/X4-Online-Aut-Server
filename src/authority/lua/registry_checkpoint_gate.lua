@@ -1,6 +1,9 @@
 -- Default-off gate for correlated registry snapshots before checkpoint saves.
 -- The caller owns events, ticks, pause/resume and the native save lifecycle.
 local M = {}
+local CLOCK_FAULT = 'registry checkpoint invalid or regressed clock'
+local TIMEOUT_FAULT = 'registry checkpoint operation timed out'
+local OWNER_TICK_FAULT = 'snapshot owner tick failed'
 
 local function token(value)
     return type(value) == 'string' and #value == 32
@@ -12,10 +15,10 @@ local function bits(value, count)
         and value:match('^[01]+$') ~= nil
 end
 
-local function check_inspected_bits(label, expected, observed)
+local function inspected_bits_error(label, expected, observed)
     if observed == expected then return end
     if type(observed) ~= 'string' or #observed ~= #expected then
-        error(label .. ' vector has an unexpected length')
+        return label .. ' vector has an unexpected length'
     end
     local count, examples = 0, {}
     for index = 1, #expected do
@@ -23,12 +26,13 @@ local function check_inspected_bits(label, expected, observed)
         if before ~= after then
             count = count + 1
             if #examples < 6 then
-                examples[#examples + 1] = string.format('%d(%c>%c)', index, before, after)
+                local observed_bit = after == 48 and '0' or after == 49 and '1' or '?'
+                examples[#examples + 1] = string.format('%d(%c>%s)', index, before, observed_bit)
             end
         end
     end
-    error(string.format('%s differs at %d indices, first %s', label, count,
-        table.concat(examples, ',')))
+    return string.format('%s differs at %d indices, first %s', label, count,
+        table.concat(examples, ','))
 end
 
 local function copy(value)
@@ -94,7 +98,7 @@ function M.new(options)
     local api = {}
     local active, active_mode, pending_marker, active_deadline
     local ready, started, stopped, busy = false, false, false, false
-    local last_time
+    local last_time, tick_fault
     local used_markers = {[cfg.epoch] = true, [cfg.nonce] = true}
     used_markers[cfg.initial_run_id or cfg.source_marker] = true
     local current_run_id = cfg.initial_run_id
@@ -107,32 +111,42 @@ function M.new(options)
         active_deadline = nil
         pcall(cfg.fault, tostring(reason))
     end
+    local function refuse_clock(reason)
+        if tick_fault then tick_fault = reason end
+        error(reason, 0)
+    end
+    local function valid_clock(ok, now)
+        return ok and type(now) == 'number' and now == now
+            and now ~= math.huge and now ~= -math.huge and (not last_time or now >= last_time)
+    end
     local function protected(fn, ...)
         local ok, result = pcall(fn, ...)
         if not ok then error(result) end
         if stopped then error('gate stopped during callback') end
         if active_deadline then
             local clock_ok, now = pcall(cfg.clock)
-            if not clock_ok or stopped or type(now) ~= 'number' or now ~= now
-                or now == math.huge or now == -math.huge
-                or (last_time and now < last_time) or now >= active_deadline then
-                error('registry checkpoint operation timed out or clock invalid')
-            end
+            if stopped then error('gate stopped during clock callback') end
+            if not valid_clock(clock_ok, now) then refuse_clock(CLOCK_FAULT) end
+            if now >= active_deadline then refuse_clock(TIMEOUT_FAULT) end
             last_time = now
         end
         return result
     end
     local function checked_clock()
         local ok, now = pcall(cfg.clock)
-        if not ok or type(now) ~= 'number' or now ~= now
-            or now == math.huge or now == -math.huge or (last_time and now < last_time) then
-            error('registry checkpoint clock invalid or moved backwards')
-        end
+        if not valid_clock(ok, now) then refuse_clock(CLOCK_FAULT) end
         last_time = now
-        if stopped or (active_deadline and now >= active_deadline) then
-            error('registry checkpoint operation timed out or gate stopped')
-        end
+        if stopped then error('gate stopped during clock callback') end
+        if active_deadline and now >= active_deadline then refuse_clock(TIMEOUT_FAULT) end
         return now
+    end
+    local function check_inspected_bits(label, expected, observed)
+        local detail = inspected_bits_error(label, expected, observed)
+        if detail then
+            -- Keep the bounded bit comparison without forwarding callback errors.
+            if tick_fault then tick_fault = OWNER_TICK_FAULT .. ': ' .. detail end
+            error(detail, 0)
+        end
     end
     local function guard()
         return protected(cfg.guard) == true
@@ -190,7 +204,18 @@ function M.new(options)
                     ready = true
                 end
             end,
-            fault = function(reason) fail('snapshot owner: ' .. tostring(reason)) end,
+            fault = function(reason)
+                if not tick_fault then
+                    fail('snapshot owner: ' .. tostring(reason))
+                    return
+                end
+                -- The owner's separate per-request deadline raises this fixed Lua error.
+                if tick_fault == OWNER_TICK_FAULT and type(reason) == 'string'
+                    and (reason == 'request timed out' or reason:match('^[^:\r\n]+:%d+: request timed out$')) then
+                    tick_fault = TIMEOUT_FAULT
+                end
+                fail(tick_fault)
+            end,
         })
         active, active_mode = owner, mode
         local now = checked_clock()
@@ -268,14 +293,15 @@ function M.new(options)
         -- Ready-state ticks intentionally do not require pause; active snapshot
         -- ticks delegate to the owner's pause/game-time guard.
         if not active then return ready end
-        busy = true
+        busy, tick_fault = true, OWNER_TICK_FAULT
         local ok, result = pcall(function()
             checked_clock()
             return active:tick()
         end)
-        busy = false
+        local reason = tick_fault
+        busy, tick_fault = false, nil
         if not ok or result ~= true then
-            if not stopped then fail('snapshot owner tick failed') end
+            if not stopped then fail(reason) end
             return false, 'faulted'
         end
         return true
