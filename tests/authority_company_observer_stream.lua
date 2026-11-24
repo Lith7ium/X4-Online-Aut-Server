@@ -62,3 +62,48 @@ owner:tick(false)
 assert(#sent == 10 and sent[9]:match('VIEW|cockpit|2|') and sent[10]:match('VIEW|map|4|'))
 owner:close()
 assert(cockpit.closed and map.closed)
+
+-- Only a current, locally confirmed cockpit observation can reach the optional trial.
+local trial_module = dofile('src/authority/lua/company_hull_trial.lua')
+local received, writes, stops = {}, 0, 0
+local native = {guard = function() return true end, close = function() end}
+local trial = trial_module.new({
+    enabled = true, own_index = 1970, target_index = 12,
+    adapter = {bind = function(_, binding)
+        assert(binding.slot == 'cockpit' and binding.actor == '0xc' and binding.index == 12)
+        return native
+    end},
+    playback = {new = function(options)
+        assert(options.guard(options.binding))
+        return {
+            push = function(_, binding, sample, arrival)
+                assert(binding.serial == 1 and arrival == clock)
+                received[#received + 1] = sample
+                return true
+            end,
+            tick = function() writes = writes + 1; return true end,
+            stop = function() stops = stops + 1 end,
+        }
+    end},
+})
+owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end, trial)
+local ordinary_send = net.send
+net.send = function() return false end
+send('cockpit', 1, 12, 'sector_a', moving)
+owner:tick(true)
+assert(#received == 0 and writes == 0)
+net.send = ordinary_send
+send('map', 1, 7354, 'sector_b', moving)
+send('cockpit', 2, 12, 'sector_a', moving)
+send('cockpit', 1, 12, 'sector_a', pose)
+owner:tick(true)
+assert(#received == 0 and writes == 0)
+send('cockpit', 1, 12, 'sector_a', moving)
+owner:tick(true)
+assert(#received == 1 and writes == 1 and received[1].real_velocity.y == .002)
+assert(received[1].capture_time == 50.25 and received[1].source_time == 1)
+owner:tick(false)
+send('cockpit', 3, 12, 'sector_a', moving)
+owner:tick(true)
+assert(#received == 1 and writes == 1 and stops == 1)
+owner:close()

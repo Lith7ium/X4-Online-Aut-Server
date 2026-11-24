@@ -38,7 +38,7 @@ local function valid_sample(row)
     return true
 end
 
-function M.new(readers, epoch, net, prefix, clock)
+function M.new(readers, epoch, net, prefix, clock, playback_trial)
     local slots = {}
     for _, name in ipairs(SLOT_NAMES) do
         slots[name] = {reader = assert(readers[name]), serial = 0, next_heartbeat = 0}
@@ -66,7 +66,7 @@ function M.new(readers, epoch, net, prefix, clock)
         net:send(prefix .. table.concat(fields, '|'))
     end
 
-    local function observe(packet)
+    local function observe(packet, now)
         if #packet > 576 or packet:sub(1, #prefix) ~= prefix then return end
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
@@ -82,7 +82,19 @@ function M.new(readers, epoch, net, prefix, clock)
         -- Echo only after reading the live local hull again. Source rates may be absent.
         local receipt = {'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
                          binding.actor, binding.code, unpack(row, 9, 16)}
-        net:send(prefix .. table.concat(receipt, '|'))
+        local confirmed = net:send(prefix .. table.concat(receipt, '|'))
+        if playback_trial and confirmed == true and row[2] == 'cockpit' then
+            local velocity
+            if row[12] ~= '-' then
+                velocity = {x = tonumber(row[12]), y = tonumber(row[13]), z = tonumber(row[14])}
+            end
+            playback_trial:sample(binding, slot.serial, {
+                version = 3, epoch = epoch, index = binding.index, sector_macro = binding.sector_macro,
+                generation = row[6], sequence = tonumber(row[7]), x = tonumber(row[9]),
+                y = tonumber(row[10]), z = tonumber(row[11]), real_velocity = velocity,
+                source_time = tonumber(row[15]), capture_time = tonumber(row[16]),
+            }, now)
+        end
     end
 
     function api:tick(running)
@@ -95,14 +107,17 @@ function M.new(readers, epoch, net, prefix, clock)
             end
             publish_view(slot, name, binding, now, running)
         end
+        if playback_trial then playback_trial:view(slots.cockpit.binding, slots.cockpit.serial) end
         for _ = 1, 8 do
             local packet = net:receive()
             if packet == nil then break end
-            if running then observe(packet) end
+            if running then observe(packet, now) end
         end
+        if playback_trial and running then playback_trial:tick() end
     end
 
     function api:close()
+        if playback_trial then playback_trial:close() end
         for _, name in ipairs(SLOT_NAMES) do slots[name].reader:close() end
     end
     return api
