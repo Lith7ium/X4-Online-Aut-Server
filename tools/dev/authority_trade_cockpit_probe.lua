@@ -198,7 +198,7 @@ local function begin_map(read_only)
     deadline = GetCurRealTime() + 8
     phase = read_only and 'wait_remote_map' or 'wait_map'
     OpenMenu('MapMenu', {0, 0, true, nil, nil, 'tradecontext',
-        {binding.station_lua, binding.ship_lua, false}}, nil)
+        {binding.station_lua, binding.ship_lua, 0}}, nil)
 end
 
 local function capture_remote_quote(data)
@@ -225,13 +225,21 @@ local function capture_menu(data)
     end
     assert(waredata and type(data.orders) == 'table', 'water_slider_or_basket')
     for _, amount in pairs(data.orders) do assert(amount == 0, 'basket_not_empty') end
-    local prior = data.currentcargo.water or 0
-    assert(integer(prior), 'water_cargo_before')
-    -- A stock slider takes the movement, with the row callback's zero basis.
+    -- Read the same affordability/capacity bound that stock assigns to the slider.
+    local content = menu.getTradeContextRowContent(waredata)
+    local max_select = content[4].scale.maxselect
+    assert(integer(max_select) and max_select >= quantity, 'stock_slider_limit')
+    local free_before = GetFreeCargoAfterTradeOrders(binding.ship_lua, 'water')
+    assert(integer(free_before) and free_before >= quantity, 'virtual_free_before')
+    -- The stock row passes a zero basis and the selected movement.
     menu.slidercellShipCargo(waredata.sell.id, waredata.buy and waredata.buy.id, 'water', 0, quantity)
+    local free_after = GetFreeCargoAfterTradeOrders(binding.ship_lua, 'water')
+    assert(integer(free_after), 'virtual_free_after')
+    log(('SLIDER_LIMIT|%d'):format(max_select))
+    log(('VIRTUAL_FREE|%d|%d'):format(free_before, free_after))
     menu.slidercellTradeConfirmed('water')
     assert(menu.contextMenuData == data and controlled() and external_dock(), 'context_changed')
-    prepared = {data = data, offer = offer, prior = prior}
+    prepared = {data = data, offer = offer}
     phase = 'confirm_map'
 end
 
@@ -249,8 +257,9 @@ local function confirm_map()
         end
     end
     assert(selected, 'stock_slider_no_quantity')
-    log(('SLIDER|%d|%d|%d'):format(prepared.prior, prepared.prior + quantity, -quantity))
+    log(('STOCK_BASKET|%d|%d'):format(-quantity, unit_cents(data.totalsellcost)))
     local cents = unit_cents(selected.price)
+    log('CONFIRM_PATH|direct_callback|button_state_unobserved')
     menu.buttonConfirmTrade()
     assert(captured and captured.price_cents == cents and hook.detach(), 'intent_not_captured')
     log(('INTENT|%s|%s|water|%d|%d'):format(captured.sector, captured.station_code, quantity, cents))
