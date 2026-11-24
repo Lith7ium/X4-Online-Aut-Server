@@ -22,13 +22,18 @@ def validate_playback_index(index, *, company_motion, own_index=None):
 class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
-    def __init__(self, *, playback_index=None, on_stage=None):
+    def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False):
         validate_playback_index(playback_index, company_motion=True)
+        if type(cockpit_radar_playback) is not bool:
+            raise ValueError('cockpit_radar_playback must be a boolean')
+        if cockpit_radar_playback and playback_index is None:
+            raise ValueError('cockpit_radar_playback requires an explicit playback_index')
         if on_stage is not None and not callable(on_stage):
             raise ValueError('invalid company motion stage reporter')
         self._on_stage = on_stage
         self._reported_stages = set()
         self._playback_index = playback_index
+        self._cockpit_radar_playback = cockpit_radar_playback
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -61,6 +66,10 @@ class CompanyMotionSource:
         return self._playback_index
 
     @property
+    def cockpit_radar_playback(self):
+        return self._cockpit_radar_playback
+
+    @property
     def registry(self):
         """Verified (registry epoch, selected index), populated by the installer."""
         return self._registry
@@ -90,6 +99,8 @@ class CompanyMotionSource:
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
         if playback_index is not None:
             config['playback_index'] = playback_index
+        if self._cockpit_radar_playback:
+            config['cockpit_radar_playback'] = True
         return config
 
     def _prefix(self):

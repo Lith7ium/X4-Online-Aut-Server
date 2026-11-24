@@ -25,7 +25,7 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
-    COMPANY_MOTION_MD, company_motion_config, company_motion_ui, export_motion_buffer, extend_seat_gate,
+    COMPANY_MOTION_MD, company_motion_config, company_motion_md, company_motion_ui, export_motion_buffer, extend_seat_gate,
 )
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
@@ -238,7 +238,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             raise ValueError('company hull playback requires its exclusive motion overlay')
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
         ui_files[insertion:insertion] = ['ui/' + name for name in ui_sources]
-        for folder, sources in (('ui', ui_sources), ('md', COMPANY_MOTION_MD)):
+        for folder, sources in (('ui', ui_sources), ('md', company_motion_md(company_motion))):
             for name, source in sources.items():
                 data = _source(ROOT / source, 1024 * 1024)
                 files[folder + '/' + name] = export_motion_buffer(data) if name == 'motion_buffer.lua' else data

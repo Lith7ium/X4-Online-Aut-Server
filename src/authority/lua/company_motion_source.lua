@@ -128,11 +128,21 @@ function M.new_x4(config, save_path, pinned, udp)
         DebugError('[X4LAN] AUTH_COMPANY_OBSERVER_UNAVAILABLE')
     end
     local ok, observer = pcall(function()
-        local cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
+        local cockpit, trial
+        if config.cockpit_radar_playback == true and X4LAN_COMPANY_COCKPIT_OBSERVER then
+            cockpit = X4LAN_COMPANY_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
+                radar_fallback = true,
+                target_index = config.playback_index,
+                clock = udp.monotonic,
+            })
+        else
+            cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
+        end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
-        local trial
         if config.playback_index then
-            local created, candidate = pcall(X4LAN_COMPANY_HULL_TRIAL and X4LAN_COMPANY_HULL_TRIAL.new_x4,
+            local factory = (config.cockpit_radar_playback == true and X4LAN_COMPANY_COCKPIT_PLAYBACK)
+                or X4LAN_COMPANY_HULL_TRIAL
+            local created, candidate = pcall(factory and factory.new_x4,
                                              config, pinned, cockpit,
                                              available, udp.monotonic)
             if created then trial = candidate

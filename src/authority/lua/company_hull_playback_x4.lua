@@ -100,6 +100,22 @@ function M.new(options, engine)
             return eligible()
         end
 
+        function session:align(target)
+            if not position(target) then return false end
+            local actual = self:read()
+            if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
+            if not engine.same_zone(original_target, target) or not eligible() then return false end
+            local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
+                x = target.x, y = target.y, z = target.z,
+                yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
+            })
+            if not ok or dispatched ~= true then
+                closed = true
+                return false
+            end
+            return eligible()
+        end
+
         function session:close()
             closed = true
         end

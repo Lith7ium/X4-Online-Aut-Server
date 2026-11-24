@@ -7,7 +7,7 @@ import shutil
 from authority.checkpoints import Checkpoint
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
-    COMPANY_MOTION_MD, company_motion_config, company_motion_ui, export_motion_buffer, extend_seat_gate,
+    COMPANY_MOTION_MD, company_motion_config, company_motion_md, company_motion_ui, export_motion_buffer, extend_seat_gate,
 )
 from authority.load_observations import BoundReceiptStream, MAX_LOG
 from authority.registry_availability_evidence import verify_join_snapshot
@@ -53,7 +53,7 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, s
     if body.count(hook) != 1:
         raise ValueError('unexpected registry module insertion point')
     ui_sources = _UI if company_motion is None else _UI | company_motion_ui(company_motion)
-    md_sources = _MD if company_motion is None else _MD | COMPANY_MOTION_MD
+    md_sources = _MD if company_motion is None else _MD | company_motion_md(company_motion)
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     manifest.write_text(body.replace(hook, modules + hook), encoding='utf-8')
 
