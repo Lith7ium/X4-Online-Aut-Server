@@ -244,6 +244,80 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(client._credential)
         await check_control(b'after-motion-close')
 
+    async def test_reconnecting_view_retires_visibility_and_accepts_only_fresh_samples(self):
+        _, viewer_port = await self.link()
+        _, source_port = await self.link()
+        viewer_grant = self.grant(1, 1970, 'sector_a')
+        source_grant = self.grant(2, 7354, 'sector_a')
+        source_client, source, _, _ = self.attach(source_port, source_grant)
+        seen, ended = [], []
+        viewer = ReconnectingCompanyMotionClient(
+            viewer_port, viewer_grant, SelectedCockpit(1970), lambda _: True,
+            on_snapshot=seen.append, on_end=lambda index, generation: ended.append((index, generation)),
+        )
+        self.addCleanup(viewer.close)
+        self.clients = [viewer, source_client]
+
+        viewer.set_view('sector_a', [1970, 7354])
+        await self.drive(lambda: viewer._client is not None and viewer._client._window == 0)
+
+        def viewer_peer():
+            return next((peer for peer in self.service._peers.values()
+                         if peer.grant is not None and peer.grant.handle == 1), None)
+
+        self.assertEqual(viewer_peer().view_id, 0)
+        self.service.set_running(True)
+        await self.drive(lambda: source_client._running and viewer_peer().indices == {7354})
+        self.assertEqual(viewer_peer().view_id, 1)
+        source.stage(1, 'sector_a', 10)
+        await self.drive(lambda: len(seen) == 1)
+        source.stage(2, 'sector_a', 26)
+        await self.drive(lambda: len(seen) == 2)
+        self.assertEqual(seen[-1]['real_velocity'], VELOCITY)
+
+        first_link = viewer._client
+        self.service._drop(viewer_peer())
+        await self.drive(lambda: viewer._client is None)
+        identity = (7354, source_grant['generation'])
+        self.assertEqual(ended, [identity])
+        viewer.set_view('sector_a', [7354, 999])
+        # Server really sends its cached sample after rebinding. The callback
+        # must only see it once although the wire records another receipt.
+        await self.drive(lambda: viewer.stats()['snapshots_received'] == 3)
+        self.assertIsNot(viewer._client, first_link)
+        self.assertEqual((viewer_peer().view_id, viewer_peer().indices), (1, {7354, 999}))
+        self.assertEqual([row['sequence'] for row in seen], [1, 2])
+        self.assertEqual(ended, [identity])
+        source.stage(3, 'sector_a', 42)
+        await self.drive(lambda: len(seen) == 3)
+        self.assertEqual((seen[-1]['sequence'], seen[-1]['real_velocity']), (3, VELOCITY))
+
+        viewer.set_view('sector_b', [7354])
+        viewer.set_view('sector_b', [7354, 1970])  # Same effective view.
+        self.assertEqual(ended, [identity, identity])
+        await self.drive(lambda: viewer_peer().view_id == 2)
+        source.stage(4, 'sector_b', 58)
+        await self.drive(lambda: len(seen) == 4)
+        self.assertEqual(seen[-1]['sector_macro'], 'sector_b')
+
+        self.service.set_running(False)
+        await self.drive(lambda: viewer._client._window == 2 and source_client._window == 2)
+        self.assertEqual(viewer_peer().view_id, 0)
+        self.assertEqual(ended, [identity] * 3)
+        self.service.set_running(True)
+        await self.drive(lambda: source_client._window == 3 and viewer_peer().view_id == 1)
+        source.stage(5, 'sector_b', 74)
+        await self.drive(lambda: len(seen) == 5)
+        source.stage(6, 'sector_a', 90)
+        await self.drive(lambda: len(ended) == 4)
+        self.assertEqual(len(seen), 5)
+        source.stage(7, 'sector_b', 106)
+        await self.drive(lambda: len(seen) == 6)
+        self.assertEqual(seen[-1]['sequence'], 7)
+        viewer.close()
+        viewer.close()
+        self.assertEqual(ended, [identity] * 5)
+
     async def test_motion_requires_both_pin_and_shared_key_before_binding(self):
         grant = self.grant(1, 1970, 'sector_a')
         for options in ({'fingerprint': '0' * 64}, {'key': b'x' * 32}):

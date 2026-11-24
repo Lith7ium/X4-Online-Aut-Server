@@ -10,8 +10,11 @@ from .trusted_load_messages import validate_ship_motion_credential
 class CompanyMotionClient:
     """Poll on the player owner thread. Only one sample awaits a receipt in each direction."""
 
-    def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None):
+    def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
+                 on_view_reset=None):
         epoch, index = source.registry
+        if on_view_reset is not None and not callable(on_view_reset):
+            raise ValueError('movement view reset callback must be callable')
         if type(credential) is not dict or not callable(validate_peer):
             raise ValueError('movement admission and local source validator required')
         credential = validate_ship_motion_credential(credential, index=index, registry_epoch=epoch,
@@ -30,6 +33,7 @@ class CompanyMotionClient:
         self._validate_peer = validate_peer
         self._on_snapshot = on_snapshot
         self._on_end = on_end
+        self._on_view_reset = on_view_reset
         self._generation = credential['generation']
         self._incoming = bytearray()
         self._bind_deadline = time.monotonic() + 15
@@ -72,6 +76,8 @@ class CompanyMotionClient:
         self._latest = self._awaiting = self._receipt = self._last_sector = None
         self._sent_view = None
         self._view_id = 0
+        if not binding and self._on_view_reset is not None:
+            self._on_view_reset()
 
     def _receive(self, message):
         kind = message.get('kind')
