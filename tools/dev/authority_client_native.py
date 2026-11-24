@@ -225,12 +225,16 @@ def error_code(error):
 
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
-        company_motion=False):
+        company_motion=False, software_vulkan_icd=None):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
+    if software_vulkan_icd is not None and (
+        not company_motion or args.keepalive_interval is None or not 0 < args.keepalive_interval <= 30
+    ):
+        raise ValueError('software Vulkan requires company motion and load keepalive')
     playback_scripts = native_playback.read_config(
         getattr(args, 'internal_saved_playback_config', None), args, playback_driver)
     if player_mode:
@@ -355,7 +359,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 paths += [lab/'ui'/name for name in
                     ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
                 if player_mode:
-                    source_options = {}
+                    source_options = dict(software_rendered=software_vulkan_icd is not None)
                     if company_motion:
                         from authority.company_motion_source import CompanyMotionSource
                         company_source = CompanyMotionSource()
@@ -372,6 +376,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     raise ValueError('native_library_copy_changed')
                 command = load.readonly_save_command(case, game, binds, lock,
                     args.display, auth, user.pw_name, args.seed, target)
+                if software_vulkan_icd is not None:
+                    import authority_software_vulkan
+                    command = authority_software_vulkan.constrain(command, display=args.display,
+                        authorization=auth, icd=software_vulkan_icd)
+                    authority_software_vulkan.verify(command, out/'client-software-vulkan.log')
                 if player_mode:
                     command = command_with_private_lock(command, display=args.display, authorization=auth)
                 position = command.index('--die-with-parent')

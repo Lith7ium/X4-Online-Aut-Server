@@ -4,7 +4,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from authority.client_registry_overlay import extend_full_inspect
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
@@ -47,6 +49,7 @@ class FullRegistryOverlayTest(unittest.TestCase):
         self.assertIn('double GetCurrentGameTime(void)', engine)
         self.assertIn('game_time=function() return tonumber(C.GetCurrentGameTime()) end', engine)
         probe = (target / 'ui/authority_download_load_probe.lua').read_text()
+        self.assertNotIn('end,300))', probe)
         self.assertLess(probe.index('full_registry_inspect:tick()'),
                         probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'))
         self.assertLess(probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'),
@@ -58,6 +61,17 @@ class FullRegistryOverlayTest(unittest.TestCase):
                     ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
                      str(target / 'ui'), mode], capture_output=True, text=True, cwd=root)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_software_overlay_selects_bounded_inspection_budget(self):
+        with patch('authority.experimental_windows_fixture_overlay.extend_full_inspect',
+                   side_effect=lambda text: extend_full_inspect(text, software_rendered=True)):
+            install_fixture_overlay(self.view, **self.options)
+        target = self.view / 'extensions/x4_lan_lab/ui'
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
+             str(target), 'ready', '300'], capture_output=True, text=True, cwd=root)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_snapshot_rejected_before_install(self):
         for change in ({'format': 2}, {'source_registry_checked': False},

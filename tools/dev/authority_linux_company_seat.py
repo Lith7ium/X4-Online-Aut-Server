@@ -29,7 +29,7 @@ _MD = {
 }
 
 
-def install(case, profile, bound, target, index, pump, *, company_motion=None):
+def install(case, profile, bound, target, index, pump, *, company_motion=None, software_rendered=False):
     """Verify the staged format-3 save and compose the gate before X4 starts."""
     offer = bound.offer
     checkpoint = Checkpoint(offer.checkpoint_id, target, offer.sha256, offer.size, bound.marker)
@@ -42,7 +42,7 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None):
     lab = case / 'extensions/x4_lan_lab'
     ui, md = lab / 'ui', lab / 'md'
     owner = ui / 'authority_download_load_probe.lua'
-    probe = extend_full_inspect(owner.read_text(encoding='utf-8'))
+    probe = extend_full_inspect(owner.read_text(encoding='utf-8'), software_rendered=software_rendered)
     owner.write_text(extend_seat_gate(probe, index=index, full_registry=full,
                                      company_motion=company_motion is not None), encoding='utf-8')
 

@@ -69,7 +69,7 @@ def validate_full_snapshot(snapshot, status, nonce, marker):
             'operational_bits': operational}
 
 
-def extend_full_inspect(text):
+def extend_full_inspect(text, *, software_rendered=False):
     """Run the read-only full owner before the legacy header receipt."""
     declaration = 'local registry_status=nil;local registry_pause_requested=false;local registry_pause_confirmed=false\n'
     if text.count(declaration) != 1:
@@ -87,6 +87,8 @@ def extend_full_inspect(text):
   assert(full_registry_inspect:tick())
   if not full_registry_inspect:ready() then return end
 '''
+    if software_rendered:
+        code = code.replace('    end))', '    end,300))')
     text = text.replace(hook, '  registry_pause_confirmed=true\n' + code + '  if not registry_status then\n')
     header_log = "log=function(marker,status)DebugError('[X4LAN] AUTH_RECOVERY_REGISTRY '.."
     if text.count(header_log) != 1:

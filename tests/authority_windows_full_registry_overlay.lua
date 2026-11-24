@@ -44,6 +44,13 @@ dofile(folder..'/client_load_barrier.lua')
 dofile(folder..'/x4_client_load_engine.lua')
 dofile(folder..'/authority_registry_availability_snapshot.lua')
 dofile(folder..'/registry_checkpoint_gate.lua')
+local gate = X4LAN_AUTHORITY_REGISTRY_CHECKPOINT_GATE
+local new_gate = gate.new
+function gate.new(options)
+ assert(options.timeout == (tonumber(arg[3]) or 110), 'wrong inspection budget')
+ return new_gate(options)
+end
+
 dofile(folder..'/client_registry_inspect.lua')
 dofile(folder..'/recovery_registry_status.lua')
 dofile(folder..'/authority_download_load_probe.lua')

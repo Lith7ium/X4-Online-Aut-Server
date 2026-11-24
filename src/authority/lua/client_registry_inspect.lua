@@ -5,6 +5,9 @@ local M = {}
 function M.new(options)
     assert(type(options) == 'table' and options.enabled == true,
         'client registry inspection is default-off')
+    local timeout = options.timeout
+    if timeout == nil then timeout = 110 end
+    assert(timeout == 110 or timeout == 300, 'unsupported client registry inspection timeout')
     local pinned, engine = options.pinned, options.engine
     assert(type(pinned) == 'table' and type(engine) == 'table')
     for _, name in ipairs({'is_paused', 'game_time'}) do
@@ -58,7 +61,7 @@ function M.new(options)
                 initial_run_id = pinned.run_id, issued_count = pinned.issued_count,
                 expected_binding_bits = pinned.binding_bits,
                 expected_operational_bits = pinned.operational_bits,
-                clock = options.clock, timeout = 110, guard = live_guard,
+                clock = options.clock, timeout = timeout, guard = live_guard,
                 issue = function(action, payload) return options.issue(action, payload) end,
                 store_marker = function()
                     error('client registry inspection cannot store a marker')
@@ -94,11 +97,11 @@ function M.new(options)
     return api
 end
 
-function M.new_x4(pinned, engine, on_fault)
+function M.new_x4(pinned, engine, on_fault, timeout)
     assert(type(on_fault) == 'function', 'load fault callback required')
     return M.new({
         enabled = true, pinned = pinned, engine = engine,
-        clock = GetCurRealTime,
+        clock = GetCurRealTime, timeout = timeout,
         register = function(callback)
             return RegisterEvent('X4AuthorityRegistryAvailabilitySnapshot.Result', callback) ~= false
         end,
