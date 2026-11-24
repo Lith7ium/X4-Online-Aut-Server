@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Export or restore one private, confirmed format-3 recovery seed on Linux."""
+"""Export or restore one private, confirmed format-3 recovery seed on Linux.
+
+Portable ZIPs accept purchase ledgers up to 64 MiB. Ordinary checkpoints and
+local recovery support larger ledgers.
+"""
 import argparse
 import hashlib
 import json
@@ -14,8 +18,7 @@ from authority_recovered_loopback_server import read_evidence, verify_previous_s
 from authority_recovered_registry_snapshot import receipt
 from authority.checkpoints import CHUNK, MAX_COMPRESSED, CheckpointStore
 from authority.load_messages import _pairs, _reject_constant
-from authority.company_purchase_ledger import (PURCHASE_LEDGER_LIMIT, PURCHASE_LEDGER_NAME,
-                                               verify_purchase_ledger)
+from authority.company_purchase_ledger import PURCHASE_LEDGER_NAME, verify_purchase_ledger
 from authority.marker_evidence import verify_saved_marker
 
 CONTENT = 'case/home/.config/EgoSoft/X4/45841/content.xml'
@@ -23,6 +26,8 @@ MD = 'case/extensions/x4_lan_lab/md'
 SCRIPTS = ('authority_checkpoint_marker.xml', 'authority_identity_fixture.xml',
            'authority_ship_registry.xml', 'authority_registry_availability_snapshot.xml')
 PACKAGE = 'seed-manifest.json'
+# The portable ZIP has a transfer size bound. Live checkpoints do not share it.
+PURCHASE_LEDGER_ARCHIVE_LIMIT = 64 * 1024 * 1024
 _CHECKPOINT_ID = re.compile(r'checkpoint-[0-9a-f]{32}')
 _SHA256 = re.compile(r'[0-9a-f]{64}')
 _CONTENT = re.compile(rb'<\?xml version="1\.0"\?><content>'
@@ -32,7 +37,7 @@ _CONTENT = re.compile(rb'<\?xml version="1\.0"\?><content>'
 
 def _file_limits(checkpoint_id, *, purchase_ledger=False):
     generation = f'checkpoints/{checkpoint_id}'
-    optional = {f'{generation}/{PURCHASE_LEDGER_NAME}': PURCHASE_LEDGER_LIMIT} if purchase_ledger else {}
+    optional = {f'{generation}/{PURCHASE_LEDGER_NAME}': PURCHASE_LEDGER_ARCHIVE_LIMIT} if purchase_ledger else {}
     return {
         **optional, 'result.json': 65536, CONTENT: 65536,
         **{f'{MD}/{name}': 65536 for name in SCRIPTS},
@@ -115,21 +120,21 @@ def export(source, archive):
     try:
         with os.fdopen(fd, 'w+b') as stream, ZipFile(stream, 'w', compression=ZIP_STORED) as package:
             for name, limit in _file_limits(checkpoint.checkpoint_id, purchase_ledger=ledger is not None).items():
-                if name.endswith('/save.xml.gz'):
-                    source_fd = os.open(checkpoint.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                if name.endswith('/save.xml.gz') or name.endswith('/' + PURCHASE_LEDGER_NAME):
+                    is_save = name.endswith('/save.xml.gz')
+                    source_fd = os.open(source / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                     with os.fdopen(source_fd, 'rb') as incoming, package.open(name, 'w') as outgoing:
                         if not stat.S_ISREG(os.fstat(incoming.fileno()).st_mode):
-                            raise ValueError('source checkpoint is not a regular file')
+                            raise ValueError('seed source member is not a regular file')
                         files[name] = _copy(incoming, outgoing, limit)
-                    if files[name] != {'sha256': checkpoint.sha256, 'size': checkpoint.size}:
-                        raise ValueError('source checkpoint changed during export')
+                    expected = (dict(sha256=checkpoint.sha256, size=checkpoint.size) if is_save else
+                                {key: ledger[key] for key in ('sha256', 'size')})
+                    if files[name] != expected:
+                        raise ValueError(f'source member changed during export: {name}')
                     continue
                 data = provenance if name == 'result.json' else read_evidence(source / name, limit)
-                files[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
-                if name.endswith('/' + PURCHASE_LEDGER_NAME) and any(
-                        files[name][key] != ledger[key] for key in ('sha256', 'size')):
-                    raise ValueError('source purchase ledger changed during export')
                 package.writestr(name, data)
+                files[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
             package.writestr(PACKAGE, _encoded({'version': 1, 'checkpoint_id': checkpoint.checkpoint_id,
                                                 'files': files}))
     except BaseException:

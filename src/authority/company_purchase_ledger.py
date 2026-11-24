@@ -1,18 +1,19 @@
 """Durable server purchase decisions and checkpoint-bound portable snapshots."""
 
+from contextlib import closing
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import tempfile
 
-from .checkpoints import _read_regular
+from .checkpoints import CHUNK
 from .company_purchase_control import purchase_receipt, purchase_value, _statement_value
 
 PURCHASE_LEDGER_NAME = 'company-purchases.sqlite3'
-PURCHASE_LEDGER_LIMIT = 64 * 1024 * 1024
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _HASH = re.compile(r'[0-9a-f]{64}')
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
@@ -68,7 +69,29 @@ def _metadata(db):
                            "('registry_epoch','checkpoint_id','checkpoint_sha256')"))
 
 
-def _snapshot_bytes(checkpoint, reference, registry_epoch):
+def _file_digest(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as file:
+        initial = os.fstat(file.fileno())
+        if not stat.S_ISREG(initial.st_mode):
+            raise ValueError('checkpoint purchase ledger must be a regular file')
+        digest, size = hashlib.sha256(), 0
+        while block := file.read(CHUNK):
+            digest.update(block)
+            size += len(block)
+        final = os.fstat(file.fileno())
+        if (size != initial.st_size or initial.st_mtime_ns != final.st_mtime_ns
+                or initial.st_ctime_ns != final.st_ctime_ns):
+            raise ValueError('checkpoint purchase ledger changed during verification')
+        return size, digest.hexdigest()
+
+
+def _open_snapshot(path):
+    return sqlite3.connect(path.absolute().as_uri() + '?mode=ro&immutable=1', uri=True)
+
+
+def verify_purchase_ledger(checkpoint, reference, *, registry_epoch=None):
+    """Verify the optional sidecar and return its fixed path, or None for legacy saves."""
     path = _sidecar(checkpoint)
     if reference is None:
         if path.exists() or path.is_symlink():
@@ -83,29 +106,18 @@ def _snapshot_bytes(checkpoint, reference, registry_epoch):
             or not _matches(reference['registry_epoch'], _TOKEN)
             or (registry_epoch is not None and reference['registry_epoch'] != registry_epoch)
             or not _matches(reference['sha256'], _HASH)
-            or type(reference['size']) is not int or not 0 < reference['size'] <= PURCHASE_LEDGER_LIMIT):
+            or type(reference['size']) is not int or reference['size'] <= 0):
         raise ValueError('invalid checkpoint purchase ledger reference')
-    raw = _read_regular(path, reference['size'])
-    if len(raw) != reference['size'] or hashlib.sha256(raw).hexdigest() != reference['sha256']:
+    if _file_digest(path) != (reference['size'], reference['sha256']):
         raise ValueError('checkpoint purchase ledger content differs')
-    db = sqlite3.connect(':memory:')
     try:
-        db.deserialize(raw)
-        expected = {key: reference[key] for key in ('registry_epoch', 'checkpoint_id', 'checkpoint_sha256')}
-        if _metadata(db) != expected or db.execute('PRAGMA quick_check(1)').fetchone() != ('ok',):
-            raise ValueError('checkpoint purchase ledger provenance differs')
+        with closing(_open_snapshot(path)) as db:
+            expected = {key: reference[key] for key in ('registry_epoch', 'checkpoint_id', 'checkpoint_sha256')}
+            if _metadata(db) != expected or db.execute('PRAGMA quick_check(1)').fetchone() != ('ok',):
+                raise ValueError('checkpoint purchase ledger provenance differs')
     except sqlite3.DatabaseError as error:
         raise ValueError('invalid checkpoint purchase ledger database') from error
-    finally:
-        db.close()
-    return raw
-
-
-def verify_purchase_ledger(checkpoint, reference, *, registry_epoch=None):
-    """Verify the optional sidecar and return its fixed path, or None for legacy saves."""
-    if _snapshot_bytes(checkpoint, reference, registry_epoch) is not None:
-        return _sidecar(checkpoint)
-    return None
+    return path
 
 
 class CompanyPurchaseLedger:
@@ -199,15 +211,14 @@ class CompanyPurchaseLedger:
             original = json.loads(original)
             observed = self._db.execute("INSERT OR IGNORE INTO challenges VALUES (?,?)",
                                         (purchase_id, challenge))
-            if (observed.rowcount != 1
-                    or any(statement[key] != original[key] for key in ('ware', 'quantity'))):
+            if observed.rowcount != 1:
                 return False
-            total = statement['settled_total_cents']
-            if first is None:
-                self._db.execute("UPDATE purchases SET reported_cents=? WHERE id=?", (total, purchase_id))
-            elif total == first:
+            matched = all(statement[key] == original[key] for key in ('ware', 'quantity'))
+            total = statement['settled_total_cents'] if matched else None
+            if total is not None and total == first:
                 self._db.execute("UPDATE purchases SET status='reported' WHERE id=?", (purchase_id,))
                 return True
+            self._db.execute("UPDATE purchases SET reported_cents=? WHERE id=?", (total, purchase_id))
         return False
 
     def next_notification(self, ship_index=None, ship_code=None, after_id=None):
@@ -224,31 +235,22 @@ class CompanyPurchaseLedger:
 
     def checkpoint(self, checkpoint):
         target = _sidecar(checkpoint)
-        snapshot = sqlite3.connect(':memory:')
-        try:
-            size = self._db.execute('PRAGMA page_size').fetchone()[0]
-            pages = self._db.execute('PRAGMA page_count').fetchone()[0]
-            if size * pages > PURCHASE_LEDGER_LIMIT:
-                raise ValueError('company purchase ledger exceeds checkpoint size limit')
-            self._db.backup(snapshot)
-            binding = {'registry_epoch': self.registry_epoch, 'checkpoint_id': checkpoint.checkpoint_id,
-                       'checkpoint_sha256': checkpoint.sha256}
-            with snapshot:
-                snapshot.executemany('INSERT OR REPLACE INTO metadata VALUES (?,?)', binding.items())
-            raw = snapshot.serialize()
-        finally:
-            snapshot.close()
-        if len(raw) > PURCHASE_LEDGER_LIMIT:
-            raise ValueError('company purchase ledger exceeds checkpoint size limit')
-        reference = dict(binding, version=1, size=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        binding = {'registry_epoch': self.registry_epoch, 'checkpoint_id': checkpoint.checkpoint_id,
+                   'checkpoint_sha256': checkpoint.sha256}
         fd, temp_name = tempfile.mkstemp(dir=target.parent, prefix='.company-purchases-')
+        os.close(fd)
+        temp_path = Path(temp_name)
         try:
-            with os.fdopen(fd, 'wb') as file:
-                file.write(raw)
-                file.flush()
+            with closing(sqlite3.connect(temp_path)) as snapshot:
+                self._db.backup(snapshot)
+                with snapshot:
+                    snapshot.executemany('INSERT OR REPLACE INTO metadata VALUES (?,?)', binding.items())
+            size, sha256 = _file_digest(temp_path)
+            reference = dict(binding, version=1, size=size, sha256=sha256)
+            with temp_path.open('rb') as file:
                 os.fsync(file.fileno())
             try:
-                os.link(temp_name, target)
+                os.link(temp_path, target)
             except FileExistsError:
                 verify_purchase_ledger(checkpoint, reference, registry_epoch=self.registry_epoch)
             directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -257,21 +259,17 @@ class CompanyPurchaseLedger:
             finally:
                 os.close(directory_fd)
         finally:
-            Path(temp_name).unlink()
+            temp_path.unlink()
         return reference
 
     def restore(self, checkpoint, reference):
-        raw = _snapshot_bytes(checkpoint, reference, self.registry_epoch)
-        if raw is None:
+        source = verify_purchase_ledger(checkpoint, reference, registry_epoch=self.registry_epoch)
+        if source is None:
             return False
         if self._db.execute('SELECT 1 FROM purchases LIMIT 1').fetchone() is not None:
             raise ValueError('restore requires a fresh company purchase ledger')
-        snapshot = sqlite3.connect(':memory:')
-        try:
-            snapshot.deserialize(raw)
+        with closing(_open_snapshot(source)) as snapshot:
             snapshot.backup(self._db)
-        finally:
-            snapshot.close()
         with self._db:
             self._db.execute("DELETE FROM metadata WHERE key IN ('checkpoint_id','checkpoint_sha256')")
             self._db.execute("UPDATE purchases SET status='pending' WHERE status='begun'")

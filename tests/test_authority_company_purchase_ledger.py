@@ -47,7 +47,8 @@ class CompanyPurchaseLedgerTests(unittest.TestCase):
         self.assertFalse(restored.statement(ID, '2'*32, REPORT))
         self.assertFalse(restored.statement(ID, '3'*32, dict(REPORT, settled_total_cents=34914)))
         self.assertFalse(restored.statement(ID, '4'*32, None))
-        self.assertTrue(restored.statement(ID, '5'*32, REPORT))
+        self.assertFalse(restored.statement(ID, '5'*32, REPORT))
+        self.assertTrue(restored.statement(ID, '6'*32, REPORT))
         reported = dict(PURCHASE, outcome='pilot_reported', settled_total_cents=34900)
         self.assertEqual(restored.next_notification(*SHIP), reported)
         self.assertEqual(restored.next_notification(), reported)
@@ -90,3 +91,30 @@ class CompanyPurchaseLedgerTests(unittest.TestCase):
         sidecar.write_bytes(b'tampered')
         with self.assertRaises(ValueError):
             verify_purchase_ledger(self.checkpoint, reference)
+
+    def test_only_consecutive_fresh_matching_responses_are_adopted(self):
+        ledger = self.open()
+        ledger.begin(*SHIP, PURCHASE)
+        ledger.finish(ID, UNKNOWN)
+        self.assertFalse(ledger.statement(ID, '1'*32, REPORT))
+        self.assertFalse(ledger.statement(ID, '2'*32, dict(REPORT, ware='energycells')))
+        self.assertFalse(ledger.statement(ID, '3'*32, REPORT))
+        alternate = dict(REPORT, settled_total_cents=34914)
+        self.assertFalse(ledger.statement(ID, '4'*32, alternate))
+        self.assertTrue(ledger.statement(ID, '5'*32, alternate))
+        self.assertEqual(ledger.next_notification()['settled_total_cents'], 34914)
+
+    def test_checkpoint_and_disk_restore_beyond_previous_sidecar_limit(self):
+        ledger = self.open(self.root/'runtime.sqlite3')
+        ledger.begin(*SHIP, PURCHASE)
+        ledger.finish(ID, UNKNOWN)
+        with ledger._db:
+            ledger._db.execute('CREATE TABLE synthetic_history (payload BLOB)')
+            ledger._db.execute('INSERT INTO synthetic_history VALUES (zeroblob(?))', (65*1024*1024,))
+        reference = ledger.checkpoint(self.checkpoint)
+        self.assertGreater(reference['size'], 64*1024*1024)
+        self.assertIsNotNone(verify_purchase_ledger(self.checkpoint, reference))
+        restored = self.open(self.root/'restored.sqlite3')
+        self.assertTrue(restored.restore(self.checkpoint, reference))
+        self.assertFalse(restored.begin(*SHIP, PURCHASE))
+        self.assertEqual(restored.next_report(), PURCHASE)
