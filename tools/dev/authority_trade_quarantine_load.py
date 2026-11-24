@@ -48,6 +48,7 @@ def verify_observation(rows):
 
 
 def run(args):
+    menu_mode = getattr(args, 'inspect_stock_menu', None)
     source = recovery.base.local_directory(args.source_run)
     result_file = source / 'result.json'
     prior_bytes = read_evidence(result_file, 1 << 20)
@@ -99,19 +100,28 @@ def run(args):
         md = case / 'extensions/x4_lan_lab/md'
         (md / REGISTRY).write_bytes(read_evidence(registry, 1 << 20))
         (md / OBSERVER).write_bytes(readonly)
-        return [md / REGISTRY, md / OBSERVER]
+        protected_files = [md / REGISTRY, md / OBSERVER]
+        if menu_mode:
+            from authority_trade_cockpit import install
+            protected_files.extend(install(case, menu_mode))
+        return protected_files
 
-    def observe(*, profile, guard, **_):
+    def observe(*, profile, guard, deadline, **_):
         guard()
         rows = loaded_observation(profile / 'engine-output.log', read_evidence)
         verify_observation(rows)
-        return {'read_only_native_observation': rows}
+        experiment = {'read_only_native_observation': rows}
+        if menu_mode:
+            from authority_trade_cockpit import observe as observe_menu
+            experiment['stock_menu'] = observe_menu(profile / 'engine-output.log', menu_mode, deadline, guard)
+        return experiment
 
     def finalize(result):
         if (_file_digest(raw)[0] != args.sha256
                 or read_evidence(result_file, 1 << 20) != prior_bytes):
             raise ValueError('quarantined source or failure record changed')
-        result.update(scope='quarantined native readback only', quarantined=True,
+        scope = 'quarantined native stock menu inspection' if menu_mode else 'quarantined native readback only'
+        result.update(scope=scope, quarantined=True,
                       source_sha256=args.sha256, source_marker=args.marker,
                       source_supervisor_success=False, settlement_verified=False,
                       admitted=False, published=False)
@@ -140,6 +150,8 @@ def main(argv=None):
     parser.add_argument('--marker', required=True)
     parser.add_argument('--xvfb', default='Xvfb')
     parser.add_argument('--vulkan-icd', type=Path)
+    parser.add_argument('--inspect-stock-menu', choices=('offer', 'cockpit'),
+                        help='Read a stock ship quote; cockpit also tests seat control and captures an unbooked intent.')
     parser.add_argument('--timeout', type=float, default=300)
     args = parser.parse_args(argv)
     args.seed = 276944566
