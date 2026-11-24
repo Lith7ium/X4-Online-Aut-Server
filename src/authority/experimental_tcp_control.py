@@ -112,10 +112,12 @@ class ExperimentalTCPControl:
         self._peers.clear()
         raise RuntimeError('control channel faulted; fence coordinator and service') from error
 
-    def adopt(self, conn):
-        """Adopt one connected socket; caller retains listener and transport policy."""
+    def adopt(self, conn, *, defer_attach=False):
+        """Adopt a socket and return its handle, or None while awaiting an offer request."""
         self._owner()
         self._reader_free(motion=True)
+        if type(defer_attach) is not bool:
+            raise ValueError('invalid deferred attach option')
         if (type(conn) is not socket.socket or conn.family != socket.AF_INET or conn.proto not in (0, socket.IPPROTO_TCP) or
                 conn.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM):
             raise ValueError('connected IPv4 TCP stream socket required')
@@ -126,7 +128,7 @@ class ExperimentalTCPControl:
         if not self._live_socket(conn):
             raise ValueError('connection already closed')
         try:
-            handle = self._session.attach(conn)
+            handle = None if defer_attach else self._session.attach(conn)
             self._peers[conn] = {'handle': handle, 'in': b'', 'out': b'', 'stage': 'attached',
                                  'deadline': time.monotonic() + self._timeout,
                                  'host_blocked_grace': 0.0}
@@ -162,10 +164,11 @@ class ExperimentalTCPControl:
     def _drop(self, conn):
         try:
             peer = self._peers.pop(conn)
-            self._session.disconnect(conn)
-            delivery = self._job_delivery_owner
-            if delivery is not None:
-                delivery._peer_disconnected(peer['handle'])
+            if peer['handle'] is not None:
+                self._session.disconnect(conn)
+                delivery = self._job_delivery_owner
+                if delivery is not None:
+                    delivery._peer_disconnected(peer['handle'])
             conn.close()
         except BaseException as error:
             try:
@@ -205,6 +208,11 @@ class ExperimentalTCPControl:
                 except ValueError:
                     if peer['stage'] != 'offered': raise
                 else:
+                    if peer['handle'] is None:
+                        if not self._current_socket(conn, peer):
+                            self._drop(conn)
+                            return
+                        peer['handle'] = self._session.attach(conn)
                     if not self._offer_ready():
                         peer['out'] += b'{"version":1,"kind":"not_ready"}\n'
                         return
@@ -347,6 +355,9 @@ class ExperimentalTCPControl:
         self._reader_free()
         ready = True
         for conn, peer in tuple(self._peers.items()):
+            # An incomplete first request does not participate in world operations.
+            if peer['handle'] is None:
+                continue
             if peer['deadline'] is not None and time.monotonic() >= peer['deadline']:
                 self._drop(conn)
                 ready = False

@@ -427,7 +427,8 @@ class Control:
 
 class Host:
     def __init__(self): self._control=Control(); self.handles=0
-    def adopt(self, conn):
+    def adopt(self, conn, *, defer_attach):
+        if defer_attach is not True: raise ValueError("expected deferred attach")
         self.handles += 1
         conn.setblocking(False)
         self._control._peers[conn]={'stage':'attached', 'handle':self.handles}
@@ -641,6 +642,12 @@ class IntegratedLoopTest(unittest.TestCase):
             self.assertEqual(store.latest_marked_confirmed(),candidate)
 
     def test_two_joins_and_last_disconnect_saves_with_real_coordinator(self):
+        self._run_two_joins(overlap=False)
+
+    def test_overlap_defers_unvalidated_sockets_and_saves_on_final_departure(self):
+        self._run_two_joins(overlap=True)
+
+    def _run_two_joins(self, *, overlap):
         # Real control sockets/coordinator and save store, fake X4 and client claims.
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); (root/'store').mkdir(); store=CheckpointStore(root/'store')
@@ -663,24 +670,58 @@ class IntegratedLoopTest(unittest.TestCase):
                     if not data: raise RuntimeError('control closed')
                     out+=data
                 return out[:-1]
+            def connect():
+                return socket.create_connection(listener.getsockname(), timeout=2)
+            def join(conn, count):
+                conn.sendall(offer_request())
+                while True:
+                    frame = read_frame(conn)
+                    if json.loads(frame).get('kind') != 'not_ready':
+                        break
+                    time.sleep(.01)
+                    conn.sendall(offer_request())
+                bound = decode_bound_offer(frame)
+                conn.sendall(encode_load_claim(claim_for(bound.offer)) + b'\n')
+                self.assertEqual(json.loads(read_frame(conn))['kind'], 'accepted')
+                wait_for(lambda: world.session.state == 'running' and engine.calls.count('resume') == count)
+                return bound.offer.checkpoint_id
             def client():
                 try:
-                    for n in (1,2):
-                        with socket.create_connection(listener.getsockname(),timeout=2) as conn:
-                            conn.settimeout(2); conn.sendall(offer_request())
-                            while True:
-                                frame=read_frame(conn)
-                                if json.loads(frame).get('kind')!='not_ready': break
-                                time.sleep(.01); conn.sendall(offer_request())
-                            bound=decode_bound_offer(frame)
-                            conn.sendall(encode_load_claim(claim_for(bound.offer))+b'\n')
-                            if json.loads(read_frame(conn))['kind']!='accepted': raise ValueError('claim refused')
-                            wait_for(lambda: engine.calls.count('resume')>=n)
-                            if n == 2:
-                                stop.set()
-                                if conn.recv(1) != b'': raise ValueError('shutdown did not close client')
-                                return
-                        wait_for(lambda: engine.calls.count('save')>=n+1 and world.session.state=='paused')
+                    with connect() as first:
+                        if overlap:
+                            with connect() as idle:
+                                idle.sendall(b'{')  # An incomplete request cannot hold up A's resume.
+                                wait_for(lambda: len(control._peers) == 2)
+                                join(first, 1)
+                                self.assertEqual(len(world.session.players), 1)
+                            wait_for(lambda: len(control._peers) == 1)
+                            with connect() as invalid:
+                                invalid.sendall(b'{}\n')
+                                self.assertEqual(invalid.recv(1), b'')
+                            self.assertEqual(engine.calls, ['pause', 'save', 'resume'])
+                            self.assertEqual(world.session.state, 'running')
+                            with connect() as second:
+                                joined_checkpoint = join(second, 2)
+                                self.assertEqual(len(world.session.ready_players), 2)
+                                before_departure = list(engine.calls)
+                                self.assertEqual(before_departure, ['pause', 'save', 'resume', 'pause', 'save', 'resume'])
+                                first.shutdown(socket.SHUT_WR)
+                                wait_for(lambda: len(control._peers) == 1 and len(world.session.players) == 1)
+                                self.assertEqual(world.session.state, 'running')
+                                self.assertIsNone(world.session.pending)
+                                self.assertEqual(engine.calls, before_departure)
+                                self.assertEqual(store.latest_marked_confirmed().checkpoint_id, joined_checkpoint)
+                            wait_for(lambda: world.session.state == 'paused' and engine.calls.count('save') == 3)
+                            self.assertNotEqual(store.latest_marked_confirmed().checkpoint_id, joined_checkpoint)
+                            stop.set()
+                        else:
+                            join(first, 1)
+                    if not overlap:
+                        wait_for(lambda: engine.calls.count('save') == 2 and world.session.state == 'paused')
+                        with connect() as second:
+                            join(second, 2)
+                            stop.set()
+                            self.assertEqual(second.recv(1), b'')
                 except BaseException as error:
                     errors.append(error); stop.set()
             worker=threading.Thread(target=client); worker.start()
@@ -690,7 +731,7 @@ class IntegratedLoopTest(unittest.TestCase):
                 saved=MODULE.settle_shutdown(control,world,store,lambda: None)
                 worker.join(2)
                 self.assertFalse(worker.is_alive()); self.assertFalse(errors)
-                self.assertEqual(counts,{'accepted_connections':2,'admitted_connections':2})
+                self.assertEqual(counts, {'accepted_connections': 4 if overlap else 2, 'admitted_connections': 2})
                 self.assertEqual(engine.calls,['pause','save','resume','pause','save',
                                                'resume','pause','save'])
                 self.assertEqual(world.session.players,())
