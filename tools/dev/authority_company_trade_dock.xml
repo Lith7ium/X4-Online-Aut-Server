@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityTradeDock" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <!-- Install only in the isolated native trade fixture. This cue runs once. -->
+  <cue name="Prepare">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityTradeDock'" control="'Prepare'"/>
+   </conditions>
+   <actions>
+    <set_value name="$Args" exact="event.param3"/>
+    <set_value name="$Nonce" exact="@$Args.$nonce"/>
+    <set_value name="$Epoch" exact="@$Args.$epoch"/>
+    <set_value name="$Avatar" exact="player.entity"/>
+    <set_value name="$AvatarStation" exact="player.station"/>
+    <set_value name="$AvatarRoom" exact="player.room"/>
+    <set_value name="$AvatarContainer" exact="player.container"/>
+    <include_actions ref="CheckAvatarAndShip"/>
+    <do_if value="not $Nonce or not $Safe">
+     <set_value name="$Status" exact="'SOURCE_MISMATCH'"/>
+    </do_if>
+    <do_elseif value="$Ship.dock or $Ship.assigneddock or $Ship.isinternallystored or $Ship.pilot or $Ship.assignedpilot or $Ship.orders.count or $Ship.commander or $Ship.subordinates.count or ($Ship.defaultorder and $Ship.defaultorder.id != 'Wait')">
+     <set_value name="$Status" exact="'SHIP_BUSY'"/>
+    </do_elseif>
+    <do_else>
+     <find_station name="$Stations" space="$Ship.sector" functional="true" checkoperational="true" multiple="true" required="false"/>
+     <set_value name="$Matches" exact="0"/>
+     <do_for_each name="$Candidate" in="$Stations">
+      <do_if value="$Candidate.idcode == 'BIM-169'">
+       <set_value name="$Station" exact="$Candidate"/>
+       <set_value name="$Matches" operation="add"/>
+      </do_if>
+     </do_for_each>
+     <do_if value="$Matches != 1 or not @$Station.isclass.station or $Station.owner != faction.teladi or $Station.trueowner != faction.teladi or $Station.macro.id != 'station_gen_factory_base_01_macro' or not $Station.dockingallowed.{$Ship}">
+      <set_value name="$Status" exact="'STATION_UNAVAILABLE'"/>
+     </do_if>
+     <do_else>
+      <find_dockingbay name="$Bay" object="$Station" checkoperational="true" multiple="false" required="false" sortbydistanceto="$Ship">
+       <match_dock size="$Ship.docksize" free="true" trading="true" allowplayeronly="false" showroom="false" storage="false"/>
+       <match_relation_to object="$Ship" comparison="not" relation="enemy"/>
+      </find_dockingbay>
+      <do_if value="not @$Bay.exists or $Bay.container != $Station or not $Bay.isdockingallowed or not $Bay.istradingallowed">
+       <set_value name="$Status" exact="'NO_FREE_TRADE_BAY'"/>
+      </do_if>
+      <do_elseif value="not $Ship.canhavecontrolentity.{controlpost.aipilot}">
+       <set_value name="$Status" exact="'NO_CAPTAIN_SLOT'"/>
+      </do_elseif>
+      <do_else>
+       <create_cue_actor name="$Captain" cue="this">
+        <select faction="faction.argon" tags="tag.fighterpilot"/>
+        <owner exact="faction.player"/>
+       </create_cue_actor>
+       <do_if value="@$Captain.isclass.npc and $Captain.owner == faction.player">
+        <assign_control_entity object="$Ship" actor="$Captain" post="controlpost.aipilot" init="true" transfer="true" result="$Assigned"/>
+        <set_value name="$Status" exact="if $Assigned then 'CAPTAIN_ASSIGNED' else 'CAPTAIN_ASSIGNMENT_FAILED'"/>
+       </do_if>
+       <do_else>
+        <set_value name="$Status" exact="'CAPTAIN_CREATION_FAILED'"/>
+       </do_else>
+      </do_else>
+     </do_else>
+    </do_else>
+    <do_if value="$Status != 'CAPTAIN_ASSIGNED'">
+     <include_actions ref="ReportFailure"/>
+    </do_if>
+   </actions>
+   <cues>
+    <cue name="Order">
+     <conditions>
+      <event_cue_completed cue="parent"/>
+      <check_value value="$Status == 'CAPTAIN_ASSIGNED'"/>
+     </conditions>
+     <delay exact="1s"/>
+     <actions>
+      <include_actions ref="CheckAvatarAndShip"/>
+      <do_if value="not $Safe or $Ship.assignedaipilot != $Captain or $Ship.pilot != $Captain or $Ship.orders.count or ($Ship.defaultorder and $Ship.defaultorder.id != 'Wait') or $Ship.dock or $Ship.assigneddock or $Ship.isinternallystored or not @$Station.isoperational or not $Station.dockingallowed.{$Ship} or not @$Bay.isdockingallowed or not $Bay.istradingallowed or $Bay.container != $Station">
+       <set_value name="$Status" exact="'DOCK_PREFLIGHT_FAILED'"/>
+      </do_if>
+      <do_else>
+       <create_order name="$DockOrder" object="$Ship" id="'DockAt'" immediate="true">
+        <param name="destination" value="$Station"/>
+        <param name="trading" value="true"/>
+        <param name="preferreddock" value="$Bay"/>
+        <param name="preferreddockonly" value="true"/>
+        <param name="store" value="false"/>
+        <param name="dockfollowers" value="false"/>
+        <param name="waittime" value="90s"/>
+       </create_order>
+       <do_if value="$DockOrder">
+        <set_value name="$Deadline" exact="player.age + 300s"/>
+        <set_value name="$Status" exact="'DOCKING'"/>
+       </do_if>
+       <do_else>
+        <set_value name="$Status" exact="'ORDER_CREATION_FAILED'"/>
+       </do_else>
+      </do_else>
+      <do_if value="$Status != 'DOCKING'">
+       <include_actions ref="ReportFailure"/>
+      </do_if>
+     </actions>
+     <cues>
+      <cue name="FirstObservation" checkinterval="1s">
+       <conditions>
+        <check_value value="@$Status == 'DOCKING'"/>
+        <check_value value="player.age ge $Deadline or not @$Ship.isoperational or $Ship.orders.count == 0"/>
+       </conditions>
+       <actions>
+        <include_actions ref="CheckDocked"/>
+        <do_if value="$Docked and player.age lt $Deadline">
+         <set_value name="$FirstObservationAge" exact="player.age"/>
+         <set_value name="$Status" exact="'DOCKED_ONCE'"/>
+        </do_if>
+        <do_else>
+         <set_value name="$Status" exact="if player.age ge $Deadline then 'DOCK_TIMEOUT' else 'DOCK_STATE_CHANGED'"/>
+         <include_actions ref="ReportFailure"/>
+        </do_else>
+       </actions>
+       <cues>
+        <cue name="LaterObservation">
+         <conditions>
+          <event_cue_completed cue="parent"/>
+          <check_value value="$Status == 'DOCKED_ONCE'"/>
+         </conditions>
+         <delay exact="1s"/>
+         <actions>
+          <include_actions ref="CheckDocked"/>
+          <do_if value="$Docked and player.age gt $FirstObservationAge">
+           <set_value name="$Status" exact="'READY'"/>
+           <debug_text text="'[X4LAN] AUTH_TRADE_DOCK %s|READY|7354|%s|%s|%s|%s|%s|%s|%s|%s'.[$Nonce,$Ship.idcode,$Station.idcode,$Bay,$Captain,$Avatar.idcode,$AvatarStation.idcode,$FirstObservationAge,player.age]" chance="100"/>
+           <raise_lua_event name="'X4AuthorityTradeDock.Result'" param="'%s|READY|%s|%s|%s|%s'.[$Nonce,$Ship,$Station,$Bay,player.age]"/>
+          </do_if>
+          <do_else>
+           <set_value name="$Status" exact="'DOCK_STATE_CHANGED'"/>
+           <include_actions ref="ReportFailure"/>
+          </do_else>
+         </actions>
+        </cue>
+       </cues>
+      </cue>
+     </cues>
+    </cue>
+   </cues>
+  </cue>
+
+  <library name="CheckAvatarAndShip">
+   <actions>
+    <set_value name="$Safe" exact="false"/>
+    <do_if value="$Epoch and @md.X4AuthorityShipRegistry.State.$epoch == $Epoch and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{7354}"/>
+     <set_value name="$Safe" exact="@$Ship.isclass.ship_s and $Ship.isoperational and $Ship.owner == faction.player and $Ship.idcode == 'WRN-302' and $Ship.macro.id == 'ship_arg_s_fighter_02_a_macro' and @$Ship.sector.macro.id == 'cluster_01_sector001_macro' and @md.X4AuthorityShipRegistry.State.$byship.{$Ship} == 7354 and @$Avatar.idcode == 'EEV-621' and player.entity == $Avatar and @$AvatarStation.idcode == 'XPJ-169' and @$AvatarStation.sector.macro.id == 'cluster_06_sector002_macro' and player.station == $AvatarStation and @$AvatarRoom.exists and player.room == $AvatarRoom and player.container == $AvatarContainer and not player.occupiedship and not player.controlled and not @player.entity.hascontext.{$Ship} and player.ship != $Ship"/>
+    </do_if>
+   </actions>
+  </library>
+  <library name="CheckDocked">
+   <actions>
+    <include_actions ref="CheckAvatarAndShip"/>
+    <set_value name="$Docked" exact="$Safe and $Ship.dock == $Bay and not $Ship.isinternallystored and $Ship.orders.count == 0 and (not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait') and $Ship.pilot == $Captain and $Ship.assignedaipilot == $Captain and @$Captain.owner == faction.player and @$Station.isoperational and $Station.owner == faction.teladi and $Station.trueowner == faction.teladi and $Station != $AvatarStation and $Bay.container == $Station and $Bay.istradingallowed"/>
+   </actions>
+  </library>
+  <library name="ReportFailure">
+   <actions>
+    <do_if value="@$DockOrder.isorder and @$Ship.orders.indexof.{$DockOrder}">
+     <cancel_order order="$DockOrder"/>
+    </do_if>
+    <debug_text text="'[X4LAN] AUTH_TRADE_DOCK %s|%s'.[$Nonce,$Status]" chance="100"/>
+    <raise_lua_event name="'X4AuthorityTradeDock.Result'" param="'%s|%s|0|0|0|0'.[$Nonce,$Status]"/>
+   </actions>
+  </library>
+ </cues>
+</mdscript>
