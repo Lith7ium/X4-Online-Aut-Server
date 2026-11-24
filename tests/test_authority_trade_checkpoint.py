@@ -86,3 +86,23 @@ class TradeSaveEvidenceTest(unittest.TestCase):
         after['ships'][0]['cargo_units'] = 1
         with self.assertRaisesRegex(ValueError, 'cargo delta'):
             compare_verified_trade(before, after, quantity=1, debit_cents=5877)
+
+    def test_stock_ship_storage_path_excludes_nested_hull_and_rejects_mixed_cargo(self):
+        evidence = self.observe_ship(dock=True)
+        evidence.observe('connections', 13, {}, None)
+        evidence.observe('connection', 14, {'connection': 'dock'}, None)
+        evidence.observe('component', 15, {'class': 'ship_s'}, None)
+        evidence.observe('connections', 16, {}, None)
+        evidence.observe('connection', 17, {'connection': 'con_storage01', 'macro': 'con_storage01'}, None)
+        evidence.observe('component', 18, {'class': 'storage', 'connection': 'shipconnection', 'id': '[0x1]'}, None)
+        evidence.observe('cargo', 19, {}, None)
+        evidence.observe('ware', 20, {'ware': 'water', 'amount': '50'}, None)
+        self.assertEqual(evidence.ships[7354]['cargo_units'], 0)
+        evidence.observe('connection', 14, {'connection': 'con_storage01', 'macro': 'con_storage01'}, None)
+        evidence.observe('component', 15, {'class': 'storage', 'connection': 'shipconnection', 'id': '[0x37db8]'}, None)
+        evidence.observe('cargo', 16, {}, None)
+        evidence.observe('ware', 17, {'ware': 'water', 'amount': '6'}, None)
+        self.assertEqual(evidence.ships[7354]['cargo_units'], 6)
+        self.assertEqual(evidence.ships[7354]['cargo_encoding'], 'stock_ship_storage_component')
+        with self.assertRaisesRegex(ValueError, 'ambiguous direct and ship storage'):
+            evidence.observe('cargo', 13, {}, None)

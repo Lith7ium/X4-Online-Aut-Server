@@ -47,12 +47,61 @@ class TradeSaveEvidence:
         self.components = []
         self.ship_depth = None
         self.ship = None
+        self.ship_path = []
         self.cargo_depth = None
+        self.cargo_kind = None
+        self.cargo_has_ware = False
+        self.cargo_storage_ids = set()
         self.factions = 0
         self.in_factions = self.in_player_faction = False
         self.account = None
         self.avatar = None
         self.seller = None
+
+    def _open_cargo(self, depth, kind, storage_id=None):
+        if self.cargo_kind is not None and self.cargo_kind != kind:
+            raise ValueError('ambiguous direct and ship storage cargo nodes')
+        if kind == 'direct' and self.cargo_kind == 'direct':
+            raise ValueError('duplicate direct ship cargo node')
+        if kind == 'storage':
+            if (not re.fullmatch(r'\[0x[0-9a-f]+\]', storage_id or '')
+                    or storage_id in self.cargo_storage_ids):
+                raise ValueError('duplicate or malformed ship storage component')
+            self.cargo_storage_ids.add(storage_id)
+        if self.cargo_kind is None:
+            self.ship['cargo_encoding'] = 'no_ware_row' if kind == 'direct' else 'storage_no_ware_row'
+        self.cargo_kind = kind
+        self.cargo_depth = depth
+        self.cargo_has_ware = False
+
+    def _observe_ship_cargo(self, tag, depth, attrs):
+        offset = depth - self.ship_depth
+        del self.ship_path[offset - 1:]
+        self.ship_path.append((tag, attrs))
+        if self.cargo_depth is not None and depth <= self.cargo_depth:
+            self.cargo_depth = None
+        if tag == 'cargo' and offset == 1:
+            self._open_cargo(depth, 'direct')
+        elif tag == 'cargo' and offset == 4:
+            connection_tag, connection = self.ship_path[1]
+            component_tag, component = self.ship_path[2]
+            name = connection.get('connection', '')
+            if (self.ship_path[0][0] == 'connections' and connection_tag == 'connection'
+                    and component_tag == 'component' and component.get('class') == 'storage'
+                    and component.get('connection') == 'shipconnection'
+                    and re.fullmatch(r'con_storage(?:_?[0-9]+)?', name)
+                    and connection.get('macro') == name):
+                self._open_cargo(depth, 'storage', component.get('id'))
+        elif self.cargo_depth is not None and depth == self.cargo_depth + 1 and tag == 'ware':
+            if not attrs.get('ware'):
+                raise ValueError('unnamed ware in ship cargo')
+            if attrs['ware'] == WARE:
+                if self.cargo_has_ware:
+                    raise ValueError(f'duplicate {WARE} ware in ship cargo')
+                self.cargo_has_ware = True
+                self.ship['cargo_units'] += _nonnegative(attrs.get('amount'), 'cargo amount')
+                self.ship['cargo_encoding'] = ('explicit_ware_row' if self.cargo_kind == 'direct'
+                                               else 'stock_ship_storage_component')
 
     def observe(self, tag, depth, attrs, index):
         if depth <= 3:
@@ -73,22 +122,9 @@ class TradeSaveEvidence:
 
         if self.ship_depth is not None:
             if depth <= self.ship_depth:
-                self.ship_depth = self.ship = self.cargo_depth = None
-            elif depth == self.ship_depth + 1:
-                self.cargo_depth = None
-                if tag == 'cargo':
-                    if self.ship['cargo_encoding'] != 'no_cargo_node':
-                        raise ValueError('duplicate direct ship cargo node')
-                    self.ship['cargo_encoding'] = 'no_ware_row'
-                    self.cargo_depth = depth
-            elif self.cargo_depth is not None and depth == self.cargo_depth + 1 and tag == 'ware':
-                if not attrs.get('ware'):
-                    raise ValueError('unnamed ware in direct ship cargo')
-                if attrs['ware'] == WARE:
-                    if self.ship['cargo_encoding'] == 'explicit_ware_row':
-                        raise ValueError(f'duplicate {WARE} ware in direct ship cargo')
-                    self.ship['cargo_units'] = _nonnegative(attrs.get('amount'), 'cargo amount')
-                    self.ship['cargo_encoding'] = 'explicit_ware_row'
+                self.ship_depth = self.ship = None
+            else:
+                self._observe_ship_cargo(tag, depth, attrs)
 
         if tag != 'component':
             return
@@ -124,6 +160,9 @@ class TradeSaveEvidence:
                          'cargo_units': 0, 'cargo_encoding': 'no_cargo_node'}
             self.ships[index] = self.ship
             self.ship_depth = depth
+            self.ship_path.clear()
+            self.cargo_depth = self.cargo_kind = None
+            self.cargo_storage_ids.clear()
         elif kind == 'player':
             if (self.avatar is not None or attrs.get('owner') != 'player' or attrs.get('connection') != 'room'
                     or host is None or host.get('class') != 'station' or host.get('code') != AVATAR_STATION
