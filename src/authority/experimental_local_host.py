@@ -78,7 +78,10 @@ class ExperimentalLocalHost:
             motion = self._control._latest_motion
             if motion is not None and self._world.session.pending is not None:
                 motion.barrier(world=True)
-            self._control.poll(timeout, wake_reader=wake_reader)
+            if wake_reader is None:
+                self._control.poll(timeout)
+            else:
+                self._control.poll(timeout, wake_reader=wake_reader)
             pending = self._world.session.pending
             if pending is None:
                 if motion is not None and motion.world_blocked:
