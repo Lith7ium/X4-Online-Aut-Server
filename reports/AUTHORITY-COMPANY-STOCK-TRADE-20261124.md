@@ -182,3 +182,44 @@ completed flight used the working isolated Steam runtime, opened no
 session listener, wrote no new save and left no test processes. Its
 diagnostic result SHA-256 is
 `0537c4c307b43e6870dd7d226836e4a26a9f8d4058bba8f058929ccc834a581d`.
+
+## Purchase selected in the docked pilot's stock trade menu
+
+In the first private berth attempt, X4 rejected a request for a specific
+trading bay from 374,528 m away. It returned neither queued nor granted.
+The run ended before any docking or purchase. A second private run loaded
+the original 10,082-ship checkpoint, took the same empty WRN-302 and
+placed it near an external trading platform at BIM-169. This avoided
+repeating the long flight. The starting platform and the bay actually
+allocated by the station were different.
+
+| Native observation | Value |
+| --- | --- |
+| Measured distance to staging platform / station centre | 1,334 m / 3,222 m |
+| Stock cockpit request | Granted |
+| Physical dock | WRN in the stock station dock list at its assigned external bay; pilot retained control |
+| Stock slider limit / selected quantity | 25 / 6 water |
+| Available virtual cargo space before / after selection | 25 / 19 |
+| Quoted unit price / basket total shown by the stock menu | 58.77 Cr / 352 Cr |
+| Account and physical water before / after the confirmation callback | 10,000 Cr and 0 water both times |
+
+The private fixture invoked X4's instant docking action after measuring the
+actual station assignment. The unmodified stock trade screen created the
+basket. The harness invoked the registered click callback of its active
+Confirm button after rebinding the rendered widget. The capture adapter
+received the station, sector, ware, quantity and quoted unit price. Its
+test destination declined the order without dispatching it. The pilot's
+end-to-end purchase, native input from a human and a second player's account
+display remain open.
+
+X4 reported an invalid optional lookup in the private placement guard
+during load. The observed placement, native permission and dock observations
+came from that run. Commit `f000e379` corrects the expression. The next
+native trade run should check the opening log for this diagnostic.
+
+The near-station result SHA-256 is
+`7397fc5fca9be306bd66745668babe7f094c1f91c318492e84da432e06a09c9d`.
+The run wrote no save and left no test processes. Both supported server
+purchase quantities now check the transaction journal and the buying ship's
+actual before/after ware counts. The revised provider verifier has focused
+regression coverage for a 58.19 Cr quote and a 58 Cr debit.

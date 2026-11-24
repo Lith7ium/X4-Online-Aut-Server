@@ -15,9 +15,10 @@ The first isolated trial uses one unit of water, the Company ship WRN-302
 and a normal Teladi station with its own stock and sell offer. The server
 avatar stays on a different station. The remote stock order completed in native Linux X4.
 A fresh process loaded the resulting balance and cargo. A separate client
-probe read a matching ship-specific live offer. The player-controlled
-stock menu, account display at a second cockpit and reliable transport
-of the actual purchase still need end-to-end verification.
+probe read a matching ship-specific live offer. A docked pilot in a separate private run selected six units in the stock menu.
+The registered Confirm callback produced the purchase request. Reliable delivery
+to the server, the resulting booking and the balance displayed at a second cockpit
+still need end-to-end verification.
 [Native trade measurements](../reports/AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
 ## What exists
