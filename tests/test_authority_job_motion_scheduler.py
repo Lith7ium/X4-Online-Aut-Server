@@ -24,9 +24,14 @@ class Scheduler(unittest.TestCase):
   ji,jo,mi,mo=sockets;ji.connect(jo.getsockname());jo.connect(ji.getsockname());mi.connect(mo.getsockname());mo.connect(mi.getsockname())
   job=ExperimentalSourceJobBridge(delivery,ji,enabled=True,lease=case.lease,attempt=case.attempt,
       epoch=case.epoch,generation=case.generation,guard=lambda:True,timeout=2)
-  motion=ExperimentalTCPMotion(delivery,enabled=True);ref=[];answered=threading.Event()
+  motion=ExperimentalTCPMotion(delivery,enabled=True);ref=[];requested=threading.Event();answered=threading.Event();attempted=threading.Event()
   def reentrant():
-   if answered.is_set():
+   if requested.is_set():
+    # The response may become readable before the responder thread can set its
+    # completion event. Wait for that event after the request was received so
+    # this guard always exercises the reentrant call during the active pull.
+    if not answered.wait(1):raise RuntimeError('fake responder did not answer')
+    attempted.set()
     try:job.run_one(_scheduler=ref[0])
     except RuntimeError:pass
    return True
@@ -35,12 +40,14 @@ class Scheduler(unittest.TestCase):
   scheduler=ExperimentalJobMotionScheduler(job,ipc,enabled=True);ref.append(scheduler)
   def fake_motion():
    parts=mo.recv(769).decode().split('|')
+   requested.set()
    mo.send('|'.join(['S','1'*32,'2'*32,'NO_SAMPLE',case.epoch,case.generation,parts[-1]]).encode())
    answered.set()
   thread=threading.Thread(target=fake_motion);thread.start()
   with self.assertRaises(RuntimeError):scheduler.step()
-  thread.join(2);self.assertFalse(thread.is_alive());self.assertTrue(answered.is_set())
-  self.assertEqual(scheduler.state,'failed');self.assertTrue(case.base.case.host._failed)
+  thread.join(2);self.assertFalse(thread.is_alive());self.assertTrue(answered.is_set());self.assertTrue(attempted.is_set())
+  self.assertEqual(scheduler.state,'failed');self.assertEqual(job.state,'failed')
+  self.assertTrue(delivery._failed);self.assertTrue(case.base.case.host._failed)
 
  def test_job_rearm_precedes_confirmed_motion_registration(self):
   case=fixture.SourceBridgeTest('test_correlated_finished_after_rearm');case.setUp();self.addCleanup(case.doCleanups)
