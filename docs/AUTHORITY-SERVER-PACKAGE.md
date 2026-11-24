@@ -9,19 +9,32 @@ It uses the project's noncommercial terms and notices in the archive root.
 
 ## Prepare the host
 
-Use an unprivileged Linux x86-64 account with Python 3.11 or newer, Bubblewrap
-with user namespaces, a C compiler and standard libc development files. Install
-Xvfb, xauth, xdpyinfo, Vulkan tools, Mesa lavapipe and the Linux libraries
-required by X4. Install and authenticate Steam under that same account and leave
-it running. Set the game argument to the operator's existing licensed Linux
-X4 9.00 installation with the pinned executable from Steam build 23660954.
-The game and its compatible DLC remain in that installation. The launch
-namespace mounts them read-only.
+Use an unprivileged Linux x86-64 account with Python 3.11+, Bubblewrap with
+user namespaces, `cc` and libc development headers. Install `Xvfb`, `xauth`,
+`xdpyinfo`, `vulkaninfo`, `/usr/bin/find`, Mesa lavapipe and the Linux runtime
+libraries required by X4. Keep the native Steam client running and authenticated
+under the same account. The supervisor checks that `~/.steam/steam.pid` names
+that account's live `steam` process. Close existing X4 instances before the test.
+
+Use the licensed Linux X4 9.00 installation from Steam build 23660954. The
+supervisor checks the executable SHA-256
+`113f73d74570084f6ce18a659b365009eccf579fb66dbabb5dad2b1718045f20`.
+It mounts the game and compatible installed DLC read-only. Keep the host's
+normal Steam and X4 profile in place.
+
+Extract into a directory owned by the operator and create the private working
+directory.
+
+```sh
+tar -xzf /path/to/x4-authority-test-server.tar.gz
+cd x4-authority-test-server
+mkdir -m 700 -p .local
+```
 
 A clean archive extraction does not have a recovery world. Obtain a separately
 authorized, compatible, confirmed disposable fixture from the test owner.
 Stage the verified source under the extraction's `.local` directory with the
-fixture's original layout. The ordinary previous-supervisor source requires:
+fixture's original layout. The ordinary previous-supervisor source uses this layout.
 
 ```text
 .local/source-run/
@@ -57,17 +70,19 @@ tools/run_authority_server.sh \
   --out .local/provider-run-01 --timeout 1800
 ```
 
-The provider launcher uses a private Xvfb display and Mesa software Vulkan.
-The trial still uses the game's graphics libraries. Rendering performance and
-native operation on a provider host require measurement. GPU-free refers to
-device access and the software driver selection. The launcher detects Xvfb on
-`PATH` and the system lavapipe ICD. For alternate installed paths, use
-`--xvfb /absolute/path/to/Xvfb` and `--vulkan-icd /absolute/path/to/lvp_icd.json`.
+The wrapper starts a private Xvfb display. Before launching X4 it checks the
+device list and Mesa software Vulkan inside the game's Bubblewrap namespace
+and records the Vulkan probe in `.local/provider-run-01/software-vulkan.log`.
+It detects Xvfb on `PATH` and the system lavapipe ICD. To specify installed
+alternatives, pass `--xvfb /absolute/path/to/Xvfb` and
+`--vulkan-icd /absolute/path/to/lvp_icd.json`.
 
-For a remote fixture client, add the explicit TLS options from the
-[recovered-server guide](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
-Keep the generated `connection.json` private. With no TLS flags, server
-endpoints are loopback only. No router or firewall is configured by the package.
+The default publishes a private loopback `endpoint.json`. For a remote
+fixture client, append `--tls-bind`, `--tls-port`, `--tls-advertise`,
+`--tls-certificate`, `--tls-private-key` and `--tls-shared-key-file` to the
+same provider command. Use a client-reachable advertised address and keep
+the generated `connection.json` private.
+See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
 ## Check the deployment from the host
 
@@ -108,11 +123,12 @@ cc -std=c11 -O2 -Wall -Wextra -Werror -shared -fPIC \
 The independent output is for compiler verification. The provider still builds
 the module into each fresh run, and the archive contains the source only.
 
-Use SIGTERM or the configured timeout to stop the trial. The supervisor
-processes participant departure and confirms its final checkpoint when it can.
-Check the private run's `result.json`; successful process startup alone does not
-verify a saved world. The clean-extraction smoke test builds the disposable
-overlay and native UDP module without launching X4.
+Use Ctrl+C, SIGTERM or the configured timeout to stop the trial. Give the
+supervisor time to settle participant departures and finish the final save.
+In the server run's `result.json`, check `success: true`,
+`final_world_state: "paused"`, an empty `owned_processes_remaining` and a
+non-null `final_checkpoint_id`. The checkpoint should match the store's
+`CONFIRMED` pointer.
 
 ## Build the archive again
 
