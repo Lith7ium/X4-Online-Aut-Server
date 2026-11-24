@@ -78,6 +78,11 @@ The server again refused a duplicate confirmation.
 | Company faction balance before / after | 10,000.00 / 9,651.00 Cr |
 | Final player balance | 9,651.00 Cr |
 
+The installed stock 9.00 map trade menu also multiplies the unit price
+by the selected quantity before calling `RoundTotalTradePrice` for each
+ware line (`08.cat`, `ui/addons/ego_detailmonitor/menu_map.lua`, lines
+21715 and 21718).
+
 Rounding six units separately to 58 Cr would have yielded 348 Cr.
 This purchase settled at 349 Cr. These amounts establish the result for
 this purchase. They do not distinguish rounding the total to the nearest
