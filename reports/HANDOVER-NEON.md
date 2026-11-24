@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026. Last team check-in at 15:00 Berlin time.** Astra leads Lith7ium's
+**24 November 2026. Last team check-in at 16:00 Berlin time.** Astra leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -9,11 +9,11 @@ current task. This document supersedes the [20 November handover](HANDOVER-NEON-
 ## Current assignments
 
 **Neon owns NPC movement from the server to a Windows pilot's screen.**
-Build on your native reacquisition branch at `4b181f5f`. Bring gameplay
+Build on your native reacquisition branch at `8416b817`. Bring gameplay
 capture and playback into an admitted session, exercise multiple visible
-ships, and measure the cost against the 10,082-entry world. Your next
-concurrency case is a delayed or missing fresh sample after preparation
-while another track continues on the same participant. Coordinate a shared
+ships, and measure the cost against the 10,082-entry world. The delayed
+source checks are complete. The next milestone is a moving native source
+and an admitted Windows observer of the same registered NPC. Coordinate a shared
 native run with Astra when the ordinary player path is ready. [Scope and acceptance evidence](NEON-NPC-SHIP-MOTION.md)
 
 **Cobalt owns map-visibility research and the ordinary Windows player
@@ -22,7 +22,7 @@ build was `cf57d0b1`. For the joint flight, use the matching Linux and
 Windows packages at `2a2b569d`. They retain a confirmed moving sample when
 the observed pilot comes to rest. Exchange session settings privately.
 [Windows flight procedure](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight)
-[15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
+[16:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795532461739279)
 
 Astra owns movement of player ships, the provider and integration on
 `experiment/authoritative-server-20261115`. For read-only contributor
@@ -37,6 +37,15 @@ and UDP, simulated visibility and a synthetic source. Neon then enrolled a
 new YDA-317 in a private native Windows game. After reacquisition, a requested
 20 m/s yielded 31.766 m in 1.588 s. This Windows run supplies the first
 component for Neon's current assignment. [Windows measurements](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/4b181f5f/reports/AUTHORITY-NPC-REACQUISITION-WINDOWS-20261124.md)
+
+At `8416b817`, three delayed-source tests also passed independently on
+Linux using real loopback sockets and simulated game callbacks. A second
+active track continued while the first track waited for a fresh sample.
+Pause, save and resume completed after the pending cancellation. One limit
+remains. A pilot can have one prepared reentry with no expiry while interest
+stays unchanged. If the source never arrives, another reentry for that pilot
+can wait until a barrier, loss of view or disconnect. The change is on Neon's
+branch. [Transport change](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/8416b817ef876c9d1d8c324c36963d81e34495b1)
 
 ## What changed since the previous handover
 
