@@ -36,7 +36,7 @@
                     <clamp_trade_amount result="$amount" trade="$offer" amount="1" buyer="$ship" seller="$station" unbundle="false"/>
                     <set_value name="$status" exact="'not_tradeable'"/>
                     <do_if value="$price gt 0Cr and $amount == 1 and $offer.offeramount.{$ship} ge 1 and $ship.money ge $price and player.money ge $price">
-                      <set_value name="$quote" exact="($price / 1ct)i"/>
+                      <set_value name="$quote" exact="($price / 1ct)L"/>
                       <set_value name="$status" exact="'quote'"/>
                       <do_if value="event.param2 == 'Quote'">
                         <set_value name="State.$quoted_request" exact="$request"/>
@@ -89,12 +89,12 @@
                 <set_value name="State.$completion_seen" exact="true"/>
                 <set_value name="$ship_cargo" exact="State.$ship.cargo.{State.$ware}.count - State.$ship_cargo"/>
                 <set_value name="$station_cargo" exact="State.$station.cargo.{State.$ware}.count - State.$station_cargo"/>
-                <set_value name="$ship_money" exact="((State.$ship.money - State.$ship_money) / 1ct)i"/>
-                <set_value name="$station_money" exact="((State.$station.money - State.$station_money) / 1ct)i"/>
-                <set_value name="$player_money" exact="((player.money - State.$player_money) / 1ct)i"/>
+                <set_value name="$ship_money" exact="((State.$ship.money - State.$ship_money) / 1ct)L"/>
+                <set_value name="$station_money" exact="((State.$station.money - State.$station_money) / 1ct)L"/>
+                <set_value name="$player_money" exact="((player.money - State.$player_money) / 1ct)L"/>
                 <set_value name="$docked" exact="@State.$ship.dock.container == State.$station"/>
                 <set_value name="$parked" exact="player.station == State.$parking and not player.controlled and not player.occupiedship and @player.room.exists"/>
-                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)i,$ship_cargo,$station_cargo,$ship_money,$station_money,$player_money,$docked,$parked]"/>
+                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)L,$ship_cargo,$station_cargo,$ship_money,$station_money,$player_money,$docked,$parked]"/>
               </actions>
             </cue>
           </cues>
