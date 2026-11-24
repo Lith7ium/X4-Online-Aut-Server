@@ -1,4 +1,4 @@
--- Read-only sight of one explicitly targeted cockpit hull.
+-- Read-only registry binding for a locally observed Company hull.
 local M = {}
 local SCREEN = 'X4AuthorityCompanyObserverTarget'
 local INTERVAL, FRESHNESS = .15, .4
@@ -14,7 +14,7 @@ end
 
 local function same_target(a, b)
     return a ~= nil and b ~= nil and a.actor == b.actor and a.space == b.space
-        and a.sector_macro == b.sector_macro and a.code == b.code
+        and a.sector_macro == b.sector_macro and a.code == b.code and a.mode == b.mode
 end
 
 local function valid_code(value)
@@ -65,6 +65,7 @@ function M.new(pinned, own_index, engine)
             observed = nil
             return
         end
+        engine.confirm(target)
         observed = {target = target, deadline = request.deadline,
                     row = {epoch = epoch, sector_macro = sector, index = index, code = code, actor = actor}}
     end
@@ -75,9 +76,11 @@ function M.new(pinned, own_index, engine)
         if sequence >= 4294967295 then self:close(); return end
         sequence = sequence + 1
         next_poll = now + INTERVAL
-        local id = nonce .. '-' .. tostring(sequence)
+        local id = nonce .. '-' .. engine.scope .. '-' .. tostring(sequence)
         pending = {id = id, target = target, deadline = now + FRESHNESS}
-        local ok, issued = pcall(engine.issue, {request_id = id, epoch = epoch, count = count, own = own_index})
+        local ok, issued = pcall(engine.issue, {
+            request_id = id, epoch = epoch, count = count, own = own_index, mode = target.mode, target = target.ref,
+        })
         if not ok or issued ~= true then pending, observed = nil, nil end
     end
 
@@ -103,7 +106,7 @@ function M.new(pinned, own_index, engine)
     return api
 end
 
-function M.new_x4(pinned, own_index, registry_ready)
+local function new_x4(pinned, own_index, registry_ready, map_target)
     assert(type(registry_ready) == 'function')
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
@@ -119,26 +122,27 @@ function M.new_x4(pinned, own_index, registry_ready)
         UniverseID GetPlayerContainerID(void); UniverseID GetContextByClass(UniverseID, const char*, bool);
         const char* GetObjectIDCode(UniverseID);
         ScreenPos GetComponentScreenPosition(UniverseID, uint32_t, uint32_t);
+        float GetDistanceBetween(UniverseID, UniverseID);
     ]]
     local C = ffi.C
     local resolve = assert(X4LAN_RESOLVE_STRING)
+    local last_hud_target
 
     local function cockpit_view()
         if registry_ready() ~= true or not C.IsPlayerValid() or C.IsGamePaused()
-                or not C.IsHUDActive() or C.IsExternalTargetMode() or C.IsExternalViewActive()
                 or type(Menus) ~= 'table' then return nil end
-        local map_found = false
+        local map_open
         for _, menu in ipairs(Menus) do
             if type(menu) == 'table' and menu.name == 'MapMenu' then
-                if menu.shown then return nil end
-                map_found = true
+                if map_open ~= nil then return nil end
+                map_open = not not menu.shown
             end
         end
-        if not map_found then return nil end
+        if map_open == nil then return nil end
         local ship = C.GetPlayerControlledShipID()
         if ship == 0 or ship ~= C.GetPlayerOccupiedShipID() or ship ~= C.GetPlayerContainerID()
                 or not C.IsValidComponent(ship) then return nil end
-        return ship
+        return ship, map_open
     end
 
     local function native_ref(id)
@@ -152,33 +156,75 @@ function M.new_x4(pinned, own_index, registry_ready)
         return ref and resolve.actor_u64(ConvertIDTo64Bit(ref)) or nil
     end
 
-    local function target()
-        local cockpit = cockpit_view()
-        if not cockpit then return nil end
-        local actor = hud_target()
+    local function within_cockpit_radar(cockpit, actor)
+        local ref = native_ref(cockpit)
+        local range = ref and GetComponentData(ref, 'maxradarrange')
+        if type(range) ~= 'number' or not (range > 0 and range < math.huge) then return false end
+        local distance = tonumber(C.GetDistanceBetween(cockpit, actor))
+        return distance ~= nil and distance >= 0 and distance <= range
+    end
+
+    local function candidate()
+        local cockpit, map_open = cockpit_view()
+        if not cockpit or (map_target and not map_open) then return nil end
+        local mode, actor
+        if map_target then
+            mode, actor = 'map', map_target()
+        elseif map_open then
+            mode, actor = 'hudmap', hud_target()
+            if not last_hud_target or last_hud_target.actor ~= actor then return nil end
+        else
+            if not C.IsHUDActive() or C.IsExternalTargetMode() or C.IsExternalViewActive() then return nil end
+            mode, actor = 'hud', hud_target()
+        end
         if not actor or actor == cockpit or not C.IsValidComponent(actor)
                 or not C.IsComponentOperational(actor) or not C.IsComponentClass(actor, 'ship') then return nil end
         local space = C.GetContextByClass(actor, 'sector', false)
-        if space == 0 or space ~= C.GetContextByClass(cockpit, 'sector', false)
-                or not C.IsValidComponent(space) or not C.IsComponentClass(space, 'sector') then return nil end
+        if space == 0 or not C.IsValidComponent(space) or not C.IsComponentClass(space, 'sector')
+                or (mode ~= 'map' and space ~= C.GetContextByClass(cockpit, 'sector', false)) then return nil end
         local ship_ref, sector_ref = native_ref(actor), native_ref(space)
         if not ship_ref or not sector_ref then return nil end
         local owner, known, radar, stored = GetComponentData(ship_ref, 'owner', 'isknown', 'isradarvisible', 'isinternallystored')
-        if owner ~= 'player' or known ~= true or radar ~= true or stored ~= false
-                or not C.GetComponentScreenPosition(actor, 32, 32).onScreen then return nil end
+        if owner ~= 'player' or known ~= true or stored ~= false or (mode ~= 'map' and radar ~= true) then return nil end
+        if (mode == 'hud' and not C.GetComponentScreenPosition(actor, 32, 32).onScreen)
+                or (mode == 'hudmap' and not within_cockpit_radar(cockpit, actor)) then return nil end
         local sector = GetComponentData(sector_ref, 'macro')
         local code_ptr = C.GetObjectIDCode(actor)
         if not valid_sector(sector) or code_ptr == nil or code_ptr == ffi.NULL then return nil end
         local code = ffi.string(code_ptr)
-        if not valid_code(code) or cockpit_view() ~= cockpit or hud_target() ~= actor then return nil end
-        return {actor = actor, space = space, sector_macro = sector, code = code}
+        local current_cockpit, current_map = cockpit_view()
+        if not valid_code(code) or current_cockpit ~= cockpit or current_map ~= map_open
+                or (mode ~= 'map' and hud_target() ~= actor) then return nil end
+        if mode == 'hudmap' and (last_hud_target.space ~= space or last_hud_target.sector_macro ~= sector
+                or last_hud_target.code ~= code) then return nil end
+        return {actor = actor, space = space, sector_macro = sector, code = code, mode = mode,
+                ref = map_target and ship_ref or nil}
+    end
+
+    local function target()
+        local value = candidate()
+        if not value or (last_hud_target and value.actor ~= last_hud_target.actor) then last_hud_target = nil end
+        return value
     end
 
     return M.new(pinned, own_index, {
+        scope = map_target and 'm' or 'h',
         clock = GetCurRealTime, target = target, parse_actor = resolve.parse_hex,
+        confirm = function(value)
+            if value.mode == 'hud' then last_hud_target = value end
+        end,
         register = function(callback) return RegisterEvent(SCREEN .. '.Result', callback) ~= false end,
         issue = function(args) return AddUITriggeredEvent(SCREEN, 'Read', args) ~= false end,
     })
+end
+
+function M.new_x4(pinned, own_index, registry_ready)
+    return new_x4(pinned, own_index, registry_ready)
+end
+
+function M.new_map_x4(pinned, own_index, registry_ready, map_target)
+    assert(type(map_target) == 'function')
+    return new_x4(pinned, own_index, registry_ready, map_target)
 end
 
 X4LAN_COMPANY_OBSERVER_TARGET = M

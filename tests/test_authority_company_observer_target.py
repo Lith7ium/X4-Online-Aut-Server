@@ -16,7 +16,10 @@ class CompanyObserverTargetTests(unittest.TestCase):
             'set_value', 'do_if', 'raise_lua_event',
         })
         self.assertTrue(all(node.get('name').startswith('$') for node in script.iter('set_value')))
-        self.assertIn('@player.target', {node.get('exact') for node in script.iter('set_value')})
+        target = script.find(".//set_value[@name='$target']")
+        self.assertEqual(target.get('exact'), "if $mode == 'map' then @$args.$target else @player.target")
+        radar = script.find(".//set_value[@name='$withinradar']")
+        self.assertIn('$target.distanceto.{player.controlled} le player.controlled.currentradarrange', radar.get('exact'))
         guards = ' '.join(node.get('value') for node in script.iter('do_if'))
         for field in ('State.$epoch == $args.$epoch', 'State.$last == $args.$count', 'not md.X4AuthorityShipRegistry.State.$faulted',
                       '$target.owner == faction.player', '$target.isoperational', '$target != player.occupiedship',
@@ -31,36 +34,49 @@ class CompanyObserverTargetTests(unittest.TestCase):
     def test_native_adapter_needs_current_cockpit_visibility_and_matching_md_receipt(self):
         script = r'''
 local ffi = require('ffi')
+ffi.cdef('typedef uint64_t UniverseID;')
 local resolve = dofile('tools/dev/authority_registry_resolve_string.lua')
 X4LAN_RESOLVE_STRING = resolve
 local own = resolve.parse_hex('0x20000000000030')
 local remote = resolve.parse_hex('0x20000000000019')
 local other = resolve.parse_hex('0x20000000000028')
 local sector = resolve.parse_hex('0x20000000000040')
+local sector_b = resolve.parse_hex('0x20000000000050')
+local map_id = ffi.new('UniverseID', 9)
 local zero = ffi.new('uint64_t', 0)
 local actor_text = '0x20000000000019'
 local sector_macro, code = 'cluster_06_sector002_macro', 'WRN-302'
+local map_sector, map_code = 'cluster_01_sector001_macro', 'ZRV-341'
+local rendered, selected = {remote, other}, {other}
+local change_selection_on_fill = false
 local by_decimal = {}
-for _, id in ipairs({own, remote, other, sector}) do
+for _, id in ipairs({own, remote, other, sector, sector_b}) do
     by_decimal[(tostring(id):gsub('ULL$', ''))] = id
 end
 
-local now, requested, receipt, target = 0, nil, nil, remote
+local now, requested, target = 0, nil, remote
+local handlers = {}
 local ready, hud, on_screen, operational, known, radar_visible, stored = true, true, true, true, true, true, false
 local owner, external, occupied, paused = 'player', false, own, false
+local distance, radar_range = 1000, 5000
 local requests = 0
-Menus = {{name='MapMenu'}}
+Menus = {{name='MapMenu', holomap=map_id}}
 GetCurRealTime = function() return now end
 GetPlayerTarget = function() return target end
 ConvertStringToLuaID = function(key) return by_decimal[key] end
 ConvertIDTo64Bit = function(id) return id end
-GetComponentData = function(id)
+GetComponentData = function(id, field)
     if id == sector then return sector_macro end
+    if id == sector_b then return map_sector end
+    if id == own and field == 'maxradarrange' then return radar_range end
     return owner, known, radar_visible, stored
 end
 RegisterEvent = function(event, handler)
     assert(event == 'X4AuthorityCompanyObserverTarget.Result')
-    receipt = handler
+    handlers[#handlers + 1] = handler
+end
+local function receipt(_, row)
+    for _, handler in ipairs(handlers) do handler(nil, row) end
 end
 AddUITriggeredEvent = function(screen, action, args)
     assert(screen == 'X4AuthorityCompanyObserverTarget' and action == 'Read')
@@ -69,24 +85,44 @@ AddUITriggeredEvent = function(screen, action, args)
     requested = args
 end
 package.loaded.ffi = {cdef=function() end, typeof=function() return true end, NULL={},
+    new=ffi.new, cast=ffi.cast,
     string=function(value) return value end, C={
         IsPlayerValid=function() return true end, IsGamePaused=function() return paused end,
         IsHUDActive=function() return hud end, IsExternalTargetMode=function() return false end,
         IsExternalViewActive=function() return external end, IsValidComponent=function(id) return id ~= zero end,
         IsComponentOperational=function() return operational end, IsComponentClass=function(id, kind)
-            return (kind == 'sector') == (id == sector)
+            return (kind == 'sector') == (id == sector or id == sector_b)
         end,
         GetPlayerControlledShipID=function() return own end, GetPlayerOccupiedShipID=function() return occupied end,
-        GetPlayerContainerID=function() return own end, GetContextByClass=function() return sector end,
-        GetObjectIDCode=function() return code end,
+        GetPlayerContainerID=function() return own end,
+        GetContextByClass=function(id) return id == other and sector_b or sector end,
+        GetObjectIDCode=function(id) return id == other and map_code or code end,
         GetComponentScreenPosition=function() return {onScreen=on_screen} end,
+        GetDistanceBetween=function(cockpit, actor)
+            assert(cockpit == own and actor == remote)
+            return distance
+        end,
+        GetNumMapSelectedComponents=function(id) assert(id == map_id); return #selected end,
+        GetMapSelectedComponents=function(out, size, id)
+            assert(size == 1 and id == map_id)
+            out[0] = selected[1]
+            return #selected
+        end,
+        GetNumMapRenderedComponents=function(id) assert(id == map_id); return #rendered end,
+        GetMapRenderedComponents=function(out, size, id)
+            assert(size == #rendered and id == map_id)
+            for i, key in ipairs(rendered) do out[i-1] = key end
+            if change_selection_on_fill then selected = {remote} end
+            return size
+        end,
     },
 }
 
 local module = dofile('src/authority/lua/company_observer_target.lua')
 local epoch = ('a'):rep(32)
-local observer = module.new_x4({epoch=epoch, nonce=('b'):rep(32), issued_count=7354}, 1970,
-                               function() return ready end)
+local pinned = {epoch=epoch, nonce=('b'):rep(32), issued_count=7354}
+local guard = function() return ready end
+local observer = module.new_x4(pinned, 1970, guard)
 
 local function result(req, index, actor)
     return table.concat({req.request_id, epoch, 'OBSERVED', index or '7354',
@@ -122,7 +158,6 @@ for _, block in ipairs({
     function(disable) operational = not disable end,
     function(disable) stored = disable end,
     function(disable) owner = disable and 'argon' or 'player' end,
-    function(disable) Menus[1].shown = disable end,
     function(disable) external = disable end,
     function(disable) paused = disable end,
     function(disable) occupied = disable and other or own end,
@@ -155,9 +190,70 @@ receipt(nil, result(requested))
 assert(observer:current() ~= nil)
 now = now + .4
 assert(observer:current() == nil)
-observer:close()
+
+-- Opening the map can retain this HUD target only with its own renewed
+-- cockpit radar and MD evidence. It must not use the map selection.
+Menus[1].shown = true
+on_screen, hud = false, false
 observer:tick()
+assert(requested.mode == 'hudmap' and requested.target == nil)
 assert(observer:current() == nil)
+receipt(nil, result(requested))
+assert(observer:current().index == 7354)
+distance = 6000
+assert(observer:current() == nil)
+distance = 1000
+now = now + .16
+local prior = requests
+observer:tick()
+assert(requests == prior) -- The invalidated HUD target cannot be reacquired from the map.
+Menus[1].shown = false
+on_screen, hud = true, true
+inspect_and_accept()
+
+dofile('src/authority/lua/map_render_observation.lua')
+local map = dofile('src/authority/lua/company_observer_map.lua').new_x4(pinned, 1970, guard)
+map:tick()
+assert(map:current() == nil)
+Menus[1].shown = true
+now = now + .16
+observer:tick()
+local hud_request = requested
+map:tick()
+local map_request = requested
+assert(hud_request.request_id ~= map_request.request_id)
+assert(hud_request.mode == 'hudmap' and map_request.mode == 'map' and map_request.target == other)
+receipt(nil, result(hud_request))
+assert(observer:current().index == 7354 and map:current() == nil)
+receipt(nil, table.concat({map_request.request_id, epoch, 'OBSERVED', 7200,
+                           '0x20000000000028', map_sector, map_code}, '|'))
+assert(observer:current().index == 7354 and map:current().index == 7200)
+assert(map:matches(epoch, map_sector, 7200, '0x20000000000028', map_code))
+assert(not map:matches(epoch, sector_macro, 7200, '0x20000000000028', map_code))
+rendered = {remote}  -- Still selected, now absent from the raw map.
+assert(map:current() == nil and observer:current().index == 7354)
+
+now = now + .16
+rendered, selected = {remote, other}, {remote, other}
+prior = requests
+map:tick()
+assert(requests == prior)
+selected = {other}
+change_selection_on_fill = true
+map:tick()
+assert(requests == prior) -- Discard a selection changed within the map read.
+change_selection_on_fill = false
+selected = {own}
+rendered = {own, remote, other}
+map:tick()
+assert(requests == prior)
+Menus[1].shown = false
+assert(map:current() == nil and observer:current() == nil)
+observer:close()
+map:close()
+observer:tick()
+map:tick()
+assert(observer:current() == nil and map:current() == nil)
 '''
         subprocess.run(['luajit', '-'], input=script, text=True, cwd=ROOT, check=True)
 

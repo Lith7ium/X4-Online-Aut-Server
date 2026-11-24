@@ -89,15 +89,7 @@ function M.new(options)
 	return sampler
 end
 
-function M.new_x4(options)
-	if type(options) ~= 'table' or options.enabled ~= true then
-		return nil, 'disabled'
-	end
-	local max_components = options.max_components or DEFAULT_MAX_COMPONENTS
-	if not valid_limit(max_components) then
-		return nil, 'invalid_limit'
-	end
-
+local function native_access()
 	local ffi = require('ffi')
 	if not pcall(ffi.typeof, 'UniverseID') then
 		ffi.cdef('typedef uint64_t UniverseID;')
@@ -105,6 +97,8 @@ function M.new_x4(options)
 	ffi.cdef[[
 		uint32_t GetNumMapRenderedComponents(UniverseID);
 		uint32_t GetMapRenderedComponents(UniverseID*, uint32_t, UniverseID);
+		uint32_t GetNumMapSelectedComponents(UniverseID);
+		uint32_t GetMapSelectedComponents(UniverseID*, uint32_t, UniverseID);
 	]]
 	local native = ffi.C
 
@@ -132,6 +126,20 @@ function M.new_x4(options)
 		return tostring(ffi.cast('UniverseID', value)):gsub('ULL$', '')
 	end
 
+	return ffi, native, active_map, decimal_id
+end
+
+function M.new_x4(options)
+	if type(options) ~= 'table' or options.enabled ~= true then
+		return nil, 'disabled'
+	end
+	local max_components = options.max_components or DEFAULT_MAX_COMPONENTS
+	if not valid_limit(max_components) then
+		return nil, 'invalid_limit'
+	end
+
+	local ffi, native, active_map, decimal_id = native_access()
+
 	return M.new({
 		max_components = max_components,
 		get_map = active_map,
@@ -150,6 +158,50 @@ function M.new_x4(options)
 		end,
 		component_id = decimal_id,
 	})
+end
+
+-- One explicitly selected component must also be present in the same raw
+-- renderer list. Recheck the map handle, selection and count after enumeration.
+function M.new_selected_x4()
+	local ffi, native, active_map, decimal_id = native_access()
+	local selected_buffer = ffi.new('UniverseID[1]')
+	local rendered_buffer, capacity
+	local function selection(map_id)
+		if native.GetNumMapSelectedComponents(map_id) ~= 1 or
+			native.GetMapSelectedComponents(selected_buffer, 1, map_id) ~= 1 or selected_buffer[0] == 0 then
+			return nil
+		end
+		return selected_buffer[0]
+	end
+
+	local sampler = {}
+	function sampler:sample()
+		local menu, map_id = active_map()
+		if not map_id then return nil end
+		local selected = selection(map_id)
+		if not selected then return nil end
+		local count = tonumber(native.GetNumMapRenderedComponents(map_id))
+		if not valid_count(count, DEFAULT_MAX_COMPONENTS) or count == 0 then return nil end
+		if not capacity or count > capacity then
+			capacity = count
+			rendered_buffer = ffi.new('UniverseID[?]', capacity)
+		end
+		if native.GetMapRenderedComponents(rendered_buffer, count, map_id) ~= count then return nil end
+		local found = false
+		for index = 0, count - 1 do
+			if rendered_buffer[index] == selected then
+				found = true
+				break
+			end
+		end
+		local map_key = decimal_id(map_id)
+		if not found or not same_map(active_map, menu, map_key, decimal_id)
+			or selection(map_id) ~= selected or native.GetNumMapSelectedComponents(map_id) ~= 1
+			or native.GetNumMapRenderedComponents(map_id) ~= count
+			or not same_map(active_map, menu, map_key, decimal_id) then return nil end
+		return selected
+	end
+	return sampler
 end
 
 X4LAN_MAP_RENDER_OBSERVATION = M
