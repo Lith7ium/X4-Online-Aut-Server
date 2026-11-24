@@ -96,6 +96,7 @@ def verify_settlement(rows, nonce):
             or int(receipt[7]) != -int(quote[3]) or any(v not in ('true', '1') for v in receipt[8:])):
         raise ValueError(f'engine event, balances, cargo or docking disagree: {rows}')
     return {'price_cents': int(quote[3]), 'ship_cargo_delta': 1, 'station_cargo_delta': -1,
+            'ship_money_delta_cents': int(receipt[5]), 'station_money_delta_cents': int(receipt[6]),
             'company_money_delta_cents': int(receipt[7]), 'records': rows}
 
 

@@ -1,8 +1,21 @@
 # Company commands and trade: existing evidence
 
-This note describes internal research, not a playable feature or a proposed
-transport or authority design. All players initially share one Company and
-account. Missions and separate player factions are outside this investigation.
+All players initially share one Company and account.
+
+## Trade authority agreed on 24 November 2026
+
+When a pilot confirms a purchase, the client sends the request to the
+server. The server checks the current offer, performs the transaction in
+its X4 world and returns the confirmed result. Two pilots spending the
+Company's last credits must each see the outcome of the server's decision.
+A lost reply must allow the player to discover whether a purchase went
+through without buying the goods a second time.
+
+The first isolated trial uses one unit of water, the Company ship WRN-302
+and a normal Teladi station with its own stock and sell offer. The server
+avatar stays on a different station. A successful stock order submission,
+a completed purchase, the balance and cargo after a reload, and a receipt
+at a second player's cockpit are separate observations.
 
 ## What exists
 
