@@ -97,7 +97,8 @@
               </conditions>
               <actions>
                 <set_value name="State.$completion_seen" exact="true"/>
-                <set_value name="$delta_ship_cargo" exact="State.$ship.cargo.{State.$ware}.count - State.$before_ship_cargo"/>
+                <set_value name="$after_ship_cargo" exact="State.$ship.cargo.{State.$ware}.count"/>
+                <set_value name="$delta_ship_cargo" exact="$after_ship_cargo - State.$before_ship_cargo"/>
                 <set_value name="$delta_station_cargo" exact="State.$station.cargo.{State.$ware}.count - State.$before_station_cargo"/>
                 <set_value name="$delta_ship_money" exact="((State.$ship.money - State.$before_ship_money) / 1ct)L"/>
                 <set_value name="$delta_station_money" exact="((State.$station.money - State.$before_station_money) / 1ct)L"/>
@@ -109,7 +110,7 @@
                   <set_value name="$after_player_money" exact="(player.money / 1ct)L"/>
                   <set_value name="$after_faction_has_account" exact="faction.player.hasownaccount"/>
                   <set_value name="$after_faction_money" exact="if $after_faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
-                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.Deal'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,State.$epoch,State.$trial,State.$quantity,(State.$price / 1ct)L,State.$quote_time,player.age / 1s,$completed.buyer,$completed.seller,$completed.ware.id,$completed.transferredamount,$completed.destroyedamount,($completed.unitprice / 1ct)L,(($completed.unitprice * $completed.transferredamount) / 1ct)L,(State.$before_player_money / 1ct)L,$after_player_money,if State.$before_faction_has_account then 1 else 0,if $after_faction_has_account then 1 else 0,State.$before_faction_money,$after_faction_money]"/>
+                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.Deal'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,State.$epoch,State.$trial,State.$quantity,(State.$price / 1ct)L,State.$quote_time,player.age / 1s,$completed.buyer,$completed.seller,$completed.ware.id,$completed.transferredamount,$completed.destroyedamount,($completed.unitprice / 1ct)L,(($completed.unitprice * $completed.transferredamount) / 1ct)L,(State.$before_player_money / 1ct)L,$after_player_money,if State.$before_faction_has_account then 1 else 0,if $after_faction_has_account then 1 else 0,State.$before_faction_money,$after_faction_money,State.$before_ship_cargo,$after_ship_cargo]"/>
                 </do_if>
                 <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)L,$delta_ship_cargo,$delta_station_cargo,$delta_ship_money,$delta_station_money,$delta_player_money,$docked,$parked]"/>
               </actions>

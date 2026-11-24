@@ -1,9 +1,9 @@
-"""Verify the six-unit native Company purchase audit receipts."""
+"""Verify native Company purchase audit receipts."""
 from decimal import Decimal
 import re
 
 
-QUANTITY = 6
+TRIALS = {'buy': ('one_unit', 1), 'six-unit': ('six_unit', 6)}
 WARE = 'water'
 SOURCES = {'ship', 'station', 'player'}
 ROLES = {'completed_trade', 'matching_account_or_order_event'}
@@ -14,6 +14,7 @@ DEAL_FIELDS = (
     'player_before_ct', 'player_after_ct', 'faction_hasown_before', 'faction_hasown_after',
     'faction_before_ct', 'faction_after_ct',
 )
+SHIP_CARGO_FIELDS = ('ship_ware_before', 'ship_ware_after')
 ENTRY_FIELDS = (
     'source', 'time', 'buyer_id', 'seller_id', 'partner_id', 'ware', 'quantity',
     'complete', 'entry_id', 'trade_id', 'eventtype', 'trade_eventtype', 'role',
@@ -82,7 +83,7 @@ def _ledger(rows):
     return header
 
 
-def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, debit):
+def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, quantity, debit):
     trade_id = ledger['trade_id']
     if ledger['status'] != 'observed' or not trade_id or trade_id <= 0:
         return 'ledger_unavailable', None
@@ -103,7 +104,7 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, d
             or not entry['linked'] or entry['trade_id'] != trade_id
             or entry['buyer_id'] != buyer or entry['seller_id'] != seller
             or not entry['buyer_matches'] or not entry['seller_matches']
-            or entry['ware'] != WARE or entry['quantity'] != QUANTITY
+            or entry['ware'] != WARE or entry['quantity'] != quantity
             for entry in completed_entries):
         return 'ledger_completed_trade_unconfirmed', None
 
@@ -119,7 +120,7 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, d
         if (not entry['complete'] or entry['entry_id'] <= 0
                 or entry['buyer_id'] not in (0, buyer) or entry['seller_id'] not in (0, seller)
                 or entry['partner_id'] not in (0, buyer, seller)
-                or entry['ware'] not in ('', WARE) or entry['quantity'] not in (0, QUANTITY)):
+                or entry['ware'] not in ('', WARE) or entry['quantity'] not in (0, quantity)):
             return 'ledger_purchase_unconfirmed', None
         transaction = tuple(entry[field] for field in ENTRY_FIELDS if field != 'source')
         copies = purchases.setdefault(transaction, {})
@@ -134,12 +135,13 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, d
     return 'verified', list(copies.values())
 
 
-def six_unit_settlement(rows, nonce, epoch):
+def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=False):
     """Parse unprefixed driver payloads and retain ambiguous economic evidence.
 
     Malformed sequences or unbound primary receipts raise ValueError. Monetary
     ambiguity produces a JSON-safe result with raw payloads and observed debit.
     """
+    trial, quantity = TRIALS[mode]
     records = list(rows)
     parts = [row.split('|') for row in records]
     steps = [part[0] for part in parts]
@@ -147,7 +149,7 @@ def six_unit_settlement(rows, nonce, epoch):
     if (not 9 <= len(parts) <= 201 or steps[:8] != opening
             or any(step != 'ENTRY' for step in steps[8:-1])
             or parts[0] != ['START'] or parts[-1] != ['DONE']):
-        raise ValueError(f'unexpected six-unit native trade sequence: {records!r}')
+        raise ValueError(f'unexpected native trade sequence: {records!r}')
 
     _, dock, quote, submitted, raw_deal, observed, duplicate, *_ = parts
     if len(dock) != 7 or dock[1:3] != [nonce, 'READY']:
@@ -165,8 +167,13 @@ def six_unit_settlement(rows, nonce, epoch):
     if quoted_unit <= 0:
         raise ValueError('nonpositive native quote')
 
-    deal = _fields(raw_deal, DEAL_FIELDS)
-    if (deal['request_id'] != nonce or deal['registry_epoch'] != epoch or deal['trial'] != 'six_unit'
+    has_absolute_cargo = len(raw_deal) == 1 + len(DEAL_FIELDS) + len(SHIP_CARGO_FIELDS)
+    if require_absolute_cargo and not has_absolute_cargo:
+        raise ValueError('missing native ship cargo counts in deal')
+    deal = _fields(raw_deal, DEAL_FIELDS + (SHIP_CARGO_FIELDS if has_absolute_cargo else ()))
+    for field in SHIP_CARGO_FIELDS if has_absolute_cargo else ():
+        deal[field] = _integer(deal[field], field)
+    if (deal['request_id'] != nonce or deal['registry_epoch'] != epoch or deal['trial'] != trial
             or deal['deal_ware'] != WARE
             or _component(deal['deal_buyer_component']) != buyer
             or _component(deal['deal_seller_component']) != seller):
@@ -181,7 +188,7 @@ def six_unit_settlement(rows, nonce, epoch):
         deal[field] = _integer(deal[field], field)
     for field in ('faction_hasown_before', 'faction_hasown_after'):
         deal[field] = _bool(deal[field])
-    if deal['requested_qty'] != QUANTITY or deal['quote_unit_ct'] != quoted_unit:
+    if deal['requested_qty'] != quantity or deal['quote_unit_ct'] != quoted_unit:
         raise ValueError(f'native deal does not match the requested quote: {raw_deal!r}')
 
     if len(observed) != 10 or observed[1:3] != [nonce, quote[3]]:
@@ -196,8 +203,11 @@ def six_unit_settlement(rows, nonce, epoch):
     faction_debit = deal['faction_before_ct'] - deal['faction_after_ct']
     if not docked or not parked:
         reason = 'docking_or_avatar_disagrees'
-    elif deal['transferred_qty'] != QUANTITY or deal['destroyed_qty'] != 0 or ship_cargo != QUANTITY:
+    elif deal['transferred_qty'] != quantity or deal['destroyed_qty'] != 0 or ship_cargo != quantity:
         reason = 'cargo_or_transfer_disagrees'
+    elif has_absolute_cargo and (deal['ship_ware_before'] < 0 or deal['ship_ware_after'] < 0
+            or deal['ship_ware_after'] - deal['ship_ware_before'] != ship_cargo):
+        reason = 'ship_cargo_counts_disagree'
     elif deal['deal_unit_ct'] != quoted_unit:
         reason = 'accepted_unit_price_disagrees'
     elif deal['deal_nominal_ct'] != nominal:
@@ -205,18 +215,18 @@ def six_unit_settlement(rows, nonce, epoch):
     elif (not deal['faction_hasown_before'] or not deal['faction_hasown_after']
           or deal['player_before_ct'] != deal['faction_before_ct']
           or deal['player_after_ct'] != deal['faction_after_ct']
-          or debit <= 0 or player_money != -debit):
+          or deal['player_after_ct'] < 0 or debit <= 0 or player_money != -debit):
         reason = 'account_balances_disagree'
     else:
         reason = None
 
     purchase = None
     if reason is None:
-        reason, purchase = _purchase_reason(ledger, buyer, seller, dock_time, completed_at, quoted_unit, debit)
+        reason, purchase = _purchase_reason(ledger, buyer, seller, dock_time, completed_at, quoted_unit, quantity, debit)
     verified = reason == 'verified'
-    return {
+    result = {
         'verified': verified, 'reason': reason,
-        'price_cents': quoted_unit, 'quoted_total_cents': QUANTITY * quoted_unit,
+        'price_cents': quoted_unit, 'quoted_total_cents': quantity * quoted_unit,
         'effective_unit_cents': deal['deal_unit_ct'], 'nominal_total_cents': nominal,
         'settled_total_cents': debit if verified else None,
         'settled_minus_nominal_cents': debit - nominal if verified else None,
@@ -228,3 +238,12 @@ def six_unit_settlement(rows, nonce, epoch):
         'dock_game_time': dock[6], 'deal': deal, 'ledger': ledger,
         'matched_purchase_entries': purchase, 'records': records,
     }
+
+    if has_absolute_cargo:
+        result['ship_ware_units_after'] = deal['ship_ware_after'] if verified else None
+    return result
+
+
+def six_unit_settlement(rows, nonce, epoch):
+    """Read historical six-unit records that predate absolute cargo fields."""
+    return purchase_settlement(rows, nonce, epoch, 'six-unit')

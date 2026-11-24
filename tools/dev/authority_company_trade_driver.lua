@@ -1,7 +1,9 @@
 -- Runs only in the disposable provider trade trial. The MD cues own all game actions.
 local M = {}
 
-function M.new(epoch, nonce, audit)
+function M.new(epoch, nonce, trial)
+    assert(trial == 'one_unit' or trial == 'six_unit', 'unsupported_trade_trial')
+    local quantity = trial == 'six_unit' and 6 or 1
     local phase = 'wait_for_resume'
     local quote, ship, station, start_time, completed_at
     local prefix = '[X4LAN] AUTH_TRADE_TRIAL ' .. nonce .. '|'
@@ -18,8 +20,7 @@ function M.new(epoch, nonce, audit)
     end
 
     local function issue(action)
-        local request = {request_id = nonce, epoch = epoch}
-        if audit then request.trial = 'six_unit' end
+        local request = {request_id = nonce, epoch = epoch, trial = trial}
         if action == 'Buy' then request.price_cents = quote end
         if AddUITriggeredEvent(screen, action, request) == false then fail('dispatch_' .. action) end
     end
@@ -41,32 +42,25 @@ function M.new(epoch, nonce, audit)
         if phase == 'quoting' and status == 'quote' and tonumber(price) > 0 then
             quote = tonumber(price)
             phase = 'buying'
-            if audit then start_time = require('ffi').C.GetCurrentGameTime() end
+            start_time = require('ffi').C.GetCurrentGameTime()
             issue('Buy')
         elseif phase == 'buying' and status == 'submitted' and tonumber(price) == quote then
             phase = 'settling'
         elseif phase == 'check_duplicate' and status == 'already_attempted' then
-            if audit then
-                phase = 'journal'
-            else
-                phase = 'done'
-                report('DONE')
-            end
+            phase = 'journal'
         else
             fail('unexpected_trade_reply')
         end
     end)
 
-    if audit then
-        RegisterEvent(screen .. '.Deal', function(_, row)
-            if type(row) == 'string' and row:match('^([^|]+)') == nonce then report('DEAL|' .. row) end
-        end)
-    end
+    RegisterEvent(screen .. '.Deal', function(_, row)
+        if type(row) == 'string' and row:match('^([^|]+)') == nonce then report('DEAL|' .. row) end
+    end)
     RegisterEvent(screen .. '.Observed', function(_, row)
         if type(row) ~= 'string' or row:match('^([^|]+)') ~= nonce then return end
         if phase ~= 'settling' then fail('unexpected_settlement'); return end
         report('OBSERVED|' .. row)
-        if audit then completed_at = require('ffi').C.GetCurrentGameTime() end
+        completed_at = require('ffi').C.GetCurrentGameTime()
         phase = 'check_duplicate'
         issue('Buy')
     end)
@@ -85,7 +79,7 @@ function M.new(epoch, nonce, audit)
         local now = require('ffi').C.GetCurrentGameTime()
         if now < (next_read or completed_at + 1) then return end
         local ok, result = pcall(X4LAN_AUTHORITY_TRADE_LEDGER.collect, {
-            ship=ship, station=station, start_time=start_time, end_time=now, quantity=6, ware='water',
+            ship=ship, station=station, start_time=start_time, end_time=now, quantity=quantity, ware='water',
         })
         if not ok or type(result) ~= 'table' then
             result = {status='unknown', reason='collector_error', rows={}}

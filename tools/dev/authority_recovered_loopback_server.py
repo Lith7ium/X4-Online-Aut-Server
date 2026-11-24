@@ -1333,25 +1333,22 @@ def run(args):
                 adapter.resume()
                 records = trade_probe.await_records(log, trade_nonce, deadline, check)
                 trial_result['records'] = records
-                if trade_mode == 'six-unit':
-                    from authority_trade_settlement import six_unit_settlement
-                    # Preserve the private game save even if accounting is inconclusive.
-                    # Only a verified purchase can enter the confirmed checkpoint store.
-                    adapter.pause()
-                    raw_save = adapter.save()
-                    verify()
-                    trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
-                                                   'marker': adapter.pending_marker}
-                    settlement = six_unit_settlement(records, trade_nonce, saved_evidence['epoch'])
-                    trial_result['settlement'] = settlement
-                    if settlement['verified'] is not True:
-                        raise ValueError(f"trade accounting unverified: {settlement['reason']}")
-                    saved = store.publish(raw_save, marker=adapter.pending_marker)
-                    adapter.checkpoint_published(saved)
-                    verify()
-                else:
-                    trial_result['settlement'] = trade_probe.verify_settlement(records, trade_nonce)
-                    saved = capture_first_registry_snapshot(adapter, store, verify)
+                from authority_trade_settlement import purchase_settlement
+                # Preserve the private game save even if accounting is inconclusive.
+                # Only a verified purchase can enter the confirmed checkpoint store.
+                adapter.pause()
+                raw_save = adapter.save()
+                verify()
+                trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
+                                               'marker': adapter.pending_marker}
+                settlement = purchase_settlement(records, trade_nonce, saved_evidence['epoch'],
+                                                 trade_mode, require_absolute_cargo=True)
+                trial_result['settlement'] = settlement
+                if settlement['verified'] is not True:
+                    raise ValueError(f"trade accounting unverified: {settlement['reason']}")
+                saved = store.publish(raw_save, marker=adapter.pending_marker)
+                adapter.checkpoint_published(saved)
+                verify()
                 witness_pending = saved
                 result.update(final_checkpoint_id=saved.checkpoint_id, final_checkpoint_sha256=saved.sha256)
             result.update(success=True, final_world_state='paused')

@@ -5,7 +5,7 @@ import unittest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
-from authority_trade_settlement import six_unit_settlement
+from authority_trade_settlement import purchase_settlement, six_unit_settlement
 
 
 class SixUnitSettlementTests(unittest.TestCase):
@@ -71,3 +71,32 @@ class SixUnitSettlementTests(unittest.TestCase):
         for rows in cases:
             with self.subTest(rows=rows), self.assertRaises(ValueError):
                 six_unit_settlement(rows, 'request', 'epoch')
+
+
+    def test_one_unit_requires_same_native_account_ledger_and_absolute_cargo(self):
+        rows = self.rows.copy()
+        rows[4] = ('DEAL|request|epoch|one_unit|1|5819|448.030|455.660|0x10|0x20|water|1|0'
+                   '|5819|5819|1000000|994200|1|1|1000000|994200|12|13')
+        rows[5] = 'OBSERVED|request|5819|1|-646|-1000000|-1611661312|-5800|1|1'
+        rows[-2] = 'ENTRY|ship|455.65|16|32|32|water|1|1|73|75|trade|0|completed_trade|1|1|-5800|5819|1'
+        result = purchase_settlement(rows, 'request', 'epoch', 'buy', require_absolute_cargo=True)
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['settled_total_cents'], 5800)
+        self.assertEqual(result['settled_minus_nominal_cents'], -19)
+        self.assertEqual(result['ship_ware_units_after'], 13)
+        self.assertEqual(result['deal']['player_after_ct'], 994200)
+
+        no_ledger = rows[:7] + ['LEDGER|unknown|unavailable|-|-|-', 'DONE']
+        self.assertEqual(purchase_settlement(no_ledger, 'request', 'epoch', 'buy')['reason'],
+                         'ledger_unavailable')
+        incorrect_cargo = rows.copy()
+        incorrect_cargo[4] = rows[4].removesuffix('|13') + '|14'
+        result = purchase_settlement(incorrect_cargo, 'request', 'epoch', 'buy')
+        self.assertEqual(result['reason'], 'ship_cargo_counts_disagree')
+        self.assertIsNone(result['ship_ware_units_after'])
+        legacy = rows.copy()
+        legacy[4] = rows[4].removesuffix('|12|13')
+        with self.assertRaisesRegex(ValueError, 'missing native ship cargo'):
+            purchase_settlement(legacy, 'request', 'epoch', 'buy', require_absolute_cargo=True)
+        with self.assertRaisesRegex(ValueError, 'unbound native deal'):
+            six_unit_settlement(rows, 'request', 'epoch')
