@@ -241,3 +241,24 @@ new order, save, client connection or surviving test process. The price
 approval rule requires a fresh pilot confirmation for a lower or higher
 price. This run used a local recording as the input to the real server.
 Result SHA-256: `b1897e759fa9b565fad7c7346910f87482cef03486af1032c925812c0cf0e4dc`.
+
+## Exact-price booking from a recorded stock confirmation
+
+The next private provider processed the same recorded 58.77 Cr confirmation
+in one Mission Director action. X4 reported the current unit price and
+submitted the native order at game age 307.27 s. The deal transferred six
+water, with zero destroyed. The ship journal recorded a debit of 352 Cr
+(the unrounded total was 352.62 Cr). At completion both Company balances
+were 9,648 Cr and the ship had six water. A duplicate received
+`already_attempted`.
+
+The supervisor initially rejected the journal because the Mission Director
+printed the docking time as 306.823 s and the Lua callback measured
+306.82299286 s. Revalidation now compares the docking lower bound at the
+precision of the reported MD time. The full-precision ledger interval and
+entry times, quantity, actual debit and absolute balances still undergo
+the same checks. The original result file, SHA-256
+`55a00099ce7f602fe39e7a105f4781ac2e1dc1320ce823c040caa9a2d1f25f98`,
+remains a failed run with no save. Rechecking its native rows yields the
+confirmed 352 Cr receipt. Later trials preserve a private native save once
+a submission has occurred even if reconciliation fails.

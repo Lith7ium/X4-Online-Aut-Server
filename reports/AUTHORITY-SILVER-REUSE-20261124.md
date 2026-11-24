@@ -26,3 +26,31 @@ on a shared simulation tick. Adopting those records would require a separate
 architecture decision.
 [Sector observations](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1115-L1139)
 · [Join fix](https://github.com/Unofficially-Online/X4-Online/commit/cea737b1)
+
+## Changes tested on the authority fork
+
+- The isolated client now enters the trade screen through the active Trade
+  button on X4's dock menu, using Silver's interaction sequence. In native
+  Linux X4 the registered button opened the stock basket for WRN-302 at
+  BIM-169. Selecting six water at 58.48 Cr showed 350 Cr in the basket;
+  the registered Confirm callback produced that exact unit quote and quantity.
+  Both callbacks ran programmatically. The pilot fixture left its physical
+  hold empty and its balance at 10,000 Cr. Capture SHA-256
+  `dc5a90531afae54a3efa4b5ca622ce1627e29bc3aedf2cf53eae3fc625c6d31c`.
+- The authority Windows launcher can reuse Steam's X4 discovery when the
+  player omits the game path. The explicit game directory still takes
+  precedence. Package/CLI tests cover alternate libraries; a new Windows
+  launch and an updated package for collaborators are still pending.
+- The normal authority join path stages a verified temporary file beside
+  the destination. The supported no-clobber publication uses a hard link on
+  Unix and a rename on Windows. A Unix filesystem without hard-link support
+  keeps the existing fenced exclusive-copy fallback. On Linux, staging the
+  real 30,317,296-byte checkpoint yielded the original SHA-256, with no
+  partly written slot at the I/O observation points and no temporary file
+  left behind. Native Windows staging remains to be exercised.
+
+Silver's tests also name a concrete next fleet experiment. Select a free
+Company fighter, issue a stock move order and compare the requested destination
+with its observed arrival. Follow with a stock Attack order against a named NPC
+and measure its shields or hull. The acceptance evidence must come from the
+authoritative game and both participants' observations.
