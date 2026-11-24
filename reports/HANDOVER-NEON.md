@@ -1,72 +1,39 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026, 15:00 Berlin check-in.** Astra is active and leads Lith7ium's
+**24 November 2026. Last team check-in at 15:00 Berlin time.** Astra leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
 current task. This document supersedes the [20 November handover](HANDOVER-NEON-20261120.md).
 
-## Neon can start now
+## Current assignments
 
-Neon owns NPC ship movement from authoritative X4 capture to playback on a native Windows client, including multi-ship behavior and measurement against the full register. The existing reacquisition work is the first component. [Subsystem assignment and acceptance evidence](NEON-NPC-SHIP-MOTION.md)
+**Neon owns NPC movement from the server to a Windows pilot's screen.**
+Build on your native reacquisition branch at `4b181f5f`. Bring gameplay
+capture and playback into an admitted session, exercise multiple visible
+ships, and measure the cost against the 10,082-entry world. Your next
+concurrency case is a delayed or missing fresh sample after preparation
+while another track continues on the same participant. Coordinate a shared
+native run with Astra when the ordinary player path is ready. [Scope and acceptance evidence](NEON-NPC-SHIP-MOTION.md)
 
-Continue the previously assigned NPC reacquisition task. When the same NPC
-returns to view after an unseen sector change, the observing client has
-permission to align once from a fresh server sample. Use the existing
-ENH-870 fixture (registry index 1318). Keep its lifetime, prepare receipt,
-fresh capture, sector/zone identity, position and real-time velocity explicit.
-A view that disappears during preparation must cancel that attempt. Keep
-other observers receiving their latest samples.
+**Cobalt owns map-visibility research and the ordinary Windows player
+preflight** ahead of the coordinated Internet test. The matching Linux and
+Windows observer packages use code `cf57d0b1`. Exchange session settings
+privately. [15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
 
-1. Branch from `experiment/authoritative-server-20261115` on
-   [the authoritative fork](https://github.com/Lith7ium/X4-Online-Aut-Server).
-   The movement/parking code snapshot at this handoff is `08ef8f92`.
-   The older review branch diverged at `58c07235`. Inspect its changes before
-   porting the NPC behavior. A merge of the entire review tree would import
-   assumptions from the old control path.
-2. The reference is `review/neon-npc-reentry-20261120` at `05d9aa28`.
-   Its short cancellation/fresh-alignment test already passed. Port that test
-   to your current-base branch, run that one case, then exercise the new
-   behavior. Read the existing [fixture steps](HANDOVER-NEON-20261120.md#neon--reacquire-the-same-npc-after-a-sector-change).
-   `CompanyMotionClient` handles admitted **player** ships. The saved NPC
-   experiment uses its own registry-backed binding.
-3. Deliver a branch, commit, test command/result and an evidence table with
-   the NPC leaving view, cancellation where applicable and the fresh alignment
-   after return. Label simulator, native Linux, Windows under Proton and
-   native Windows observations separately. Coordinate any shared-host X4 use
-   with Astra first. The station parking and cold-reload runs have finished.
+Astra owns movement of player ships, the provider and integration on
+`experiment/authoritative-server-20261115`. For read-only contributor
+accounts, a PR from a personal fork or a patch with a source commit works.
+Bring the result, outstanding decisions and next substantive milestone to
+the hourly check.
 
-If your account can only read Lith7ium’s fork, push the work branch to your
-own fork and open a PR targeting `experiment/authoritative-server-20261115`,
-or share a commit/patch for review at the hourly check.
+## NPC work already verified
 
-For a fresh contributor checkout:
-
-```sh
-git clone --branch experiment/authoritative-server-20261115 https://github.com/Lith7ium/X4-Online-Aut-Server.git x4-neon
-cd x4-neon
-git switch -c work/neon-npc-reacquisition
-git diff --stat 58c07235..origin/review/neon-npc-reentry-20261120
-```
-
-Neon acknowledged the assignment from a separate Windows PC. His port is on
-[work/neon-npc-reacquisition at 05e68bf7](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/05e68bf7),
-based on `519cd0f1`. Astra ran
-`EnhancedNpc870ReacquisitionLoopback.test_enh_870_reacquisition_cancel_and_fresh_alignment_with_other_observer`
-once on Linux. It passed with real loopback TCP/UDP, a synthetic NPC source and
-simulated visibility and game callbacks. Neon subsequently published his Windows
-harness and report at `4b181f5f`. His native game used newly enrolled YDA-317
-in a private creative start. After reacquisition, a requested 20 m/s yielded
-31.766 m in 1.588 s. ENH-870 remained the loopback case.
-[Neon's Windows measurements](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/4b181f5f/reports/AUTHORITY-NPC-REACQUISITION-WINDOWS-20261124.md)
-
-For the next check, Neon owns the delayed or absent fresh sample after
-preparation. Test two tracks on the same admitted participant and record
-control, pause/save/resume and continued delivery to the other track.
-Cobalt owns the ordinary Windows company-player preflight on the observer
-branch ahead of a coordinated Internet test. The matching Linux and Windows
-observer builds use code `cf57d0b1`. Exchange session settings privately.
-[15:00 Slack check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795528846850779)
+The Linux loopback on Neon’s port `05e68bf7` exercised ENH-870 with real TCP
+and UDP, simulated visibility and a synthetic source. Neon then enrolled a
+new YDA-317 in a private native Windows game. After reacquisition, a requested
+20 m/s yielded 31.766 m in 1.588 s. This Windows run supplies the first
+component for Neon's current assignment. [Windows measurements](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/4b181f5f/reports/AUTHORITY-NPC-REACQUISITION-WINDOWS-20261124.md)
 
 ## What changed since the previous handover
 
@@ -96,7 +63,9 @@ observer builds use code `cf57d0b1`. Exchange session settings privately.
   downloaded the world over LAN TLS and reached the X4 menu, then its
   Steam IPC failed before admission. In a separate native session WOO's
   stock map selected WRN in the other sector. Its position agreed with the
-  saved world within 0.51 mm. Live flight between two pilots remains open.
+  saved world within 0.51 mm. On a subsequent solo WRN flight the authority
+  acknowledged native samples with nonzero velocity, including 5.76144 m/s.
+  Live flight between two pilots remains open.
   [Observer implementation and native results](AUTHORITY-COMPANY-OBSERVER-20261124.md)
 - Astra owns server-avatar parking. Lith7ium chose the walkable player HQ
   when available, with a well-protected station until then. The current seed
@@ -128,12 +97,8 @@ expected save digest. The handover repository contains the project code
 and reports. The operator supplies a private connection file and a licensed
 matching game installation separately.
 
-The strict Linux check at the package revision collected 5,480 cases. Its
-first run had one packaging-test error and 56 environment skips. The test
-had omitted the defence evidence required by the real parking installer.
-Its fixture was corrected in `4022460d`, and the 12 focused parking/package
-tests passed. Of the skipped cases, 30 passed using the existing local
-validation environment and two more passed against the locally resolved
-stock XML. Across these runs 5,456 distinct cases passed. The remaining
-24 require Windows (12), external reference data (11), or the released
-lane runner (1). A completely passing strict suite remains outstanding.
+The observer-build check collected 5,517 tests. Across the strict Linux
+run and targeted follow-ups, 5,493 distinct tests passed. The remaining
+24 require Windows (12), external reference files (11), or the released
+lane tool (1). The strict suite and live Internet gameplay each have an
+outstanding acceptance check. [Test and native evidence](AUTHORITY-COMPANY-OBSERVER-20261124.md)
