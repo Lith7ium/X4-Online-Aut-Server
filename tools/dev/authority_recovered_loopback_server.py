@@ -858,13 +858,23 @@ def run(args):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
+    cockpit_capture = getattr(args, 'company_cockpit_purchase', None)
+    cockpit_purchase = None
+    if cockpit_capture is not None:
+        if trade_mode is not None:
+            raise ValueError('select one private Company trade experiment')
+        trade_mode = 'six-unit'
     if trade_mode:
         if (trade_mode not in ('buy', 'six-unit', 'inspect') or not require_snapshot or parking is not None
                 or require_company_ship or company_motion or tls is not None
                 or getattr(args, 'company_pose_trial', False) or getattr(args, 'verify_company_pose', False)):
             raise ValueError('company trade trial requires an isolated recovered provider')
         import authority_company_trade_trial as trade_probe
-        trade_nonce = secrets.token_hex(16)
+        if cockpit_capture is None:
+            trade_nonce = secrets.token_hex(16)
+        else:
+            from authority_cockpit_purchase import load_cockpit_capture, cockpit_receipt
+            cockpit_purchase, trade_nonce, capture_sha256 = load_cockpit_capture(cockpit_capture)
     if parking is not None:
         import authority_station_parking as parking_probe
         parking_probe.mode(args, require_snapshot=require_snapshot, tls=tls,
@@ -1041,6 +1051,9 @@ def run(args):
                 if trade_mode != 'inspect' and checkpoint.sha256 != trade_probe.SOURCE_DIGEST:
                     raise ValueError('stock purchase trial requires its original private two-ship world')
                 result['company_trade_trial'] = {'mode': trade_mode}
+                if cockpit_purchase is not None:
+                    result['company_trade_trial'].update(cockpit_purchase=cockpit_purchase,
+                                                         request_id=trade_nonce, capture_sha256=capture_sha256)
             if pose_live or pose_cold:
                 if pose_live and checkpoint.sha256 != company_pose.PARKED_SAVE:
                     raise ValueError('company pose trial requires the pinned parked source')
@@ -1073,7 +1086,8 @@ def run(args):
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
             if trade_mode:
-                protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce))
+                protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce,
+                                                     cockpit_purchase=cockpit_purchase))
             if pose_channel is not None:
                 protected.extend(pose_overlay.install(case, profile, port=pose_channel.port,
                                                       lease=pose_channel.lease, epoch=pose_channel.epoch,
@@ -1337,6 +1351,13 @@ def run(args):
                 # Preserve the private game save even if accounting is inconclusive.
                 # Only a verified purchase can enter the confirmed checkpoint store.
                 adapter.pause()
+                if cockpit_purchase is not None:
+                    receipt = cockpit_receipt(cockpit_purchase, records, trade_nonce, saved_evidence['epoch'])
+                    trial_result['cockpit_receipt'] = receipt
+                    if receipt['outcome'] == 'refused':
+                        verify()
+                        result.update(success=True, final_world_state='paused')
+                        raise _WitnessFinished()
                 raw_save = adapter.save()
                 verify()
                 trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
@@ -2091,8 +2112,11 @@ def main(argv=None):
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
                         help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
-    parser.add_argument('--company-trade-trial', choices=('buy', 'six-unit', 'inspect'),
-                        help='isolated two-ship stock trade experiment without network clients')
+    trade = parser.add_mutually_exclusive_group()
+    trade.add_argument('--company-trade-trial', choices=('buy', 'six-unit', 'inspect'),
+                       help='isolated two-ship stock trade experiment without network clients')
+    trade.add_argument('--company-cockpit-purchase', type=Path, metavar='RESULT_JSON',
+                       help='process one recorded stock cockpit purchase in the private recovered world')
     parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
                         help='isolated private station parking fixture and read-only cold verification')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')

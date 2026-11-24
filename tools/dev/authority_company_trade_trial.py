@@ -1,4 +1,5 @@
 """Run one stock X4 purchase in the isolated, parked two-ship world."""
+import json
 import os
 from pathlib import Path
 import time
@@ -11,7 +12,7 @@ PURCHASE_CUES = ('authority_company_trade_dock.xml', 'authority_company_stock_tr
 UI_DRIVER = 'authority_company_trade_driver.lua'
 
 
-def install(case, mode, epoch, nonce):
+def install(case, mode, epoch, nonce, *, cockpit_purchase=None):
     extension = case / 'extensions/x4_lan_lab'
     purchase = mode in ('buy', 'six-unit')
     files = [extension / 'md' / name for name in (READ_CUE, *(PURCHASE_CUES if purchase else ()))]
@@ -28,10 +29,19 @@ def install(case, mode, epoch, nonce):
         hook = '    <file name="ui/authority_world_bridge_probe.lua" />\n'
         entry = f'    <file name="ui/authority_trade_ledger.lua" />\n    <file name="ui/{UI_DRIVER}" />\n'
         trial = 'six_unit' if mode == 'six-unit' else 'one_unit'
+        request_argument = ''
+        if cockpit_purchase is not None:
+            # Only the six fields validated from the stock menu enter the fixture.
+            fields = ('sector', 'station_code', 'ship_code', 'ware', 'quantity', 'price_cents')
+            if mode != 'six-unit' or set(cockpit_purchase) != set(fields):
+                raise ValueError('unsupported private cockpit purchase')
+            values = ', '.join(f'{key}={json.dumps(cockpit_purchase[key], ensure_ascii=True)}' for key in fields)
+            request_argument = ', {' + values + '}'
+
         for path, marker, replacement in (
             (manifest, hook, entry + hook),
             (bridge, tick, tick + f''' if registry_checkpoint:ready() then
-  if not trade_tick then trade_tick = X4LAN_COMPANY_TRADE_DRIVER.new("{epoch}", "{nonce}", "{trial}") end
+  if not trade_tick then trade_tick = X4LAN_COMPANY_TRADE_DRIVER.new("{epoch}", "{nonce}", "{trial}"{request_argument}) end
   trade_tick(C.IsGamePaused())
  end
 '''),
