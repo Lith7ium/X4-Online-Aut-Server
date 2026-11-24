@@ -99,7 +99,7 @@ function M.new(config, engine, net)
             end
             local live, x, y, z, code = engine.actor(args, row[7], args.action ~= 'apply')
             if not live or (args.action ~= 'apply' and (not finite(x) or not finite(y) or not finite(z)
-                    or type(code) ~= 'string' or #code > 32 or not code:match('^[A-Z0-9]+%-%d+$'))) then
+                    or type(code) ~= 'string' or not code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$'))) then
                 fail_pending('BRIDGE_LOCAL_REFUSED')
                 return
             end

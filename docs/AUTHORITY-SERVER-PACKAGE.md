@@ -109,15 +109,17 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
-## Server position trial for the two base-game fighters
+## Server positions for reserved Company ships
 
-With the disposable Black Hole Sun V starting seed, `--base-game-only` and
-`--company-pose-trial` enable native server position readback for HVC-420
-(1073) and KHI-630 (1074). The checkpoint digest selects the permitted ships.
-The older parked test seed retains its own ship indices. The trial inspects
-the live ship and sector before relocating it, then reads the position back.
-A later `--verify-company-pose` checks the saved position on a cold start.
-The ordinary `--company-motion` option alone runs the relay. The human
+Use `--company-ship-positions` (also accepted as `--company-pose-trial`) to
+apply a pilot's flight samples to their reserved ship. Admission and movement
+use the same Company ship catalogue from the confirmed checkpoint. This also
+works with the catalogue from a subsequent save. Before writing a position,
+the server checks the current reservation, registry binding, ownership, seat
+and sector in the live game. It reads the resulting position back through MD
+and the native UI. Ships must already be in the reported sector. A later
+`--verify-company-pose` checks the saved positions against the recorded
+movement after a cold start. The ordinary `--company-motion` option alone runs the relay. The human
 flight used that relay. [Two-pilot flight report](../reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
 
 In a separate native Linux trial, two synthetic pilots each sent one position

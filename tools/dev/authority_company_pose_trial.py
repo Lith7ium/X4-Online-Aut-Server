@@ -1,4 +1,4 @@
-"""Apply and independently observe admitted cockpit motion in the isolated parked world."""
+"""Apply and independently observe admitted cockpit motion in a verified Company ship."""
 import math
 import re
 import secrets
@@ -8,13 +8,19 @@ import time
 
 from authority_tcp_job_client_live import socket_owner
 
-PARKED_SAVE = '68dc79959984dbd3499b7b6360bde5b0e24d5cbc845b49d24a908d043a7612ca'
-BASE_FIGHTER_SAVE = '1ceb756b1fc6080c6a6752e51d146cfc17c72762b8af9f9c1aed7bce20fa4958'
-# Registry indices have meaning only inside their own disposable world.
-_SHIPS_BY_SOURCE_SAVE = {
-    PARKED_SAVE: {1970: 'WOO-831', 7354: 'WRN-302'},
-    BASE_FIGHTER_SAVE: {1073: 'HVC-420', 1074: 'KHI-630'},
-}
+from authority.company_ships import read_company_ship_catalogue
+
+_SHIP_CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
+_INSPECT_UNAVAILABLE = frozenset({
+    'SHIP_NOT_COMPANY_OPERATIONAL', 'PLAYER_CONTEXT', 'PILOT_PRESENT',
+    'DOCKING_OR_STORED', 'FRAME_INVALID',
+})
+
+
+class ShipUnavailable(ValueError):
+    """The native pre-write inspection found the ship unavailable."""
+
+
 _MOVEMENT_PROOF_VERSION = 1
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
@@ -49,13 +55,10 @@ def _observed_move(before, target, md, ui):
 class GamePoseChannel:
     """A single in-flight command to the owned game. Never replay an uncertain write."""
 
-    def __init__(self, epoch, *, source_sha256=PARKED_SAVE):
+    def __init__(self, epoch):
         if not _TOKEN.fullmatch(epoch):
             raise ValueError('invalid source registry epoch')
-        if type(source_sha256) is not str or source_sha256 not in _SHIPS_BY_SOURCE_SAVE:
-            raise ValueError('company pose trial requires a pinned source world')
-        self.source_sha256 = source_sha256
-        self.ship_codes = _SHIPS_BY_SOURCE_SAVE[source_sha256].copy()
+        self.ship_codes = {}
         self.epoch, self.lease = epoch, secrets.token_hex(16)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -66,6 +69,15 @@ class GamePoseChannel:
             raise
         self.port = self.socket.getsockname()[1]
         self.peer = self.process = self.guard = self.pending = None
+
+    def read_company_catalogue(self, checkpoint):
+        """Refresh eligible indices from the same verified snapshot used for seat selection."""
+        self.ship_codes.clear()
+        catalogue = read_company_ship_catalogue(checkpoint)
+        if catalogue.registry_epoch != self.epoch:
+            raise ValueError('company ship catalogue belongs to another registry')
+        self.ship_codes = {ship.ship_index: ship.code for ship in catalogue.ships}
+        return catalogue
 
     def bind(self, process, guard):
         self.process, self.guard = process, guard
@@ -121,15 +133,23 @@ class GamePoseChannel:
                 raise ValueError('pose receipt does not match the pending command')
             status, actual_actor, frame = fields[5:8]
             if status != {'inspect': 'INSPECTED', 'apply': 'DISPATCHED', 'verify': 'OBSERVED'}[action]:
+                if action == 'inspect' and status in _INSPECT_UNAVAILABLE:
+                    self.pending = None
+                    raise ShipUnavailable(status)
                 detail = status if re.fullmatch(r'[A-Z_]{1,64}', status) else 'INVALID_STATUS'
                 raise ValueError(f'X4 refused {action} for ship {identity[2]}: {detail}')
             if (frame != sector or not _ACTOR.fullmatch(actual_actor)
                     or (actor != '0' and actual_actor != actor)):
                 raise ValueError('X4 pose receipt changed actor or sector')
             md, ui = _xyz(fields[8:11]), _xyz(fields[11:14])
-            if action != 'apply' and (fields[14] != self.ship_codes[int(identity[2])]
-                                      or math.dist(md, ui) > READBACK_METRES):
-                raise ValueError(f'independent pose readers disagree for ship {identity[2]}: {md}, {ui}')
+            if action != 'apply':
+                index = int(identity[2])
+                code = fields[14]
+                if (not _SHIP_CODE.fullmatch(code) or index not in self.ship_codes
+                        or self.ship_codes[index] not in (None, code)
+                        or math.dist(md, ui) > READBACK_METRES):
+                    raise ValueError(f'independent pose readers disagree for ship {index}: {md}, {ui}')
+                self.ship_codes[index] = code
             self.pending = None
             return {'actor': actual_actor, 'md': md, 'ui': ui, 'code': fields[14]}
         return None
@@ -156,6 +176,7 @@ class CompanyPoseTrial:
         self.last = {}
         self.window_moves = {}
         self.baselines = {}
+        report['unavailable_before_write'] = 0
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
                       max_source_speed_mps=None, last_verified={}, paused={})
@@ -166,6 +187,9 @@ class CompanyPoseTrial:
             return
         sample = record.sample
         index = sample['index']
+        if index not in self.channel.ship_codes:
+            self._skip_unavailable(index)
+            return
         target = _xyz(sample[key] for key in 'xyz')
         base = self.baselines.setdefault(index, target)
         self.report['max_source_travel_metres'] = max(self.report['max_source_travel_metres'],
@@ -224,18 +248,31 @@ class CompanyPoseTrial:
         }
         self.active = None
 
+    def _skip_unavailable(self, index):
+        self.report['unavailable_before_write'] += 1
+        self.last.pop(index, None)
+        self.window_moves.pop(index, None)
+        self.active = None
+
+    def _receive(self, service, read_reply):
+        try:
+            reply = read_reply()
+        except ShipUnavailable:
+            self._skip_unavailable(self.active['sample']['index'])
+            return
+        if reply is not None:
+            self._advance(service, reply)
+
     def poll(self, service):
         if self.active is not None:
-            reply = self.channel.poll()
-            if reply is not None:
-                self._advance(service, reply)
+            self._receive(service, self.channel.poll)
         if self.active is None:
             for record in service.take_application_batch(1):
                 self._start(record, service)
 
     def _settle(self, service):
         while self.active is not None:
-            self._advance(service, self.channel.wait())
+            self._receive(service, self.channel.wait)
 
     def before_pause(self, service):
         self._settle(service)
@@ -247,7 +284,10 @@ class CompanyPoseTrial:
         paused = {}
         for index, sample in self.last.items():
             self.channel.begin('inspect', sample)
-            reply = self.channel.wait()
+            try:
+                reply = self.channel.wait()
+            except ShipUnavailable:
+                continue
             target = self.report['last_verified'][str(index)]['target']
             if _readback_error(target, reply['md'], reply['ui']) > READBACK_METRES:
                 self.report['failed_pause'] = {'index': index, 'target': target, **reply}
@@ -293,7 +333,8 @@ def _paused_poses(report, ship_codes):
         index = indices.get(key)
         if index is None:
             raise ValueError('unexpected saved company ship')
-        if (type(item) is not dict or item.get('code') != ship_codes[index]
+        if (type(item) is not dict or type(item.get('code')) is not str
+                or not _SHIP_CODE.fullmatch(item['code']) or ship_codes[index] not in (None, item['code'])
                 or type(item.get('sequence')) is not int or item['sequence'] <= 0
                 or type(item.get('sector_macro')) is not str or not _SECTOR.fullmatch(item['sector_macro'])):
             raise ValueError('invalid saved company ship pose')
@@ -325,7 +366,8 @@ def verify_reloaded(channel, prior, checkpoint):
             or prior.get('final_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_id') != checkpoint.checkpoint_id
             or report.get('saved_checkpoint_sha256') != checkpoint.sha256
-            or report.get('source_sha256') != channel.source_sha256 or type(report.get('paused')) is not dict
+            or type(prior.get('source_sha256')) is not str or not re.fullmatch(r'[0-9a-f]{64}', prior['source_sha256'])
+            or report.get('source_sha256') != prior['source_sha256'] or type(report.get('paused')) is not dict
             or not report['paused'] or type(report.get('writes_verified')) is not int
             or report['writes_verified'] <= 0):
         raise ValueError('cold pose check requires a confirmed checkpoint with a verified movement write')
@@ -335,6 +377,8 @@ def verify_reloaded(channel, prior, checkpoint):
                       sector_macro=item['sector_macro'], **dict(zip('xyz', target)))
         channel.begin('inspect', sample)
         reply = channel.wait()
+        if reply['code'] != item['code']:
+            raise ValueError('reloaded ship code differs from the paused checkpoint')
         error = _readback_error(target, reply['md'], reply['ui'])
         if error > READBACK_METRES:
             raise ValueError(f'cold pose differs for {item["code"]}: {error:.3f} m')

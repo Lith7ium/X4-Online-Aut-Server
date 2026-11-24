@@ -9,12 +9,14 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
-from authority_company_pose_trial import (
-    BASE_FIGHTER_SAVE, PARKED_SAVE, CompanyPoseTrial, GamePoseChannel, verify_reloaded,
-)
+from authority.company_ships import CompanyShip, CompanyShipCatalogue
+from authority_company_pose_trial import CompanyPoseTrial, GamePoseChannel, verify_reloaded
+
+SOURCE_DIGEST = 'e' * 64
 
 EPOCH = 'a' * 32
 GENERATION = 'b' * 32
@@ -61,8 +63,9 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.channel, self.peer = self.open_channel()
         self.sample = source_sample()
 
-    def open_channel(self, source_sha256=PARKED_SAVE):
-        channel = GamePoseChannel(EPOCH, source_sha256=source_sha256)
+    def open_channel(self, ships=None):
+        channel = GamePoseChannel(EPOCH)
+        self.load_catalogue(channel, ships if ships is not None else {1970: 'WOO-831', INDEX: CODE})
         self.addCleanup(channel.close)
         peer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addCleanup(peer.close)
@@ -72,6 +75,14 @@ class CompanyPoseTrialTests(unittest.TestCase):
         channel.bind(process_identity(), lambda: None)
         self.assertEqual(channel.peer, peer.getsockname())
         return channel, peer
+
+    def load_catalogue(self, channel, ships, epoch=EPOCH):
+        entries = tuple(CompanyShip(index, f'[0x{index:x}]', SECTOR, None, code) for index, code in ships.items())
+        catalogue = CompanyShipCatalogue(epoch, entries)
+        checkpoint = SimpleNamespace(sha256=SOURCE_DIGEST)
+        with patch('authority_company_pose_trial.read_company_ship_catalogue', return_value=catalogue) as read:
+            self.assertIs(channel.read_company_catalogue(checkpoint), catalogue)
+        read.assert_called_once_with(checkpoint)
 
     def command(self, action, *, actor=ACTOR, peer=None, channel=None, index=INDEX, sector=SECTOR):
         if peer is None:
@@ -114,9 +125,9 @@ class CompanyPoseTrialTests(unittest.TestCase):
 
     def saved_prior(self, trial, report):
         checkpoint = SimpleNamespace(checkpoint_id='isolated-pose', sha256='c' * 64)
-        report['source_sha256'] = PARKED_SAVE
+        report['source_sha256'] = SOURCE_DIGEST
         trial.checkpoint_published(checkpoint)
-        prior = {'success': True, 'final_checkpoint_id': checkpoint.checkpoint_id,
+        prior = {'success': True, 'source_sha256': SOURCE_DIGEST, 'final_checkpoint_id': checkpoint.checkpoint_id,
                  'final_checkpoint_sha256': checkpoint.sha256, 'company_pose_trial': report}
         return prior, checkpoint
 
@@ -141,7 +152,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.command('inspect')
 
     def test_base_game_fighters_use_only_the_identifiers_from_their_own_world(self):
-        channel, peer = self.open_channel(BASE_FIGHTER_SAVE)
+        channel, peer = self.open_channel({1073: 'HVC-420', 1074: 'KHI-630'})
         sector = 'cluster_06_sector002_macro'
         for index, code in ((1073, 'HVC-420'), (1074, 'KHI-630')):
             sample = dict(self.sample, index=index, sector_macro=sector)
@@ -151,8 +162,6 @@ class CompanyPoseTrialTests(unittest.TestCase):
             self.assertEqual(channel.wait()['code'], code)
         with self.assertRaisesRegex(ValueError, 'foreign pose identity'):
             channel.begin('inspect', self.sample)
-        with self.assertRaisesRegex(ValueError, 'pinned source'):
-            GamePoseChannel(EPOCH, source_sha256='0' * 64)
         self.assert_no_command(peer)
 
         channel.begin('inspect', sample)
@@ -160,6 +169,34 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.reply(command, peer=peer, code='HVC-420')
         with self.assertRaisesRegex(ValueError, 'pose readers disagree'):
             channel.wait()
+
+    def test_catalogue_refresh_replaces_ships_and_rejects_a_foreign_epoch(self):
+        self.load_catalogue(self.channel, {45: None})
+        with self.assertRaisesRegex(ValueError, 'foreign pose identity'):
+            self.channel.begin('inspect', self.sample)
+        sample = dict(self.sample, index=45)
+        self.channel.begin('inspect', sample)
+        self.reply(self.command('inspect', index=45), code='NEW-1A2')
+        self.assertEqual('NEW-1A2', self.channel.wait()['code'])
+        self.channel.begin('inspect', sample)
+        self.reply(self.command('inspect', index=45), code='NEW-999')
+        with self.assertRaisesRegex(ValueError, 'readers disagree'):
+            self.channel.wait()
+        with self.assertRaisesRegex(ValueError, 'another registry'):
+            self.load_catalogue(self.channel, {INDEX: CODE}, epoch='f' * 32)
+        self.assertFalse(self.channel.ship_codes)
+
+    def test_docked_ship_does_not_block_another_pilot_before_write(self):
+        trial, report, service = self.trial()
+        trial.poll(service)
+        self.reply(self.command('inspect'), status='DOCKING_OR_STORED')
+        other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970)))
+        trial.poll(other)
+        self.reply(self.command('inspect', index=1970), code='WOO-831')
+        trial.poll(other)
+        self.assertEqual(1, report['unavailable_before_write'])
+        self.assertEqual({'1970'}, set(report['last_verified']))
+        self.assert_no_command()
 
     def assert_no_command(self, peer=None):
         self.assertFalse(select.select([peer or self.peer], [], [], 0)[0])
@@ -242,16 +279,16 @@ class CompanyPoseTrialTests(unittest.TestCase):
                          tuple(item[key] for key in ('code', 'position', 'md_position', 'sector_macro', 'sequence')))
         self.assertEqual(ORIGIN, item['movement']['before'])
 
-        report['source_sha256'] = PARKED_SAVE
+        report['source_sha256'] = SOURCE_DIGEST
         trial.checkpoint_published(checkpoint)
         self.assertEqual(checkpoint.checkpoint_id, report['saved_checkpoint_id'])
         self.assertEqual(checkpoint.sha256, report['saved_checkpoint_sha256'])
-        prior = {'success': True, 'final_checkpoint_id': checkpoint.checkpoint_id,
+        prior = {'success': True, 'source_sha256': SOURCE_DIGEST, 'final_checkpoint_id': checkpoint.checkpoint_id,
                  'final_checkpoint_sha256': checkpoint.sha256, 'company_pose_trial': report}
 
         cold, peer = self.open_channel()
         for key, wrong in (('saved_checkpoint_id', 'other-pose'), ('saved_checkpoint_sha256', 'd' * 64),
-                           ('source_sha256', BASE_FIGHTER_SAVE)):
+                           ('source_sha256', 'd' * 64)):
             with self.subTest(key=key):
                 wrong_proof = dict(prior, company_pose_trial=dict(report, **{key: wrong}))
                 with self.assertRaises(ValueError):

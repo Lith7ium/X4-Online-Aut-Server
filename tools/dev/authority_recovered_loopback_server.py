@@ -1085,11 +1085,11 @@ def run(args):
                     result['company_trade_trial'].update(cockpit_purchase=cockpit_purchase,
                                                          request_id=trade_nonce, capture_sha256=capture_sha256)
             if pose_live or pose_cold:
-                pose_source_sha256 = checkpoint.sha256
+                pose_channel = company_pose.GamePoseChannel(saved_evidence['epoch'])
                 if pose_cold:
-                    prior_pose = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20))
-                    pose_source_sha256 = prior_pose.get('company_pose_trial', {}).get('source_sha256')
-                pose_channel = company_pose.GamePoseChannel(saved_evidence['epoch'], source_sha256=pose_source_sha256)
+                    prior_pose = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20),
+                                            object_pairs_hook=_pairs, parse_constant=_reject_constant)
+                    pose_channel.read_company_catalogue(checkpoint)
                 if pose_live:
                     result['company_pose_trial'] = {'source_sha256': checkpoint.sha256}
                     pose_trial = company_pose.CompanyPoseTrial(pose_channel, result['company_pose_trial'])
@@ -1456,7 +1456,8 @@ def run(args):
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
         session = TrustedMarkerLoadSession(world, enabled=True, marker_script=marker_script,
-                                         require_company_ship=require_company_ship)
+                                         require_company_ship=require_company_ship,
+                                         company_ship_reader=pose_channel.read_company_catalogue if pose_live else None)
         if company_motion:
             from authority.company_motion_service import CompanyMotionService
             application_drops = None
@@ -2173,8 +2174,8 @@ def main(argv=None):
     tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
     tls.add_argument('--tls-shared-key-file', type=Path, help='64 lowercase hex characters from 32 random bytes')
     poses = parser.add_mutually_exclusive_group()
-    poses.add_argument('--company-pose-trial', action='store_true',
-                       help='adopt admitted flight samples on the isolated parked source')
+    poses.add_argument('--company-pose-trial', '--company-ship-positions', action='store_true',
+                       help='apply admitted flight samples to available ships in their current sector')
     poses.add_argument('--verify-company-pose', action='store_true',
                        help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
