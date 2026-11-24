@@ -9,6 +9,7 @@ The participant confirmations are native, not simulated. Import starts nothing.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -74,7 +75,14 @@ class Participant(LocalParticipantControl):
             text = os.read(fd, 512 * 1024 + 1).decode('ascii')
             original = f'authority_participant_lease="{self.lease}"'
             if text.count(original) != 1: raise ValueError('client lease missing or repeated')
-            data = text.replace(original, 'authority_participant_lease="redacted"').encode('ascii')
+            text = text.replace(original, 'authority_participant_lease="redacted"')
+            if ',authority_company_purchase=' in text:
+                text, count = re.subn(
+                    r',authority_company_purchase=\{epoch="[0-9a-f]{32}",index=[0-9]+,'
+                    r'port=[0-9]+,lease="[0-9a-f]{32}"\}', '', text)
+                if count != 1 or ',authority_company_purchase=' in text:
+                    raise ValueError('unexpected Company purchase lease configuration')
+            data = text.encode('ascii')
             os.lseek(fd, 0, os.SEEK_SET)
             written = 0
             while written < len(data):

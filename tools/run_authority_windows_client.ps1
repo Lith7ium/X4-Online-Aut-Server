@@ -12,6 +12,7 @@ param(
     [switch] $ChooseCompanyShip,
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
+    [switch] $CompanyPurchases,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
@@ -22,7 +23,7 @@ if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) 
 if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $CompanyMotion) {
     throw 'CompanyHullPlaybackIndex requires CompanyMotion.'
 }
-$companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
+$companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
 $playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
 if ($companyPilot -and -not $playUntilExit -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
@@ -102,6 +103,9 @@ if ($CompanyMotion) {
     }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'
+}
+if ($CompanyPurchases) {
+    $clientArgs += '--company-purchases'
 }
 & $Python $client @clientArgs
 exit $LASTEXITCODE

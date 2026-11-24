@@ -321,6 +321,44 @@ to your own world if using another test save. The ordinary map observer
 continues to cover the selected remote sector. Both the trial receiver and
 the provider must support the opt-in loss notifications.
 
+## Try the opt-in Company water purchase
+
+Use matching trade-capable server and player packages with the private
+format-3 Company seed. Add `--company-purchases` to the normal provider
+command with `--require-registry-snapshot` and the pinned TLS settings above.
+On Linux, add `--company-purchases --company-ship-index 7354` to the player
+command. The Windows launcher uses `-CompanyPurchases` and prompts for the
+ship. Company motion is optional for this test.
+
+The experimental provider accepts a single immediate purchase of six units
+of water by WRN-302 (7354), externally docked at Teladi station BIM-169 in
+Grand Exchange I. Open the stock Docked menu,
+choose Trade, set the water quantity to six, review the price, and confirm.
+The provider checks the seat, berth and current unit price before dispatch.
+If the price changes in either direction, reopen and review the fresh stock
+offer before confirming again. A pending request needs no second click.
+
+A native confirmation can show the actual debit, Company balance and the
+ship's resulting water count. If the native receipt is missing, the cockpit
+can show **Company purchase accepted. Awaiting reconciliation with your
+purchase record.** The provider queries the original recorded basket with
+fresh challenges and requires two matching reports for the same purchase ID,
+ware, quantity and basket total. The pilot-reported result records the
+displayed basket price as trusted testimony. Only native confirmation can
+establish the debit, balance and cargo readback. Reconciliation does not
+dispatch another purchase.
+
+For a later reconnect, use the same client OS account and device, the same
+pinned server certificate and the same Company registry. The client can
+recognize the original purchase after choosing another free ship. It reports
+only a retained basket and leaves a new cockpit basket alone. An absent or
+unrecognized local record leaves the purchase unresolved. The host can
+recover durable purchase decisions from a verified checkpoint with its
+purchase-ledger sidecar. Keep the checkpoint and sidecar together.
+
+Use this path in the disposable fixture. A live two-player purchase and
+reconnect still require validation.
+
 ## Check the deployment from the host
 
 Start a loopback run as above. Once its private `endpoint.json` appears, use a

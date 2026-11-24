@@ -80,7 +80,8 @@ class FixedTradeDriverTests(unittest.TestCase):
                            for event in node.iter('raise_lua_event'))]
         refusal, = branches
         self.assertIsNone(refusal.find('.//create_trade_order'))
-        proof = refusal.find('do_if').attrib['value']
+        proof = next(node.attrib['value'] for node in refusal.findall('do_if')
+                     if node.find('raise_lua_event') is not None)
         self.assertIn('$ship.orders.count == $refusal_orders_before', proof)
         self.assertIn('$refusal_water_before == $refusal_water_after', proof)
         self.assertIn('$refusal_cash_before == $refusal_cash_after', proof)
@@ -89,9 +90,9 @@ class FixedTradeDriverTests(unittest.TestCase):
     def test_fixed_native_quote_and_order_share_the_post_duplicate_lookup(self):
         source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
         cue = ET.parse(source).find(".//cue[@name='Request']")
-        fixture = next(node for node in cue.iter('do_if') if '$ship.idcode' in node.attrib['value'])
+        fixture = next(node for node in cue.iter('do_if') if node.attrib['value'].startswith('$live_dock or '))
         duplicate = fixture.find('do_elseif')
-        self.assertIn('@State.$attempted or @State.$refused', duplicate.attrib['value'])
+        self.assertIn('@State.$attempted or (not $live and @State.$refused)', duplicate.attrib['value'])
         self.assertIsNone(duplicate.find('.//find_sell_offer'))
         self.assertIsNone(duplicate.find('.//raise_lua_event'))
         lookup = fixture.find('do_else')

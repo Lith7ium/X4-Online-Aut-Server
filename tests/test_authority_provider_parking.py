@@ -1,5 +1,5 @@
 """Exercise the GPU-free provider wrapper without opening X4 or a display."""
-from contextlib import nullcontext, redirect_stderr
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import sys
@@ -74,6 +74,27 @@ class ProviderParkingTest(unittest.TestCase):
                 self.assertEqual(provider.main([*ARGS, *options]), 0)
                 flags, = run.call_args.args
                 self.assertEqual(flags[:flags.index('--game')], expected)
+
+    def test_company_purchase_opt_in_reaches_the_raw_supervisor_parser(self):
+        tls = ['--tls-port', '0']
+        for enabled in (False, True):
+            with (
+                self.subTest(enabled=enabled),
+                patch.object(provider.os, 'geteuid', return_value=1000),
+                patch.dict(provider.os.environ),
+                patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
+                patch.object(provider, 'lavapipe_icd', return_value=Path(__file__)),
+                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth'))),
+                patch.object(provider.supervisor, 'run', return_value={'success': True}) as run,
+                redirect_stdout(StringIO()),
+            ):
+                options = ['--company-purchases'] if enabled else []
+                self.assertEqual(provider.main([*ARGS, *tls, *options]), 0)
+                args, = run.call_args.args
+                self.assertIs(args.company_purchases, enabled)
+                self.assertIs(args.require_company_ship, enabled)
+                self.assertIs(args.require_registry_snapshot, enabled)
+                self.assertFalse(args.company_motion)
 
     def test_conflicting_company_pose_modes_and_verify_hosting_flags_fail_before_display(self):
         cases = (

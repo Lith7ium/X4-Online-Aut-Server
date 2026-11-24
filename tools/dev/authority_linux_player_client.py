@@ -25,6 +25,8 @@ def main(argv=None):
                         help='choose a specific free index instead of prompting')
     parser.add_argument('--company-motion', action='store_true',
                         help='opt into the server’s separate authenticated company motion channel')
+    parser.add_argument('--company-purchases', action='store_true',
+                        help='opt in to authority-confirmed Company cockpit purchases')
     parser.add_argument('--company-hull-playback-index', type=int,
                         help='isolated test only: follow another company ship in the same cockpit sector')
     parser.add_argument('--timeout', type=float, default=3600,
@@ -57,6 +59,8 @@ def main(argv=None):
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = prompt_company_ship if args.company_ship_index is None else selected_index
         motion_options = {'company_motion': True} if args.company_motion else {}
+        if args.company_purchases:
+            motion_options['company_purchases'] = True
         if args.company_hull_playback_index is not None:
             motion_options['company_hull_playback_index'] = args.company_hull_playback_index
         result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined,

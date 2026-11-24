@@ -35,9 +35,10 @@ from authority_recovered_tls_gateway import RecoveredTLSGateway, gateway_setting
 import linux_gate_live as live
 import linux_snapshot_capture as snapshot
 from authority.checkpoints import CheckpointStore
+from authority.company_purchase_ledger import CompanyPurchaseLedger, verify_purchase_ledger
 from authority.experimental_local_host import ExperimentalLocalHost
 from authority.experimental_tcp_control import ExperimentalTCPControl
-from authority.experimental_tcp_participants import ExperimentalTCPParticipants
+from authority.experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from authority.local_control_bridge import LocalControlBridge
 from authority.load_messages import _pairs, _reject_constant
 from authority.recovery import stage_confirmed_recovery
@@ -94,7 +95,7 @@ def read_evidence(path, limit=65536):
 
 def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False,
                            require_registry_snapshot=False, return_supervisor_result=False,
-                           require_ready_registry_script=False):
+                           require_ready_registry_script=False, return_purchase_reference=False):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -154,7 +155,14 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         from authority.registry_availability_evidence import verify_join_snapshot
         saved_evidence = verify_join_snapshot(checkpoint)
         registry_snapshots.verify_previous_receipt(result, checkpoint, saved_evidence)
+        reference = result.get('company_purchase_ledger')
+        verify_purchase_ledger(checkpoint, reference, registry_epoch=saved_evidence['epoch'])
+        if return_purchase_reference:
+            return fixture, saved_evidence, reference
         return fixture, saved_evidence
+    if result.get('company_purchase_ledger') is not None:
+        raise ValueError('a saved Company ledger requires its format-3 registry')
+    verify_purchase_ledger(checkpoint, None)
     if return_supervisor_result:
         return fixture, result
     return fixture
@@ -552,8 +560,12 @@ def capture_first_registry_snapshot(adapter, store, verify):
     return saved
 
 
-def settle_shutdown(control, world, store, check):
+def settle_shutdown(control, world, store, check, *, purchases=None):
     """Disconnect clients and settle their last-disconnect pause/save once."""
+    if purchases is not None:
+        while not purchases.before_world_transition():
+            check()
+            time.sleep(.05)
     control.close()
     while world.session.pending is not None:
         check()
@@ -624,20 +636,30 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
         super().__init__(host, enabled=enabled, timeout=timeout)
         self._guard_process = guard_process
 
+    def check_process(self):
+        try:
+            self._guard_process()
+        except Exception as error:
+            raise ParticipantGuardFailure('recovered X4 process guard failed') from error
+        return True
+
     def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
-        if check is not None:
-            raise RuntimeError('unexpected nested participant guard')
+        def check_exchange():
+            self.check_process()
+            if check is not None:
+                check()
         return super()._exchange(conn, peer, others, raw, expected, deadline,
-                                 check=self._guard_process, validate_answer=validate_answer)
+                                 check=check_exchange, validate_answer=validate_answer)
 
     def _quiet(self, peers, deadline):
-        self._guard_process()
+        self.check_process()
         result = super()._quiet(peers, deadline)
-        self._guard_process()
+        self.check_process()
         return result
 
 
-def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1, motion_service=None, pose_trial=None):
+def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
+          motion_service=None, pose_trial=None, purchases=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -675,14 +697,21 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
                    and motion_service.running else None)
         pending = channel.pending if channel is not None else None
         now = time.monotonic()
+        tick_options = {'defer_world': True} if purchases is not None else {}
         if pending is not None and (pending is not last_pose_request or now >= next_pose_wake):
             # One early wake per request per control interval. Repeated HELLOs
             # cannot spin the loop, and a new native command can wake immediately.
             last_pose_request = pending
             next_pose_wake = now + tick_interval
-            host.tick(tick_interval, wake_reader=channel.socket)
-        else:
-            host.tick(tick_interval)
+            tick_options['wake_reader'] = channel.socket
+        # Defer any pause requested during socket polling until the in-flight booking is checked.
+        host.tick(tick_interval, **tick_options)
+        if purchases is not None:
+            session = host._world.session
+            if session.pending is not None and purchases.before_world_transition():
+                host.tick(0)
+            if session.pending is None and session.state == 'running':
+                purchases.step()
         if motion_service is not None:
             motion_service.poll()
             if pose_trial is not None and motion_service.running:
@@ -870,6 +899,9 @@ def run(args):
     company_motion = getattr(args, 'company_motion', False)
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    company_purchases = getattr(args, 'company_purchases', False)
+    if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
+        raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
     cockpit_capture = getattr(args, 'company_cockpit_purchase', None)
@@ -911,6 +943,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
+    purchase_provider = purchases = purchase_ledger = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1056,7 +1089,13 @@ def run(args):
             if witness_join: raise ValueError('witness join requires an own verified source')
             fixture = source.verify(source_store.directory, checkpoint, profile)
         else:
-            fixture = verify_previous_source(source_store, checkpoint, profile, registry_status=(bootstrap_snapshot or getattr(args,'registry_status',False) or getattr(args,'registry_enroll',False) or bool(witness_phase)), witness_source=(witness_phase=='verify'), require_registry_snapshot=require_snapshot, return_supervisor_result=bootstrap_snapshot, require_ready_registry_script=bootstrap_snapshot)
+            fixture = verify_previous_source(
+                source_store, checkpoint, profile,
+                registry_status=(bootstrap_snapshot or getattr(args, 'registry_status', False)
+                                 or getattr(args, 'registry_enroll', False) or bool(witness_phase)),
+                witness_source=witness_phase == 'verify', require_registry_snapshot=require_snapshot,
+                return_supervisor_result=bootstrap_snapshot, require_ready_registry_script=bootstrap_snapshot,
+                return_purchase_reference=require_snapshot)
         bootstrap_status = None
         first_capture_state = None
         if bootstrap_snapshot:
@@ -1068,7 +1107,11 @@ def run(args):
             result['registry_snapshot'] = first_capture_state.metadata()
         registry_snapshot_state = None
         if require_snapshot:
-            fixture, saved_evidence = fixture
+            fixture, saved_evidence, ledger_reference = fixture
+            if company_purchases or ledger_reference is not None:
+                purchase_ledger = CompanyPurchaseLedger(saved_evidence['epoch'], out / 'company-purchases.sqlite3')
+                if ledger_reference is not None:
+                    purchase_ledger.restore(checkpoint, ledger_reference)
             if shuttle_mode is not None:
                 shuttle_source = source_store.directory.parent / 'result.json'
                 shuttle_provenance = read_evidence(shuttle_source, 1 << 20)
@@ -1116,6 +1159,10 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if company_purchases:
+                from authority_native_purchase import NativePurchaseProvider
+                purchase_provider = NativePurchaseProvider()
+                protected.extend(purchase_provider.install(case))
             if trade_mode:
                 protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce,
                                                      cockpit_purchase=cockpit_purchase))
@@ -1340,6 +1387,8 @@ def run(args):
                 appended = tuple(ship['index'] for ship in shuttle_pair['ships']) if shuttle_mode == 'prepare' else ()
                 registry_snapshot_state.verify_save(saved, profile/'engine-output.log', appended_indices=appended)
                 result['registry_snapshot'] = registry_snapshot_state.metadata()
+                if purchase_ledger is not None:
+                    result['company_purchase_ledger'] = purchase_ledger.checkpoint(saved)
             if registry_check is not None:
                 saved=store_arg.get(checkpoint_id)
                 actual=registry_check.saved_status(saved)
@@ -1467,7 +1516,7 @@ def run(args):
                 pose_trial.report['application_drops'] = application_drops
             motion_service = CompanyMotionService(application_drops=application_drops)
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
-                                         motion_service=motion_service)
+                                         motion_service=motion_service, company_purchases=company_purchases)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
         def verify_process():
@@ -1475,6 +1524,10 @@ def run(args):
             return overlap_guard[0]()
         world._participants = RecoveredGuardedParticipants(host, enabled=True, timeout=120,
                                                           guard_process=verify_process)
+        if purchase_provider is not None:
+            from authority.company_purchase_scheduler import CompanyPurchaseScheduler
+            purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
+                                                 guard=world._participants.check_process)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -1982,7 +2035,7 @@ def run(args):
 
         service_deadline = None if getattr(args, 'persistent', False) else deadline
         result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
-                            should_stop=lambda: stop[0] or gateway_stopped()))
+                            purchases=purchases, should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -1994,7 +2047,7 @@ def run(args):
             # Stop intake, then settle the last-disconnect save before stopping X4.
             listener.close()
             listener = None
-            saved = settle_shutdown(control, world, store, check)
+            saved = settle_shutdown(control, world, store, check, purchases=purchases)
             control = None
         if failed_gateway:
             raise RuntimeError('TLS gateway stopped while serving')
@@ -2045,6 +2098,16 @@ def run(args):
                 motion_service.close()
             except OSError as error:
                 errors.append('movement service cleanup: ' + type(error).__name__)
+        if purchase_ledger is not None:
+            try:
+                purchase_ledger.close()
+            except Exception as error:
+                errors.append('purchase ledger cleanup: ' + type(error).__name__)
+        if purchase_provider is not None:
+            try:
+                purchase_provider.close()
+            except OSError as error:
+                errors.append('purchase provider cleanup: ' + type(error).__name__)
         if pose_channel is not None:
             pose_channel.close()
         services_stopped = True
@@ -2111,6 +2174,8 @@ def run(args):
                     shuttle_result['cue_sha256'] = shuttle_probe.archive_cues(out, case, expected, live.sha)
                 if pose_channel is not None:
                     pose_overlay.archive_cue(case, out)
+                if purchase_provider is not None:
+                    purchase_provider.archive_cues(case, out)
                 if trade_mode:
                     trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:
@@ -2184,6 +2249,8 @@ def main(argv=None):
                        help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the separate participant-bound TLS movement channel')
+    parser.add_argument('--company-purchases', action='store_true',
+                        help='enable Company purchases for a verified company ship over pinned TLS')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every joining player to reserve a free shared-company ship')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')
