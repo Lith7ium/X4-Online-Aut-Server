@@ -632,7 +632,7 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
         return result
 
 
-def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1):
+def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1, motion_service=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -664,6 +664,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
                 conn.close()
                 raise
         host.tick(tick_interval)
+        if motion_service is not None:
+            motion_service.poll()
         for peer in host._control._peers.values():
             if peer['stage'] == 'admitted' and peer['handle'] not in admitted_handles:
                 admitted_handles.add(peer['handle'])
@@ -844,6 +846,10 @@ def run(args):
     if type(require_company_ship) is not bool or (require_company_ship and not require_snapshot):
         raise ValueError('company ship admission requires a format-3 checkpoint')
     tls = gateway_settings(args)
+    company_motion = getattr(args, 'company_motion', False)
+    if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
+        raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    motion_service = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1258,7 +1264,11 @@ def run(args):
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
         session = TrustedMarkerLoadSession(world, enabled=True, marker_script=marker_script,
                                          require_company_ship=require_company_ship)
-        control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True)
+        if company_motion:
+            from authority.company_motion_service import CompanyMotionService
+            motion_service = CompanyMotionService()
+        control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
+                                         motion_service=motion_service)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
         def verify_process():
@@ -1275,7 +1285,16 @@ def run(args):
                 value = getattr(original, name)
                 if name in ('pause','resume','save','checkpoint_published') and callable(value):
                     def call(*args):
-                        verify_process(); result = value(*args); verify_process(); operations.append(name); return result
+                        verify_process()
+                        if motion_service is not None and name == 'pause':
+                            motion_service.set_running(False)
+                            motion_service.poll()
+                        result = value(*args)
+                        verify_process()
+                        if motion_service is not None and name == 'resume':
+                            motion_service.set_running(True)
+                        operations.append(name)
+                        return result
                     return call
                 return value
         world._engine = GuardedEngine()
@@ -1739,7 +1758,8 @@ def run(args):
             if stop[0] or time.monotonic() >= deadline:
                 raise InterruptedError('TLS startup cancelled')
             gateway = RecoveredTLSGateway(tls, out=out, control_port=listener.getsockname()[1],
-                                          file_port=service.port, file_token=service.token)
+                                          file_port=service.port, file_token=service.token,
+                                          motion_port=motion_service.port if motion_service is not None else None)
             gateway.start(min(5, max(0, deadline - time.monotonic())))
         else:
             fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
@@ -1751,7 +1771,7 @@ def run(args):
         def gateway_stopped():
             return gateway is not None and not gateway.running
 
-        result.update(serve(listener, host, deadline=deadline, check=check,
+        result.update(serve(listener, host, deadline=deadline, check=check, motion_service=motion_service,
                             should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
@@ -1806,6 +1826,14 @@ def run(args):
         if control is not None and not (control._closed or control._failed):
             try: control.close()
             except BaseException as error: errors.append('control cleanup: '+type(error).__name__)
+        if motion_service is not None:
+            result['company_motion_samples_received'] = motion_service.accepted_samples
+            result['company_motion_samples_with_velocity'] = motion_service.samples_with_velocity
+            result['company_motion_last_ship'] = motion_service.last_ship_position
+            try:
+                motion_service.close()
+            except OSError as error:
+                errors.append('movement service cleanup: ' + type(error).__name__)
         services_stopped = True
         for service in services:
             try: owned.close_owned_file_service(service)
@@ -1911,6 +1939,8 @@ def main(argv=None):
     tls.add_argument('--tls-certificate', type=Path, help='PEM server certificate')
     tls.add_argument('--tls-private-key', type=Path, help='PEM server private key')
     tls.add_argument('--tls-shared-key-file', type=Path, help='64 lowercase hex characters from 32 random bytes')
+    parser.add_argument('--company-motion', action='store_true',
+                        help='enable the separate participant-bound TLS movement channel')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every joining player to reserve a free shared-company ship')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')

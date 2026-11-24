@@ -1,0 +1,134 @@
+"""Real loopback movement sockets with explicit admission and visibility."""
+import json
+import socket
+import unittest
+from unittest.mock import patch
+
+from authority.company_motion_service import CompanyMotionService
+
+
+class CompanyMotionServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.service = CompanyMotionService()
+        self.addCleanup(self.service.close)
+        self.first = self.grant(1)
+        self.second = self.grant(2)
+
+    def grant(self, index):
+        return self.service.admit(index, f'{index:032x}', index, 'sector_a', 'a' * 32, 'b' * 32)
+
+    def open(self):
+        connection = socket.create_connection(('127.0.0.1', self.service.port), timeout=1)
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.addCleanup(connection.close)
+        stream = connection.makefile('rb')
+        self.addCleanup(stream.close)
+        return connection, stream
+
+    def send(self, connection, message):
+        connection.sendall(json.dumps(message).encode() + b'\n')
+        self.service.poll()
+
+    def bind(self, grant):
+        connection, stream = self.open()
+        self.send(connection, {'kind': 'bind_motion', 'ticket': grant['ticket']})
+        reply = json.loads(stream.readline())
+        self.assertEqual(reply['kind'], 'motion_bound')
+        return connection, stream
+
+    def sample(self, grant, sequence, sector='sector_a', velocity=None):
+        return {'version': 3, 'epoch': grant['epoch'], 'generation': grant['generation'],
+                'index': grant['index'], 'sequence': sequence, 'sector_macro': sector,
+                'source_time': sequence / 2, 'capture_time': float(sequence),
+                'x': sequence * 10, 'y': 100, 'z': 0, 'real_velocity': velocity}
+
+    def publish(self, source, grant, seq, **kwargs):
+        self.send(source, {'kind': 'motion_sample', 'window': self.service.window,
+                           'sample': self.sample(grant, seq, **kwargs)})
+
+    def view(self, viewer, indices, sector='sector_a', view_id=1):
+        self.send(viewer, {'kind': 'motion_view', 'window': self.service.window,
+                           'view_id': view_id, 'indices': indices, 'sector_macro': sector})
+
+    def test_latest_visible_sample_waits_for_previous_receipt(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second)
+        self.view(viewer, [1, 2])
+        self.publish(source, self.first, 1)
+        self.service.poll()
+        first = json.loads(stream.readline())
+        self.assertEqual(first['sample']['index'], 1)
+        self.assertEqual(first['view_id'], 1)
+        for seq in range(2, 21):
+            self.publish(source, self.first, seq, velocity={'x': 10, 'y': 0, 'z': 0})
+        self.send(viewer, {'kind': 'motion_received', 'window': 1, 'view_id': 1, 'index': 1,
+                           'generation': self.first['generation'], 'sequence': 1})
+        latest = json.loads(stream.readline())['sample']
+        self.assertEqual((latest['sequence'], latest['real_velocity']['x']), (20, 10))
+        self.assertEqual(self.service.accepted_samples, 20)
+        self.publish(source, self.first, 21, sector='sector_b')
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_end')
+
+    def test_unobserved_sector_and_stale_window_are_fenced(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second)
+        self.view(viewer, [1], sector='sector_b')
+        self.publish(source, self.first, 1)
+        self.service.set_running(False)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline()), {'kind': 'motion_state', 'window': 2, 'running': False})
+        self.service.set_running(True)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['window'], 3)
+        self.send(source, {'kind': 'motion_sample', 'window': 1, 'sample': self.sample(self.first, 2)})
+        self.assertEqual(self.service.accepted_samples, 1)
+        self.publish(source, self.first, 3, sector='sector_b')
+        self.view(viewer, [1], sector='sector_b')
+        self.assertEqual(json.loads(stream.readline())['sample']['sequence'], 3)
+
+    def test_only_one_socket_and_the_selected_ship_can_use_a_grant(self):
+        self.service.set_running(True)
+        source, stream = self.bind(self.first)
+        duplicate, duplicate_stream = self.open()
+        self.send(duplicate, {'kind': 'bind_motion', 'ticket': self.first['ticket']})
+        self.assertEqual(duplicate_stream.readline(), b'')
+        self.publish(source, self.second, 1)
+        self.assertEqual(stream.readline(), b'')
+        self.assertEqual(self.service.accepted_samples, 0)
+        rebound, rebound_stream = self.bind(self.first)
+        self.service.revoke(1)
+        self.assertEqual(rebound_stream.readline(), b'')
+        late, late_stream = self.open()
+        self.send(late, {'kind': 'bind_motion', 'ticket': self.first['ticket']})
+        self.assertEqual(late_stream.readline(), b'')
+
+    def test_outdated_last_position_expires_without_reporting_an_unseen_ship(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        viewer, stream = self.bind(self.second)
+        self.view(viewer, [1], sector='sector_a')
+        with patch('authority.company_motion_service.time.monotonic', return_value=100.0):
+            self.publish(source, self.first, 1)
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['sample']['sequence'], 1)
+        with patch('authority.company_motion_service.time.monotonic', return_value=105.0):
+            self.service.poll()
+            end = json.loads(stream.readline())
+            self.assertEqual((end['kind'], end['index'], end['view_id']), ('motion_end', 1, 1))
+            self.view(viewer, [1], sector='sector_b', view_id=2)
+            self.service.revoke(1)
+            self.service.set_running(False)
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['kind'], 'motion_state')
+
+    def test_clock_change_before_binding_sends_only_current_bound_state(self):
+        connection, stream = self.open()
+        self.service.poll()
+        self.service.set_running(True)
+        self.send(connection, {'kind': 'bind_motion', 'ticket': self.first['ticket']})
+        self.assertEqual(json.loads(stream.readline()), {
+            'kind': 'motion_bound', 'window': 1, 'running': True, 'last_sequence': 0,
+        })

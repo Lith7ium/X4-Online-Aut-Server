@@ -78,6 +78,8 @@ def main(argv=None):
     parser.add_argument('--xvfb', help='Xvfb executable; defaults to PATH')
     parser.add_argument('--vulkan-icd', type=Path, help='Mesa lavapipe ICD; defaults to system detection')
     parser.add_argument('--timeout', type=float, default=3600, help='total run duration in seconds')
+    parser.add_argument('--company-motion', action='store_true',
+                        help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every player to select an available company ship; enables full registry checks')
     parser.add_argument('--registry-status', action='store_true', help='verify saved registry status')
@@ -100,10 +102,12 @@ def main(argv=None):
             server_flags.extend(('--tls-' + flag, str(value)))
     if args.registry_status:
         server_flags.append('--registry-status')
-    if args.require_registry_snapshot or args.require_company_ship:
+    if args.require_registry_snapshot or args.require_company_ship or args.company_motion:
         server_flags.append('--require-registry-snapshot')
-    if args.require_company_ship:
+    if args.require_company_ship or args.company_motion:
         server_flags.append('--require-company-ship')
+    if args.company_motion:
+        server_flags.append('--company-motion')
     xvfb, xauth, xdpyinfo = (shutil.which(name) for name in (args.xvfb or 'Xvfb', 'xauth', 'xdpyinfo'))
     icd = args.vulkan_icd or lavapipe_icd()
     if sys.platform != 'linux' or os.geteuid() == 0:
