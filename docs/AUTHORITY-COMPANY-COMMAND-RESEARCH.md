@@ -16,6 +16,7 @@ and a normal Teladi station with its own stock and sell offer. The server
 avatar stays on a different station. A successful stock order submission,
 a completed purchase, the balance and cargo after a reload, and a receipt
 at a second player's cockpit are separate observations.
+[Native trade measurements](../reports/AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
 ## What exists
 

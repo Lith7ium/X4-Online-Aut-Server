@@ -1,0 +1,63 @@
+# A Company purchase with the server avatar on another station
+
+The isolated native Linux provider loaded confirmed checkpoint
+`checkpoint-12aba53907ec43a6becfc7dde919d309`, SHA-256
+`1c7117f327df18df402295755968a19591cc238b9f38519b43348bfce3ee2ff1`.
+The intended purchase is one unit of water for WRN-302 at an ordinary Teladi
+station. The server avatar stays on foot at XPJ-169 in Black Hole Sun V.
+Each attempt starts from the original private checkpoint. These trials run
+without a public listener or a connected pilot.
+
+## What the game reported at load
+
+| Measurement | Value |
+| --- | --- |
+| Issued ship registry entries | 10,082 |
+| Company faction account and player account | 1,000,000 cents each (10,000 Cr) |
+| WRN-302 (index 7354), Grand Exchange I | In space, 0 units of water aboard, space for 25 |
+| WOO-831 (index 1970), in another sector | In space, 0 units of water aboard, space for 90 |
+| WRN to BIM-169 | 374,528 m |
+| BIM-169 water stock / units for sale to WRN | 44,668 / 31,475 |
+| Initial quoted price | 5,877 cents per unit (58.77 Cr) |
+
+The saved faction account had raw amount `10000`. X4 reported that
+account and the player's wallet separately. The provider asks for a fresh
+quote after docking because the station continues to trade while WRN flies.
+
+## Docking diagnosis
+
+The first attempt stopped during fixture identity checks, before assigning
+a captain. The second assigned a Company captain to the empty ship. An
+ordinary quicksave in the private display captured the world at game age
+761.89 s. The docking preparation had completed at 302.52 s, but the next
+Mission Director cue was still waiting for its parent's completion event.
+The saved ship still had only its default Wait order. No purchase had
+been submitted. The quicksave notified the provider's normal save guard,
+which ended the trial. No test processes remained. This diagnostic file
+was excluded from checkpoint recovery.
+
+Diagnostic quicksave SHA-256
+`ea5f8da291c8ddc2cadf1dd37a05964dcd388b47ae8e3c2c8987dcb4cf425bc1`.
+The corrected fixture checks the saved preparation status when its child
+cue becomes active and issues the order once. In the next native run the
+captain was assigned at game age 302.514 s. At 303.981 s X4 returned a
+`DockAt` order for WRN with one entry in the ship's order queue.
+[Test fixture and stock trade event](../tools/dev/AUTHORITY-COMPANY-STOCK-TRADE.md)
+
+## First completed purchase
+
+At game ages 446.486 s and 447.644 s the provider found WRN at the
+same external trading bay, with its captain and an empty order queue.
+The server avatar was still at XPJ-169. The live unit quote had changed
+to 5,819 cents. The provider submitted one stock order. X4 raised its
+trade-completed event at 455.66 s. WRN gained one unit of water and the
+player balance decreased by 5,800 cents. Repeating the same confirmation
+returned `already_attempted`.
+
+The aggregate water stock at BIM-169 dropped by 646 units over the
+observation interval. Other economic activity continued during the
+purchase. The first probe also narrowed the per-container monetary deltas
+to signed 32-bit integers. Those measurements cannot establish the seller's
+proceeds or the settled unit price. The strict check rejected the run and
+published no checkpoint. Both the stock deal and a separately identifiable
+account entry are needed to reconcile the offered and charged amounts.

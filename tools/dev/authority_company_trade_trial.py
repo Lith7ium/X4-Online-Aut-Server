@@ -13,23 +13,29 @@ UI_DRIVER = 'authority_company_trade_driver.lua'
 
 def install(case, mode, epoch, nonce):
     extension = case / 'extensions/x4_lan_lab'
-    files = [extension / 'md' / name for name in (READ_CUE, *(PURCHASE_CUES if mode == 'buy' else ()))]
-    if mode == 'buy':
+    purchase = mode in ('buy', 'six-unit')
+    files = [extension / 'md' / name for name in (READ_CUE, *(PURCHASE_CUES if purchase else ()))]
+    if purchase:
         files.append(extension / 'ui' / UI_DRIVER)
+    if mode == 'six-unit':
+        files.append(extension / 'ui/authority_trade_ledger.lua')
     for file in files:
         with file.open('xb') as output:
             output.write((PROBES / file.name).read_bytes())
-    if mode == 'buy':
+    if purchase:
         # Attach to the existing world update after the verified initial pause.
         bridge = extension / 'ui/authority_world_bridge_probe.lua'
         manifest = extension / 'ui.xml'
         tick = ' local ok,reason=bridge:update();assert(ok,reason)\n'
         hook = '    <file name="ui/authority_world_bridge_probe.lua" />\n'
         entry = f'    <file name="ui/{UI_DRIVER}" />\n'
+        if mode == 'six-unit':
+            entry = '    <file name="ui/authority_trade_ledger.lua" />\n' + entry
+        audit = 'true' if mode == 'six-unit' else 'false'
         for path, marker, replacement in (
             (manifest, hook, entry + hook),
             (bridge, tick, tick + f''' if registry_checkpoint:ready() then
-  if not trade_tick then trade_tick = X4LAN_COMPANY_TRADE_DRIVER.new("{epoch}", "{nonce}") end
+  if not trade_tick then trade_tick = X4LAN_COMPANY_TRADE_DRIVER.new("{epoch}", "{nonce}", {audit}) end
   trade_tick(C.IsGamePaused())
  end
 '''),
@@ -55,7 +61,7 @@ def loaded_observation(log, read_evidence):
     return records
 
 
-def await_settlement(log, nonce, deadline, check):
+def await_records(log, nonce, deadline, check):
     prefix = f'[X4LAN] AUTH_TRADE_TRIAL {nonce}|'.encode('ascii')
     observations = []
     with log.open('rb') as stream:
@@ -75,10 +81,10 @@ def await_settlement(log, nonce, deadline, check):
                     continue
                 row = line.split(prefix, 1)[1].strip().decode('ascii')
                 observations.append(row)
-                if len(observations) > 20 or row.startswith('FAILED|'):
+                if len(observations) > 210 or row.startswith('FAILED|'):
                     raise ValueError(f'trade trial stopped: {observations}')
                 if row == 'DONE':
-                    return verify_settlement(observations, nonce)
+                    return observations
     raise TimeoutError(f'trade trial timed out: {observations}')
 
 
@@ -102,7 +108,7 @@ def verify_settlement(rows, nonce):
 
 def archive_cues(case, out, mode):
     names = [READ_CUE]
-    if mode == 'buy':
+    if mode in ('buy', 'six-unit'):
         names.extend(PURCHASE_CUES)
     for name in names:
         source = case / 'extensions/x4_lan_lab/md' / name

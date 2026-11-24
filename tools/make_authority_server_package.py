@@ -28,6 +28,8 @@ REQUIRED = {
     'tools/dev/authority_company_trade_dock.xml',
     'tools/dev/authority_company_stock_trade.xml',
     'tools/dev/authority_company_trade_driver.lua',
+    'tools/dev/authority_trade_ledger.lua',
+    'tools/dev/authority_trade_settlement.py',
     'tools/dev/authority_trade_observer.xml',
     'tools/dev/authority_connection_check.py',
     'tools/dev/authority_exec_gate.py',

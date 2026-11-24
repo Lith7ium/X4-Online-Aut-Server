@@ -859,7 +859,7 @@ def run(args):
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
     if trade_mode:
-        if (trade_mode not in ('buy', 'inspect') or not require_snapshot or parking is not None
+        if (trade_mode not in ('buy', 'six-unit', 'inspect') or not require_snapshot or parking is not None
                 or require_company_ship or company_motion or tls is not None
                 or getattr(args, 'company_pose_trial', False) or getattr(args, 'verify_company_pose', False)):
             raise ValueError('company trade trial requires an isolated recovered provider')
@@ -1038,7 +1038,7 @@ def run(args):
         if require_snapshot:
             fixture, saved_evidence = fixture
             if trade_mode:
-                if trade_mode == 'buy' and checkpoint.sha256 != trade_probe.SOURCE_DIGEST:
+                if trade_mode != 'inspect' and checkpoint.sha256 != trade_probe.SOURCE_DIGEST:
                     raise ValueError('stock purchase trial requires its original private two-ship world')
                 result['company_trade_trial'] = {'mode': trade_mode}
             if pose_live or pose_cold:
@@ -1328,11 +1328,30 @@ def run(args):
             log = profile / 'engine-output.log'
             trial_result = result['company_trade_trial']
             trial_result['loaded_observation'] = trade_probe.loaded_observation(log, read_evidence)
-            if trade_mode == 'buy':
+            if trade_mode != 'inspect':
                 check()
                 adapter.resume()
-                trial_result['settlement'] = trade_probe.await_settlement(log, trade_nonce, deadline, check)
-                saved = capture_first_registry_snapshot(adapter, store, verify)
+                records = trade_probe.await_records(log, trade_nonce, deadline, check)
+                trial_result['records'] = records
+                if trade_mode == 'six-unit':
+                    from authority_trade_settlement import six_unit_settlement
+                    # Preserve the private game save even if accounting is inconclusive.
+                    # Only a verified purchase can enter the confirmed checkpoint store.
+                    adapter.pause()
+                    raw_save = adapter.save()
+                    verify()
+                    trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
+                                                   'marker': adapter.pending_marker}
+                    settlement = six_unit_settlement(records, trade_nonce, saved_evidence['epoch'])
+                    trial_result['settlement'] = settlement
+                    if settlement['verified'] is not True:
+                        raise ValueError(f"trade accounting unverified: {settlement['reason']}")
+                    saved = store.publish(raw_save, marker=adapter.pending_marker)
+                    adapter.checkpoint_published(saved)
+                    verify()
+                else:
+                    trial_result['settlement'] = trade_probe.verify_settlement(records, trade_nonce)
+                    saved = capture_first_registry_snapshot(adapter, store, verify)
                 witness_pending = saved
                 result.update(final_checkpoint_id=saved.checkpoint_id, final_checkpoint_sha256=saved.sha256)
             result.update(success=True, final_world_state='paused')
@@ -2075,7 +2094,7 @@ def main(argv=None):
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
                         help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
-    parser.add_argument('--company-trade-trial', choices=('buy', 'inspect'),
+    parser.add_argument('--company-trade-trial', choices=('buy', 'six-unit', 'inspect'),
                         help='isolated two-ship stock trade experiment without network clients')
     parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
                         help='isolated private station parking fixture and read-only cold verification')
