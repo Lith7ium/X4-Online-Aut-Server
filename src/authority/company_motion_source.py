@@ -22,8 +22,12 @@ def validate_playback_index(index, *, company_motion, own_index=None):
 class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
-    def __init__(self, *, playback_index=None):
+    def __init__(self, *, playback_index=None, on_stage=None):
         validate_playback_index(playback_index, company_motion=True)
+        if on_stage is not None and not callable(on_stage):
+            raise ValueError('invalid company motion stage reporter')
+        self._on_stage = on_stage
+        self._reported_stages = set()
         self._playback_index = playback_index
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -115,6 +119,11 @@ class CompanyMotionSource:
         self._owner()
         return self._observer.stats()
 
+    def _report_once(self, stage):
+        if stage not in self._reported_stages:
+            self._reported_stages.add(stage)
+            self._on_stage(stage)
+
     def poll(self, validate_peer):
         """Return one latest new V3 sample, or None. validate_peer takes (IPv4, port)."""
         self._owner()
@@ -138,12 +147,16 @@ class CompanyMotionSource:
                 raise
             if not raw.startswith(prefix) or address[0] != '127.0.0.1':
                 continue
+            if self._on_stage is not None:
+                self._report_once('first_local_motion_datagram_matched')
             if checked_peer != address:
                 if self._peer is not None and address != self._peer:
                     continue
                 if validate_peer(address) is not True:
                     continue
                 checked_peer = self._peer = address
+                if self._on_stage is not None:
+                    self._report_once('first_local_motion_peer_verified')
             body = raw[len(prefix):]
             if self._observer is not None and body.partition(b'|')[0] not in (b'GAP', b'SAMPLE3'):
                 if len(raw) <= MAX_OBSERVER_DATAGRAM and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
@@ -179,6 +192,8 @@ class CompanyMotionSource:
                     sample['real_velocity'] = None
                 check_motion_progress(sample, self._previous)
             self._previous = newest = sample
+            if self._on_stage is not None:
+                self._report_once('first_local_own_pose_validated')
         if newest is not None:
             if select.select([self._socket], [], [], 0)[0]:
                 return None  # Drain a backlog before publishing an old observation.

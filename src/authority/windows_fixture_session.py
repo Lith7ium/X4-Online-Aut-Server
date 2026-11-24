@@ -202,7 +202,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 source_options = {}
                 if company_motion:
                     from .company_motion_source import CompanyMotionSource
-                    company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
+                    company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
+                                                        on_stage=on_stage)
                     source_options['company_motion'] = company_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],

@@ -25,6 +25,7 @@ class _CheckedParticipant:
 
     def __init__(self, session):
         self._session = session
+        self._reported_resume = False
 
     def _call(self, operation, handles):
         session = self._session
@@ -40,6 +41,9 @@ class _CheckedParticipant:
                 raise RuntimeError('motion transition did not confirm')
         if not session._check():
             raise RuntimeError('client log became incomplete during command')
+        if operation == 'resume' and session._on_stage is not None and not self._reported_resume:
+            self._reported_resume = True
+            session._on_stage('first_local_resume_confirmed')
         return True
 
     def pause(self, handles):

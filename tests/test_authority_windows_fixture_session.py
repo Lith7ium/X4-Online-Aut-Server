@@ -233,7 +233,7 @@ class FixtureSessionTests(unittest.TestCase):
         motion_module = SimpleNamespace(ReconnectingCompanyMotionClient=SimpleNamespace(observing=start_motion))
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
              patch.object(subject, 'WindowsMotionPeer', return_value=validate_peer) as peer_factory, \
-             patch('authority.company_motion_source.CompanyMotionSource', return_value=source), \
+             patch('authority.company_motion_source.CompanyMotionSource', return_value=source) as source_factory, \
              patch.dict(sys.modules, {'authority.company_motion_reconnect': motion_module}):
             result = self.run_session(require_registry_snapshot=True,
                                       select_ship=lambda ships, pump: 2, company_motion=True,
@@ -243,6 +243,7 @@ class FixtureSessionTests(unittest.TestCase):
             (0, ('company_ship_reserved', 2)), (2, ('first_own_sample_acknowledged',)),
             (3, ('first_remote_pose_received',)),
         ])
+        source_factory.assert_called_once_with(playback_index=None, on_stage=note_stage)
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)
         self.assertEqual(result['company_motion'], counts)

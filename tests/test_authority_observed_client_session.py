@@ -190,8 +190,9 @@ class ObservedSessionTest(unittest.TestCase):
             self.log += b'\n'
         writer = threading.Thread(target=complete_log)
         writer.start(); self.addCleanup(writer.join)
+        stages = []
         session = ObservedClientSession(owner, bound, controller, slot='save_009',
-            read_log=lambda: self.log, guard=lambda: True, deadline=deadline)
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline, on_stage=stages.append)
         self.addCleanup(session.close)
         self.assertTrue(session.start())
         self.assertIsNone(owner._participant._apply_motion)
@@ -199,6 +200,8 @@ class ObservedSessionTest(unittest.TestCase):
         while not self.replies:
             session.poll(.1)
         self.assertEqual(self.replies[0]['status'], 'confirmed')
+        self.assertEqual(stages, ['world_marker_confirmed', 'participant_admitted',
+                                  'first_local_resume_confirmed'])
         self.assertEqual(len(self.claims), 1)
         self.assertGreater(len(self.keepalives), 0)
         self.log += request
@@ -206,6 +209,7 @@ class ObservedSessionTest(unittest.TestCase):
             session.poll()
         self.assertEqual(client.fileno(), -1)
         self.assertEqual(controller.sock.fileno(), -1)
+        self.assertEqual(stages.count('first_local_resume_confirmed'), 1)
 
     def test_motion_budget_reserves_ready_stop_and_native_control_deadlines(self):
         class MotionControl:
@@ -486,8 +490,9 @@ class ObservedSessionTest(unittest.TestCase):
         self.start_fake_participant(controller)
         self.log = b''.join(self.log_parts())
         self.partial_during_command = True
+        stages = []
         session = ObservedClientSession(owner, bound, controller, slot='save_009',
-            read_log=lambda: self.log, guard=lambda: True, deadline=deadline)
+            read_log=lambda: self.log, guard=lambda: True, deadline=deadline, on_stage=stages.append)
         self.addCleanup(session.close)
         self.assertTrue(session.start())
         with self.assertRaisesRegex(RuntimeError, 'incomplete during command'):
@@ -496,6 +501,7 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertEqual(self.commands, ['resume'])
         self.assertTrue(self.server_done.wait(2))
         self.assertEqual(self.replies, [])
+        self.assertNotIn('first_local_resume_confirmed', stages)
         self.assertEqual(client.fileno(), -1)
 
     def test_rejects_mismatched_offer_and_shorter_session_deadline(self):

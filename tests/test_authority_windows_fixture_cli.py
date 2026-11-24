@@ -132,6 +132,10 @@ class FixtureCliTests(unittest.TestCase):
         def late_failure(args, *, on_stage):
             on_stage('cockpit_control_confirmed', 18)
             on_stage('participant_admitted')
+            on_stage('first_local_resume_confirmed')
+            on_stage('first_local_motion_datagram_matched')
+            on_stage('first_local_motion_peer_verified')
+            on_stage('first_local_own_pose_validated')
             raise RuntimeError('PRIVATE_CREDENTIAL')
 
         output, errors = io.StringIO(), io.StringIO()
@@ -141,10 +145,18 @@ class FixtureCliTests(unittest.TestCase):
         progress = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(progress, [
             {'status': 'pilot_progress', 'stage': 'cockpit_control_confirmed', 'ship_index': 18},
-            {'status': 'pilot_progress', 'stage': 'participant_admitted'}])
+            {'status': 'pilot_progress', 'stage': 'participant_admitted'},
+            {'status': 'pilot_progress', 'stage': 'first_local_resume_confirmed'},
+            {'status': 'pilot_progress', 'stage': 'first_local_motion_datagram_matched'},
+            {'status': 'pilot_progress', 'stage': 'first_local_motion_peer_verified'},
+            {'status': 'pilot_progress', 'stage': 'first_local_own_pose_validated'}])
         report = json.loads(errors.getvalue())
         self.assertEqual(report['status'], 'failed')
-        self.assertEqual(report['confirmed_stages'], {'cockpit_control_confirmed': 18, 'participant_admitted': True})
+        self.assertEqual(report['confirmed_stages'], {
+            'cockpit_control_confirmed': 18, 'participant_admitted': True,
+            'first_local_resume_confirmed': True, 'first_local_motion_datagram_matched': True,
+            'first_local_motion_peer_verified': True, 'first_local_own_pose_validated': True,
+        })
         self.assertNotIn('PRIVATE_CREDENTIAL', errors.getvalue())
 
     def test_missing_opt_in_refuses_before_reading_credentials(self):

@@ -4,7 +4,7 @@ import socket
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -49,6 +49,48 @@ class CompanyMotionSourceTest(unittest.TestCase):
             owned.sendto(f'{prefix}SAMPLE3|{epoch}|1960|7|sector_b|20|7|7|2|3|10|0|0|'.encode(), destination)
             with self.assertRaisesRegex(ValueError, 'foreign local'):
                 source.poll(validate)
+
+    def test_first_local_motion_stages_require_matching_datagram_owned_peer_and_valid_pose(self):
+        stages = []
+        source = CompanyMotionSource(on_stage=stages.append)
+        self.addCleanup(source.close)
+        epoch = 'a' * 32
+        config = source.configure(epoch, 1961)
+        destination = ('127.0.0.1', config['port'])
+        prefix = source._prefix()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as foreign:
+            owned.bind(('127.0.0.1', 0))
+            validate = Mock(side_effect=lambda peer: peer == owned.getsockname())
+            receive = Mock()
+            receive.recvfrom.side_effect = [(prefix + b'GAP', ('192.0.2.1', 7)),
+                                            (b'wrong-prefix|GAP', owned.getsockname()),
+                                            BlockingIOError]
+            with patch.object(source, '_socket', receive):
+                self.assertIsNone(source.poll(validate))
+            validate.assert_not_called()
+            self.assertEqual(stages, [])
+
+            foreign.sendto(prefix + b'GAP', destination)
+            self.assertIsNone(source.poll(validate))
+            self.assertEqual(stages, ['first_local_motion_datagram_matched'])
+
+            owned.sendto(prefix + b'GAP', destination)
+            self.assertIsNone(source.poll(validate))
+            self.assertEqual(stages[-1], 'first_local_motion_peer_verified')
+            owned.sendto(prefix + f'SAMPLE3|{epoch}|1960|1|sector_a|20|1|1|2|3|-|-|-|'.encode(),
+                         destination)
+            with self.assertRaisesRegex(ValueError, 'foreign local'):
+                source.poll(validate)
+            self.assertEqual(len(stages), 2)
+
+            for sequence in (1, 2):
+                owned.sendto(prefix + f'SAMPLE3|{epoch}|1961|{sequence}|sector_a|20|{sequence}|1|2|3|-|-|-|'.encode(),
+                             destination)
+                self.assertEqual(source.poll(validate)['sequence'], sequence)
+            self.assertEqual(stages, ['first_local_motion_datagram_matched',
+                                      'first_local_motion_peer_verified',
+                                      'first_local_own_pose_validated'])
 
     def test_selected_sampler_only_captures_after_resume_and_resets_rates(self):
         subprocess.run(['luajit', 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
