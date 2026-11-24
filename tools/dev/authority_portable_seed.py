@@ -14,6 +14,8 @@ from authority_recovered_loopback_server import read_evidence, verify_previous_s
 from authority_recovered_registry_snapshot import receipt
 from authority.checkpoints import CHUNK, MAX_COMPRESSED, CheckpointStore
 from authority.load_messages import _pairs, _reject_constant
+from authority.company_purchase_ledger import (PURCHASE_LEDGER_LIMIT, PURCHASE_LEDGER_NAME,
+                                               verify_purchase_ledger)
 from authority.marker_evidence import verify_saved_marker
 
 CONTENT = 'case/home/.config/EgoSoft/X4/45841/content.xml'
@@ -28,10 +30,11 @@ _CONTENT = re.compile(rb'<\?xml version="1\.0"\?><content>'
                       rb'<extension id="x4_lan_lab" enabled="true" /></content>\n')
 
 
-def _file_limits(checkpoint_id):
+def _file_limits(checkpoint_id, *, purchase_ledger=False):
     generation = f'checkpoints/{checkpoint_id}'
+    optional = {f'{generation}/{PURCHASE_LEDGER_NAME}': PURCHASE_LEDGER_LIMIT} if purchase_ledger else {}
     return {
-        'result.json': 65536, CONTENT: 65536,
+        **optional, 'result.json': 65536, CONTENT: 65536,
         **{f'{MD}/{name}': 65536 for name in SCRIPTS},
         'checkpoints/CURRENT': 4096, 'checkpoints/CONFIRMED': 4096,
         f'{generation}/manifest.json': 4096, f'{generation}/save.xml.gz': MAX_COMPRESSED,
@@ -57,6 +60,8 @@ def _provenance(result, checkpoint, evidence):
             'supervisor_version', 'success', 'final_world_state', 'owned_processes_remaining',
             'final_checkpoint_id', 'final_checkpoint_sha256')},
         'registry_snapshot': {**mode, 'final_receipt': receipt(checkpoint, evidence)},
+        **({'company_purchase_ledger': result['company_purchase_ledger']}
+           if result.get('company_purchase_ledger') is not None else {}),
     }
 
 
@@ -74,12 +79,15 @@ def _verify(source, profile=None):
                         script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
     if read_evidence(source / 'result.json', 1 << 20) != original:
         raise ValueError('source result changed during validation')
-    return checkpoint, _encoded(_provenance(_json(original), checkpoint, evidence))
+    result = _json(original)
+    ledger = result.get('company_purchase_ledger')
+    verify_purchase_ledger(checkpoint, ledger, registry_epoch=evidence['epoch'])
+    return checkpoint, _encoded(_provenance(result, checkpoint, evidence)), ledger
 
 
 def verify(source, profile=None):
     """Validate a restored directory using the supervisor's recovery guards."""
-    checkpoint, normalized = _verify(source, profile)
+    checkpoint, normalized, _ = _verify(source, profile)
     if read_evidence(Path(source) / 'result.json') != normalized:
         raise ValueError('restored provenance contains additional or noncanonical data')
     return checkpoint
@@ -101,12 +109,12 @@ def export(source, archive):
     source, archive = Path(source).resolve(strict=True), Path(archive)
     if archive.resolve().is_relative_to(source):
         raise ValueError('archive must be outside the read-only source')
-    checkpoint, provenance = _verify(source)
+    checkpoint, provenance, ledger = _verify(source)
     files = {}
     fd = os.open(archive, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, 'w+b') as stream, ZipFile(stream, 'w', compression=ZIP_STORED) as package:
-            for name, limit in _file_limits(checkpoint.checkpoint_id).items():
+            for name, limit in _file_limits(checkpoint.checkpoint_id, purchase_ledger=ledger is not None).items():
                 if name.endswith('/save.xml.gz'):
                     source_fd = os.open(checkpoint.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                     with os.fdopen(source_fd, 'rb') as incoming, package.open(name, 'w') as outgoing:
@@ -117,8 +125,11 @@ def export(source, archive):
                         raise ValueError('source checkpoint changed during export')
                     continue
                 data = provenance if name == 'result.json' else read_evidence(source / name, limit)
-                package.writestr(name, data)
                 files[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
+                if name.endswith('/' + PURCHASE_LEDGER_NAME) and any(
+                        files[name][key] != ledger[key] for key in ('sha256', 'size')):
+                    raise ValueError('source purchase ledger changed during export')
+                package.writestr(name, data)
             package.writestr(PACKAGE, _encoded({'version': 1, 'checkpoint_id': checkpoint.checkpoint_id,
                                                 'files': files}))
     except BaseException:
@@ -140,7 +151,8 @@ def _manifest(package):
             or type(manifest['checkpoint_id']) is not str or not _CHECKPOINT_ID.fullmatch(manifest['checkpoint_id'])
             or type(manifest['files']) is not dict):
         raise ValueError('invalid seed manifest')
-    limits = _file_limits(manifest['checkpoint_id'])
+    ledger_name = f"checkpoints/{manifest['checkpoint_id']}/{PURCHASE_LEDGER_NAME}"
+    limits = _file_limits(manifest['checkpoint_id'], purchase_ledger=ledger_name in members)
     if members.keys() != limits.keys() | {PACKAGE} or manifest['files'].keys() != limits.keys():
         raise ValueError('seed member names differ from the allowlist')
     for name, limit in limits.items():
