@@ -69,5 +69,11 @@ covers the current-source DLL build, connection file, and retained artifacts.
 For servers with company motion enabled, add `-CompanyMotion` to the same
 PowerShell invocation. This opens the terminal ship selection and uses the
 separate stream through the same pinned TLS endpoint once the ship is admitted.
-The run result records movement counts. The temporary motion credential stays
+With matching server and player builds, target a company ship in the cockpit
+or select a rendered company ship on the open map. Both views can stay active
+while the map shows another sector. The player result records sent movement
+counts and a `company_observer` section with native confirmations by view.
+A confirmation identifies the remote pilot's sample and the local hull that
+X4 matched. Native Windows flight and visible playback require separate
+gameplay verification. The temporary motion credential stays
 in memory.

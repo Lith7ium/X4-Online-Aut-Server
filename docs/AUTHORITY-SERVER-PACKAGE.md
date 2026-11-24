@@ -163,7 +163,18 @@ Keep the connection file owner-readable only (`chmod 600`). Select a free ship
 at the prompt, or use `--company-ship-index` to name one explicitly. For the
 private two-ship fixture, select WOO-831 (1970) and WRN-302 (7354) on separate
 players. The separate Windows diagnostic kit joins the same provider with its
-own `--company-motion` option.
+PowerShell `-CompanyMotion` option.
+
+With matching observer builds, the player can target a company ship in the
+cockpit and select another company ship on the open map, including in another
+sector. The cockpit target has to remain within sensor range and high
+attention. The map selection has to appear in the native rendered list.
+When a remote pilot occupies an observed hull, the movement channel forwards
+its current sample. The receiver records a confirmation after X4 matches the
+same hull again. On exit, `company_observer.slots.cockpit` and
+`company_observer.slots.map` in the player result give the counts and last
+confirmed sample for each view. This stage reads the hull and does not set
+its position on the receiving client.
 
 ## Check the deployment from the host
 
