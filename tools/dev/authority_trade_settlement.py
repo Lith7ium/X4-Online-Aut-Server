@@ -298,6 +298,67 @@ def purchase_settlement(rows, nonce, epoch, mode, *, require_absolute_cargo=Fals
     return result
 
 
+def reconcile_observed_purchase(before, after, journal_rows):
+    """Read-only assessment of an ambiguous native purchase.
+
+    Before is the verified native pre-submission observation. After is an
+    independent stock observation for the same resolved registry epoch, buyer
+    and seller. Both contain exact cargo/account amounts and game time. A
+    missing observation or unmatched ledger leaves the effect unproven.
+    """
+    def unproven(reason):
+        return {'status': 'no_proven_economic_delta', 'reason': reason}
+
+    if not before:
+        return unproven('native_pre_purchase_snapshot_unavailable')
+    if not after:
+        return unproven('native_post_purchase_snapshot_unavailable')
+
+    try:
+        epoch = before['registry_epoch']
+        buyer, seller = (_component(before[field]) for field in ('buyer', 'seller'))
+        if (not re.fullmatch(r'[0-9a-f]{32}', epoch) or epoch != after['registry_epoch']
+                or before['ware'] != WARE or after['ware'] != WARE
+                or buyer != _component(after['buyer']) or seller != _component(after['seller'])):
+            return unproven('native_binding_disagrees')
+        quantity, unit = before['quantity'], before['price_cents']
+        if buyer == seller or type(quantity) is not int or quantity <= 0 or type(unit) is not int or unit <= 0:
+            return unproven('invalid_native_purchase')
+        bound_at, observed_at = (_time(state['game_time']) for state in (before, after))
+        if observed_at <= bound_at:
+            return unproven('native_observation_not_later')
+        cargo, balance, player = ('cargo_units', 'company_balance_cents', 'player_balance_cents')
+        amounts = [state[field] for state in (before, after) for field in (cargo, balance, player)]
+        if any(type(amount) is not int or amount < 0 for amount in amounts):
+            return unproven('invalid_native_amounts')
+        if after[cargo] - before[cargo] != quantity:
+            return unproven('native_cargo_delta_disagrees')
+        debit = before[balance] - after[balance]
+        if debit <= 0 or any(state[balance] != state[player] for state in (before, after)):
+            return unproven('native_balances_disagree')
+        rows = [row.split('|') for row in journal_rows or ()]
+        if not rows:
+            return unproven('native_journal_unavailable')
+        if len(rows) > 193 or rows[0][0] != 'LEDGER' or any(row[0] != 'ENTRY' for row in rows[1:]):
+            return unproven('malformed_native_observations')
+        ledger = _ledger(rows)
+        if (ledger['end'] is not None
+                and _time(ledger['end']) > observed_at + Decimal('0.0005')):
+            return unproven('native_ledger_after_observation')
+        completed = [_time(entry['time']) for entry in ledger['entries'] if entry['role'] == 'completed_trade']
+        if ledger['status'] == 'observed' and not completed:
+            return unproven('ledger_completed_trade_unconfirmed')
+        reason, entries = _purchase_reason(ledger, buyer, seller, bound_at, max(completed, default=observed_at),
+                                            unit, quantity, debit, live=True)
+    except (KeyError, ValueError, TypeError, IndexError):
+        return unproven('malformed_native_observations')
+    if entries is None:
+        return unproven(reason)
+    return {'status': 'already_applied', 'reason': reason, 'trade_id': ledger['trade_id'],
+            'settled_total_cents': debit, 'cargo_units': after[cargo],
+            'company_balance_cents': after[balance], 'matched_purchase_entries': entries}
+
+
 def six_unit_settlement(rows, nonce, epoch):
     """Read historical six-unit records that predate absolute cargo fields."""
     return purchase_settlement(rows, nonce, epoch, 'six-unit')
