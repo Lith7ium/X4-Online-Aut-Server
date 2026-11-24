@@ -24,6 +24,16 @@ def _nonnegative(raw, field):
     return int(raw)
 
 
+def _account_cents(raw):
+    if raw is None:
+        return None
+    match = re.fullmatch(r'(0|[1-9][0-9]{0,18})(?:\.([0-9]{1,2})0*)?', raw)
+    if not match:
+        raise ValueError(f'invalid or inexact saved account amount: {raw!r}')
+    whole, fraction = match.groups()
+    return int(whole) * 100 + int((fraction or '').ljust(2, '0'))
+
+
 def _station(attrs):
     return {field: attrs.get(field) for field in ('code', 'macro', 'owner')}
 
@@ -51,12 +61,13 @@ class TradeSaveEvidence:
             self.in_player_faction = self.in_factions and depth == 4 and tag == 'faction' and attrs.get('id') == 'player'
             self.factions += int(self.in_player_faction)
         if self.in_player_faction and depth == 5 and tag == 'account':
-            if self.account is not None or not re.fullmatch(r'\[0x[0-9a-f]+\]', attrs.get('id', '')):
+            if (self.account is not None or set(attrs) - {'id', 'amount'}
+                    or not re.fullmatch(r'\[0x[0-9a-f]+\]', attrs.get('id', ''))):
                 raise ValueError('ambiguous or malformed saved player faction account')
             self.account = {
                 'id': attrs['id'],
-                'amount': _nonnegative(attrs['amount'], 'account amount') if 'amount' in attrs else None,
-                'unit': 'unconfirmed',
+                'amount': attrs.get('amount'),
+                'amount_cents': _account_cents(attrs.get('amount')),
                 'xml_path': '/savegame/universe/factions/faction[@id="player"]/account/@amount',
             }
 
@@ -140,13 +151,46 @@ def read_verified_trade_checkpoint(checkpoint):
             'registry_epoch': snapshot['epoch'], **evidence.result()}
 
 
+def compare_verified_trade(before, after, *, quantity, debit_cents):
+    """Compare two verified snapshots against an independent native receipt."""
+    if (type(quantity) is not int or quantity <= 0
+            or type(debit_cents) is not int or debit_cents <= 0):
+        raise ValueError('expected positive quantity and debit in cents')
+    if (before['sha256'] == after['sha256'] or before['marker'] == after['marker']
+            or any(before[key] != after[key] for key in ('registry_epoch', 'ware', 'avatar', 'seller'))):
+        raise ValueError('snapshots are identical or their trade context changed')
+    initial_account, final_account = (state['account']['amount_cents'] for state in (before, after))
+    if initial_account is None or final_account is None or initial_account - final_account != debit_cents:
+        raise ValueError('saved account debit does not match the native receipt')
+    initial, final = ({ship['index']: ship for ship in state['ships']} for state in (before, after))
+    purchased_ship = final[7354]
+    if (final[1970] != initial[1970] or purchased_ship['sector'] != after['seller']['sector']
+            or not purchased_ship['dock'] or purchased_ship['dock']['station_code'] != after['seller']['code']
+            or purchased_ship['cargo_units'] - initial[7354]['cargo_units'] != quantity):
+        raise ValueError('saved cargo delta or docking evidence does not match the native receipt')
+    return {'before_sha256': before['sha256'], 'after_sha256': after['sha256'],
+            'debit_cents': debit_cents, 'added_units': quantity}
+
+
+def _read_directory(directory):
+    return read_verified_trade_checkpoint(CheckpointStore(directory.parent).get(directory.name))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('checkpoint', type=Path, help='specific checkpoint directory within a checkpoint store')
+    parser.add_argument('--before', type=Path, help='compare an earlier checkpoint with the positional checkpoint')
+    parser.add_argument('--quantity', type=int, help='positive quantity from the native receipt')
+    parser.add_argument('--debit-cents', type=int, help='positive debit in cents from the native receipt')
     args = parser.parse_args()
+    if any(value is not None for value in (args.before, args.quantity, args.debit_cents)):
+        if any(value is None for value in (args.before, args.quantity, args.debit_cents)):
+            parser.error('--before, --quantity and --debit-cents are required together')
     try:
-        checkpoint = CheckpointStore(args.checkpoint.parent).get(args.checkpoint.name)
-        result = read_verified_trade_checkpoint(checkpoint)
+        result = _read_directory(args.checkpoint)
+        if args.before is not None:
+            result['comparison'] = compare_verified_trade(_read_directory(args.before), result,
+                                                          quantity=args.quantity, debit_cents=args.debit_cents)
     except (OSError, ValueError) as exc:
         parser.exit(1, f'{exc}\n')
     print(json.dumps(result, indent=2, sort_keys=True))
