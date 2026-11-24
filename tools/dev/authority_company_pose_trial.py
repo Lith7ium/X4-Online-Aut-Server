@@ -21,7 +21,14 @@ class ShipUnavailable(ValueError):
     """The native pre-write inspection found the ship unavailable."""
 
 
-_MOVEMENT_PROOF_VERSION = 1
+class TransferNotVisible(ValueError):
+    """The verifier still sees the ship outside the expected destination sector."""
+
+
+_SUCCESS = {'inspect': 'INSPECTED', 'locate': 'LOCATED', 'apply': 'DISPATCHED',
+            'transfer': 'DISPATCHED', 'verify': 'OBSERVED'}
+_READ_ACTIONS = {'inspect', 'locate', 'verify'}
+_MOVEMENT_PROOF_VERSION = 2
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
 _ACTOR = re.compile(r'0[xX][0-9a-fA-F]{1,16}')
@@ -46,8 +53,10 @@ def _readback_error(target, md, ui):
     return max(math.dist(target, md), math.dist(target, ui))
 
 
-def _observed_move(before, target, md, ui):
-    return (min(math.dist(before, point) for point in (target, md, ui)) > READBACK_METRES
+def _observed_move(before, target, md, ui, *, changed_sector=False):
+    # Positions in different sectors use different origins. Arrival in the
+    # verified destination frame establishes movement even at identical xyz.
+    return ((changed_sector or min(math.dist(before, point) for point in (target, md, ui)) > READBACK_METRES)
             and _readback_error(target, md, ui) <= READBACK_METRES
             and math.dist(md, ui) <= READBACK_METRES)
 
@@ -59,6 +68,7 @@ class GamePoseChannel:
         if not _TOKEN.fullmatch(epoch):
             raise ValueError('invalid source registry epoch')
         self.ship_codes = {}
+        self.ship_sectors = {}
         self.epoch, self.lease = epoch, secrets.token_hex(16)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -73,10 +83,12 @@ class GamePoseChannel:
     def read_company_catalogue(self, checkpoint):
         """Refresh eligible indices from the same verified snapshot used for seat selection."""
         self.ship_codes.clear()
+        self.ship_sectors.clear()
         catalogue = read_company_ship_catalogue(checkpoint)
         if catalogue.registry_epoch != self.epoch:
             raise ValueError('company ship catalogue belongs to another registry')
         self.ship_codes = {ship.ship_index: ship.code for ship in catalogue.ships}
+        self.ship_sectors = {ship.ship_index: ship.sector_macro for ship in catalogue.ships}
         return catalogue
 
     def bind(self, process, guard):
@@ -95,7 +107,10 @@ class GamePoseChannel:
     def begin(self, action, sample, actor='0'):
         if self.pending is not None:
             raise RuntimeError('previous company pose command is still pending')
-        if action not in ('inspect', 'apply', 'verify') or not (actor == '0' or _ACTOR.fullmatch(actor)):
+        if action not in _SUCCESS:
+            raise ValueError('invalid company pose action')
+        needs_actor = action not in ('inspect', 'locate')
+        if (needs_actor and not _ACTOR.fullmatch(actor)) or (not needs_actor and actor != '0'):
             raise ValueError('invalid company pose action or actor')
         self.guard()
         if not socket_owner(self.peer, self.socket.getsockname(), self.process):
@@ -132,17 +147,20 @@ class GamePoseChannel:
             if tuple(fields[:4]) != identity or fields[4] != action:
                 raise ValueError('pose receipt does not match the pending command')
             status, actual_actor, frame = fields[5:8]
-            if status != {'inspect': 'INSPECTED', 'apply': 'DISPATCHED', 'verify': 'OBSERVED'}[action]:
-                if action == 'inspect' and status in _INSPECT_UNAVAILABLE:
+            if status != _SUCCESS[action]:
+                if action == 'verify' and status == 'FRAME_INVALID':
+                    self.pending = None
+                    raise TransferNotVisible('X4 has not verified the destination sector')
+                if action in ('inspect', 'locate') and status in _INSPECT_UNAVAILABLE:
                     self.pending = None
                     raise ShipUnavailable(status)
                 detail = status if re.fullmatch(r'[A-Z_]{1,64}', status) else 'INVALID_STATUS'
                 raise ValueError(f'X4 refused {action} for ship {identity[2]}: {detail}')
-            if (frame != sector or not _ACTOR.fullmatch(actual_actor)
+            if (not _SECTOR.fullmatch(frame) or (action != 'locate' and frame != sector) or not _ACTOR.fullmatch(actual_actor)
                     or (actor != '0' and actual_actor != actor)):
                 raise ValueError('X4 pose receipt changed actor or sector')
             md, ui = _xyz(fields[8:11]), _xyz(fields[11:14])
-            if action != 'apply':
+            if action in _READ_ACTIONS:
                 index = int(identity[2])
                 code = fields[14]
                 if (not _SHIP_CODE.fullmatch(code) or index not in self.ship_codes
@@ -151,7 +169,7 @@ class GamePoseChannel:
                     raise ValueError(f'independent pose readers disagree for ship {index}: {md}, {ui}')
                 self.ship_codes[index] = code
             self.pending = None
-            return {'actor': actual_actor, 'md': md, 'ui': ui, 'code': fields[14]}
+            return {'actor': actual_actor, 'md': md, 'ui': ui, 'code': fields[14], 'sector_macro': frame}
         return None
 
     def wait(self):
@@ -176,7 +194,7 @@ class CompanyPoseTrial:
         self.last = {}
         self.window_moves = {}
         self.baselines = {}
-        report['unavailable_before_write'] = 0
+        report.update(unavailable_before_write=0, sector_transfers_verified=0)
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
                       max_source_speed_mps=None, last_verified={}, paused={})
@@ -191,7 +209,16 @@ class CompanyPoseTrial:
             self._skip_unavailable(index)
             return
         target = _xyz(sample[key] for key in 'xyz')
-        base = self.baselines.setdefault(index, target)
+        sector = sample['sector_macro']
+        changed_sector = sector != self.channel.ship_sectors[index]
+        if changed_sector and record.sector_revision == 0:
+            # A first sample in a different frame cannot prove a gate crossing.
+            self._skip_unavailable(index)
+            return
+        baseline = self.baselines.get(index)
+        if baseline is None or baseline[0] != sector:
+            self.baselines[index] = (sector, target)
+        base = self.baselines[index][1]
         self.report['max_source_travel_metres'] = max(self.report['max_source_travel_metres'],
                                                     math.dist(target, base))
         if sample['real_velocity'] is not None:
@@ -201,30 +228,41 @@ class CompanyPoseTrial:
                 self.report['max_source_speed_mps'] = speed
         self.report['last_attempt'] = {'index': index, 'sequence': sample['sequence'],
                                        'sector_macro': sample['sector_macro'], 'target': target}
-        self.channel.begin('inspect', sample)
-        self.active = dict(record=record, sample=sample, target=target, stage='inspect')
+        action = 'locate' if changed_sector else 'inspect'
+        self.channel.begin(action, sample)
+        self.active = dict(record=record, sample=sample, target=target, stage=action)
 
     def _advance(self, service, reply):
         active = self.active
         stage, sample, target = active['stage'], active['sample'], active['target']
-        if stage == 'inspect':
+        if stage in ('inspect', 'locate'):
             active['before'], active['actor'] = reply['ui'], reply['actor']
             if not service.is_application_current(active['record'], after_inspect=True):
                 self.report['expired_before_write'] += 1
                 self.active = None
                 return
+            if stage == 'locate' and reply['sector_macro'] != sample['sector_macro']:
+                if reply['sector_macro'] != self.channel.ship_sectors[sample['index']]:
+                    self._skip_unavailable(sample['index'])
+                    return
+                active['source_sector_macro'] = reply['sector_macro']
+                active['stage'] = 'transfer'
+                self.channel.begin('transfer', sample, active['actor'])
+                return
+            self.channel.ship_sectors[sample['index']] = sample['sector_macro']
             if _readback_error(target, reply['md'], reply['ui']) > READBACK_METRES:
                 active['stage'] = 'apply'
                 self.channel.begin('apply', sample, active['actor'])
                 return
             self.report['within_tolerance'] += 1
-        elif stage == 'apply':
+        elif stage in ('apply', 'transfer'):
             active['stage'] = 'verify'
             active['verify_deadline'] = time.monotonic() + 4
             self.channel.begin('verify', sample, active['actor'])
             return
         elif stage == 'verify':
-            if not _observed_move(active['before'], target, reply['md'], reply['ui']):
+            if not _observed_move(active['before'], target, reply['md'], reply['ui'],
+                                  changed_sector='source_sector_macro' in active):
                 if time.monotonic() < active['verify_deadline']:
                     # The stock relocation can become visible several frames after dispatch.
                     self.channel.begin('verify', sample, active['actor'])
@@ -236,10 +274,16 @@ class CompanyPoseTrial:
                     'target': target, 'md': reply['md'], 'ui': reply['ui'],
                     'generation': sample['generation'], 'sector_macro': sample['sector_macro']}
             self.window_moves[sample['index']] = move
-            step = math.dist(reply['ui'], active['before'])
-            if step > self.report['max_verified_step_metres']:
-                self.report['max_verified_step_metres'] = step
-                self.report['largest_verified_move'] = move
+            if 'source_sector_macro' in active:
+                move['source_sector_macro'] = active['source_sector_macro']
+                self.channel.ship_sectors[sample['index']] = sample['sector_macro']
+                self.report['sector_transfers_verified'] += 1
+                self.report['last_sector_transfer'] = dict(index=sample['index'], **move)
+            else:
+                step = math.dist(reply['ui'], active['before'])
+                if step > self.report['max_verified_step_metres']:
+                    self.report['max_verified_step_metres'] = step
+                    self.report['largest_verified_move'] = move
         self.last[sample['index']] = sample
         self.report['last_verified'][str(sample['index'])] = {
             'sequence': sample['sequence'], 'sector_macro': sample['sector_macro'], 'target': target,
@@ -257,6 +301,11 @@ class CompanyPoseTrial:
     def _receive(self, service, read_reply):
         try:
             reply = read_reply()
+        except TransferNotVisible:
+            if 'source_sector_macro' not in self.active or time.monotonic() >= self.active['verify_deadline']:
+                raise
+            self.channel.begin('verify', self.active['sample'], self.active['actor'])
+            return
         except ShipUnavailable:
             self._skip_unavailable(self.active['sample']['index'])
             return
@@ -315,16 +364,23 @@ class CompanyPoseTrial:
                                saved_checkpoint_sha256=checkpoint.sha256)
 
 
-def _check_movement(move, item):
+def _check_movement(move, item, version):
     if (type(move) is not dict or move.get('code') != item['code']
-            or type(move.get('sequence')) is not int or not 0 < move['sequence'] <= item['sequence']
-            or not _observed_move(*(_report_xyz(move.get(name)) for name in ('before', 'target', 'md', 'ui')))):
+            or type(move.get('sequence')) is not int or not 0 < move['sequence'] <= item['sequence']):
+        raise ValueError('invalid checkpoint movement proof')
+    transfer = 'source_sector_macro' in move
+    if transfer:
+        origin = move['source_sector_macro']
+        if version < 2 or type(origin) is not str or not _SECTOR.fullmatch(origin) or origin == item['sector_macro']:
+            raise ValueError('invalid checkpoint sector transfer')
+    positions = (_report_xyz(move.get(name)) for name in ('before', 'target', 'md', 'ui'))
+    if not _observed_move(*positions, changed_sector=transfer):
         raise ValueError('invalid checkpoint movement proof')
 
 
 def _paused_poses(report, ship_codes):
     version = report.get('movement_proof_version')
-    if type(version) is not int or version != _MOVEMENT_PROOF_VERSION:
+    if type(version) is not int or version not in (1, _MOVEMENT_PROOF_VERSION):
         raise ValueError('unsupported checkpoint movement proof')
 
     poses = {}
@@ -349,7 +405,7 @@ def _paused_poses(report, ship_codes):
             raise ValueError('invalid paused checkpoint readback')
         if 'movement' in item:
             move = item['movement']
-            _check_movement(move, item)
+            _check_movement(move, item, version)
             if move.get('generation') != generation or move.get('sector_macro') != item['sector_macro']:
                 raise ValueError('checkpoint movement proof belongs to another grant or sector')
             movement = True

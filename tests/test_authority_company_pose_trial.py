@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
-from authority_company_pose_trial import CompanyPoseTrial, GamePoseChannel, verify_reloaded
+from authority_company_pose_trial import CompanyPoseTrial, GamePoseChannel, _paused_poses, verify_reloaded
 
 SOURCE_DIGEST = 'e' * 64
 
@@ -93,16 +93,17 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertRegex(row[3], r'^[0-9a-f]{32}$')
         self.assertEqual(row[4:6], [EPOCH, str(index)])
         self.assertRegex(row[6], r'^[0-9a-f]{32}$')
-        self.assertEqual(row[7:9], [sector, '0' if action == 'inspect' else actor])
+        self.assertEqual(row[7:9], [sector, '0' if action in ('inspect', 'locate') else actor])
         return row
 
     def reply(self, command, position=TARGET, *, peer=None, actor=ACTOR, **changes):
         action = command[2]
-        status = {'inspect': 'INSPECTED', 'apply': 'DISPATCHED', 'verify': 'OBSERVED'}[action]
-        point = (0, 0, 0) if action == 'apply' else position
+        status = {'inspect': 'INSPECTED', 'locate': 'LOCATED', 'transfer': 'DISPATCHED',
+                  'apply': 'DISPATCHED', 'verify': 'OBSERVED'}[action]
+        point = (0, 0, 0) if action in ('apply', 'transfer') else position
         values = dict(request_id=command[3], epoch=command[4], index=command[5], generation=command[6],
                       action=action, status=status, actor=actor, sector=command[7], md=point, ui=point,
-                      code='-' if action == 'apply' else CODE)
+                      code='-' if action in ('apply', 'transfer') else CODE)
         values.update(changes)
         md, ui, code = (values.pop(key) for key in ('md', 'ui', 'code'))
         data = '|'.join(str(value) for value in ('P', command[1], 'RESULT', *values.values(), *md, *ui, code))
@@ -197,6 +198,60 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertEqual(1, report['unavailable_before_write'])
         self.assertEqual({'1970'}, set(report['last_verified']))
         self.assert_no_command()
+
+    def test_sector_transfer_uses_both_frames_and_stops_transferring_on_arrival(self):
+        target_sector = 'cluster_06_sector002_macro'
+        sample = dict(self.sample, sector_macro=target_sector)
+        source = SimpleNamespace(sample=sample, sector_revision=0)
+        service = ApplicationQueue(source)
+        report = {}
+        trial = CompanyPoseTrial(self.channel, report)
+
+        trial.poll(service)
+        self.assert_no_command()
+        source = SimpleNamespace(sample=sample, sector_revision=1)
+        service = ApplicationQueue(source)
+        trial.poll(service)
+        self.reply(self.command('locate', sector=target_sector), position=TARGET, sector=SECTOR)
+        trial.poll(service)
+        self.reply(self.command('transfer', sector=target_sector))
+        trial.poll(service)
+        self.reply(self.command('verify', sector=target_sector), status='FRAME_INVALID')
+        trial.poll(service)
+        self.reply(self.command('verify', sector=target_sector), position=TARGET)
+        trial.poll(service)
+        self.assertEqual(target_sector, self.channel.ship_sectors[INDEX])
+        self.assertEqual(1, report['sector_transfers_verified'])
+        self.assertEqual(0, report['max_verified_step_metres'])
+        self.assertEqual(SECTOR, report['last_sector_transfer']['source_sector_macro'])
+        service = ApplicationQueue(SimpleNamespace(sample=dict(sample, sequence=9), sector_revision=1))
+        trial.poll(service)
+        self.reply(self.command('inspect', sector=target_sector))
+        trial.poll(service)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(trial.after_pause)
+            self.reply(self.command('inspect', sector=target_sector))
+            future.result(2)
+        self.assertTrue(_paused_poses(report, self.channel.ship_codes)[INDEX][2])
+        report['paused'][str(INDEX)]['movement']['source_sector_macro'] = target_sector
+        with self.assertRaisesRegex(ValueError, 'invalid checkpoint sector transfer'):
+            _paused_poses(report, self.channel.ship_codes)
+        self.assert_no_command()
+
+    def test_cross_sector_locate_requires_current_grant_and_known_origin(self):
+        target_sector = 'cluster_06_sector002_macro'
+        for revoked, actual_sector in ((True, SECTOR), (False, 'another_sector_macro')):
+            with self.subTest(revoked=revoked, actual_sector=actual_sector):
+                sample = dict(self.sample, sector_macro=target_sector)
+                service = ApplicationQueue(SimpleNamespace(sample=sample, sector_revision=1))
+                trial = CompanyPoseTrial(self.channel, {})
+                trial.poll(service)
+                self.reply(self.command('locate', sector=target_sector), sector=actual_sector)
+                if revoked:
+                    service.current = None
+                trial.poll(service)
+                self.assert_no_command()
+                self.assertEqual(SECTOR, self.channel.ship_sectors[INDEX])
 
     def assert_no_command(self, peer=None):
         self.assertFalse(select.select([peer or self.peer], [], [], 0)[0])
@@ -376,6 +431,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
         other_index = 1970
         other_sector = 'cluster_14_sector001_macro'
         other_code = 'WOO-831'
+        self.channel.ship_sectors[other_index] = other_sector
         other_sample = dict(self.sample, index=other_index, sector_macro=other_sector)
         other = ApplicationQueue(SimpleNamespace(sample=other_sample))
         trial.poll(other)
