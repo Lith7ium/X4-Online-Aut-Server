@@ -45,6 +45,12 @@ class CompanyPoseOverlayTests(unittest.TestCase):
         self.assertIn('allow_apply=true', code)
         self.assertIn(load.lua_literal(str(self.profile / 'save')), code)
         self.assertLess(code.index('not registry_checkpoint:ready()'), code.index('company_pose:tick()'))
+        from authority_recovered_loopback_server import redact_recovery_config
+        config = self.lab / 'ui/config.lua'
+        self.assertIn(config, paths)
+        self.assertNotIn(LEASE, code)
+        self.assertIn('lease=cfg.authority_company_pose_lease', code)
+        self.assertNotIn(LEASE, redact_recovery_config(config.read_text()))
         manifest = ET.parse(self.lab / 'ui.xml')
         names = [node.get('name') for node in manifest.iter('file')]
         self.assertLess(names.index('ui/company_ship_pose.lua'), names.index('ui/authority_world_bridge_probe.lua'))

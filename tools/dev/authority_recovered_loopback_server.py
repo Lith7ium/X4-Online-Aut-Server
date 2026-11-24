@@ -472,6 +472,11 @@ def redact_recovery_config(text):
     redacted,count=re.subn(r'authority_control_lease="[0-9a-f]{32}"',
         'authority_control_lease="redacted"',text)
     if count!=1:raise ValueError('invalid lease')
+    if 'authority_company_pose_lease=' in redacted:
+        redacted, count = re.subn(r'authority_company_pose_lease="[0-9a-f]{32}"',
+                                  'authority_company_pose_lease="redacted"', redacted)
+        if count != 1:
+            raise ValueError('invalid company pose lease')
     for name in ('lease','attempt','generation','nonce','saved_nonce','candidate_nonce','pair_nonce'):
         key='authority_motion_'+name+'='
         if key in redacted:

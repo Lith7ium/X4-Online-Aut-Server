@@ -62,7 +62,8 @@ def install(case, profile, *, port, lease, epoch, writable):
         raise ValueError('company pose overlay paths must belong to the owned extension')
     save_literal = lua_literal(str(save))
     config = config_path.read_text(encoding='ascii')
-    if config.count(f'authority_load_save_path={save_literal},') != 1:
+    profile_field = f'authority_load_save_path={save_literal},'
+    if config.count(profile_field) != 1 or 'authority_company_pose_lease=' in config:
         raise ValueError('company pose save path differs from the recovery bridge')
     probe = probe_path.read_text(encoding='ascii')
     manifest = manifest_path.read_text(encoding='ascii')
@@ -73,7 +74,7 @@ def install(case, profile, *, port, lease, epoch, writable):
     probe = _replace_once(probe, _UDP, _UDP + '  company_pose_udp=lib\n')
     hook = f''' if not company_pose and registry_checkpoint:ready() then
   company_pose=assert(X4LAN_AUTHORITY_COMPANY_SHIP_POSE.new_x4(
-   {{port={port},lease="{lease}",epoch="{epoch}",allow_apply={str(writable).lower()}}},
+   {{port={port},lease=cfg.authority_company_pose_lease,epoch="{epoch}",allow_apply={str(writable).lower()}}},
    function() return registry_checkpoint:ready() end, {save_literal}, company_pose_udp))
  end
  if company_pose then company_pose:tick() end
@@ -112,7 +113,10 @@ def install(case, profile, *, port, lease, epoch, writable):
             output.write(body)
     probe_path.write_text(probe, encoding='ascii')
     manifest_path.write_text(manifest, encoding='ascii')
-    return [*sources, cue, probe_path, manifest_path]
+    config = _replace_once(config, profile_field,
+                           profile_field + f'authority_company_pose_lease="{lease}",')
+    config_path.write_text(config, encoding='ascii')
+    return [*sources, cue, probe_path, manifest_path, config_path]
 
 
 def archive_cue(case, out):
