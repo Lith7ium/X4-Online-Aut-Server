@@ -1351,16 +1351,18 @@ def run(args):
                 # Preserve the private game save even if accounting is inconclusive.
                 # Only a verified purchase can enter the confirmed checkpoint store.
                 adapter.pause()
-                if cockpit_purchase is not None:
+                # A completed decline has no economic mutation to preserve. Retain the
+                # private native save for every submission, even if the ledger disagrees.
+                submitted = any(row.startswith(f'RESULT|{trade_nonce}|submitted|') for row in records)
+                if cockpit_purchase is not None and not submitted:
                     receipt = cockpit_receipt(cockpit_purchase, records, trade_nonce, saved_evidence['epoch'])
-                    evidence = receipt.pop('native_evidence')
+                    if receipt['outcome'] != 'refused':
+                        raise ValueError('native completion lacks a submission or a verified refusal')
+                    trial_result['refusal_evidence'] = receipt.pop('native_evidence')
                     trial_result['cockpit_receipt'] = receipt
-                    if receipt['outcome'] == 'refused':
-                        trial_result['refusal_evidence'] = evidence
-                        verify()
-                        result.update(success=True, final_world_state='paused')
-                        raise _WitnessFinished()
-                    settlement = evidence
+                    verify()
+                    result.update(success=True, final_world_state='paused')
+                    raise _WitnessFinished()
                 raw_save = adapter.save()
                 verify()
                 trial_result['native_save'] = {'name': raw_save.name, 'sha256': live.sha(raw_save),
@@ -1368,6 +1370,12 @@ def run(args):
                 if cockpit_purchase is None:
                     settlement = purchase_settlement(records, trade_nonce, saved_evidence['epoch'],
                                                      trade_mode, require_absolute_cargo=True)
+                else:
+                    receipt = cockpit_receipt(cockpit_purchase, records, trade_nonce, saved_evidence['epoch'])
+                    if receipt['outcome'] != 'confirmed':
+                        raise ValueError('submitted native order lacks a confirmed cockpit receipt')
+                    settlement = receipt.pop('native_evidence')
+                    trial_result['cockpit_receipt'] = receipt
                 trial_result['settlement'] = settlement
                 if settlement['verified'] is not True:
                     raise ValueError(f"trade accounting unverified: {settlement['reason']}")
