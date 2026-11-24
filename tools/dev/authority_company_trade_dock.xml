@@ -62,6 +62,9 @@
     <do_if value="$Status != 'CAPTAIN_ASSIGNED'">
      <include_actions ref="ReportFailure"/>
     </do_if>
+    <do_else>
+     <debug_text text="'[X4LAN] AUTH_TRADE_DOCK_STAGE %s|CAPTAIN_ASSIGNED|age=%s|ship=%s|captain=%s|station=%s|bay=%s'.[$Nonce,player.age,$Ship,$Captain,$Station,$Bay]" chance="100"/>
+    </do_else>
    </actions>
    <cues>
     <cue name="Order">
@@ -88,6 +91,7 @@
        <do_if value="$DockOrder">
         <set_value name="$Deadline" exact="player.age + 300s"/>
         <set_value name="$Status" exact="'DOCKING'"/>
+        <debug_text text="'[X4LAN] AUTH_TRADE_DOCK_STAGE %s|ORDER_CREATED|age=%s|deadline=%s|ship=%s|order=%s|queue_count=%s|bay=%s|station_distance=%s'.[$Nonce,player.age,$Deadline,$Ship,$DockOrder,@$Ship.orders.count,$Bay,@$Ship.distanceto.{$Station}]" chance="100"/>
        </do_if>
        <do_else>
         <set_value name="$Status" exact="'ORDER_CREATION_FAILED'"/>
@@ -178,6 +182,9 @@
   </library>
   <library name="ReportFailure" purpose="include_actions">
    <actions>
+    <do_if value="$Status == 'DOCK_PREFLIGHT_FAILED' or $Status == 'ORDER_CREATION_FAILED' or $Status == 'DOCK_STATE_CHANGED' or $Status == 'DOCK_TIMEOUT'">
+     <debug_text text="'[X4LAN] AUTH_TRADE_DOCK_STATE %s|%s|age=%s|ship=%s|operational=%s|sector=%s|captain=%s|pilot=%s|assigned_pilot=%s|commander=%s|order=%s|order_state=%s|default_order=%s|queue_count=%s|fixture_order=%s|fixture_order_state=%s|destination=%s|station_distance=%s|target_bay=%s|bay_distance=%s|bay_assigned_ship=%s|bay_docked_count=%s|assigned_bay=%s|physical_bay=%s|physical_station=%s|stored=%s'.[$Nonce,$Status,player.age,$Ship,@$Ship.isoperational,@$Ship.sector.macro.id,$Captain,@$Ship.pilot,@$Ship.assignedaipilot,@$Ship.commander,@$Ship.order.id,@$Ship.order.state,@$Ship.defaultorder.id,@$Ship.orders.count,@$DockOrder,@$DockOrder.state,$Station,@$Ship.distanceto.{$Station},$Bay,@$Ship.distanceto.{$Bay},@$Bay.assignedship,@$Bay.docked.count,@$Ship.assigneddock,@$Ship.dock,@$Ship.dock.container,@$Ship.isinternallystored]" chance="100"/>
+    </do_if>
     <do_if value="@$DockOrder.isorder and @$Ship.orders.indexof.{$DockOrder}">
      <cancel_order order="$DockOrder"/>
     </do_if>
