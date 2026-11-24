@@ -31,6 +31,8 @@ ffi.cdef[[
 ]]
 local C = ffi.C
 local screen = 'X4AuthorityPlayerDockObserver'
+local berth_screen = 'X4AuthorityPlayerTradeBerth'
+local use_berth = cfg.authority_player_trade_berth == true
 local pinned = {nonce = cfg.authority_player_dock_flight_nonce,
     epoch = '4ba7be438ebb04ec5bb85fdb95b5a488', issued_count = 10082}
 local index = 7354
@@ -43,6 +45,8 @@ local departed
 local pending, next_poll, next_sample
 local start_time, next_range
 local autopilot = false
+local berth_stage, berth_age
+local berth_next = {START = 'REQUESTED', REQUESTED = 'ASSIGNED', ASSIGNED = 'DISPATCHED'}
 
 local function log(row) DebugError('[X4LAN] AUTH_PLAYER_DOCK_FLIGHT ' .. row) end
 
@@ -127,7 +131,7 @@ local function on_observation(_, row)
             and distance and distance > 0 and water and water >= 0 and account and account >= 0
             and age and age >= 0, 'initial_' .. status)
         assert(object_code(ship, 'WRN-302', 'ship') and object_code(station, 'BIM-169', 'station'), 'initial_identity')
-        binding = {ship = ship, station = station, start_distance = distance,
+        binding = {ship = ship, station = station, ship_hex = fields[2], station_hex = fields[3], start_distance = distance,
             ship_lua = assert(ConvertStringToLuaID(tostring(ship))),
             station_lua = assert(ConvertStringToLuaID(tostring(station)))}
         log('START|' .. row)
@@ -143,6 +147,7 @@ local function on_observation(_, row)
         departed = true
         log(('DEPARTURE|%s|%s'):format(binding.start_distance, distance))
     elseif phase == 'dock_wait' and status == 'DOCKED' and listed_at_station() then
+        assert(not use_berth or observation.bay == binding.requested_bay, 'physical_bay_differs')
         phase = 'begin_capture'
         log('DOCKED|' .. row)
     elseif phase == 'before_confirm_wait' or phase == 'after_confirm_wait' then
@@ -162,6 +167,30 @@ local function on_observation(_, row)
     end
 end
 
+local function on_berth_result(_, row)
+    assert(phase == 'berth_wait' and type(row) == 'string' and #row < 512, 'berth_reply')
+    log('BERTH|' .. row)
+    local status, ship, station, bay, controlled, occupied, container, age = row:match(
+        '^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
+    assert(status and berth_next[berth_stage] == status, 'berth_' .. tostring(status))
+    local parse = X4LAN_RESOLVE_STRING.parse_hex
+    assert(parse(ship) == binding.ship and parse(station) == binding.station
+        and parse(controlled) == binding.ship and parse(occupied) == binding.ship
+        and parse(container) == binding.ship and control_matches(), 'berth_binding')
+    age = tonumber(age)
+    assert(age and age >= 0 and age < math.huge and (not berth_age or age >= berth_age), 'berth_clock')
+    berth_age, berth_stage = age, status
+    if status == 'ASSIGNED' then
+        binding.requested_bay = parse(bay)
+        assert(binding.requested_bay and C.GetContextByClass(binding.requested_bay, 'station', true)
+            == binding.station, 'berth_bay')
+    elseif status == 'DISPATCHED' then
+        assert(parse(bay) == binding.requested_bay, 'berth_bay_changed')
+        local now = GetCurRealTime()
+        phase, deadline, next_poll, next_sample = 'dock_wait', now + docking_timeout, now, now
+    end
+end
+
 local function frame(registry)
     local now = GetCurRealTime()
     if phase == 'init' then
@@ -173,6 +202,10 @@ local function frame(registry)
             and registry and registry:ready() and C.IsGamePaused(), 'initial_guard')
         assert(RegisterEvent(screen .. '.Result', function(...) guarded(on_observation, ...) end) ~= false,
             'observer_register')
+        if use_berth then
+            assert(RegisterEvent(berth_screen .. '.Result', function(...) guarded(on_berth_result, ...) end) ~= false,
+                'berth_register')
+        end
         phase, deadline = 'initial_observation', now + 8
         observe(now)
     elseif phase == 'begin_seat' then
@@ -192,11 +225,25 @@ local function frame(registry)
     elseif phase == 'await_unpause' then
         assert(now < deadline and control_matches(), 'unpause_or_control')
         if not C.IsGamePaused() and tonumber(C.GetCurrentGameTime()) > start_time then
-            local accepted = StartAutoPilot(binding.station_lua)
-            assert(accepted ~= false, 'autopilot_refused')
-            autopilot = true
-            phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
-            log('AUTOPILOT|started|' .. tostring(accepted))
+            if use_berth then
+                phase, deadline, next_sample, berth_stage = 'berth_wait', now + 30, now + 5, 'START'
+                log('ROUTE|berth')
+                assert(AddUITriggeredEvent(berth_screen, 'Prepare', {
+                    ship = binding.ship_hex, station = binding.station_hex,
+                }) ~= false, 'berth_dispatch')
+            else
+                local accepted = StartAutoPilot(binding.station_lua)
+                assert(accepted ~= false, 'autopilot_refused')
+                autopilot = true
+                phase, deadline, next_poll, next_sample, next_range = 'flight', now + approach_timeout, now, now, now
+                log('AUTOPILOT|started|' .. tostring(accepted))
+            end
+        end
+    elseif phase == 'berth_wait' then
+        assert(now < deadline and control_matches(), 'berth_timeout_or_control_lost')
+        if now >= next_sample then
+            log('BERTH_PROGRESS|' .. berth_stage)
+            next_sample = now + 5
         end
     elseif phase == 'flight' or phase == 'dock_wait' then
         assert(now < deadline and control_matches(), 'timeout_or_control_lost')
