@@ -849,6 +849,11 @@ def run(args):
     company_motion = getattr(args, 'company_motion', False)
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    parking = getattr(args, 'park_server_avatar', None)
+    if parking is not None:
+        import authority_station_parking as parking_probe
+        parking_probe.mode(args, require_snapshot=require_snapshot, tls=tls,
+                           company_ships=require_company_ship, company_motion=company_motion)
     motion_service = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
@@ -1009,6 +1014,12 @@ def run(args):
             fixture, saved_evidence = fixture
             registry_snapshot_state = registry_snapshots.RegistrySnapshotState(checkpoint, saved_evidence)
             result['registry_snapshot'] = registry_snapshot_state.metadata()
+            if parking is not None:
+                parking_source_result = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20))
+                parking_expected = parking_probe.source_location(parking, checkpoint, parking_source_result)
+                parking_inventory = parking_probe.verify_saved(checkpoint, parking_expected)
+                result['station_parking'] = {'mode': parking, 'source_sha256': checkpoint.sha256,
+                                             'inventory': parking_inventory, 'client_endpoint_opened': False}
         target = profile/'save/save_008.xml.gz'
         if any(target.parent.iterdir()): raise ValueError('new profile save directory not empty')
         os.link(staged, target, follow_symlinks=False); target.chmod(0o400)
@@ -1022,6 +1033,9 @@ def run(args):
         if require_snapshot:
             protected.extend(registry_snapshot_state.install(case, reserved_tokens=(lease, epoch),
                                                              read_source=read_evidence, timeout=snapshot_timeout))
+            if parking is not None:
+                parking_nonce = secrets.token_hex(16)
+                protected.extend(parking_probe.install(case, parking_nonce, parking, parking_expected))
         if bootstrap_snapshot:
             protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch),
                                                          read_source=read_evidence, timeout=snapshot_timeout))
@@ -1186,6 +1200,12 @@ def run(args):
         peer = bridge.activate(sock, watch, lease, epoch, deadline, check, verify)
         if require_snapshot:
             registry_snapshot_state.verify_initial(profile/'engine-output.log')
+            if parking is not None:
+                parking_location = parking_probe.verify_log(profile/'engine-output.log', parking_nonce, read_evidence)
+                if parking_expected is not None and parking_location != parking_expected:
+                    raise ValueError('cold parking location changed')
+                result['station_parking'].update(native_parked=True, location=parking_location,
+                                                 both_company_seats_available=True)
             result['registry_snapshot'] = registry_snapshot_state.metadata()
         if registry_check is not None:
             registry_check.matches_log(profile/'engine-output.log',registry_nonce,'startup',registry_expected)
@@ -1259,6 +1279,15 @@ def run(args):
             result.update(success=True, final_world_state='paused',
                           final_checkpoint_id=saved.checkpoint_id,
                           final_checkpoint_sha256=saved.sha256)
+            raise _WitnessFinished()
+        if parking is not None:
+            check()
+            if parking == 'prepare':
+                saved = capture_first_registry_snapshot(adapter, store, verify)
+                result['station_parking']['saved'] = parking_probe.verify_saved(saved, parking_location)
+                witness_pending = saved
+                result.update(final_checkpoint_id=saved.checkpoint_id, final_checkpoint_sha256=saved.sha256)
+            result.update(success=True, final_world_state='paused')
             raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
@@ -1887,6 +1916,16 @@ def run(args):
                 if require_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            require_registry_snapshot=True)
+                if parking is not None:
+                    if parking_probe.verify_log(profile/'engine-output.log', parking_nonce, read_evidence) != parking_location:
+                        raise ValueError('final parking receipt changed')
+                    if parking == 'prepare':
+                        if parking_probe.verify_saved(witness_pending, parking_location) != result['station_parking']['saved']:
+                            raise ValueError('final parked checkpoint evidence changed')
+                        result['station_parking']['park_cue_sha256'] = parking_probe.archive_cues(
+                            out, case, expected, live.sha)
+                    elif list(store.directory.iterdir()):
+                        raise ValueError('read-only parked verification published a checkpoint')
                 if bootstrap_snapshot:
                     verify_previous_source(source_store, checkpoint, profile,
                                            registry_status=True, return_supervisor_result=True,
@@ -1948,6 +1987,8 @@ def main(argv=None):
                         help='require confirmed format-3 source and full live registry observations for every save')
     parser.add_argument('--bootstrap-registry-snapshot',action='store_true',
                         help='one-shot first format-3 capture from a confirmed ready-registry supervisor source; no endpoint')
+    parser.add_argument('--park-server-avatar', choices=('prepare', 'verify'),
+                        help='isolated private station parking fixture and read-only cold verification')
     parser.add_argument('--registry-enroll',action='store_true',help='experimentally enroll existing ships into an uninitialized registry')
     parser.add_argument('--registry-witness',choices=('create','verify'),help='isolated paused diagnostic; never admit clients')
     parser.add_argument('--registry-witness-join',action='store_true',help='private one-client witness join experiment; not identity proof')

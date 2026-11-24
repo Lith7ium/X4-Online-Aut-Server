@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityStationParkingShips" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Inspect" instantiate="true">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityStationParkingShips'" control="'Inspect'"/>
+   </conditions>
+   <actions>
+    <set_value name="$request" exact="event.param3"/>
+    <set_value name="$status" exact="'REGISTRY_CHANGED'"/>
+    <set_value name="$actor" exact="'0'"/>
+    <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <do_if value="$request.$epoch == md.X4AuthorityShipRegistry.State.$epoch and $request.$count == md.X4AuthorityShipRegistry.State.$last">
+      <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$request.$index}"/>
+      <do_if value="not @$ship.isclass.ship or @md.X4AuthorityShipRegistry.State.$byship.{$ship} != $request.$index">
+       <set_value name="$status" exact="'BINDING_INVALID'"/>
+      </do_if>
+      <do_elseif value="$ship.owner != faction.player or not $ship.isoperational">
+       <set_value name="$status" exact="'SHIP_NOT_COMPANY_OPERATIONAL'"/>
+      </do_elseif>
+      <do_elseif value="$ship.idcode != $request.$code or $ship.macro.id != $request.$macro or @$ship.sector.macro.id != $request.$sector">
+       <set_value name="$status" exact="'SHIP_IDENTITY_CHANGED'"/>
+      </do_elseif>
+      <do_elseif value="$ship == player.ship or $ship == player.occupiedship or $ship == player.controlled or $ship == player.container">
+       <set_value name="$status" exact="'PLAYER_CONTEXT'"/>
+      </do_elseif>
+      <do_elseif value="$ship.dock.exists or $ship.isinternallystored or $ship.pilot.exists or $ship.assignedpilot.exists">
+       <set_value name="$status" exact="'SEAT_IN_USE_OR_DOCKED'"/>
+      </do_elseif>
+      <do_else>
+       <set_value name="$status" exact="'AVAILABLE'"/>
+       <set_value name="$actor" exact="'%s'.[$ship]"/>
+      </do_else>
+     </do_if>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityStationParkingShips.Result'" param="'%s|%s|%s|%s'.[$request.$nonce,$request.$index,$status,$actor]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
