@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -61,3 +63,24 @@ class StockTradeReceiptSourceTests(unittest.TestCase):
         self.assertEqual(writes['$after_ship_cargo'], 'State.$ship.cargo.{State.$ware}.count')
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][-2:],
                          ['State.$before_ship_cargo', '$after_ship_cargo'])
+
+
+class FixedTradeDriverTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_native_refusal_and_success_sequences_use_original_price(self):
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['luajit', 'tests/authority_company_fixed_trade.lua'],
+                       cwd=root, check=True, timeout=10)
+
+    def test_native_refusal_branch_cannot_book_an_order(self):
+        source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
+        document = ET.parse(source)
+        branches = [node for node in document.iter('do_elseif')
+                    if any(event.attrib['name'] == "'X4AuthorityCompanyStockTrade.Refused'"
+                           for event in node.iter('raise_lua_event'))]
+        refusal, = branches
+        self.assertIsNone(refusal.find('.//create_trade_order'))
+        proof = refusal.find('do_if').attrib['value']
+        self.assertIn('$ship.orders.count == $refusal_orders_before', proof)
+        self.assertIn('$refusal_water_before == $refusal_water_after', proof)
+        self.assertIn('$refusal_cash_before == $refusal_cash_after', proof)
