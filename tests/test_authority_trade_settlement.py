@@ -34,6 +34,23 @@ class SixUnitSettlementTests(unittest.TestCase):
         self.assertEqual(result['records'], self.rows)
         json.dumps(result)
 
+    def test_only_journal_start_may_round_to_the_md_dock_instant(self):
+        def settle(start, end='455.7', entry='455.65', dock='447.644'):
+            rows = self.rows.copy()
+            rows[1] = rows[1].removesuffix('447.644') + dock
+            rows[7] = f'LEDGER|observed|-|75|{start}|{end}'
+            rows[8] = rows[8].replace('|455.65|', f'|{entry}|')
+            return six_unit_settlement(rows, 'request', 'epoch')['reason']
+
+        self.assertEqual(settle('447.64399286'), 'verified')
+        self.assertEqual(settle('447.6435'), 'verified')
+        self.assertEqual(settle('447.6434999'), 'ledger_window_disagrees')
+        self.assertEqual(settle('447.6441', dock='447.6442'), 'ledger_window_disagrees')
+        self.assertEqual(settle('447.64399286', end='455.65999999'), 'ledger_window_disagrees')
+        self.assertEqual(settle('447.64399286', end='477.64399287'), 'ledger_window_disagrees')
+        self.assertEqual(settle('447.64399286', entry='447.64399285'), 'ledger_entry_outside_window')
+        self.assertEqual(settle('447.64399286', entry='455.70000001'), 'ledger_entry_outside_window')
+
     def test_ambiguous_monetary_result_keeps_raw_evidence(self):
         negative = self.rows[-2]
         cases = (

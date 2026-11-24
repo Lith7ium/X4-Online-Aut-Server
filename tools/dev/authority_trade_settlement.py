@@ -1,5 +1,5 @@
 """Verify native Company purchase audit receipts."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import re
 
 
@@ -90,7 +90,11 @@ def _purchase_reason(ledger, buyer, seller, dock_time, completed, quoted_unit, q
     if ledger['start'] is None or ledger['end'] is None:
         return 'ledger_window_missing', None
     start, end = _time(ledger['start']), _time(ledger['end'])
-    if not dock_time <= start < completed <= end or end - start > 30:
+    # MD formats READY in milliseconds. Lua can sample the same game tick
+    # before that rounded value, while all journal timestamps retain precision.
+    same_dock_tick = (Decimal('0') < dock_time - start <= Decimal('0.0005')
+                      and start.quantize(Decimal('0.001'), rounding=ROUND_HALF_UP) == dock_time)
+    if (start < dock_time and not same_dock_tick) or not start < completed <= end or end - start > 30:
         return 'ledger_window_disagrees', None
     if any(not start < _time(entry['time']) <= end for entry in ledger['entries']):
         return 'ledger_entry_outside_window', None
