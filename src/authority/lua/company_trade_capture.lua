@@ -34,7 +34,8 @@ local function stock_order(menu, data, o)
     local offer_id = o.decode_offer_id(tostring(id))
     local offer = offer_id and menu.getTradeOfferByID(offer_id)
     if type(offer) ~= 'table' or type(offer.ware) ~= 'string' or offer.ware == ''
-            or o.offer_station(offer_id) ~= o.station or offer.ismissionoffer or offer.isbuyoffer then
+            or o.offer_station(offer_id) ~= o.station or offer.ismissionoffer or offer.isbuyoffer
+            or offer.isselloffer ~= true or offer.active ~= true then
         return nil, 'stale_offer'
     end
     local price_cents = cents(offer.price)
@@ -166,17 +167,26 @@ function M.install_x4(o)
     local C = ffi.C
     local function id(ref)
         if ref == nil then return end
+        if ffi.istype('UniverseID', ref) then
+            if ref ~= 0 then return ref end
+            return
+        end
         local ok, value = pcall(ConvertIDTo64Bit, ref)
         if ok and value and value ~= 0 then return value end
+    end
+    local function lua_id(ref)
+        return ConvertStringToLuaID(tostring(ref))
     end
     local ship, station = id(o.ship), id(o.station)
     local function live_dock(ship_ref, station_ref)
         if id(ship_ref) ~= ship or id(station_ref) ~= station or C.GetPlayerControlledShipID() ~= ship
                 or not C.IsComponentClass(ship, 'ship') or not C.IsComponentOperational(ship)
                 or not C.IsComponentClass(station, 'station') or not C.IsComponentOperational(station) then return end
-        local owner, docked, docking, stored = GetComponentData(ship_ref, 'owner', 'isdocked', 'isdocking', 'isinternallystored')
+        local ship_id, station_id = lua_id(ship), lua_id(station)
+        if not ship_id or not station_id then return end
+        local owner, docked, docking, stored = GetComponentData(ship_id, 'owner', 'isdocked', 'isdocking', 'isinternallystored')
         if owner ~= 'player' or docked ~= true or docking ~= false or stored ~= false then return end
-        local station_owner = GetComponentData(station_ref, 'owner')
+        local station_owner = GetComponentData(station_id, 'owner')
         if not station_owner or station_owner == 'player' then return end
         local count = tonumber(C.GetNumDockedShips(station, nil))
         if not count or count < 1 or count > 4096 then return end
@@ -187,7 +197,8 @@ function M.install_x4(o)
                 local sector = C.GetContextByClass(station, 'sector', false)
                 local code = C.GetObjectIDCode(station)
                 if sector == 0 or code == nil then return end
-                local sector_id = ConvertStringToLuaID(tostring(sector):gsub('ULL$', ''))
+                local sector_id = lua_id(sector)
+                if not sector_id then return end
                 return {ship = ship, station = station, sector = GetComponentData(sector_id, 'macro'),
                     station_code = ffi.string(code)}
             end

@@ -49,3 +49,38 @@ path and suppresses its local order and trade-computer signal. It still
 checks live physical docking, control, and ownership. The exact Lua
 record and export behavior together still need a native test. The focused
 LuaJIT test exercises the adapter against synthetic X4 UI and dock data.
+
+## Isolated stock UI capture
+
+Use the Trade button in the docked menu with the Company ship occupied and
+controlled in an external bay at the chosen ordinary station. The stock button
+calls the MapMenu `tradecontext` for the current container. Select the occupied
+ship and move a single ordinary Water slider to the desired purchase amount.
+The slider edits the ship's virtual cargo plan. Before using the stock Confirm
+button, check that the hooked menu points to the pinned station and ship and that
+`immediate` is true with the ship as `immediateObject`. For a capture-only
+probe, inject a request callback that records the intent and returns `false`.
+That callback starts no trade. Do not use a live request handler in this probe.
+
+The installed 9.00 catalog `08.cat` contains the original docked button
+(`menu_docked.lua` lines 1106–1109 and 1473–1476), the MapMenu initialization
+(`menu_map.lua` lines 6463–6468), and the offer reads and virtual slider
+(`menu_map.lua` lines 4594–4620, 21359–21414 and 21763–21779). The stock code
+keeps C `UniverseID` values in the context and order keys. It converts them to
+Lua IDs with `ConvertStringToLuaID(tostring(id))` when calling the Lua trade API.
+
+To inspect an offer without opening or changing the menu, convert the exact
+station and ship IDs to Lua IDs and call `GetTradeList(station, ship)`. The
+flat result contains the stock `id`, string `ware`, `isselloffer`,
+`isbuyoffer`, `ismissionoffer`, `amount`, `minamount` and `price`. Select
+`ware == 'water'` with a regular station sell offer. The menu sets its cached
+`active` flag using `CanTradeWith` for that ship and appends the row to
+`contextMenuData.selloffers`. Once the menu is open, `getTradeOfferByID` reads
+the exact cached row using `IsSameTrade`. `GetTradeData` on the same Lua offer
+ID supplies the station identity. The stock code converts that station field
+with `ConvertIDTo64Bit` at line 27990.
+
+The quote comes from the ship-context list row in credits before the menu
+rounds the extended line total. The earlier 5819-cent fixture value was a
+provider MD quote at its own time. A capture from a pilot's current menu must
+read the actual row price and may differ from the logged fixture quote.
