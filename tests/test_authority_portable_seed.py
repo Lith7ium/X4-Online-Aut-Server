@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'tools/dev'), str(ROOT / 'src')]
 import authority_portable_seed as seed
 from authority.checkpoints import CheckpointStore
+from authority.company_purchase_ledger import CompanyPurchaseLedger, PURCHASE_LEDGER_NAME
 from authority.registry_availability_evidence import verify_join_snapshot
 from authority_recovered_registry_snapshot import receipt
 from test_authority_registry_availability_evidence import RUN, build_xml
@@ -69,6 +70,39 @@ class PortableSeedTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             seed.restore(self.archive, destination)
         self.assertTrue(restored.path.is_file())
+
+    def test_optional_ledger_roundtrip_preserves_pending_report_and_purchase_id(self):
+        epoch = verify_join_snapshot(self.checkpoint)['epoch']
+        purchase = dict(purchase_id='b'*32, sector='sector_1', station_code='BIM-169',
+                        ware='water', quantity=6, price_cents=5819)
+        purchase_id = purchase['purchase_id']
+        statement = dict(purchase_id=purchase_id, ware='water', quantity=6, settled_total_cents=34900)
+        ledger = CompanyPurchaseLedger(epoch)
+        self.addCleanup(ledger.close)
+        self.assertTrue(ledger.begin(7354, 'WRN-302', purchase))
+        ledger.finish(purchase_id, dict(purchase, outcome='unknown'))
+        self.assertFalse(ledger.statement(purchase_id, '1'*32, statement))
+        reference = ledger.checkpoint(self.checkpoint)
+        self.result['company_purchase_ledger'] = reference
+        (self.source / 'result.json').write_text(json.dumps(self.result))
+
+        seed.export(self.source, self.archive)
+        destination = self.root / 'restored'
+        restored = seed.restore(self.archive, destination)
+        self.assertTrue(restored.path.with_name(PURCHASE_LEDGER_NAME).is_file())
+        restored_result = json.loads((destination/'result.json').read_bytes())
+        self.assertEqual(restored_result['company_purchase_ledger'], reference)
+        report = CompanyPurchaseLedger(epoch)
+        self.addCleanup(report.close)
+        self.assertTrue(report.restore(restored, reference))
+        self.assertFalse(report.begin(7354, 'WRN-302', purchase))
+        self.assertFalse(report.statement(purchase_id, '1'*32, statement))
+        self.assertTrue(report.statement(purchase_id, '2'*32, statement))
+
+        del self.result['company_purchase_ledger']
+        (self.source / 'result.json').write_text(json.dumps(self.result))
+        with self.assertRaises(ValueError):
+            seed.export(self.source, self.root/'stripped.zip')
 
     def test_source_guard_rejects_changed_receipt(self):
         self.result['registry_snapshot']['final_receipt']['mapping_sha256'] = 'f' * 64

@@ -25,7 +25,8 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
-    COMPANY_MOTION_MD, company_motion_config, company_motion_ui, export_motion_buffer, extend_seat_gate,
+    COMPANY_MOTION_MD, COMPANY_PURCHASE_UI, company_motion_config, company_motion_ui,
+    company_purchase_config, export_motion_buffer, extend_seat_gate,
 )
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
@@ -88,7 +89,7 @@ def _windows_save_path(value):
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
                             registry_status=None, registry_nonce=None, motion_settings=None,
-                            registry_snapshot=None, seat_index=None, company_motion=None):
+                            registry_snapshot=None, seat_index=None, company_motion=None, company_purchase=None):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -192,7 +193,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if seat_index is not None:
         load_name = 'ui/authority_download_load_probe.lua'
         files[load_name] = extend_seat_gate(files[load_name].decode('utf-8'), seat_index,
-                                            full_registry, company_motion=company_motion is not None).encode('utf-8')
+                                            full_registry, company_motion=company_motion is not None,
+                                            company_purchases=company_purchase is not None).encode('utf-8')
         for target, source in (
                 ('ui/authority_registry_resolve_string.lua',
                  'tools/dev/authority_registry_resolve_string.lua'),
@@ -231,6 +233,12 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
         ui_files[insertion:insertion] = [
             'ui/authority_registry_resolve_string.lua', 'ui/client_seat.lua']
+    if company_purchase is not None:
+        config = config[:-2] + company_purchase_config(company_purchase, seat_index, full_registry) + '}\n'
+        insertion = ui_files.index('ui/authority_download_load_probe.lua')
+        ui_files[insertion:insertion] = ['ui/' + name for name in COMPANY_PURCHASE_UI]
+        for name, source in COMPANY_PURCHASE_UI.items():
+            files['ui/' + name] = _source(ROOT / source, 1024 * 1024)
     if company_motion is not None:
         config = config[:-2] + company_motion_config(company_motion, seat_index, full_registry) + '}\n'
         ui_sources = company_motion_ui(company_motion)

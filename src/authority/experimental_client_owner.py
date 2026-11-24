@@ -46,6 +46,8 @@ class ExperimentalClientOwner:
         self._participant = None
         self._offer = None
         self._ship_motion_credential = None
+        self._company_purchases_enabled = False
+        self._company_purchase_statement_version = None
         self._thread = threading.current_thread()
         self._phase = 'loading'
         self._motion_port = motion_port
@@ -106,6 +108,8 @@ class ExperimentalClientOwner:
         """Request a server offer; its marker is an expectation, not evidence."""
         with self._operation('loading'):
             self._offer = self._load.request_offer()
+            self._company_purchases_enabled = False
+            self._company_purchase_statement_version = None
             return self._offer
 
     def list_company_ships(self) -> tuple[dict, ...]:
@@ -123,6 +127,14 @@ class ExperimentalClientOwner:
         if type(result) is str:
             raise CompanyShipChoiceDenied(result)
         return result
+
+    def enable_company_purchases(self):
+        """Enable authenticated purchase polls for the ship chosen on this offer."""
+        with self._operation('loading'):
+            epoch = self._load.enable_company_purchases()
+            self._company_purchases_enabled = True
+            self._company_purchase_statement_version = 1
+            return epoch
 
     def request_ship_motion(self):
         """Request a separate motion credential for the chosen offered ship."""
@@ -166,7 +178,8 @@ class ExperimentalClientOwner:
 
     def activate(self, attempt, controller, *, participant_timeout=30,
                  authority_grant=None, authority_guard=None, pull_authority_motion=None,
-                 apply_motion=None, on_stage=None):
+                 apply_motion=None, on_stage=None, company_purchase_exchange=None,
+                 company_purchase_statement=None, company_purchase_statement_result=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
@@ -176,6 +189,8 @@ class ExperimentalClientOwner:
         An optional motion consumer runs on this owner's thread, using the
         existing participant protocol. Its receipt confirms consumption only;
         native movement needs separate evidence. It must bound its own work.
+        The optional purchase exchange requires a chosen company ship and runs
+        under the same owned connection after admission.
         """
         with self._operation('loading'):
             if self._offer is None:
@@ -184,6 +199,27 @@ class ExperimentalClientOwner:
                 raise ValueError('invalid admission observer')
             if apply_motion is not None and not callable(apply_motion):
                 raise ValueError('motion consumer must be callable')
+            purchase_options = {}
+            statement_callbacks = (company_purchase_statement, company_purchase_statement_result)
+            if (getattr(self, '_company_purchases_enabled', False)
+                    and not all(callable(callback) for callback in (company_purchase_exchange, *statement_callbacks))):
+                raise ValueError('negotiated company purchases require exchange, statement and receipt callbacks')
+            if any(value is not None for value in (company_purchase_exchange, *statement_callbacks)):
+                if (getattr(self, '_company_purchases_enabled', False) is not True
+                        or self._load._chosen_ship_index is None
+                        or (company_purchase_exchange is not None and not callable(company_purchase_exchange))):
+                    raise ValueError('company purchase exchange requires negotiated capability and a chosen ship')
+                statement_version = getattr(self, '_company_purchase_statement_version', None)
+                if any(value is not None and (not callable(value) or type(statement_version) is not int
+                                             or statement_version != 1) for value in statement_callbacks):
+                    raise ValueError('company purchase statement requires negotiated version 1')
+                purchase_options = {
+                    'company_purchase_exchange': company_purchase_exchange,
+                    'company_purchase_statement': company_purchase_statement,
+                    'company_purchase_statement_result': company_purchase_statement_result,
+                    'company_purchase_attempt': self._offer.offer.attempt_id,
+                    'company_purchase_ship_index': self._load._chosen_ship_index,
+                }
             checked_grant = None
             if any(value is not None for value in
                    (authority_grant, authority_guard, pull_authority_motion)):
@@ -210,7 +246,7 @@ class ExperimentalClientOwner:
                     conn, controller, enabled=True, epoch=self._offer.offer.world_epoch,
                     handle=self._offer.offer.connection_handle, timeout=participant_timeout,
                     authority_grant=checked_grant, authority_guard=authority_guard,
-                    pull_authority_motion=pull_authority_motion, apply_motion=apply_motion)
+                    pull_authority_motion=pull_authority_motion, apply_motion=apply_motion, **purchase_options)
             except BaseException:
                 conn.close()
                 raise

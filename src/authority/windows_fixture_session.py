@@ -105,7 +105,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
-                        company_hull_playback_index=None, on_stage=None):
+                        company_hull_playback_index=None, on_stage=None, company_purchases=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -141,6 +141,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('company ship choice requires full registry inspection and a selector')
     if type(company_motion) is not bool or (company_motion and (select_ship is None or motion_request is not None)):
         raise ValueError('company motion requires a seat selection and its own transport')
+    if type(company_purchases) is not bool or (company_purchases and (select_ship is None or not require_registry_snapshot)):
+        raise ValueError('Company purchases require a verified selected seat')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion)
     validate_motion_request(motion_request, participant_timeout)
 
@@ -153,7 +155,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
-            company_source = company_client = None
+            company_source = company_client = purchase_source = None
             motion_socket = motion = None
             launch_attempted = overlay_registered = False
             original = None
@@ -171,6 +173,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                                         company_motion=company_motion, own_index=seat_index)
                 if company_motion:
                     owner.request_ship_motion()
+                if company_purchases:
+                    purchase_epoch = owner.enable_company_purchases()
                 download = owner.download(workspace.download_dir)
                 staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
                 if time.monotonic() >= deadline or workspace.guard() is not True:
@@ -205,6 +209,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
                                                         on_stage=on_stage)
                     source_options['company_motion'] = company_source
+                if company_purchases:
+                    from .company_purchase_source import CompanyPurchaseSource
+                    purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
+                                                            server_fingerprint=server_fingerprint)
+                    source_options['company_purchase'] = purchase_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
@@ -230,11 +239,15 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     motion = ParticipantMotion(motion_socket,
                         {'motion': {**motion_settings, 'epoch': registry_status[1]}}, running_guard,
                         WindowsMotionPeer(process, motion_socket))
+                purchase_options = {}
+                if purchase_source is not None:
+                    purchase_source.bind_validator(WindowsMotionPeer(process, purchase_source.socket))
+                    purchase_options = purchase_source.control_callbacks(owner)
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,
                     require_full_inspection=require_registry_snapshot, seat_index=seat_index,
-                    apply_motion=motion, motion_control=motion, on_stage=on_stage)
+                    apply_motion=motion, motion_control=motion, on_stage=on_stage, **purchase_options)
                 if session.start() is not True:
                     raise RuntimeError('fixture admission unconfirmed')
                 if company_source is not None:
@@ -302,6 +315,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_source.close()
                     except BaseException:
                         cleanup_errors.append('company motion source cleanup failed')
+                if purchase_source is not None:
+                    try:
+                        purchase_source.close()
+                    except OSError:
+                        cleanup_errors.append('company purchase source cleanup failed')
                 if motion is not None:
                     try:
                         if motion.running and not motion.stopped:

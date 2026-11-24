@@ -135,21 +135,31 @@ class FixtureOverlayTest(unittest.TestCase):
             self.install(**options, seat_index=8)
         with self.assertRaisesRegex(ValueError, 'inoperable'):
             self.install(**options, registry_snapshot=snapshot, seat_index=7)
-        manifest = self.install(**options, registry_snapshot=snapshot, seat_index=8)
+        from authority.company_purchase_source import CompanyPurchaseSource
+        source = CompanyPurchaseSource(expected_epoch=status[1])
+        self.addCleanup(source.close)
+        manifest = self.install(**options, registry_snapshot=snapshot, seat_index=8, company_purchase=source)
         target = self.view / 'extensions/x4_lan_lab'
         self.assertIn('md/client_seat.xml', manifest)
         self.assertIn('md/authority_checkpoint_marker.xml', manifest)
         self.assertNotIn('md/authority_identity_fixture.xml', manifest)
         self.assertNotIn('ui/authority_identity_probe.lua', manifest)
         self.assertNotIn('authority_identity_phase', (target / 'ui/config.lua').read_text())
+        self.assertIn('ui/company_trade_capture.lua', manifest)
+        self.assertIn('ui/company_purchase_source.lua', manifest)
         paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
         self.assertNotIn('ui/authority_identity_probe.lua', paths)
         self.assertLess(paths.index('ui/client_seat.lua'),
                         paths.index('ui/authority_download_load_probe.lua'))
+        self.assertLess(paths.index('ui/company_trade_capture.lua'), paths.index('ui/company_purchase_source.lua'))
+        self.assertLess(paths.index('ui/company_purchase_source.lua'),
+                        paths.index('ui/authority_two_x4_participant_probe.lua'))
+        self.assertIn('authority_company_purchase={', (target / 'ui/config.lua').read_text())
         load = (target / 'ui/authority_download_load_probe.lua').read_text()
         self.assertNotIn('X4LAN_IDENTITY_READY', load)
         self.assertLess(load.index('X4LAN_AUTHORITY_MARKER_READY()'), load.index('full_registry_inspect:ready()'))
         self.assertLess(load.index('full_registry_inspect:ready()'), load.index('client_seat:tick()'))
+        self.assertLess(load.index('client_seat:ready()'), load.index('X4LAN_COMPANY_PURCHASE_SOURCE.arm(client_seat)'))
         self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
         root = Path(__file__).resolve().parents[1]

@@ -41,8 +41,11 @@ class ConfirmedSnapshotSourceTests(unittest.TestCase):
         checkpoint_dir.mkdir()
         for name in ('CURRENT', 'CONFIRMED'):
             (checkpoint_dir / name).write_text('same pointer\n')
-        self.checkpoint = SimpleNamespace(checkpoint_id='checkpoint-id', sha256='f' * 64,
-                                          marker='b' * 32)
+        checkpoint_id = 'checkpoint-' + '1' * 32
+        generation = checkpoint_dir / checkpoint_id
+        generation.mkdir()
+        self.checkpoint = SimpleNamespace(checkpoint_id=checkpoint_id, sha256='f' * 64,
+                                          marker='b' * 32, path=generation / 'save.xml.gz')
         self.store = SimpleNamespace(directory=checkpoint_dir,
                                      latest_marked_confirmed=lambda: self.checkpoint)
         self.evidence = {'format': 3, 'source_registry_checked': True, 'epoch': 'a' * 32,
@@ -51,7 +54,7 @@ class ConfirmedSnapshotSourceTests(unittest.TestCase):
                          'availability_sha256': '1' * 64, 'operational_sha256': '2' * 64,
                          'mapping_sha256': '3' * 64}
         self.result = {'supervisor_version': 1, 'success': True, 'final_world_state': 'paused',
-                       'owned_processes_remaining': [], 'final_checkpoint_id': 'checkpoint-id',
+                       'owned_processes_remaining': [], 'final_checkpoint_id': checkpoint_id,
                        'final_checkpoint_sha256': 'f' * 64,
                        'registry_snapshot': {'required': True, 'initial_inspect_verified': True,
                            'final_receipt': snapshots.receipt(self.checkpoint, self.evidence)}}

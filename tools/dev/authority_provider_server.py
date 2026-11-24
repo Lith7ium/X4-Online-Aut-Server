@@ -82,6 +82,8 @@ def main(argv=None):
                         help='keep accepting pilots after the last one leaves, until the operator stops the server')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
+    parser.add_argument('--company-purchases', action='store_true',
+                        help='enable Company purchases and require company ship selection and pinned TLS')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every player to select an available company ship; enables full registry checks')
     parser.add_argument('--base-game-only', action='store_true',
@@ -119,7 +121,7 @@ def main(argv=None):
         value = getattr(args, 'tls_' + flag.replace('-', '_'))
         if value is not None:
             server_flags.extend(('--tls-' + flag, str(value)))
-    if server_flags or args.require_company_ship or args.company_motion:
+    if server_flags or args.require_company_ship or args.company_motion or args.company_purchases:
         if args.company_shuttle_pair:
             parser.error('--company-shuttle-pair uses an isolated fixture with no TLS or Company hosting options')
         if args.park_server_avatar:
@@ -127,7 +129,7 @@ def main(argv=None):
         if args.verify_company_pose:
             parser.error('--verify-company-pose uses an isolated fixture with no TLS or Company hosting options')
     company_motion = args.company_motion or args.company_pose_trial
-    require_ship = args.require_company_ship or company_motion
+    require_ship = args.require_company_ship or company_motion or args.company_purchases
     if args.bootstrap_registry_snapshot:
         if (server_flags or args.registry_status or require_ship or args.require_registry_snapshot
                 or args.company_shuttle_pair or args.park_server_avatar or args.verify_company_pose
@@ -158,6 +160,8 @@ def main(argv=None):
         server_flags.append('--require-company-ship')
     if company_motion:
         server_flags.append('--company-motion')
+    if args.company_purchases:
+        server_flags.append('--company-purchases')
     if args.company_pose_trial:
         server_flags.append('--company-pose-trial')
     if args.verify_company_pose:

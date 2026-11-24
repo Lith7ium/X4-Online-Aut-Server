@@ -1,0 +1,147 @@
+-- Privately staged in an authority provider. Only the MD Buy cue can book.
+local M = {}
+local C = require('ffi').C
+local screen = 'X4AuthorityCompanyStockTrade'
+local entry_fields = {'source', 'time', 'buyer_id', 'seller_id', 'partner_id', 'ware',
+    'quantity', 'complete', 'entry_id', 'trade_id', 'eventtype', 'trade_eventtype',
+    'role', 'buyer_matches', 'seller_matches', 'money_cents', 'price_cents', 'linked'}
+
+local function field(value)
+    if type(value) == 'boolean' then return value and '1' or '0' end
+    if type(value) == 'number' then return ('%.17g'):format(value) end
+    if type(value) == 'string' and value ~= '' and not value:find('[|\r\n]') then return value end
+    return '-'
+end
+
+function M.new(lease, net)
+    local active, next_hello
+    local seen = {}
+    local attempted = false
+
+    local function send(id, sequence, row)
+        DebugError('[X4LAN] AUTH_NATIVE_PURCHASE ' .. id .. '|' .. row)
+        net:send('RECEIPT|' .. lease .. '|' .. id .. '|' .. sequence .. '|' .. row)
+    end
+
+    local function emit(row)
+        active.sequence = active.sequence + 1
+        send(active.id, active.sequence, row)
+    end
+
+    local function finish()
+        emit('DONE')
+        active = nil
+    end
+
+    local function matches(row)
+        return active and type(row) == 'string' and row:match('^([^|]+)') == active.id
+    end
+
+    RegisterEvent(screen .. '.Bound', function(_, row)
+        if not matches(row) or active.ship then return end
+        active.ship, active.station = row:match('^[^|]+|READY|([^|]+)|([^|]+)|')
+        emit('DOCK|' .. row)
+    end)
+    RegisterEvent(screen .. '.Before', function(_, row)
+        if matches(row) then emit('BEFORE|' .. row) end
+    end)
+    RegisterEvent(screen .. '.Result', function(_, row)
+        if not matches(row) then return end
+        local status = row:match('^[^|]+|([%a_]+)|')
+        emit('RESULT|' .. row)
+        if status == 'submitted' then
+            attempted = true
+            active.submitted = true
+        elseif status ~= 'quote' then
+            -- A missing order handle after create_trade_order is an uncertain effect.
+            if status == 'order_refused' then attempted = true end
+            finish()
+        end
+    end)
+    RegisterEvent(screen .. '.Refused', function(_, row)
+        if matches(row) then emit('REFUSED|' .. row) end
+    end)
+    RegisterEvent(screen .. '.Deal', function(_, row)
+        if matches(row) then emit('DEAL|' .. row) end
+    end)
+    RegisterEvent(screen .. '.Observed', function(_, row)
+        if not matches(row) or not active.submitted or active.observed then return end
+        emit('OBSERVED|' .. row)
+        active.observed = C.GetCurrentGameTime()
+        active.next_read = active.observed + 1
+    end)
+
+    local function receive()
+        if not net:pending() then return end
+        local data = net:receive()
+        if type(data) ~= 'string' then return end
+        local packet_lease, id, epoch, index, code, sector, station, ware, quantity, cents = data:match(
+            '^PURCHASE|([0-9a-f]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([%w%-]+)|([%w_]+)|([%w%-]+)|([%w_]+)|(%d+)|(%d+)$')
+        if packet_lease ~= lease or #id ~= 32 or #epoch ~= 32 or code ~= 'WRN-302' or index ~= '7354'
+                or sector ~= 'cluster_01_sector001_macro' or station ~= 'BIM-169' or ware ~= 'water'
+                or quantity ~= '6' or #cents > 10 or tonumber(cents) < 1
+                or tonumber(cents) > 2147483647 or seen[id] then return end
+        if active then return end
+        seen[id] = true
+        if attempted then
+            send(id, 1, 'RESULT|' .. id .. '|provider_limit|0')
+            send(id, 2, 'DONE')
+            return
+        end
+        active = {id=id, start=C.GetCurrentGameTime(), sequence=0}
+        local ok, result = pcall(AddUITriggeredEvent, screen, 'Buy', {
+            request_id=id, epoch=epoch, ship_index=tonumber(index), ship_code=code, sector=sector,
+            station_code=station, ware=ware, quantity=tonumber(quantity), price_cents=tonumber(cents),
+            trial='six_unit', fixed_request=true, live_request=true,
+        })
+        if (not ok or result == false) and active then
+            attempted = true
+            emit('RESULT|' .. id .. '|dispatch_uncertain|0')
+            finish()
+        end
+    end
+
+    local function journal()
+        local now = C.GetCurrentGameTime()
+        local cutoff = active.start + 30
+        if now > cutoff then
+            emit('LEDGER|unknown|window_expired|-|' .. field(active.start) .. '|' .. field(now))
+            finish()
+            return
+        end
+        if not active.next_read or now < active.next_read then return end
+        local ok, result = pcall(X4LAN_AUTHORITY_TRADE_LEDGER.collect, {
+            ship=active.ship, station=active.station, start_time=active.start,
+            end_time=now, quantity=6, ware='water',
+        })
+        if not ok or type(result) ~= 'table' or type(result.rows) ~= 'table' then
+            result = {status='unknown', reason='collector_error', rows={}}
+        end
+        if result.status ~= 'observed' and now < math.min(active.observed + 5, cutoff - 1) then
+            active.next_read = now + 1
+            return
+        end
+        emit(table.concat({'LEDGER', field(result.status), field(result.reason),
+            field(result.trade_id), field(active.start), field(now)}, '|'))
+        for _, row in ipairs(result.rows) do
+            local values = {'ENTRY'}
+            for _, name in ipairs(entry_fields) do values[#values + 1] = field(row[name]) end
+            emit(table.concat(values, '|'))
+        end
+        finish()
+    end
+
+    return function(paused)
+        local real_time = GetCurRealTime()
+        if not next_hello or real_time >= next_hello then
+            net:send('PURCHASE_HELLO|' .. lease)
+            next_hello = real_time + .5
+        end
+        if paused then return end
+        receive()
+        if active and active.submitted then journal() end
+    end
+end
+
+X4LAN_AUTHORITY_NATIVE_PURCHASE = M
+return M

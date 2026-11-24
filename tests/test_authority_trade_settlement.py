@@ -5,7 +5,9 @@ import unittest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
-from authority_trade_settlement import purchase_settlement, six_unit_settlement
+from authority_trade_settlement import (
+    purchase_settlement, reconcile_observed_purchase, six_unit_settlement,
+)
 
 
 class SixUnitSettlementTests(unittest.TestCase):
@@ -117,3 +119,41 @@ class SixUnitSettlementTests(unittest.TestCase):
             purchase_settlement(legacy, 'request', 'epoch', 'buy', require_absolute_cargo=True)
         with self.assertRaisesRegex(ValueError, 'unbound native deal'):
             six_unit_settlement(rows, 'request', 'epoch')
+
+
+class NativeEconomicReadbackTests(unittest.TestCase):
+    def setUp(self):
+        self.before = {
+            'registry_epoch': 'e' * 32, 'buyer': '0x10', 'seller': '0x20',
+            'ware': 'water', 'quantity': 6, 'price_cents': 5819, 'game_time': '11.000',
+            'cargo_units': 12, 'company_balance_cents': 1000000, 'player_balance_cents': 1000000,
+        }
+        self.after = dict(self.before, game_time='15.000', cargo_units=18,
+                          company_balance_cents=965200, player_balance_cents=965200)
+        self.rows = [
+            'LEDGER|observed|-|75|10|14',
+            'ENTRY|ship|12|16|32|32|water|6|1|73|75|trade|0|completed_trade|1|1|-34800|5819|1',
+        ]
+
+    def test_already_applied_is_proven_without_completion_receipt(self):
+        result = reconcile_observed_purchase(self.before, self.after, self.rows)
+        self.assertEqual(result['status'], 'already_applied')
+        self.assertEqual(result['settled_total_cents'], 34800)
+        self.assertEqual(result['trade_id'], 75)
+
+    def test_ambiguity_does_not_assert_no_effect(self):
+        other_debit = self.rows[1].replace('|73|', '|74|').replace('|16|32|32|', '|0|32|32|')
+        other_debit = other_debit.replace('completed_trade|1|1|', 'matching_account_or_order_event|0|1|')
+        cases = [
+            (None, self.after, self.rows, 'native_pre_purchase_snapshot_unavailable'),
+            (self.before, self.after, [], 'native_journal_unavailable'),
+            (self.before, self.after, self.rows[:1], 'ledger_completed_trade_unconfirmed'),
+            (self.before, dict(self.after, buyer='0x11'), self.rows, 'native_binding_disagrees'),
+            (self.before, dict(self.after, cargo_units=12), self.rows, 'native_cargo_delta_disagrees'),
+            (self.before, dict(self.after, game_time='13'), self.rows, 'native_ledger_after_observation'),
+            (self.before, self.after, [*self.rows, other_debit], 'ledger_purchase_ambiguous'),
+        ]
+        for before, after, rows, reason in cases:
+            with self.subTest(reason=reason):
+                self.assertEqual(reconcile_observed_purchase(before, after, rows),
+                                 {'status': 'no_proven_economic_delta', 'reason': reason})

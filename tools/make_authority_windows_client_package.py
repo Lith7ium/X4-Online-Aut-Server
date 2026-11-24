@@ -66,6 +66,7 @@ COMPANY_SEAT = {
     'src/authority/lua/company_hull_playback.lua',
     'src/authority/lua/company_hull_playback_x4.lua',
     'src/authority/lua/company_hull_trial.lua',
+    'src/authority/lua/company_trade_capture.lua', 'src/authority/lua/company_purchase_source.lua',
     'src/authority/lua/company_motion_source.lua', 'src/authority/lua/source_motion_sampler.lua',
     'tools/dev/authority_job_descriptor_probe.lua', 'tools/dev/authority_job_descriptor_probe.xml',
 }

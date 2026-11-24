@@ -65,7 +65,9 @@ class ObservedClientSession:
 
     def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                  apply_motion=None, registry_status=None, registry_nonce=None,
-                 motion_control=None, require_full_inspection=False, seat_index=None, on_stage=None):
+                 motion_control=None, require_full_inspection=False, seat_index=None, on_stage=None,
+                 company_purchase_exchange=None, company_purchase_statement=None,
+                 company_purchase_statement_result=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -105,6 +107,17 @@ class ObservedClientSession:
             self._bound, self._encoded = owner._offer, encoded
             self._load = owner._load
             self._slot, self._read_log, self._guard, self._deadline = slot, read_log, guard, float(deadline)
+            if company_purchase_exchange is not None and not callable(company_purchase_exchange):
+                raise ValueError('Company purchase callback must be callable')
+            self._purchase_callbacks = {}
+            if company_purchase_exchange is not None:
+                self._purchase_callbacks['company_purchase_exchange'] = company_purchase_exchange
+            if company_purchase_statement is not None or company_purchase_statement_result is not None:
+                if (company_purchase_exchange is None or not callable(company_purchase_statement)
+                        or not callable(company_purchase_statement_result)):
+                    raise ValueError('Company purchase statement callbacks require a purchase exchange')
+                self._purchase_callbacks.update(company_purchase_statement=company_purchase_statement,
+                    company_purchase_statement_result=company_purchase_statement_result)
             self._apply_motion = apply_motion
             self._on_stage = on_stage
             self._motion_control = motion_control
@@ -238,6 +251,7 @@ class ObservedClientSession:
                 activate_options['on_stage'] = self._on_stage
             if self._apply_motion is not None:
                 activate_options['apply_motion'] = self._checked_motion
+            activate_options.update(self._purchase_callbacks)
             self.owner.activate(attempt, _CheckedParticipant(self), **activate_options)
             self._state = 'active'
             if not self._check(): raise RuntimeError('client log became incomplete after claim')

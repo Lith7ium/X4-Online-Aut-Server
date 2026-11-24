@@ -59,6 +59,8 @@ def parser():
                         help='optional private JSON for an existing server motion stream; one attempt only')
     motion.add_argument('--company-motion', action='store_true',
                         help='choose a company ship and use the separate authenticated motion channel')
+    result.add_argument('--company-purchases', action='store_true',
+                        help='opt in to authority-confirmed Company cockpit purchases')
     result.add_argument('--company-hull-playback-index', type=int,
                         help='isolated test only: follow another company ship in the same cockpit sector')
     result.add_argument('--base-game-only', action='store_true',
@@ -105,7 +107,7 @@ def run(args, *, on_stage=None):
     from authority.windows_fixture_session import run_fixture_session
     from authority.windows_fixture_workspace import WindowsFixtureWorkspace
 
-    select_ship = prompt_company_ship if args.choose_company_ship or args.company_motion else None
+    select_ship = prompt_company_ship if args.choose_company_ship or args.company_motion or args.company_purchases else None
     if args.company_ship_index is not None:
         if not 1 <= args.company_ship_index <= 200000:
             raise ValueError('company ship index outside the registry range')
@@ -116,6 +118,8 @@ def run(args, *, on_stage=None):
     view_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
     motion_options = {'company_motion': True} if args.company_motion else {}
+    if args.company_purchases:
+        motion_options['company_purchases'] = True
     if args.company_hull_playback_index is not None:
         motion_options['company_hull_playback_index'] = args.company_hull_playback_index
     return run_fixture_session(
