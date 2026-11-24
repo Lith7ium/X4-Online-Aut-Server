@@ -66,13 +66,13 @@
                           <set_value name="State.$parking" exact="$parking"/>
                           <set_value name="State.$ware" exact="$ware"/>
                           <set_value name="State.$price" exact="$price"/>
-                          <set_value name="State.$ship_cargo" exact="$ship.cargo.{$ware}.count"/>
-                          <set_value name="State.$station_cargo" exact="$station.cargo.{$ware}.count"/>
-                          <set_value name="State.$ship_money" exact="$ship.money"/>
-                          <set_value name="State.$station_money" exact="$station.money"/>
-                          <set_value name="State.$player_money" exact="player.money"/>
-                          <set_value name="State.$faction_has_account" exact="faction.player.hasownaccount"/>
-                          <set_value name="State.$faction_money" exact="if State.$faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
+                          <set_value name="State.$before_ship_cargo" exact="$ship.cargo.{$ware}.count"/>
+                          <set_value name="State.$before_station_cargo" exact="$station.cargo.{$ware}.count"/>
+                          <set_value name="State.$before_ship_money" exact="$ship.money"/>
+                          <set_value name="State.$before_station_money" exact="$station.money"/>
+                          <set_value name="State.$before_player_money" exact="player.money"/>
+                          <set_value name="State.$before_faction_has_account" exact="faction.player.hasownaccount"/>
+                          <set_value name="State.$before_faction_money" exact="if State.$before_faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
                           <signal_cue_instantly cue="Monitor"/>
                           <create_trade_order name="State.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
                           <set_value name="State.$deal" exact="@State.$order.trade"/>
@@ -97,21 +97,21 @@
               </conditions>
               <actions>
                 <set_value name="State.$completion_seen" exact="true"/>
-                <set_value name="$ship_cargo" exact="State.$ship.cargo.{State.$ware}.count - State.$ship_cargo"/>
-                <set_value name="$station_cargo" exact="State.$station.cargo.{State.$ware}.count - State.$station_cargo"/>
-                <set_value name="$ship_money" exact="((State.$ship.money - State.$ship_money) / 1ct)L"/>
-                <set_value name="$station_money" exact="((State.$station.money - State.$station_money) / 1ct)L"/>
-                <set_value name="$player_money" exact="((player.money - State.$player_money) / 1ct)L"/>
+                <set_value name="$delta_ship_cargo" exact="State.$ship.cargo.{State.$ware}.count - State.$before_ship_cargo"/>
+                <set_value name="$delta_station_cargo" exact="State.$station.cargo.{State.$ware}.count - State.$before_station_cargo"/>
+                <set_value name="$delta_ship_money" exact="((State.$ship.money - State.$before_ship_money) / 1ct)L"/>
+                <set_value name="$delta_station_money" exact="((State.$station.money - State.$before_station_money) / 1ct)L"/>
+                <set_value name="$delta_player_money" exact="((player.money - State.$before_player_money) / 1ct)L"/>
                 <set_value name="$docked" exact="@State.$ship.dock.container == State.$station"/>
                 <set_value name="$parked" exact="player.station == State.$parking and not player.controlled and not player.occupiedship and @player.room.exists"/>
                 <do_if value="event.param == State.$deal and event.param.buyer == State.$ship and event.param.seller == State.$station and event.param.ware == State.$ware">
                   <set_value name="$completed" exact="event.param"/>
-                  <set_value name="$player_after" exact="(player.money / 1ct)L"/>
-                  <set_value name="$faction_has_account" exact="faction.player.hasownaccount"/>
-                  <set_value name="$faction_after" exact="if $faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
-                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.Deal'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,State.$epoch,State.$trial,State.$quantity,(State.$price / 1ct)L,State.$quote_time,player.age / 1s,$completed.buyer,$completed.seller,$completed.ware.id,$completed.transferredamount,$completed.destroyedamount,($completed.unitprice / 1ct)L,(($completed.unitprice * $completed.transferredamount) / 1ct)L,(State.$player_money / 1ct)L,$player_after,if State.$faction_has_account then 1 else 0,if $faction_has_account then 1 else 0,State.$faction_money,$faction_after]"/>
+                  <set_value name="$after_player_money" exact="(player.money / 1ct)L"/>
+                  <set_value name="$after_faction_has_account" exact="faction.player.hasownaccount"/>
+                  <set_value name="$after_faction_money" exact="if $after_faction_has_account then (faction.player.money / 1ct)L else 'unknown'"/>
+                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.Deal'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,State.$epoch,State.$trial,State.$quantity,(State.$price / 1ct)L,State.$quote_time,player.age / 1s,$completed.buyer,$completed.seller,$completed.ware.id,$completed.transferredamount,$completed.destroyedamount,($completed.unitprice / 1ct)L,(($completed.unitprice * $completed.transferredamount) / 1ct)L,(State.$before_player_money / 1ct)L,$after_player_money,if State.$before_faction_has_account then 1 else 0,if $after_faction_has_account then 1 else 0,State.$before_faction_money,$after_faction_money]"/>
                 </do_if>
-                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)L,$ship_cargo,$station_cargo,$ship_money,$station_money,$player_money,$docked,$parked]"/>
+                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[State.$request,(State.$price / 1ct)L,$delta_ship_cargo,$delta_station_cargo,$delta_ship_money,$delta_station_money,$delta_player_money,$docked,$parked]"/>
               </actions>
             </cue>
           </cues>

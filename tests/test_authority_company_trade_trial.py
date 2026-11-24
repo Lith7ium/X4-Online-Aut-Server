@@ -1,5 +1,6 @@
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
@@ -36,3 +37,34 @@ class StockTradeReceiptTests(unittest.TestCase):
         for index in (4, 5):
             with self.subTest(index=index), self.assertRaises(ValueError):
                 verify_settlement(self.rows[:index] + self.rows[index + 1:], self.request)
+
+
+class StockTradeReceiptSourceTests(unittest.TestCase):
+    def test_player_balance_snapshot_cannot_alias_completion_delta(self):
+        source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
+        document = ET.parse(source)
+        request = document.find(".//cue[@name='Request']")
+        completed = document.find(".//cue[@name='Completed']")
+        snapshot = request.find(".//set_value[@name='State.$before_player_money']")
+        self.assertEqual(snapshot.attrib['exact'], 'player.money')
+
+        snapshot_names = {
+            node.attrib['name'].removeprefix('State.')
+            for node in request.iter('set_value')
+            if node.attrib['name'].startswith('State.$before_')
+        }
+        writes = {
+            node.attrib['name'].removeprefix('State.'): node.attrib['exact']
+            for node in completed.iter('set_value')
+        }
+        self.assertFalse(snapshot_names & writes.keys())
+        self.assertEqual(writes['$after_player_money'], '(player.money / 1ct)L')
+        self.assertEqual(writes['$delta_player_money'], '((player.money - State.$before_player_money) / 1ct)L')
+
+        events = {
+            node.attrib['name']: node.attrib['param'].split('.[', 1)[1].rstrip(']').split(',')
+            for node in completed.iter('raise_lua_event')
+        }
+        self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][14:16],
+                         ['(State.$before_player_money / 1ct)L', '$after_player_money'])
+        self.assertEqual(events["'X4AuthorityCompanyStockTrade.Observed'"][6], '$delta_player_money')
