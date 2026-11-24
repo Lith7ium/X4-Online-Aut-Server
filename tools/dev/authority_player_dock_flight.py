@@ -130,7 +130,7 @@ def run(args):
     def command(case, game, binds, lock, display, auth, username, seed, target):
         launch = original_command(case, game, binds, lock, display, auth, username, seed, target)
         pos = launch.index('--die-with-parent')
-        launch[pos:pos] = ['--unshare-net', '--ro-bind', str(target.parent), str(target.parent)]
+        launch[pos:pos] = ['--ro-bind', str(target.parent), str(target.parent)]
         launch = software_vulkan.constrain(launch, display=display, authorization=auth, icd=args.vulkan_icd)
         software_vulkan.verify(launch, args.out / 'software-vulkan.log')
         return launch
@@ -143,7 +143,7 @@ def run(args):
         if save.is_dir() and any(path.name != 'save_008.xml.gz' for path in save.glob('*.xml.gz')):
             raise ValueError('flight wrote an unexpected save')
         result.update(scope='private stock cockpit flight and docking diagnostic', trial_nonce=nonce,
-                      ship_index=SHIP_INDEX, network=False, saved=False, published=False)
+                      ship_index=SHIP_INDEX, session_listener=False, saved=False, published=False)
 
     with (patch.multiple(recovery, verify_source=verify_source, extra_protected_files=protected,
                          observation_callback=observe, result_finalizer=finalize),
