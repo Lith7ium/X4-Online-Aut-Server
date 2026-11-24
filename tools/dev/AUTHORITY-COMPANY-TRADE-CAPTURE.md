@@ -8,18 +8,23 @@ the diagnostic ship and station.
 Call `X4LAN_COMPANY_TRADE_CAPTURE.install_x4` with `enabled = true`, the
 `menu`, local `ship` and `station` component values, the expected station
 sector macro as `sector`, its `station_code`, a `request(intent, settle)`
-callback, and a `notice(status)` callback. The intent contains the sector
+callback and optionally `notice(status, settled_total_cents)`. The default
+notice uses the stock info line. The intent contains the sector
 macro, station code, ware ID, quantity, and quote in integer cents. Component
 IDs stay local. The request callback must return `true` to acknowledge
 dispatch or `false` if it can prove nothing was dispatched. Any other
 dispatch result is uncertain. This adapter sends no packets.
 
 Call `settle` once with the original intent fields and an `outcome` of
-`confirmed` or `refused` after checking the authoritative result. A missing,
-mismatched or unclear result is uncertain. Call `settle(nil)` if the request
-owner reaches its deadline. A pending receipt is never displayed as payment.
-The integration should render the notice status to the player. The adapter
-leaves the menu open and never invokes stock booking for the covered selection.
+`confirmed` or `refused` after checking the authoritative result. A confirmed
+receipt must carry the actual booked debit as a positive, exactly represented
+integer `settled_total_cents`. The info line displays this amount. For example,
+six units quoted at 5819 cents and booked at 34900 cents display 349.00 Cr.
+`price_cents` remains the original unit quote used to match the receipt.
+A missing, malformed or mismatched receipt is uncertain. Call `settle(nil)`
+if the request owner reaches its deadline. Pending or refused notices have
+no settled total. The adapter leaves the menu open and suppresses local stock
+booking for the covered selection.
 It suppresses further confirmations after dispatch even if the outcome is
 uncertain. Close the menu before removing the hook. The returned `detach`
 function restores the stock handler when no dispatch or reply is outstanding.

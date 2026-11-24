@@ -1,9 +1,14 @@
 -- Opt-in owner of a single docked purchase through the stock MapMenu.
 local M = {}
 local max_integer = 2147483647
+local max_exact_lua_integer = 9007199254740991
 
 local function positive_integer(n)
     return type(n) == 'number' and n >= 1 and n <= max_integer and n % 1 == 0
+end
+
+local function valid_settlement(total)
+    return type(total) == 'number' and total >= 1 and total <= max_exact_lua_integer and total % 1 == 0
 end
 
 local function cents(price)
@@ -97,8 +102,9 @@ function M.install(o)
             end
             if phase ~= 'pending' then return end
             phase = 'finished'
-            if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt) then
-                o.notice('confirmed')
+            if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt)
+                    and valid_settlement(receipt.settled_total_cents) then
+                o.notice('confirmed', receipt.settled_total_cents)
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
                 o.notice('refused')
             else
@@ -129,6 +135,20 @@ function M.install(o)
     }
 end
 
+local trade_notices = {
+    pending = 'Company purchase awaiting confirmation.',
+    refused = 'Company purchase refused.',
+    uncertain = 'Company purchase status uncertain. Check the authoritative receipt.',
+    already_attempted = 'Company purchase already submitted.',
+    stale_identity = 'Company purchase refused: ship or station changed.',
+    stale_dock = 'Company purchase refused: confirm the current dock.',
+    immediate_trade_required = 'Company purchase requires an immediate trade.',
+    unsupported_trade = 'Company purchase does not support this trade.',
+    single_buy_required = 'Company purchase requires a single buy.',
+    stale_offer = 'Company purchase refused: offer changed.',
+    ambiguous_price = 'Company purchase refused: invalid quote.',
+}
+
 function M.install_x4(o)
     if o.enabled ~= true then return nil, 'disabled' end
     local ffi = require('ffi')
@@ -139,6 +159,7 @@ function M.install_x4(o)
         UniverseID GetPlayerControlledShipID(void);
         UniverseID GetContextByClass(UniverseID,const char*,bool);
         const char* GetObjectIDCode(UniverseID);
+        void ShowInfoLine(const char*,uint32_t);
         uint32_t GetNumDockedShips(UniverseID,const char*);
         uint32_t GetDockedShips(UniverseID*,uint32_t,UniverseID,const char*);
     ]]
@@ -172,9 +193,18 @@ function M.install_x4(o)
             end
         end
     end
+    local function stock_notice(status, settled_total_cents)
+        local text = trade_notices[status]
+        if status == 'confirmed' then
+            local remainder = settled_total_cents % 100
+            local credits = (settled_total_cents - remainder) / 100
+            text = string.format('Company purchase confirmed. Paid %d.%02d Cr.', credits, remainder)
+        end
+        if text then C.ShowInfoLine(text, 4) end
+    end
     return M.install({
         enabled = true, menu = o.menu, ship = ship, station = station, sector = o.sector,
-        station_code = o.station_code, request = o.request, notice = o.notice,
+        station_code = o.station_code, request = o.request, notice = o.notice or stock_notice,
         identity = id, read_dock = live_dock, decode_offer_id = ConvertStringToLuaID,
         offer_station = function(offer_id)
             local data = GetTradeData(offer_id)

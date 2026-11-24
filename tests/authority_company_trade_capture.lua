@@ -1,5 +1,5 @@
 local module = dofile('src/authority/lua/company_trade_capture.lua')
-local live, native_calls, requests, notices = true, 0, {}, {}
+local live, native_calls, requests, notices, lines = true, 0, {}, {}, {}
 local offer = {ware = 'water', price = 58.77}
 local offer_station = 71
 local menu = {name = 'MapMenu'}
@@ -20,6 +20,7 @@ end
 package.preload.ffi = function()
     local C = {
         GetPlayerControlledShipID = function() return 11 end,
+        ShowInfoLine = function(text, seconds) assert(seconds == 4); lines[#lines + 1] = text end,
         IsComponentClass = function(id, class)
             return (id == 11 and class == 'ship') or (id == 71 and class == 'station')
         end,
@@ -97,19 +98,40 @@ assert(#requests == 1 and purchase.intent.sector == 'cluster_01_sector001_macro'
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'already_attempted')
 assert(#requests == 1 and not installed.detach())
 purchase.settle({outcome = 'confirmed', sector = purchase.intent.sector,
-    station_code = 'BIM-169', ware = 'water', quantity = 1, price_cents = 5878})
+    station_code = 'BIM-169', ware = 'water', quantity = 1, price_cents = 5878, settled_total_cents = 5877})
 assert(notices[#notices] == 'uncertain')
 assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'already_attempted')
 assert(#requests == 1 and native_calls == 3)
 assert(installed.detach())
 original('detached')
 
--- A separate adapter instance with an immediate, matching authoritative reply.
-options.request = function(intent, settle)
-    intent.outcome = 'confirmed'
-    settle(intent)
-    return true
+-- The stock notice uses the booked total, independent of the unit quote.
+options.notice = nil
+menu.contextMenuData.orders[123] = -6
+offer.price = 58.19
+local function report(outcome, total, expect_notice)
+    options.request = function(intent, settle)
+        assert(intent.quantity == 6 and intent.price_cents == 5819)
+        if outcome then
+            intent.outcome, intent.settled_total_cents = outcome, total
+            settle(intent)
+        else
+            settle(nil)
+        end
+        return true
+    end
+    local adapter = assert(module.install_x4(options))
+    local previous = #lines
+    assert(menu.buttonConfirmTrade() == nil and #lines == previous + 1)
+    assert(lines[#lines] == expect_notice, lines[#lines])
+    assert(adapter.detach())
 end
-assert(module.install_x4(options))
-assert(menu.buttonConfirmTrade() == nil and notices[#notices] == 'confirmed')
+report('confirmed', 34900, 'Company purchase confirmed. Paid 349.00 Cr.')
+report('refused', nil, 'Company purchase refused.')
+local uncertain = 'Company purchase status uncertain. Check the authoritative receipt.'
+report(nil, nil, uncertain)
+report('confirmed', nil, uncertain)
+for _, malformed in ipairs({'34900', -34900, 0, 34900.5, math.huge, 0 / 0, 9007199254740992}) do
+    report('confirmed', malformed, uncertain)
+end
 assert(native_calls == 4)
