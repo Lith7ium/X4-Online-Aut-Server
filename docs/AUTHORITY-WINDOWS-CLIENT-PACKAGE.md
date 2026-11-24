@@ -81,6 +81,27 @@ X4 matched. Native Windows flight and visible playback require separate
 gameplay verification. The temporary motion credential stays
 in memory.
 
+### Try the opt-in Company water purchase
+
+Use a matching Windows package and a private `connection.json` from a provider
+started with `--company-purchases`. Add `-CompanyPurchases` to the PowerShell
+command above and choose WRN-302 (7354). The experiment supports buying six
+units of water in one immediate purchase while WRN-302 is externally docked
+at Teladi station BIM-169 in Grand Exchange I. Open Trade from the stock
+Docked menu, set the quantity to six, review the offer, and confirm once.
+Reopen and review the stock offer before confirming again after any price
+change, including a lower price.
+
+If the game says it is awaiting reconciliation, leave the request pending.
+With the original local basket record, the same Windows account and device
+can answer fresh server checks even after reconnecting in another Company
+ship. Use the same server certificate and Company registry. A pilot-reported
+notice records the basket amount you saw. Native confirmation is required to
+verify the actual debit, balance and cargo. A missing local record leaves the
+purchase unresolved. The server retains supported purchase decisions with its
+verified checkpoints. This route has offline integration coverage. A live
+two-player Windows purchase awaits verification.
+
 ### Observe a short cross-sector flight
 
 For the two-ship test world, the Windows observer chooses WOO-831 (1970)
