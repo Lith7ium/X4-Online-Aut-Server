@@ -1,9 +1,11 @@
 """One-shot station parking and read-only cold verification for the private seed."""
+from dataclasses import asdict
 import json
 from pathlib import Path
 import re
 
 from authority.registry_availability_evidence import verify_join_snapshot
+from authority.server_parking_sites import SavedProtectedStations
 
 ROOT = Path(__file__).resolve().parents[2]
 STATION_SCRIPT = 'authority_station_parking.xml'
@@ -14,6 +16,7 @@ EPOCH, COUNT = '4ba7be438ebb04ec5bb85fdb95b5a488', 10082
 FALLBACK_SECTOR = 'cluster_06_sector002_macro'
 FALLBACK_CODES = ('XPJ-169', 'JZJ-119')
 FALLBACK_MACROS = ('station_gen_factory_base_01_macro', 'station_arg_tradestation_base_01_macro')
+FALLBACK_ENTRIES = ('arg_defence_cluster_06_sector002', 'tradestation_argon_01')
 SHIPS = (
     {'index': 1970, 'code': 'WOO-831', 'macro': 'ship_arg_s_scout_01_a_macro',
      'sector': 'cluster_14_sector001_macro'},
@@ -60,11 +63,14 @@ def source_location(choice, checkpoint, source_result):
     return _location(data.get('location'))
 
 
-def verify_saved(checkpoint, expected=None):
+def verify_saved(checkpoint, expected=None, *, include_sites=False):
     """Verify the registered hulls and the saved player/station/room ancestry."""
     ancestors, ships, players, stations = [], {}, [], []
+    sites = SavedProtectedStations() if include_sites else None
 
     def observe(element, depth, attrs, index):
+        if sites is not None:
+            sites.observe(element, depth, attrs, index)
         while ancestors and ancestors[-1][0] >= depth:
             ancestors.pop()
         if element != 'component':
@@ -100,9 +106,16 @@ def verify_saved(checkpoint, expected=None):
                 raise ValueError('saved fallback station owner or macro changed')
         elif stations[0][:2] != ('player', 'station_pla_headquarters_base_01_macro'):
             raise ValueError('saved HQ owner or macro changed')
-    return {'company_ships': [dict(ship) for ship in SHIPS],
+    result = {'company_ships': [dict(ship) for ship in SHIPS],
             'epoch': EPOCH, 'count': COUNT,
-            'station': {'owner': stations[0][0], 'macro': stations[0][1]} if expected else None}
+              'station': {'owner': stations[0][0], 'macro': stations[0][1]} if expected else None}
+    if sites is not None:
+        ranked = sites.ranked()
+        if tuple((site.code, site.sector_macro, site.source_entry) for site in ranked) != tuple(
+                zip(FALLBACK_CODES, (FALLBACK_SECTOR,) * len(FALLBACK_CODES), FALLBACK_ENTRIES)):
+            raise ValueError('protected fallback stations changed in the pinned source')
+        result['fallback_sites'] = [asdict(site) for site in ranked]
+    return result
 
 
 def _lua(value):
@@ -113,7 +126,7 @@ def _lua(value):
     return json.dumps(value, ensure_ascii=True)
 
 
-def install(case, nonce, choice, expected):
+def install(case, nonce, choice, expected, *, fallback_sites=()):
     if not re.fullmatch(r'[0-9a-f]{32}', nonce):
         raise ValueError('invalid station parking nonce')
     lab = Path(case) / 'extensions/x4_lan_lab'
@@ -135,8 +148,12 @@ def install(case, nonce, choice, expected):
     files.update({lab / 'ui' / name: (ROOT / 'tools/dev' / name).read_bytes() for name in UI})
     config = dict(mode=choice, nonce=nonce, epoch=EPOCH, count=COUNT, ships=SHIPS)
     if choice == 'prepare':
-        config.update(sector=FALLBACK_SECTOR, codes=FALLBACK_CODES,
-                      owner='argon', macros=FALLBACK_MACROS)
+        sectors = {site['sector_macro'] for site in fallback_sites}
+        codes = tuple(site['code'] for site in fallback_sites)
+        entries = tuple(site['source_entry'] for site in fallback_sites)
+        if sectors != {FALLBACK_SECTOR} or codes != FALLBACK_CODES or entries != FALLBACK_ENTRIES:
+            raise ValueError('station parking requires proven fallback stations')
+        config.update(sector=FALLBACK_SECTOR, codes=codes, owner='argon', macros=FALLBACK_MACROS)
     else:
         config['expected'] = expected
     hook = f''' if not activated then

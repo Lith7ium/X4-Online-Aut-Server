@@ -1017,7 +1017,8 @@ def run(args):
             if parking is not None:
                 parking_source_result = json.loads(read_evidence(source_store.directory.parent/'result.json', 1 << 20))
                 parking_expected = parking_probe.source_location(parking, checkpoint, parking_source_result)
-                parking_inventory = parking_probe.verify_saved(checkpoint, parking_expected)
+                parking_inventory = parking_probe.verify_saved(
+                    checkpoint, parking_expected, include_sites=parking == 'prepare')
                 result['station_parking'] = {'mode': parking, 'source_sha256': checkpoint.sha256,
                                              'inventory': parking_inventory, 'client_endpoint_opened': False}
         target = profile/'save/save_008.xml.gz'
@@ -1035,7 +1036,8 @@ def run(args):
                                                              read_source=read_evidence, timeout=snapshot_timeout))
             if parking is not None:
                 parking_nonce = secrets.token_hex(16)
-                protected.extend(parking_probe.install(case, parking_nonce, parking, parking_expected))
+                protected.extend(parking_probe.install(case, parking_nonce, parking, parking_expected,
+                    fallback_sites=parking_inventory.get('fallback_sites', ())))
         if bootstrap_snapshot:
             protected.extend(first_capture_state.install(case, reserved_tokens=(lease, epoch),
                                                          read_source=read_evidence, timeout=snapshot_timeout))
