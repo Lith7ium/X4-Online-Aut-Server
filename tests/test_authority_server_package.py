@@ -23,11 +23,14 @@ class AuthorityServerPackageTest(unittest.TestCase):
             subprocess.run(['git', 'init', '-q', str(root)], check=True)
             extra_source = {'tools/dev/dependency.py', 'src/authority/lua/dependency.lua'}
             excluded = {'third_party/example.c', 'tools/dev/connection.json',
-                        'src/lockstep/base/native/runtime.dll', '.local/checkpoints/save.xml.gz'}
+                        'src/lockstep/base/native/runtime.dll', '.local/checkpoints/save.xml.gz',
+                        'tools/dev/unrelated_experiment.py', 'tools/dev/unrelated_probe.lua'}
             for name in PACKAGE.REQUIRED | extra_source | excluded:
                 target = root / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text('committed\n')
+            (root / 'tools/dev/authority_provider_server.py').write_text(
+                'def start():\n    import dependency\n')
             launcher = root / 'tools/run_authority_server.sh'
             launcher.chmod(0o755)
             subprocess.run(['git', '-C', str(root), 'add', '.'], check=True)

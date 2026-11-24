@@ -123,5 +123,10 @@ python3 tools/make_authority_server_package.py --ref HEAD \
   --out /path/to/x4-authority-test-server.tar.gz
 ```
 
-The packager reads committed source blobs. It uses an ordered Git tar and a
-fixed gzip timestamp. The printed commit ID and SHA-256 identify the archive.
+The packager reads committed source blobs. It includes Python imports of the
+recovered supervisor and its helpers, including imports inside functions,
+plus explicit Lua and MD assets for the provider path. Some shared
+development modules are transitively imported by the supervisor. The
+standalone development experiments remain outside the provider workflow.
+The archive uses an ordered Git tar and a fixed gzip timestamp. The printed
+commit ID and SHA-256 identify it.
