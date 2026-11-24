@@ -62,10 +62,11 @@ RECOVERY_HOOK = """ if state=='done' then
  end"""
 
 
-def install(case, full):
+def install(case, full, *, prepare_berth=False):
     lab = case / 'extensions/x4_lan_lab'
     installed = []
-    for folder, modules in (('md', MD), ('ui', UI)):
+    md_sources = (*MD, 'tools/dev/authority_player_trade_berth.xml') if prepare_berth else MD
+    for folder, modules in (('md', md_sources), ('ui', UI)):
         for source in modules:
             target = lab / folder / Path(source).name
             with target.open('xb') as stream:
@@ -85,6 +86,7 @@ def install(case, full):
     with config.open('a', encoding='ascii') as stream:
         stream.write('X4LAN_CONFIG.authority_recovery_early_pause = true\n'
                      'X4LAN_CONFIG.authority_player_dock_flight = true\n'
+                     f'X4LAN_CONFIG.authority_player_trade_berth = {str(prepare_berth).lower()}\n'
                      f'X4LAN_CONFIG.authority_player_dock_flight_nonce = "{full["nonce"]}"\n'
                      f'X4LAN_CONFIG.authority_player_dock_flight_epoch = "{full["epoch"]}"\n'
                      f'X4LAN_CONFIG.authority_player_dock_flight_index = {SHIP_INDEX}\n'
@@ -125,7 +127,7 @@ def run(args):
     def protected(case, _profile):
         if full is None:
             raise ValueError('unverified flight source')
-        return install(case, full)
+        return install(case, full, prepare_berth=args.prepare_berth)
 
     def command(case, game, binds, lock, display, auth, username, seed, target):
         launch = original_command(case, game, binds, lock, display, auth, username, seed, target)
@@ -136,13 +138,14 @@ def run(args):
         return launch
 
     def observe(*, profile, guard, deadline, **_):
-        return observe_player_flight(profile / 'engine-output.log', deadline, guard)
+        return observe_player_flight(profile / 'engine-output.log', deadline, guard, prepare_berth=args.prepare_berth)
 
     def finalize(result):
         save = args.out / PROFILE_SAVE
         if save.is_dir() and any(path.name != 'save_008.xml.gz' for path in save.glob('*.xml.gz')):
             raise ValueError('flight wrote an unexpected save')
-        result.update(scope='private stock cockpit flight and docking diagnostic', trial_nonce=nonce,
+        scope = 'private assigned-berth cockpit diagnostic' if args.prepare_berth else 'private stock cockpit flight and docking diagnostic'
+        result.update(scope=scope, trial_nonce=nonce,
                       ship_index=SHIP_INDEX, session_listener=False, saved=False, published=False)
 
     with (patch.multiple(recovery, verify_source=verify_source, extra_protected_files=protected,
@@ -155,6 +158,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     for flag in ('game', 'store', 'out'):
         parser.add_argument('--' + flag, type=Path, required=True)
+    parser.add_argument('--prepare-berth', action='store_true',
+                        help='Use a verified assigned trading bay to test the cockpit menu without flying the approach.')
     parser.add_argument('--xvfb', default='Xvfb')
     parser.add_argument('--vulkan-icd', type=Path)
     parser.add_argument('--timeout', type=float, default=1200)

@@ -23,6 +23,19 @@ class PlayerDockFlightTests(unittest.TestCase):
         self.assertEqual(result['unit_price_cents'], 5820)
         self.assertFalse(result['purchase_executed'])
 
+    def test_assigned_berth_must_be_the_same_bay_observed_while_piloting(self):
+        stages = ['ROUTE|berth']
+        for status in ('REQUESTED', 'ASSIGNED', 'DISPATCHED'):
+            stages.append('BERTH|' + status + '|0x10|0x20|0x30|0x10|0x10|0x10|305')
+        rows = self.rows[:2] + stages + self.rows[5:]
+        result = verify_player_flight(rows, prepare_berth=True)
+        self.assertIsNone(result['flight_game_seconds'])
+        with self.assertRaises(ValueError):
+            verify_player_flight(rows)
+        stages[2] = stages[2].replace('0x30', '0x31')
+        with self.assertRaises(ValueError):
+            verify_player_flight(self.rows[:2] + stages + self.rows[5:], prepare_berth=True)
+
     def test_rejects_other_ship_or_cargo_changes(self):
         for original, altered in (('SEAT|controlled|16ULL', 'SEAT|controlled|17ULL'),
                                   ('AFTER_CONFIRM', self.rows[7].replace('|0|1000000|', '|6|1000000|')),
