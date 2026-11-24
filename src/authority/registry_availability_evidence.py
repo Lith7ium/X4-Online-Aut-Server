@@ -67,22 +67,27 @@ def verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
                    verify_source_registry=verify_source_registry, pump=pump)
 
 
-def verify_join_snapshot(checkpoint, *, pump=None):
+def verify_join_snapshot(checkpoint, *, pump=None, observe_universe=None):
     """Verify format-3 saved bytes for admission using the checkpoint's run marker.
 
     Epoch and issued count are discovered from the saved snapshot and checked
     against the source registry. The MD checkpoint marker is a separate check
     owned by the caller; this function only correlates the snapshot run ID.
+    An optional observer receives the element name, depth and attributes of each
+    universe element during the existing final pass,
+    with an issued index only for components captured as available and operational.
+    Observations are valid only after verification returns successfully.
     """
     if (not isinstance(checkpoint, Checkpoint) or not isinstance(checkpoint.marker, str)
             or not _HEX32.fullmatch(checkpoint.marker)):
         raise RegistryAvailabilityEvidenceError('join checkpoint requires a run marker')
     return _verify(checkpoint, None, checkpoint.marker, None,
-                   verify_source_registry=True, pump=pump, discover=True)
+                   verify_source_registry=True, pump=pump, discover=True,
+                   observe_universe=observe_universe)
 
 
 def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
-            verify_source_registry, pump, discover=False):
+            verify_source_registry, pump, discover=False, observe_universe=None):
     if (type(verify_source_registry) is not bool or not isinstance(checkpoint, Checkpoint)
             or (discover and verify_source_registry is not True)
             or (not discover and (not isinstance(expected_epoch, str)
@@ -360,12 +365,16 @@ def _verify(checkpoint, expected_epoch, expected_run_id, expected_count, *,
         found = set()
         unavailable_present = set()
         def components(path, attrs):
-            if len(path) < 3 or path[:2] != ['savegame', 'universe'] or path[-1] != 'component':
+            if len(path) < 2 or path[1] != 'universe':
                 return
-            match = _COMPONENT.fullmatch(attrs.get('id', ''))
-            if not match:
+            is_component = path[-1] == 'component'
+            match = _COMPONENT.fullmatch(attrs.get('id', '')) if is_component else None
+            component = _component(attrs['id']) if match else None
+            if observe_universe is not None:
+                index = reverse.get(component)
+                observe_universe(path[-1], len(path), attrs, index if index in operational_indices else None)
+            if component is None:
                 return
-            component = _component(attrs['id'])
             if component in unavailable_source_components:
                 unavailable_present.add(component)
             if component not in wanted:
