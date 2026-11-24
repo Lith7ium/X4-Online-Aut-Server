@@ -9,13 +9,26 @@ import threading
 import time
 
 from .experimental_tcp_motion import check_motion_progress, motion_value
-from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
+from .company_motion_frames import (MAX_INDICES, MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
 
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
 # A stopped game sampler cannot refresh a new viewer from an indefinitely old pose.
 MAX_SAMPLE_AGE = 3.0
+MAX_NPC_TRACKS = 1024
+MAX_NOTICES = max(2 * MAX_PEERS, 2 * MAX_INDICES)
+
+
+@dataclass
+class _NpcTrack:
+    index: int
+    epoch: str
+    generation: str
+    last_sample: dict | None = None
+    last_accepted: dict | None = None
+    last_sequence: int = 0
+    visible_until: float = 0
 
 
 @dataclass
@@ -91,6 +104,7 @@ class CompanyMotionService:
         self._grants = {}
         self._tickets = {}
         self._peers = {}
+        self._npc_tracks = {}
         self._owner = threading.current_thread()
         self._application_pending = {}
         self._application_batch = {}
@@ -98,6 +112,8 @@ class CompanyMotionService:
         self.window = 0
         self.accepted_samples = 0
         self.samples_with_velocity = 0
+        self.accepted_npc_samples = 0
+        self.npc_samples_with_velocity = 0
         self.last_ship_position = None
 
     def admit(self, handle, attempt_id, ship_index, sector_macro, session_epoch, registry_epoch):
@@ -112,6 +128,7 @@ class CompanyMotionService:
             raise ValueError('invalid participant movement grant')
         # A previous source may have left over a failed control link. A new
         # owner ends its remaining route metadata before receiving authority.
+        self.retire_npc_track(ship_index)
         self._retire_sample(ship_index)
         grant = _Grant(handle, secrets.token_hex(32), ship_index, registry_epoch, secrets.token_hex(16))
         # A previous grant's sealed sample cannot move a reassigned ship.
@@ -134,7 +151,7 @@ class CompanyMotionService:
             grant.last_sample = None
 
     def _notice(self, peer, message):
-        if len(peer.notices) >= 2 * MAX_PEERS:
+        if len(peer.notices) >= MAX_NOTICES:
             self._drop(peer, transport_lost=False)
         else:
             peer.notices.append(encode_frame(message))
@@ -196,6 +213,9 @@ class CompanyMotionService:
             grant.last_sample = None
             grant.visible_until = 0
             grant.trial_route = None
+        for track in self._npc_tracks.values():
+            track.last_sample = None
+            track.visible_until = 0
         for peer in tuple(self._peers.values()):
             if peer.grant is None:
                 continue
@@ -347,6 +367,86 @@ class CompanyMotionService:
             sector = sample['sector_macro']
             if view_matches(views, grant.index, sector) and not view_matches(previous, grant.index, sector):
                 peer.latest[grant.index] = sample
+        for track in self._npc_tracks.values():
+            sample = track.last_sample
+            if sample is None or track.visible_until <= now:
+                continue
+            sector = sample['sector_macro']
+            if view_matches(views, track.index, sector) and not view_matches(previous, track.index, sector):
+                peer.latest[track.index] = sample
+
+    def subscribed_npc_targets(self):
+        """Return {sector_macro: frozenset(indices)} subscribed across admitted observers, excluding player grants."""
+        self._check_owner()
+        player_indices = {grant.index for grant in self._grants.values()}
+        merged = {}
+        for peer in self._peers.values():
+            if peer.grant is None:
+                continue
+            for sector, indices in peer.views.items():
+                npc_indices = indices - player_indices
+                if npc_indices:
+                    merged.setdefault(sector, set()).update(npc_indices)
+        return {sector: frozenset(indices) for sector, indices in merged.items()}
+
+    def publish_npc_sample(self, raw_sample):
+        """Publish one authoritative server-side V3 NPC sample to matching admitted observers."""
+        self._check_owner()
+        value = motion_value(raw_sample)
+        index = value['index']
+        if value['version'] != 3 or not 1 <= index <= 200000:
+            raise ValueError('authoritative NPC sample must be version 3 within registry bounds')
+        if any(grant.index == index for grant in self._grants.values()):
+            raise ValueError('ship index owned by an admitted player grant')
+        if not self.running:
+            return False
+        now = time.monotonic()
+        track = self._npc_tracks.get(index)
+        if track is None or track.generation != value['generation']:
+            if value['real_velocity'] is not None:
+                raise ValueError('initial NPC sample must establish a new motion baseline')
+            if track is not None:
+                self._retire_sample(index, track.generation, transport_lost=False)
+            elif len(self._npc_tracks) >= MAX_NPC_TRACKS:
+                expired = [idx for idx, item in self._npc_tracks.items()
+                           if item.visible_until <= now]
+                for idx in expired:
+                    old = self._npc_tracks.pop(idx)
+                    if old.last_sample is not None:
+                        self._retire_sample(idx, old.generation, transport_lost=True)
+                if len(self._npc_tracks) >= MAX_NPC_TRACKS:
+                    raise ValueError('authoritative NPC track capacity reached')
+            track = _NpcTrack(index=index, epoch=value['epoch'], generation=value['generation'])
+            self._npc_tracks[index] = track
+        else:
+            if value['epoch'] != track.epoch or value['sequence'] <= track.last_sequence:
+                raise ValueError('stale or foreign authoritative NPC sample')
+            if track.last_sample is None and value['real_velocity'] is not None:
+                raise ValueError('resumed NPC sample must establish a new motion baseline')
+            check_motion_progress(value, track.last_accepted)
+            if track.last_accepted is not None and track.last_accepted['sector_macro'] != value['sector_macro']:
+                self._retire_sample(index, track.generation, transport_lost=False)
+        track.last_accepted = track.last_sample = value
+        track.last_sequence = value['sequence']
+        track.visible_until = now + MAX_SAMPLE_AGE
+        self.accepted_npc_samples += 1
+        self.npc_samples_with_velocity += int(value['real_velocity'] is not None)
+        for viewer in self._peers.values():
+            if viewer.grant is not None and view_matches(viewer.views, index, value['sector_macro']):
+                viewer.latest[index] = value
+        return True
+
+    def retire_npc_track(self, index, generation=None, *, transport_lost=False):
+        """Retire one authoritative NPC track and notify subscribed observers."""
+        self._check_owner()
+        track = self._npc_tracks.get(index)
+        if track is None:
+            return False
+        if generation is not None and track.generation != generation:
+            return False
+        self._npc_tracks.pop(index)
+        self._retire_sample(index, track.generation, transport_lost=transport_lost)
+        return True
 
     def _sample(self, peer, message):
         if set(message) != {'kind', 'window', 'sample'}:
@@ -434,6 +534,11 @@ class CompanyMotionService:
             if grant.visible_until and grant.visible_until <= now:
                 grant.visible_until = 0
                 self._retire_sample(grant.index, grant.generation, transport_lost=True)
+        for track in self._npc_tracks.values():
+            if track.visible_until and track.visible_until <= now:
+                track.visible_until = 0
+                track.last_sample = None
+                self._retire_sample(track.index, track.generation, transport_lost=True)
         for _ in range(MAX_PEERS):
             try:
                 connection, _ = self.listener.accept()
@@ -466,5 +571,6 @@ class CompanyMotionService:
             self._drop(peer)
         self._grants.clear()
         self._tickets.clear()
+        self._npc_tracks.clear()
         self._application_pending.clear()
         self._application_batch.clear()

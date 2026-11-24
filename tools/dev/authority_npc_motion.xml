@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Opt-in native X4 9.00 universe registry + guarded NPC motion/playback verification cues.
+     Never auto-runs: every cue requires an explicit correlated UI-triggered event. -->
+<mdscript name="X4AuthorityNpcMotion" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this">
+   <actions>
+    <set_value name="$owned_ship" exact="null"/>
+    <set_value name="$owned_wait" exact="null"/>
+   </actions>
+  </cue>
+
+  <!-- Populate X4AuthorityShipRegistry across all operational ships in player.galaxy,
+       returning total enrolled count and up to 48 undocked non-player candidates. -->
+  <cue name="PopulateUniverse" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'PopulateUniverse'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$epoch" exact="@$r.$epoch"/>
+    <do_if value="$r.$request_id? and $epoch?">
+     <set_value name="md.X4AuthorityShipRegistry.State.$epoch" exact="$epoch"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="0"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="false"/>
+     <find_ship name="$all" space="player.galaxy" multiple="true"/>
+     <set_value name="$count" exact="0"/>
+     <set_value name="$reported" exact="0"/>
+     <set_value name="$rows" exact="''"/>
+     <set_value name="$stride" exact="if $all.count gt 96 then ($all.count / 48)i else 1"/>
+     <do_all exact="$all.count" counter="$i">
+      <set_value name="$s" exact="$all.{$i}"/>
+      <do_if value="@$s.isoperational and $s.isclass.ship">
+       <set_value name="$count" exact="$count + 1"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$ships.{$count}" exact="$s"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$s}" exact="$count"/>
+       <do_if value="$reported lt 48 and (($i - 1) % $stride == 0 or $i gt $all.count - 96) and $s.owner != faction.player and $s != player.controlled and $s != player.ship and $s != player.occupiedship and $s != player.container and not $s.dock.exists and not $s.isinternallystored and @$s.sector.isclass.sector and @$s.parent.isclass.zone">
+        <set_value name="$reported" exact="$reported + 1"/>
+        <do_if value="$rows != ''">
+         <set_value name="$rows" exact="$rows + ';'"/>
+        </do_if>
+        <set_value name="$rows" exact="$rows + '%s,%s,%s,%s,%s'.[$count,$s,$s.sector.macro.id,$s.idcode,$s.owner.id]"/>
+       </do_if>
+      </do_if>
+     </do_all>
+     <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="$count"/>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Populated|%s|%s|%s'.[$r.$request_id,$count,$reported,$rows]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Refused|populate_args'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <!-- Guarded playback handoff: verify registry index, hold Wait order, and apply velocity. -->
+  <cue name="PreparePlayback" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'PreparePlayback'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <include_actions ref="GuardShip"/>
+    <do_if value="$valid and $r.$expected_sector? and @$ship.sector.macro.id == $r.$expected_sector">
+     <do_if value="@State.$owned_ship.exists and State.$owned_ship != $ship">
+      <set_object_velocity object="State.$owned_ship" constantvel="false"/>
+      <do_if value="@State.$owned_wait.exists">
+       <cancel_order order="State.$owned_wait"/>
+      </do_if>
+      <set_value name="State.$owned_wait" exact="null"/>
+     </do_if>
+     <do_if value="@State.$owned_ship != $ship or not @State.$owned_wait.exists">
+      <create_order object="$ship" id="'Wait'" immediate="true" name="State.$owned_wait">
+       <param name="timeout" value="60s"/>
+       <param name="skipalignment" value="true"/>
+       <param name="fidget" value="false"/>
+       <param name="noattackresponse" value="true"/>
+      </create_order>
+      <set_value name="State.$owned_ship" exact="$ship"/>
+     </do_if>
+     <do_if value="$r.$vx? and $r.$vy? and $r.$vz?">
+      <set_object_velocity object="$ship" constantvel="true">
+       <linear value="vector.[$r.$vx * 1m, $r.$vy * 1m, $r.$vz * 1m]"/>
+      </set_object_velocity>
+     </do_if>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|PlaybackReady|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$index,$ship,$ship.sector,$ship.parent,$ship.sector.macro.id,$ship.idcode]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Refused|playback_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <!-- Independent correlated registry readback. -->
+  <cue name="Readback" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'Readback'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <include_actions ref="GuardShip"/>
+    <do_if value="$valid">
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Readback|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$index,$ship,$ship.sector,$ship.parent,$ship.sector.macro.id,$ship.idcode]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Refused|readback_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <!-- Release any owned Wait/constantvel cleanly before exit. -->
+  <cue name="Release" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcMotion'" control="'Release'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <do_if value="@State.$owned_ship.exists and State.$owned_ship.isoperational">
+     <set_object_velocity object="State.$owned_ship" constantvel="false"/>
+     <do_if value="@State.$owned_wait.exists">
+      <cancel_order order="State.$owned_wait"/>
+     </do_if>
+    </do_if>
+    <set_value name="State.$owned_wait" exact="null"/>
+    <set_value name="State.$owned_ship" exact="null"/>
+    <raise_lua_event name="'X4AuthorityNpcMotion.Result'" param="'%s|Released'.[@$r.$request_id]"/>
+   </actions>
+  </cue>
+
+  <library purpose="include_actions" name="GuardShip">
+   <actions>
+    <set_value name="$valid" exact="false"/>
+    <set_value name="$ship" exact="null"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and $r.$index?">
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and md.X4AuthorityShipRegistry.State.$faulted?">
+      <do_if value="not md.X4AuthorityShipRegistry.State.$faulted and $r.$epoch == md.X4AuthorityShipRegistry.State.$epoch and $r.$index ge 1 and $r.$index le md.X4AuthorityShipRegistry.State.$last and $r.$index == ($r.$index)i">
+       <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$index}"/>
+       <do_if value="@$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $r.$index and @$ship.sector.isclass.sector and @$ship.parent.isclass.zone">
+        <do_if value="$ship.owner != faction.player and $ship != player.controlled and $ship != player.ship and $ship != player.occupiedship and $ship != player.container and not $ship.dock.exists and not $ship.isinternallystored">
+         <set_value name="$valid" exact="true"/>
+        </do_if>
+       </do_if>
+      </do_if>
+     </do_if>
+    </do_if>
+   </actions>
+  </library>
+ </cues>
+</mdscript>
