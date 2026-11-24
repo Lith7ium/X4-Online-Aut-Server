@@ -25,9 +25,16 @@ COMPANY_PLAYBACK_UI = {
     for name in ('motion_buffer', 'motion_playback', 'company_hull_playback',
                  'company_hull_playback_x4', 'company_hull_trial')
 }
+COMPANY_COCKPIT_RADAR_UI = {
+    'company_cockpit_observer.lua': 'src/authority/lua/company_cockpit_observer.lua',
+    'company_cockpit_playback.lua': 'src/authority/lua/company_cockpit_playback.lua',
+}
 COMPANY_MOTION_MD = {
     'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml',
     'company_observer_target.xml': 'src/authority/md/company_observer_target.xml',
+}
+COMPANY_COCKPIT_RADAR_MD = {
+    'company_cockpit_observer.xml': 'src/authority/md/company_cockpit_observer.xml',
 }
 
 SEAT_TAG = b'[X4LAN] AUTH_CLIENT_SEAT '
@@ -51,9 +58,17 @@ def seat_prefix(index, nonce, status):
 
 
 def company_motion_ui(source):
+    if getattr(source, 'cockpit_radar_playback', False):
+        return COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI | COMPANY_MOTION_UI
     if source.playback_index is not None:
         return COMPANY_PLAYBACK_UI | COMPANY_MOTION_UI
     return COMPANY_MOTION_UI
+
+
+def company_motion_md(source):
+    if getattr(source, 'cockpit_radar_playback', False):
+        return COMPANY_MOTION_MD | COMPANY_COCKPIT_RADAR_MD
+    return COMPANY_MOTION_MD
 
 
 def export_motion_buffer(data):
