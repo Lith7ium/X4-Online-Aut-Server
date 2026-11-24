@@ -125,7 +125,7 @@
           <include_actions ref="CheckDocked"/>
           <do_if value="$Docked and player.age gt $FirstObservationAge">
            <set_value name="$Status" exact="'READY'"/>
-           <debug_text text="'[X4LAN] AUTH_TRADE_DOCK %s|READY|7354|%s|%s|%s|%s|%s|%s|%s|%s'.[$Nonce,$Ship.idcode,$Station.idcode,$Bay,$Captain,$Avatar.idcode,$AvatarStation.idcode,$FirstObservationAge,player.age]" chance="100"/>
+           <debug_text text="'[X4LAN] AUTH_TRADE_DOCK %s|READY|7354|%s|%s|%s|%s|%s|%s|%s|%s'.[$Nonce,$Ship.idcode,$Station.idcode,$Bay,$Captain,$Avatar,$AvatarStation.idcode,$FirstObservationAge,player.age]" chance="100"/>
            <raise_lua_event name="'X4AuthorityTradeDock.Result'" param="'%s|READY|%s|%s|%s|%s'.[$Nonce,$Ship,$Station,$Bay,player.age]"/>
           </do_if>
           <do_else>
