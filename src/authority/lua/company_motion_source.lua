@@ -107,8 +107,16 @@ function M.new_x4(config, save_path, pinned, udp)
     local ok, observer = pcall(function()
         local cockpit = X4LAN_COMPANY_OBSERVER_TARGET.new_x4(pinned, config.index, available)
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
+        local trial
+        if config.playback_index then
+            local created, candidate = pcall(X4LAN_COMPANY_HULL_TRIAL and X4LAN_COMPANY_HULL_TRIAL.new_x4,
+                                             config, pinned, cockpit,
+                                             available, udp.monotonic)
+            if created then trial = candidate
+            else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
+        end
         return X4LAN_COMPANY_OBSERVER_STREAM.new({cockpit = cockpit, map = map},
-                                                  pinned.epoch, net, prefix, udp.monotonic)
+                                                  pinned.epoch, net, prefix, udp.monotonic, trial)
     end)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({

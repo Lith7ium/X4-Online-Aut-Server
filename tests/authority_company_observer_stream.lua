@@ -67,7 +67,7 @@ assert(cockpit.closed and map.closed)
 local trial_module = dofile('src/authority/lua/company_hull_trial.lua')
 local received, writes, stops = {}, 0, 0
 local native = {guard = function() return true end, close = function() end}
-local trial = trial_module.new({
+local trial_options = {
     enabled = true, own_index = 1970, target_index = 12,
     adapter = {bind = function(_, binding)
         assert(binding.slot == 'cockpit' and binding.actor == '0xc' and binding.index == 12)
@@ -85,7 +85,8 @@ local trial = trial_module.new({
             stop = function() stops = stops + 1 end,
         }
     end},
-})
+}
+local trial = trial_module.new(trial_options)
 owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end, trial)
 local ordinary_send = net.send
 net.send = function() return false end
@@ -106,4 +107,27 @@ owner:tick(false)
 send('cockpit', 3, 12, 'sector_a', moving)
 owner:tick(true)
 assert(#received == 1 and writes == 1 and stops == 1)
+owner:close()
+
+-- A local revocation can arrive before its delayed REMOTE on the UDP socket.
+local function end_packet(origin)
+    return prefix .. table.concat({'END', 'cockpit', 1, epoch, 12, origin, 'sector_a'}, '|')
+end
+owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end,
+                   trial_module.new(trial_options))
+incoming[1] = end_packet(generation)
+send('cockpit', 1, 12, 'sector_a', moving)
+owner:tick(true)
+assert(#received == 1 and writes == 1)
+owner:close()
+
+owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end,
+                   trial_module.new(trial_options))
+send('cockpit', 1, 12, 'sector_a', moving)
+incoming[2] = end_packet(('d'):rep(32))
+owner:tick(true)
+assert(#received == 2 and writes == 2)
+incoming[1] = end_packet(generation)
+owner:tick(true)
+assert(writes == 2 and stops == 2)
 owner:close()

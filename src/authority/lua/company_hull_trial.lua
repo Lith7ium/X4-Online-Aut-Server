@@ -27,6 +27,13 @@ function M.new(options)
         if binding and not same_view(observed, serial) then self:close() end
     end
 
+    function trial:end_track(observed, serial, generation)
+        if observed.index == target_index and
+                (not binding or (same_view(observed, serial) and binding.generation == generation)) then
+            self:close()
+        end
+    end
+
     function trial:sample(observed, serial, sample, arrival)
         if finished or observed.index ~= target_index then return end
         if binding and (not same_view(observed, serial) or binding.generation ~= sample.generation) then
@@ -63,6 +70,49 @@ function M.new(options)
     end
 
     return trial
+end
+
+-- Keep the first readback and the first metre of measured movement in the
+-- engine log. A stationary period cannot overwrite either diagnostic.
+function M.new_x4(config, pinned, cockpit_reader, guard, clock)
+    local ffi = require('ffi')
+    ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
+        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
+    })
+    local origin, recorded_readback, recorded_movement
+    local function decimal(value) return ('%.17g'):format(value) end
+    local function coordinates(pose)
+        return table.concat({decimal(pose.x), decimal(pose.y), decimal(pose.z)}, ',')
+    end
+    local function record(event)
+        if not origin then origin = event.actual end
+        if event.kind == 'readback' then
+            local actual, target = event.actual, event.target
+            local dx, dy, dz = actual.x - origin.x, actual.y - origin.y, actual.z - origin.z
+            local displacement = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if not recorded_readback or (not recorded_movement and displacement >= 1) then
+                DebugError(table.concat({
+                    '[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_READBACK', 'ship=' .. event.code,
+                    'epoch=' .. event.epoch, 'index=' .. event.index, 'sector=' .. event.sector_macro,
+                    'generation=' .. event.generation, 'sequence=' .. event.source_sequence,
+                    'source_time=' .. decimal(event.source_time), 'capture_time=' .. decimal(event.capture_time),
+                    'elapsed=' .. decimal(event.elapsed), 'target=' .. coordinates(target),
+                    'actual=' .. coordinates(actual), 'error=' .. decimal(event.error),
+                    'displacement=' .. decimal(displacement),
+                }, ' '))
+                recorded_readback = true
+                recorded_movement = recorded_movement or displacement >= 1
+            end
+        end
+        return true
+    end
+    return M.new({
+        enabled = true, own_index = config.index, target_index = config.playback_index,
+        adapter = adapter, clock = clock, game = function() return ffi.C.GetCurrentGameTime() end,
+        paused = function() return ffi.C.IsGamePaused() end, record = record,
+        fault = function(reason) DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP ' .. tostring(reason)) end,
+    })
 end
 
 X4LAN_COMPANY_HULL_TRIAL = M

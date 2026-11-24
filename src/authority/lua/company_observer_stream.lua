@@ -72,6 +72,15 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
         end
+        if playback_trial and #row == 7 and row[1] == 'END' and row[2] == 'cockpit' then
+            local slot = slots.cockpit
+            if slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
+                    and counter(row[5]) == slot.binding.index and row[7] == slot.binding.sector_macro
+                    and #row[6] == 32 and row[6]:match('^[0-9a-f]+$') then
+                playback_trial:end_track(slot.binding, slot.serial, row[6])
+            end
+            return
+        end
         if #row ~= 16 or row[1] ~= 'REMOTE' then return end
         local slot = slots[row[2]]
         local binding = slot and slot.binding
