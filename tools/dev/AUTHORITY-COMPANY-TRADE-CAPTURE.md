@@ -8,7 +8,7 @@ the diagnostic ship and station.
 Call `X4LAN_COMPANY_TRADE_CAPTURE.install_x4` with `enabled = true`, the
 `menu`, local `ship` and `station` component values, the expected station
 sector macro as `sector`, its `station_code`, a `request(intent, settle)`
-callback and optionally `notice(status, settled_total_cents)`. The default
+callback and optionally `notice(status, settled_total_cents, snapshot)`. The default
 notice uses the stock info line. The intent contains the sector
 macro, station code, ware ID, quantity, and quote in integer cents. Component
 IDs stay local. The request callback must return `true` to acknowledge
@@ -21,6 +21,16 @@ receipt must carry the actual booked debit as a positive, exactly represented
 integer `settled_total_cents`. The info line displays this amount. For example,
 six units quoted at 5819 cents and booked at 34900 cents display 349 Cr. An actual fractional credit would retain its cents.
 `price_cents` remains the original unit quote used to match the receipt.
+The request owner may include the authoritative post-purchase state as
+`company_balance_cents`, `ship_code`, and `cargo_units`. The balance must
+be a nonnegative exact Lua integer in cents. The ship code must match the
+locally bound hull's stock ID code. `cargo_units` is the absolute count for
+the receipt's matched ware and must be an integer at least as large as the
+confirmed purchase quantity. Include all three fields or omit them together.
+A complete valid snapshot appears in the stock info line and as the optional
+custom notice argument with the matched `ware`. An incomplete or invalid
+snapshot leaves the paid-only notice. The snapshot only affects display.
+
 A missing, malformed or mismatched receipt is uncertain. Call `settle(nil)`
 if the request owner reaches its deadline. Pending or refused notices have
 no settled total. The adapter leaves the menu open and suppresses local stock

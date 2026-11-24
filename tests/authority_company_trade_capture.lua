@@ -44,7 +44,11 @@ package.loaded.ffi = (function()
             assert(station == station_id and class == 'sector')
             return sector_id
         end,
-        GetObjectIDCode = function(id) assert(id == station_id); return 'BIM-169' end,
+        GetObjectIDCode = function(id)
+            if id == ship_id then return 'WRN-302' end
+            assert(id == station_id)
+            return 'BIM-169'
+        end,
     }
     return {C = C, typeof = ffi.typeof, istype = ffi.istype, cdef = function() end,
         new = ffi.new, string = function(value) return value end}
@@ -128,11 +132,12 @@ original('detached')
 options.notice = nil
 menu.contextMenuData.orders[order_id] = -6
 offer.price = 58.19
-local function report(outcome, total, expect_notice)
+local function report(outcome, total, expect_notice, fields)
     options.request = function(intent, settle)
         assert(intent.quantity == 6 and intent.price_cents == 5819)
         if outcome then
             intent.outcome, intent.settled_total_cents = outcome, total
+            for key, value in pairs(fields or {}) do intent[key] = value end
             settle(intent)
         else
             settle(nil)
@@ -147,10 +152,27 @@ local function report(outcome, total, expect_notice)
 end
 report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr.')
 report('confirmed', 34905, 'Company purchase confirmed. Paid 349.05 Cr.')
+report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr. Company balance 9651 Cr. WRN-302: 6 water.',
+    {company_balance_cents = 965100, ship_code = 'WRN-302', cargo_units = 6})
+report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr. Company balance 0 Cr. WRN-302: 7 water.',
+    {company_balance_cents = 0, ship_code = 'WRN-302', cargo_units = 7})
+for _, fields in ipairs({
+    {company_balance_cents = 965100, ship_code = 'WRN-302'},
+    {ship_code = 'WRN-302', cargo_units = 6},
+    {company_balance_cents = math.huge, ship_code = 'WRN-302', cargo_units = 6},
+    {company_balance_cents = '965100', ship_code = 'WRN-302', cargo_units = 6},
+    {company_balance_cents = 965100, ship_code = 'WOO-831', cargo_units = 6},
+    {company_balance_cents = 965100, ship_code = 'WRN-302', cargo_units = 5},
+    {company_balance_cents = 965100, ship_code = 'WRN-302', cargo_units = 6.5},
+}) do
+    report('confirmed', 34900, 'Company purchase confirmed. Paid 349 Cr.', fields)
+end
 report('refused', nil, 'Company purchase refused.')
 local uncertain = 'Company purchase status uncertain. Check the authoritative receipt.'
 report(nil, nil, uncertain)
 report('confirmed', nil, uncertain)
+report('confirmed', 34900, uncertain,
+    {company_balance_cents = 965100, ship_code = 'WRN-302', cargo_units = 6, price_cents = 5818})
 for _, malformed in ipairs({'34900', -34900, 0, 34900.5, math.huge, 0 / 0, 9007199254740992}) do
     report('confirmed', malformed, uncertain)
 end

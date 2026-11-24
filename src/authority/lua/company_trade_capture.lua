@@ -7,8 +7,8 @@ local function positive_integer(n)
     return type(n) == 'number' and n >= 1 and n <= max_integer and n % 1 == 0
 end
 
-local function valid_settlement(total)
-    return type(total) == 'number' and total >= 1 and total <= max_exact_lua_integer and total % 1 == 0
+local function exact_cents(total)
+    return type(total) == 'number' and total >= 0 and total <= max_exact_lua_integer and total % 1 == 0
 end
 
 local function cents(price)
@@ -47,6 +47,15 @@ local function matches(intent, receipt)
     return receipt.sector == intent.sector and receipt.station_code == intent.station_code
         and receipt.ware == intent.ware and receipt.quantity == intent.quantity
         and receipt.price_cents == intent.price_cents
+end
+
+local function resulting_snapshot(intent, receipt, ship_code)
+    if type(ship_code) ~= 'string' or not ship_code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$')
+            or receipt.ship_code ~= ship_code or not exact_cents(receipt.company_balance_cents)
+            or not positive_integer(receipt.cargo_units) or receipt.cargo_units < intent.quantity
+            or not intent.ware:match('^[a-zA-Z0-9_]+$') then return end
+    return {company_balance_cents = receipt.company_balance_cents, ship_code = ship_code,
+        ware = intent.ware, cargo_units = receipt.cargo_units}
 end
 
 function M.install(o)
@@ -104,8 +113,13 @@ function M.install(o)
             if phase ~= 'pending' then return end
             phase = 'finished'
             if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt)
-                    and valid_settlement(receipt.settled_total_cents) then
-                o.notice('confirmed', receipt.settled_total_cents)
+                    and exact_cents(receipt.settled_total_cents) and receipt.settled_total_cents > 0 then
+                local snapshot = resulting_snapshot(intent, receipt, o.ship_code)
+                if snapshot then
+                    o.notice('confirmed', receipt.settled_total_cents, snapshot)
+                else
+                    o.notice('confirmed', receipt.settled_total_cents)
+                end
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
                 o.notice('refused')
             else
@@ -150,6 +164,14 @@ local trade_notices = {
     ambiguous_price = 'Company purchase refused: invalid quote.',
 }
 
+local function format_credits(cents)
+    local remainder = cents % 100
+    local credits = (cents - remainder) / 100
+    local amount = string.format('%d', credits)
+    if remainder ~= 0 then amount = amount .. string.format('.%02d', remainder) end
+    return amount .. ' Cr'
+end
+
 function M.install_x4(o)
     if o.enabled ~= true then return nil, 'disabled' end
     local ffi = require('ffi')
@@ -178,6 +200,11 @@ function M.install_x4(o)
         return ConvertStringToLuaID(tostring(ref))
     end
     local ship, station = id(o.ship), id(o.station)
+    local ship_code
+    if ship and C.IsComponentClass(ship, 'ship') then
+        local native_ship_code = C.GetObjectIDCode(ship)
+        if native_ship_code ~= nil then ship_code = ffi.string(native_ship_code) end
+    end
     local function live_dock(ship_ref, station_ref)
         if id(ship_ref) ~= ship or id(station_ref) ~= station or C.GetPlayerControlledShipID() ~= ship
                 or not C.IsComponentClass(ship, 'ship') or not C.IsComponentOperational(ship)
@@ -204,20 +231,20 @@ function M.install_x4(o)
             end
         end
     end
-    local function stock_notice(status, settled_total_cents)
+    local function stock_notice(status, settled_total_cents, snapshot)
         local text = trade_notices[status]
         if status == 'confirmed' then
-            local remainder = settled_total_cents % 100
-            local credits = (settled_total_cents - remainder) / 100
-            local amount = string.format('%d', credits)
-            if remainder ~= 0 then amount = amount .. string.format('.%02d', remainder) end
-            text = 'Company purchase confirmed. Paid ' .. amount .. ' Cr.'
+            text = 'Company purchase confirmed. Paid ' .. format_credits(settled_total_cents) .. '.'
+            if snapshot then
+                text = text .. ' Company balance ' .. format_credits(snapshot.company_balance_cents)
+                    .. '. ' .. snapshot.ship_code .. ': ' .. snapshot.cargo_units .. ' ' .. snapshot.ware .. '.'
+            end
         end
         if text then C.ShowInfoLine(text, 4) end
     end
     return M.install({
         enabled = true, menu = o.menu, ship = ship, station = station, sector = o.sector,
-        station_code = o.station_code, request = o.request, notice = o.notice or stock_notice,
+        station_code = o.station_code, ship_code = ship_code, request = o.request, notice = o.notice or stock_notice,
         identity = id, read_dock = live_dock, decode_offer_id = ConvertStringToLuaID,
         offer_station = function(offer_id)
             local data = GetTradeData(offer_id)
