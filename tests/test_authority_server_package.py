@@ -1,7 +1,9 @@
-"""Exercise the source-only package in a small Git repository."""
+"""Check source archive boundaries and exercise extracted entry points."""
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -51,3 +53,44 @@ class AuthorityServerPackageTest(unittest.TestCase):
                 self.assertTrue(entry.mode & 0o111)
                 with archive.extractfile(entry) as stream:
                     self.assertEqual(stream.read(), b'committed\n')
+
+    def test_extracted_seed_and_child_gate_entrypoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'provider.tar.gz'
+            PACKAGE.build('HEAD', output)
+            with tarfile.open(output, 'r:gz') as archive:
+                archive.extractall(root, filter='data')
+            extracted = root / PACKAGE.PREFIX
+            tools = extracted / 'tools/dev'
+            # The extracted tools must find their imports without the checkout
+            # paths used by the test suite.
+            environment = dict(os.environ, PYTHONNOUSERSITE='1')
+            environment.pop('PYTHONPATH', None)
+
+            with self.subTest(entrypoint='portable seed'):
+                result = subprocess.run(
+                    [sys.executable, str(tools/'authority_portable_seed.py'), '--help'],
+                    cwd=extracted, env=environment, capture_output=True, text=True,
+                    check=True, timeout=10,
+                )
+                self.assertIn('{export,restore,verify}', result.stdout)
+
+            for permission, status in ((b'', 1), (b'G', 0)):
+                with self.subTest(entrypoint='child gate', permission=permission):
+                    read_fd, write_fd = os.pipe()
+                    try:
+                        os.write(write_fd, permission)
+                    finally:
+                        os.close(write_fd)
+                    try:
+                        result = subprocess.run(
+                            [sys.executable, str(tools/'authority_exec_gate.py'), str(read_fd),
+                             sys.executable, '-c', 'print("child executed")'],
+                            cwd=extracted, env=environment, pass_fds=(read_fd,),
+                            capture_output=True, text=True, timeout=10,
+                        )
+                    finally:
+                        os.close(read_fd)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertEqual(result.stdout, 'child executed\n' if permission else '')
