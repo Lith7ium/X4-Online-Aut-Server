@@ -1,6 +1,6 @@
 # Current handover for Neon and Cobalt
 
-**24 November 2026, 13:03 Berlin.** Astra is active and leads Lith7ium's
+**24 November 2026, 13:16 Berlin.** Astra is active and leads Lith7ium's
 authoritative fork. Silver runs his separate fork. Lith7ium approves major
 architecture changes. Compare results and allocate further work in
 `#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
@@ -34,6 +34,10 @@ other observers receiving their latest samples.
    native Windows observations separately. Coordinate any shared-host X4 use
    with Astra first. Astra currently owns the station parking test slot.
 
+If your account can only read Lith7ium’s fork, push the work branch to your
+own fork and open a PR targeting `experiment/authoritative-server-20261115`,
+or share a commit/patch for review at the hourly check.
+
 For a fresh contributor checkout:
 
 ```sh
@@ -64,9 +68,10 @@ git diff --stat 58c07235..origin/review/neon-npc-reentry-20261120
 - Astra owns server-avatar parking. Lith7ium chose the walkable player HQ
   when available, with a well-protected station until then. The current seed
   has no HQ. Its preferred fallback is the Argon defence platform XPJ-169 in
-  Black Hole Sun V, with trading station JZJ-119 as backup. The first MD
-  preflight failed before any teleport/save. The include-action fix is in
-  `08ef8f92`. The native retry and cold reload were pending at handoff.
+  Black Hole Sun V, with trading station JZJ-119 as backup. A native server parked on XPJ-169, saved the world and stopped. A fresh
+  server loaded the same docking bay with both Company ships free. There were
+  10,082 issued entries and 17 were unavailable after relocation. An initial
+  preflight failure had stopped before any write. [Parking and cold-reload evidence](AUTHORITY-SERVER-PARKING-20261124.md)
 - Cobalt delivered the Windows map pan observations. Two runs showed a
   listed NPC onscreen, absent after panning and clearing focus, and present
   after returning. Focus changed together with the camera. Cobalt retains
