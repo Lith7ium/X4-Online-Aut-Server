@@ -116,7 +116,7 @@ two-player Windows purchase awaits verification.
 
 ### Observe a short cross-sector flight
 
-For the two-ship test world, the Windows observer chooses WOO-831 (1970)
+For the older parked-ship fixture, the Windows observer chooses WOO-831 (1970)
 and the Linux pilot chooses WRN-302 (7354). After both cockpits are admitted
 and the session resumes, the observer opens WRN's sector on the stock map
 and selects WRN. Keep that selection while the pilot flies briefly and stops.

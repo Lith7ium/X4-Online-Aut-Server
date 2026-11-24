@@ -301,16 +301,17 @@ launcher creates a disposable profile and keeps the game window on that
 display. Use a different output path for each player:
 
 ```sh
-tools/run_authority_client.sh --company-motion \
+tools/run_authority_client.sh --base-game-only --company-motion \
   --connection-file /path/to/connection.json \
   --game '/path/to/X4 Foundations' --out .local/player-run-01
 ```
 
 Keep the connection file owner-readable only (`chmod 600`). Select a free ship
-at the prompt, or use `--company-ship-index` to name one explicitly. For the
-private two-ship fixture, select WOO-831 (1970) and WRN-302 (7354) on separate
-players. The separate Windows diagnostic kit joins the same provider with its
-PowerShell `-CompanyMotion` option.
+at the prompt, or use `--company-ship-index` to name one explicitly. In the base-game
+starting world, choose the two Pulsar Vanguards HVC-420 (1073) and KHI-630
+(1074), one per pilot. Both start in Black Hole Sun V. The matching Windows
+starter uses `-BaseGameOnly -CompanyMotion`. For a later session, use the
+ship list from the checkpoint the server offers.
 
 The Linux launcher allows up to an hour to connect and join. Once admitted,
 close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
