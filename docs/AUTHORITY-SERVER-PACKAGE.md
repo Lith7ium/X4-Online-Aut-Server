@@ -109,6 +109,11 @@ same provider command. Use a client-reachable advertised address and keep
 the generated `connection.json` private.
 See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optional-tls-gateway-for-the-windows-fixture-client).
 
+Company sessions accept up to four concurrent pilots, including a host who
+plays. A dedicated server avatar uses no pilot slot. A fifth pilot sees
+`Session Full` before admission can pause the world. A pilot who leaves
+releases their slot and ship.
+
 ## Server positions for reserved Company ships
 
 Use `--company-ship-positions` (also accepted as `--company-pose-trial`) to
