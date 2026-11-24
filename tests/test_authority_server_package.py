@@ -121,7 +121,11 @@ with tempfile.TemporaryDirectory() as work:
                          issued_count=1, availability_bits='1', operational_bits='1'))
         paths = pose.install(case, profile, port=23202, lease='f' * 32, epoch='d' * 32,
                              writable=writable)
-        assert len(paths) == 6 and all(path.is_file() for path in paths)
+        assert {path.relative_to(lab).as_posix() for path in paths} == {
+            'md/company_ship_pose.xml', 'ui.xml', 'ui/config.lua', 'ui/authority_world_bridge_probe.lua',
+            'ui/authority_registry_resolve_string.lua', 'ui/replica_motion_binding.lua', 'ui/company_ship_pose.lua',
+        }
+        assert all(path.is_file() for path in paths)
         assert (b'<warp ' in (lab / 'md/company_ship_pose.xml').read_bytes()) == writable
 '''
 
