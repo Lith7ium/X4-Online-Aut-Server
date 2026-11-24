@@ -266,10 +266,17 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 enabled = true, pinned = pinned, own_index = own_index, observer = cockpit,
                 guard = function() return not st.paused end,
             })
+            local function playback_clock()
+                if st.clock_reads then
+                    st.clock_reads = st.clock_reads + 1
+                    return st.now + st.clock_reads * 1e-6
+                end
+                return st.now
+            end
             local ctrl = playback_mod.new({
                 enabled = true, own_index = own_index, target_index = remote_index,
                 allow_reacquire_align = true, adapter = adapter,
-                clock = function() return st.now end, game = function() return st.gt end,
+                clock = playback_clock, game = function() return st.gt end,
                 paused = function() return st.paused end,
                 record = function(ev)
                     if ev.kind == 'readback' or ev.kind == 'alignment_readback' then
@@ -283,7 +290,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             local stream = stream_mod.new({cockpit = cockpit, map = map_reader}, epoch, {
                 receive = function() return table.remove(st.incoming, 1) end,
                 send = function(_, msg) st.sent[#st.sent + 1] = msg; return true end,
-            }, prefix, function() return st.now end, ctrl)
+            }, prefix, playback_clock, ctrl)
 
             local function step(dt)
                 st.now = st.now + dt
@@ -385,9 +392,16 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
 
             -- Fresh gen2 arrives 120 m ahead -> 1 authorized alignment + later readback -> ordinary <=50 m playback!
             local align_x = x_6_1s + 120
+            -- A high-resolution clock can advance between datagrams in one game update.
+            st.clock_reads = 0
             deliver(1, align_x, nil, gen2, hud_serial)
+            deliver(2, align_x, nil, gen2, hud_serial)
+            local readbacks_before_align = #st.readbacks
             step(0.05)
-            step(0.05)  -- Settles alignment_readback on later tick!
+            assert(st.pending_write and #st.readbacks == readbacks_before_align)
+            step(0.05)
+            assert(#st.readbacks == readbacks_before_align + 1)
+            st.clock_reads = nil
             assert(ctrl:stats().alignments == 1)
             -- Second unaligned >50 m jump must be refused!
             local w_before_bad = #st.writes

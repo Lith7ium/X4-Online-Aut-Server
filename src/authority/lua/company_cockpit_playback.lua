@@ -247,7 +247,7 @@ function M.new(options)
         return true, 'within_bounds', step
     end
 
-    function ctrl:tick()
+    function ctrl:tick(update_started_at)
         if closed then return end
         if paused() then
             if controller or pending_align then
@@ -263,7 +263,8 @@ function M.new(options)
         end
         last_tick_now = now
         if pending_align then
-            settle_alignment(now)
+            -- An alignment written while draining UDP must settle on a later update.
+            if (update_started_at or now) > pending_align.written_at then settle_alignment(now) end
             return
         end
         if controller then
@@ -312,11 +313,7 @@ function M.new(options)
             stats.active_generation = active_generation
         end
 
-        -- Settle pending alignment readback if clock advanced.
-        if pending_align then
-            if not settle_alignment(now) then return false, 'alignment_failed' end
-            if pending_align then return true, 'alignment_pending' end
-        end
+        if pending_align then return true, 'alignment_pending' end
 
         -- Enforce per-generation monotone ordering and 5-second cutoff settling.
         if last then

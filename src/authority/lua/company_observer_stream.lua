@@ -129,7 +129,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
             if packet == nil then break end
             if running then observe(packet) end
         end
-        if playback_trial and running then playback_trial:tick() end
+        if playback_trial and running then playback_trial:tick(now) end
     end
 
     function api:close()
