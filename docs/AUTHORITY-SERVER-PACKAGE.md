@@ -383,10 +383,9 @@ add `-CompanyPurchases` and select the same index you reserved for that pilot.
 
 Open the stock Docked menu, choose Trade, select a single ware and quantity,
 review the price, and confirm. The provider checks the reserved ship's
-identity, external berth, empty order queue, free cargo space, funds and
-current station offer. For a captain-less ship it checks the ship is on the
-berth and attempts to run the queued order with X4's stock trade computer.
-An idle Company captain can also execute the order. The native bridge currently allows one completed order
+identity, external berth, assigned Company NPC pilot, empty order queue,
+free cargo space, funds and current station offer. The pilot must be aboard
+the ship in the server's world. The native bridge currently allows one completed order
 per run. A missing receipt after dispatch also closes it to further orders.
 The native reference purchase used WRN-302 (7354) and six units of water at
 BIM-169 in Grand Exchange I. Other purchase baskets have protocol and

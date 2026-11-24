@@ -301,3 +301,19 @@ The provider used a descriptor derived from the source save and the client
 measured its own berth independently. Delivery of that descriptor over a
 pilot's live multiplayer connection, and a bay already occupied on the
 provider, remain separate cases.
+
+### Purchase from an unoccupied server ship
+
+A test participant reserved WRN-302 through its pinned TLS control connection
+and requested two units of water from BIM-169. The provider loaded the
+confirmed docked world. It refused the first price and returned 58.48 Cr
+per unit. A separate synthetic confirmation then accepted that exact price.
+X4 reported `No trade entity on object Elite Vanguard (WRN-302)`. The ship
+had no captain. Its order queue was empty and X4 returned no trade deal.
+
+The participant received `accepted_pending_statement`. The provider saved
+the world and kept the purchase unresolved. The original and final saves
+both contained 10,000 Cr in the Company account and zero water on WRN.
+The ordinary provider requires an assigned Company NPC pilot before placing
+a trade order. The player-side test above establishes which berth a human
+pilot occupies and what they selected in the stock menu.

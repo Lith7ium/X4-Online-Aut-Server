@@ -142,28 +142,6 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(provider.poll()['outcome'], 'unknown')
             self.assertEqual(provider.evidence(purchase_id)['before'], before)
 
-    def test_unverified_trade_computer_order_is_uncertain_and_never_retried(self):
-        provider = self.provider()
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
-            peer.bind(('127.0.0.1', 0))
-            address = provider._socket.getsockname()
-            lease = provider._lease
-            purchase_id = PURCHASE['purchase_id']
-            peer.sendto(f'PURCHASE_HELLO|{lease}'.encode(), address)
-            self.assertIsNone(provider.begin(BINDING, PURCHASE))
-            rows = (f'DOCK|{purchase_id}|READY|0x10|0x20|0x30|11.000',
-                    f'RESULT|{purchase_id}|quote|5819',
-                    f'BEFORE|{purchase_id}|{BINDING["registry_epoch"]}'
-                    '|0x10|0x20|0x30|water|6|5819|12|1000000|1000000|11.000',
-                    f'RESULT|{purchase_id}|order_refused|5819', 'DONE')
-            for sequence, row in enumerate(rows, 1):
-                peer.sendto(f'RECEIPT|{lease}|{purchase_id}|{sequence}|{row}'.encode(), address)
-            result = dict(PURCHASE, outcome='unknown')
-            self.assertEqual(provider.poll(), result)
-            self.assertEqual(provider.begin(BINDING, PURCHASE), result)
-            self.assertEqual(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32))['reason'],
-                             'provider_limit')
-
     def test_sequence_hole_never_confirms_refusal_or_settlement(self):
         provider = self.provider(timeout=3)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
@@ -246,46 +224,3 @@ class NativePurchaseProviderTests(unittest.TestCase):
         self.assertEqual(buys[0].attrib['immediate'], 'true')
         for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
             self.assertEqual(list(root.iter(action)), [])
-
-    def test_md_trade_computer_runs_only_the_originally_captainless_reserved_order(self):
-        request = ET.parse(STOCK).find(".//cue[@name='Request']/actions")
-        captainless = request.find(".//set_value[@name='$captainless']").attrib['exact']
-        for property_name in ('pilot', 'assignedpilot', 'aipilot', 'assignedaipilot', 'tradecomputer'):
-            self.assertIn(f'not @$ship.{property_name}.exists', captainless)
-        self.assertIn('$live and $owned_docked', captainless)
-        self.assertIn('$idle_captain or ($captainless and $bay.docked.indexof.{$ship} and $ship.tradeorders.count == 0)',
-                      request.find(".//set_value[@name='$live_dock']").attrib['exact'])
-
-        precreate = request.find(".//do_if[@value='$captainless']")
-        computer, = request.iter('create_trade_computer')
-        self.assertIs(computer, precreate.find('create_trade_computer'))
-        self.assertEqual(computer.attrib, {'object': '$ship', 'result': '$tradecomputer'})
-        ready = precreate.find("set_value[@name='$computer_ready']").attrib['exact']
-        for condition in ('@$tradecomputer.exists', '@$ship.tradecomputer == $tradecomputer',
-                          '$ship.orders.count == 0', '$ship.tradeorders.count == 0',
-                          '$bay.docked.indexof.{$ship}', 'not player.occupiedship'):
-            self.assertIn(condition, ready)
-        self.assertIsNone(precreate.find('.//create_trade_order'))
-
-        clean, = precreate.findall('do_if')
-        for before in ('before_ship_cargo', 'before_station_cargo', 'before_ship_money',
-                       'before_station_money', 'before_player_money', 'before_faction_money'):
-            self.assertIn('State.$' + before, clean.attrib['value'])
-        for condition in ('not $computer_ready', 'not @$tradecomputer.exists', 'not @$ship.tradecomputer.exists',
-                          '$ship.orders.count == 0', '$ship.tradeorders.count == 0'):
-            self.assertIn(condition, clean.attrib['value'])
-        self.assertEqual(clean.find("set_value[@name='$status']").attrib['exact'], "'not_tradeable'")
-
-        order_arm = request.find(".//do_if[@value='not $captainless or $computer_ready']")
-        booked, = request.iter('create_trade_order')
-        self.assertIs(booked, order_arm.find('create_trade_order'))
-        queued = order_arm.find(".//set_value[@name='$deal_bound']").attrib['exact']
-        for condition in ('$ship.orders.count == 1', '$ship.orders.{1} == State.$order',
-                          '$ship.tradeorders.count == 1', 'State.$deal.exchangepartner.{$ship} == $station',
-                          'State.$deal.ware == $ware', 'State.$deal.amount == $quantity',
-                          'State.$deal.unitprice == $price'):
-            self.assertIn(condition, queued)
-        rejected = order_arm.find(".//do_if[@value='not $deal_bound']/set_value")
-        self.assertEqual(rejected.attrib['exact'], "'order_refused'")
-        ordered = list(request.iter())
-        self.assertLess(ordered.index(computer), ordered.index(booked))

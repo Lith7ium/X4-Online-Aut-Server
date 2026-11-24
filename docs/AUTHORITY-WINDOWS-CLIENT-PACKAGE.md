@@ -100,7 +100,7 @@ started with `--company-purchases`. Add `-CompanyPurchases` to the PowerShell
 command above and select your reserved Company ship. Open Trade from the
 stock Docked menu, choose a single ware and quantity, review the offer, and
 confirm once. The server must also see the ship at that station's external
-trading berth with an empty order queue. The native reference purchase
+trading berth with its Company NPC pilot aboard and an empty order queue. The native reference purchase
 was six units of water by WRN-302 (7354) at BIM-169. Other baskets and
 the Windows cockpit flow still need live verification. The provider currently
 accepts one completed purchase per run.
