@@ -9,14 +9,13 @@ also stops and saves when the last player leaves. All players initially share
 one player faction and one company account; separate factions and accounts are
 deferred.
 
-**Experimental status:** the new components are prototypes and are not a
-playable authoritative multiplayer implementation. An isolated Linux test has
-exercised a marked server save, recovery, one local client join and a later
-save; it is not a gameplay or cross-platform acceptance test. Position
-replication, client-side high-attention authority and Windows/Linux sessions
-remain unproven. The original lockstep work below remains the historical base
-of this branch. See
-[the investigation](docs/AUTHORITY-INVESTIGATION.md) for evidence and limits.
+**Internal development, 24 November 2026.** A Fedora server hosted a base-game
+world for a Bazzite pilot on the LAN and a Windows pilot over the internet.
+The pilots saw each other's fighters. The Bazzite pilot selected the other
+fighter, but saw no remote movement. Damage appeared only for the shooter.
+Fedora accepted 392 movement samples, all accounted for by Bazzite, and
+saved the world after the last departure. The current development priority
+is visible movement in both cockpits. [Human flight report](reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
 
 ## Original lockstep project
 

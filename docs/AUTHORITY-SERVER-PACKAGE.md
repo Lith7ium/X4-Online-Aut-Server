@@ -20,8 +20,9 @@ Use the licensed Linux X4 9.00 installation from Steam build 23660954. The
 supervisor checks the executable SHA-256
 `113f73d74570084f6ce18a659b365009eccf579fb66dbabb5dad2b1718045f20`.
 It mounts the game and compatible installed DLC read-only. Keep the host's
-normal Steam and X4 profile in place. The supplied seed enabled these eight
-official extension directories:
+normal Steam and X4 profile in place. The current two-Pulsar seed uses the
+base game. Start the provider and both clients with their base-game-only
+option. The older format-3 test seed used these official extension directories:
 
 ```text
 ego_dlc_boron     ego_dlc_mini_01   ego_dlc_mini_02   ego_dlc_pirate
@@ -110,8 +111,8 @@ See the [TLS settings](../tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md#optio
 
 ## Server position trial for the two base-game fighters
 
-With the disposable Black Hole Sun V starting seed, `--base-game-only
---company-pose-trial` enables native server position readback for HVC-420
+With the disposable Black Hole Sun V starting seed, `--base-game-only` and
+`--company-pose-trial` enable native server position readback for HVC-420
 (1073) and KHI-630 (1074). The checkpoint digest selects the permitted ships.
 The older parked test seed retains its own ship indices. The trial inspects
 the live ship and sector before relocating it, then reads the position back.
@@ -121,15 +122,19 @@ flight used that relay. [Two-pilot flight report](../reports/AUTHORITY-BASE-GAME
 
 ## Starting ships for human flight tests
 
-Prepare fresh human playtest worlds with **two fully equipped Xperimental
-Shuttles in the same sector**. Give each pilot a separate undocked Company
-ship. Place them a few kilometres apart in clear space, facing one another,
-so each pilot can acquire the other in the cockpit immediately. Players can
-fly to different sectors after the first sighting. This is a starting setup
-for new test worlds. A reconnect uses the saved world and ship positions.
+The base-game test starts two **Pulsar Vanguards** 3 km apart in Black Hole
+Sun V. Each has six Bolt Repeaters Mk2, three Paranid combat engines Mk3,
+a Teladi shield Mk3 and combat thrusters Mk3. The server avatar stays on
+a station. The pilots choose separate ships from their shared Company.
+Use the verified private Pulsar seed for this setup. Both Linux launchers
+take `--base-game-only`. The Windows PowerShell launcher takes `-BaseGameOnly`.
+[Fighter equipment definition](../tools/dev/fixtures/vanilla-flight/libraries/loadouts.xml)
 
-Use the Timelines sandbox ship `ship_ter_s_xperimental_01_a_macro` for both
-seats. For seed preparation, the [shared shuttle loadout](../tools/dev/fixtures/human-flight/libraries/loadouts.xml)
+### Earlier Timelines test world
+
+This older fixture requires Timelines and uses
+`ship_ter_s_xperimental_01_a_macro` for both seats.
+For seed preparation, the [shared shuttle loadout](../tools/dev/fixtures/human-flight/libraries/loadouts.xml)
 is the fixed equipment definition from the LAN flight tests. It fills all
 six gun mounts with Gamma HEPTs, both engine mounts with Frontier engines
 and the shield mount with a Frontier Mk5 shield. It includes Mk3 combat
