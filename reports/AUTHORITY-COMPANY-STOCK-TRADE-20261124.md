@@ -143,3 +143,13 @@ station dock-list membership and the stock immediate-trade context. It
 also checks the controlled ship and the selected station before accepting
 a purchase. A LuaJIT regression covers the two simultaneous flags, an
 approach without completed docking, and a ship absent from the dock list.
+
+With the corrected dock check, the native stock dock list contained two
+ships and included WRN at the same station reported by the Mission Director.
+The normal teleport query returned `research`; the private test allowed
+the same research exemption used in Company-seat diagnostics, and X4
+returned `granted`. X4 dispatched the cockpit transfer. Over the following
+eight real seconds the controlled, occupied and container IDs did not all
+match WRN. The target had an assigned NPC captain before dispatch. This
+run did not establish why control was missing. No purchase or player
+confirmation was attempted, and the test left no processes running.
