@@ -841,8 +841,10 @@ def diagnostic_process_measure_seconds(args):
 def run(args):
     require_snapshot = registry_snapshots.validate_mode(args)
     tls = gateway_settings(args)
-    import authority_company_fixture_prepare as company_fixture
-    prepare_company_fixture = company_fixture.validate_mode(args, require_snapshot=require_snapshot, tls=tls)
+    prepare_company_fixture = getattr(args, 'prepare_disposable_company_fixture', False)
+    if prepare_company_fixture is not False:
+        import authority_company_fixture_prepare as company_fixture
+        company_fixture.validate_mode(args, require_snapshot=require_snapshot, tls=tls)
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
