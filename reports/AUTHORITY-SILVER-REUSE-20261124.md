@@ -49,6 +49,14 @@ architecture decision.
   partly written slot at the I/O observation points and no temporary file
   left behind. Native Windows staging remains to be exercised.
 
+The independent provider consumed the new dock-menu capture with a price of
+58.48 Cr. Its own live offer was 58.77 Cr. It returned both prices in a
+matched refusal, with the account still at 10,000 Cr and cargo at zero. This
+exercises the opposite price direction from the earlier native 58.77-to-58.48
+refusal. Both used recorded input. There was no live participant connection.
+Provider result SHA-256:
+`5f1bfd0c6e5af105d42630ea230b250b4f38145bd367a5037c1b9bef5567b3bb`.
+
 Silver's tests also name a concrete next fleet experiment. Select a free
 Company fighter, issue a stock move order and compare the requested destination
 with its observed arrival. Follow with a stock Attack order against a named NPC
