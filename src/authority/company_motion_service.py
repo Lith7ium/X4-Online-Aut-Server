@@ -9,7 +9,8 @@ import threading
 import time
 
 from .experimental_tcp_motion import check_motion_progress, motion_value
-from .company_motion_frames import MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame, read_frames, validate_view
+from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
+                                    normalize_views, read_frames, view_matches)
 
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
@@ -39,12 +40,11 @@ class _Peer:
     outgoing: bytes = field(default=b'', repr=False)
     notices: deque = field(default_factory=deque)
     latest: dict = field(default_factory=dict)
-    delivered: set = field(default_factory=set)
+    delivered: dict = field(default_factory=dict)
     awaiting_ack: tuple | None = None
     source_ack: bytes = b''
     view_id: int = 0
-    sector: str | None = None
-    indices: set = field(default_factory=set)
+    views: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +133,7 @@ class CompanyMotionService:
         for viewer in tuple(self._peers.values()):
             viewer.latest.pop(grant.index, None)
             if grant.index in viewer.delivered:
-                viewer.delivered.discard(grant.index)
+                del viewer.delivered[grant.index]
                 self._notice(viewer, {'kind': 'motion_end', 'window': self.window, 'view_id': viewer.view_id,
                                       'index': grant.index, 'generation': grant.generation})
 
@@ -166,7 +166,7 @@ class CompanyMotionService:
                 continue
             peer.latest.clear()
             peer.delivered.clear()
-            peer.sector, peer.indices = None, set()
+            peer.views.clear()
             peer.awaiting_ack, peer.source_ack, peer.view_id = None, b'', 0
             self._notice(peer, {'kind': 'motion_state', 'window': self.window, 'running': running})
 
@@ -246,19 +246,30 @@ class CompanyMotionService:
                             'last_sequence': grant.last_sequence})
 
     def _view(self, peer, message):
-        indices, sector = message.get('indices'), message.get('sector_macro')
-        if (set(message) != {'kind', 'window', 'view_id', 'sector_macro', 'indices'} or
-                type(message['view_id']) is not int or not peer.view_id < message['view_id'] <= MAX_COUNTER):
+        fields = {'kind', 'window', 'view_id'}
+        if message['kind'] == 'motion_view' and set(message) == fields | {'sector_macro', 'indices'}:
+            rows = [{'sector_macro': message['sector_macro'], 'indices': message['indices']}]
+        elif message['kind'] == 'motion_views' and set(message) == fields | {'views'}:
+            rows = message['views']
+        else:
+            raise ValueError('invalid observed view')
+        if type(message['view_id']) is not int or not peer.view_id < message['view_id'] <= MAX_COUNTER:
             raise ValueError('invalid observed view revision')
-        validate_view(sector, indices)
-        peer.delivered.clear()
+        views = normalize_views(rows, own_index=peer.grant.index)
+        previous = peer.views
         peer.view_id = message['view_id']
-        peer.sector, peer.indices = sector, set(indices) - {peer.grant.index}
-        peer.latest.clear()
+        peer.views = views
+        peer.delivered = {index: sector for index, sector in peer.delivered.items()
+                          if view_matches(views, index, sector)}
+        peer.latest = {index: sample for index, sample in peer.latest.items()
+                       if view_matches(views, index, sample['sector_macro'])}
+        now = time.monotonic()
         for grant in self._grants.values():
             sample = grant.last_sample
-            if (grant.index in peer.indices and sample is not None and grant.visible_until > time.monotonic()
-                    and sample['sector_macro'] == sector):
+            if sample is None or grant.visible_until <= now:
+                continue
+            sector = sample['sector_macro']
+            if view_matches(views, grant.index, sector) and not view_matches(previous, grant.index, sector):
                 peer.latest[grant.index] = sample
 
     def _sample(self, peer, message):
@@ -286,7 +297,7 @@ class CompanyMotionService:
         peer.source_ack = encode_frame({'kind': 'motion_sampled', 'window': self.window,
                                    'sequence': grant.last_sequence})
         for viewer in self._peers.values():
-            if viewer is not peer and grant.index in viewer.indices and viewer.sector == value['sector_macro']:
+            if viewer is not peer and view_matches(viewer.views, grant.index, value['sector_macro']):
                 viewer.latest[grant.index] = value
 
     def _receive(self, peer, message):
@@ -305,7 +316,7 @@ class CompanyMotionService:
                     tuple(message[key] for key in fields) != peer.awaiting_ack):
                 raise ValueError('movement receipt does not match the in-flight snapshot')
             peer.awaiting_ack = None
-        elif message.get('kind') == 'motion_view':
+        elif message.get('kind') in ('motion_view', 'motion_views'):
             self._view(peer, message)
         elif message.get('kind') == 'motion_sample':
             self._sample(peer, message)
@@ -322,7 +333,7 @@ class CompanyMotionService:
                 elif peer.latest and peer.awaiting_ack is None:
                     index = next(iter(peer.latest))
                     sample = peer.latest.pop(index)
-                    peer.delivered.add(index)
+                    peer.delivered[index] = sample['sector_macro']
                     peer.awaiting_ack = (peer.view_id, index, sample['generation'], sample['sequence'])
                     peer.outgoing = encode_frame({'kind': 'motion_snapshot', 'window': self.window,
                                              'view_id': peer.view_id, 'sample': sample})

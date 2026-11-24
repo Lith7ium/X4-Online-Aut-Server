@@ -63,7 +63,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         gateway = await start_server(listener=public, ssl_context=create_server_context(certificate, key),
             shared_key=KEY, control_port=control.sockets[0].getsockname()[1],
             file_port=unused_file.getsockname()[1], motion_port=self.service.port,
-            max_connections=1, max_motion_connections=2, idle_timeout=15)
+            max_connections=1, max_motion_connections=3, idle_timeout=15)
         self.addAsyncCleanup(gateway.close)
 
     @staticmethod
@@ -258,7 +258,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
 
         self.service.revoke(1)
         self.clients = [b]
-        await self.drive(lambda: len(lost_b) == 2)
+        await self.drive(lambda: len(lost_b) == 3)
         self.assertEqual(lost_b[-1], (1970, first_grant['generation']))
         with self.assertRaises(ConnectionError):
             await self.drive(a.poll)
@@ -350,7 +350,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(viewer_peer().view_id, 0)
         self.service.set_running(True)
-        await self.drive(lambda: source_client._running and viewer_peer().indices == {7354})
+        await self.drive(lambda: source_client._running and viewer_peer().views == {'sector_a': {7354}})
         self.assertEqual(viewer_peer().view_id, 1)
         source.stage(1, 'sector_a', 10)
         await self.drive(lambda: len(seen) == 1)
@@ -368,7 +368,7 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         # must only see it once although the wire records another receipt.
         await self.drive(lambda: viewer.stats()['snapshots_received'] == 3)
         self.assertIsNot(viewer._client, first_link)
-        self.assertEqual((viewer_peer().view_id, viewer_peer().indices), (1, {7354, 999}))
+        self.assertEqual((viewer_peer().view_id, viewer_peer().views), (1, {'sector_a': {7354, 999}}))
         self.assertEqual([row['sequence'] for row in seen], [1, 2])
         self.assertEqual(ended, [identity])
         source.stage(3, 'sector_a', 42)
@@ -400,6 +400,116 @@ class CompanyMotionTLSTests(unittest.IsolatedAsyncioTestCase):
         viewer.close()
         viewer.close()
         self.assertEqual(ended, [identity] * 5)
+
+    async def test_dual_view_replaces_map_and_preserves_cockpit_over_tls(self):
+        control, viewer_port = await self.link()
+        _, cockpit_port = await self.link()
+        _, map_port = await self.link()
+        viewer_grant = self.grant(1, 101, 'sector_a')
+        cockpit_grant = self.grant(2, 1970, 'sector_a')
+        map_grant = self.grant(3, 7354, 'sector_b')
+        cockpit, source_a, _, _ = self.attach(cockpit_port, cockpit_grant)
+        map_client, source_b, _, _ = self.attach(map_port, map_grant)
+        seen, ended = [], []
+        viewer = ReconnectingCompanyMotionClient(
+            viewer_port, viewer_grant, SelectedCockpit(101), lambda _: True,
+            on_snapshot=seen.append, on_end=lambda index, generation: ended.append((index, generation)),
+        )
+        self.addCleanup(viewer.close)
+        self.clients = [viewer, cockpit, map_client]
+
+        def row(sector, *indices):
+            return {'sector_macro': sector, 'indices': list(indices)}
+
+        def viewer_peer():
+            return next((peer for peer in self.service._peers.values()
+                         if peer.grant is not None and peer.grant.handle == 1), None)
+
+        view_ab = [row('sector_a', 101, 1970), row('sector_a', 1970), row('sector_b', 7354)]
+        view_ac = [row('sector_a', 1970), row('sector_c', 7354)]
+        viewer.set_views(view_ab)
+        with self.assertRaises(ValueError):
+            viewer.set_views(view_ab + [row('sector_c', 999)])
+        with self.assertRaises(ValueError):
+            viewer.set_views([row('sector_a', *range(1000, 1256)), row('sector_b', 7354)])
+        self.service.set_running(True)
+        await self.drive(lambda: cockpit._running and map_client._running and viewer_peer() is not None
+                         and viewer_peer().views == {'sector_a': {1970}, 'sector_b': {7354}})
+        await self.control_roundtrip(control, b'dual-subscription')
+        source_a.stage(1, 'sector_a', 10)
+        source_b.stage(1, 'sector_b', 20)
+        await self.drive(lambda: len(seen) == 2)
+        self.assertEqual({(r['index'], r['sector_macro'], r['sequence']) for r in seen},
+                         {(1970, 'sector_a', 1), (7354, 'sector_b', 1)})
+        self.assertEqual(ended, [])
+
+        viewer.set_views(view_ac)
+        map_identity = (7354, map_grant['generation'])
+        cockpit_identity = (1970, cockpit_grant['generation'])
+        self.assertEqual(ended, [map_identity])
+        source_a.stage(2, 'sector_a', 26)
+        source_b.stage(2, 'sector_b', 36)
+        await self.drive(lambda: len(seen) == 3 and map_client.stats()['samples_acknowledged'] == 2
+                         and viewer_peer().view_id == 2)
+        self.assertEqual((seen[-1]['index'], seen[-1]['sequence'], seen[-1]['real_velocity']),
+                         (1970, 2, VELOCITY))
+        source_b.stage(3, 'sector_c', 52)
+        await self.drive(lambda: len(seen) == 4)
+        self.assertEqual((seen[-1]['index'], seen[-1]['sector_macro']), (7354, 'sector_c'))
+        self.assertEqual(ended, [map_identity])
+
+        viewer.set_views([])
+        await self.drive(lambda: not viewer_peer().views)
+        self.assertCountEqual(ended, [map_identity, cockpit_identity, map_identity])
+        self.service._drop(viewer_peer())
+        await self.drive(lambda: viewer._client is None)
+        viewer.set_views(view_ac)
+        await self.drive(lambda: viewer.stats()['snapshots_received'] == 6)
+        self.assertEqual(len(seen), 4)  # Cached positions cannot reappear after clear/reconnect.
+        source_a.stage(3, 'sector_a', 42)
+        source_b.stage(4, 'sector_c', 68)
+        await self.drive(lambda: len(seen) == 6)
+        self.assertEqual({(r['index'], r['sector_macro'], r['sequence']) for r in seen[-2:]},
+                         {(1970, 'sector_a', 3), (7354, 'sector_c', 4)})
+        self.assertIsNone(viewer.failure)
+        await self.control_roundtrip(control, b'after-dual-rebind')
+
+    async def test_legacy_server_can_reject_dual_view_without_dropping_existing_control(self):
+        control, motion = await self.link()
+        reader, writer = await asyncio.open_connection('127.0.0.1', control)
+        writer.write(b'before\n')
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.readline(), 2), b'control:before\n')
+        self.addCleanup(writer.close)
+        source = SelectedCockpit(1970)
+        viewer = ReconnectingCompanyMotionClient(motion, self.grant(1, 1970, 'sector_a'),
+            source, lambda _: True, on_snapshot=lambda _: None, on_end=lambda *_: None)
+        self.addCleanup(viewer.close)
+        self.clients = [viewer]
+        self.service.set_running(True)
+        await self.drive(lambda: viewer._client is not None and viewer._client._running)
+        original = self.service._receive
+
+        def legacy_receive(peer, message):
+            if message['kind'] == 'motion_views':
+                raise ValueError('unknown movement message')
+            original(peer, message)
+
+        with patch.object(self.service, '_receive', side_effect=legacy_receive):
+            viewer.set_views([{'sector_macro': 'sector_a', 'indices': [7354]},
+                              {'sector_macro': 'sector_b', 'indices': [7355]}])
+            await self.drive(lambda: viewer._client is None)
+            writer.write(b'during\n')
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.readline(), 2), b'control:during\n')
+            viewer.set_view('sector_a', [7354])
+            await self.drive(lambda: any(peer.views == {'sector_a': {7354}}
+                                         for peer in self.service._peers.values()))
+            writer.write(b'after\n')
+            await writer.drain()
+            self.assertEqual(await asyncio.wait_for(reader.readline(), 2), b'control:after\n')
+        writer.close()
+        await writer.wait_closed()
 
     async def test_motion_requires_both_pin_and_shared_key_before_binding(self):
         grant = self.grant(1, 1970, 'sector_a')

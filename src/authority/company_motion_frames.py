@@ -48,3 +48,25 @@ def validate_view(sector, indices):
             any(type(index) is not int or not 1 <= index <= 200000 for index in indices) or
             len(indices) != len(set(indices))):
         raise ValueError('invalid observed sector or ship indices')
+
+
+def normalize_views(views, *, own_index=None):
+    """Validate a bounded replacement and merge rows for the same sector."""
+    if type(views) is not list or len(views) > MAX_INDICES:
+        raise ValueError('invalid observed views')
+    merged = {}
+    for row in views:
+        if type(row) is not dict or set(row) != {'sector_macro', 'indices'}:
+            raise ValueError('invalid observed view row')
+        sector, indices = row['sector_macro'], row['indices']
+        validate_view(sector, indices)
+        selected = set(indices) - {own_index}
+        if selected:
+            merged.setdefault(sector, set()).update(selected)
+    if len(merged) > 2 or sum(map(len, merged.values())) > MAX_INDICES:
+        raise ValueError('observed views exceed their bounds')
+    return {sector: frozenset(indices) for sector, indices in merged.items()}
+
+
+def view_matches(views, index, sector):
+    return index in views.get(sector, ())
