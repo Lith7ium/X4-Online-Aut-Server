@@ -66,6 +66,12 @@ branch. [Transport change](https://github.com/Lith7ium/X4-Online-Aut-Server/comm
   passed. A first local sizing run used about 3.72 CPU cores and up to 8.60 GiB
   summed process RSS. Provider hardware has yet to be measured.
   [Provider evidence](AUTHORITY-PROVIDER-20261124.md)
+- The GPU-free server completed a real stock purchase while its avatar
+  stayed on another station. After a private native cold restart WRN-302
+  held six water, the shared account held 9,651 Cr and WOO-831 remained
+  in its original sector. The trial save is unpublished because its first
+  verifier misread a balance. The player-facing purchase path is still open.
+  [Stock trade, account debit and cold restart](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 - Players select an unoccupied ship of one company. Admission verifies their
   actual cockpit against the offered full registry. The test world contains
   WOO-831 (1970) and WRN-302 (7354) in different sectors.
