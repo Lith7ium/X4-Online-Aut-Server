@@ -14,10 +14,11 @@ class CompanyMotionClient:
     """Poll on the player owner thread. Only one sample awaits a receipt in each direction."""
 
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
-                 on_view_reset=None, _latest_seen=None):
+                 on_view_reset=None, on_transport_lost=None, on_clock=None, _latest_seen=None):
         epoch, index = source.registry
-        if on_view_reset is not None and not callable(on_view_reset):
-            raise ValueError('movement view reset callback must be callable')
+        if any(callback is not None and not callable(callback)
+               for callback in (on_view_reset, on_transport_lost, on_clock)):
+            raise ValueError('invalid movement observation callback')
         if type(credential) is not dict or not callable(validate_peer):
             raise ValueError('movement admission and local source validator required')
         credential = validate_ship_motion_credential(credential, index=index, registry_epoch=epoch,
@@ -28,7 +29,10 @@ class CompanyMotionClient:
         try:
             self._connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._connection.setblocking(False)
-            self._outgoing = encode_frame({'kind': 'bind_motion', 'ticket': credential['ticket']})
+            bind = {'kind': 'bind_motion', 'ticket': credential['ticket']}
+            if on_transport_lost is not None:
+                bind['loss_notifications'] = True
+            self._outgoing = encode_frame(bind)
         except BaseException:
             self._connection.close()
             raise
@@ -37,6 +41,8 @@ class CompanyMotionClient:
         self._on_snapshot = on_snapshot
         self._on_end = on_end
         self._on_view_reset = on_view_reset
+        self._on_transport_lost = on_transport_lost
+        self._on_clock = on_clock
         self._generation = credential['generation']
         self._incoming = bytearray()
         self._bind_deadline = time.monotonic() + 15
@@ -48,6 +54,7 @@ class CompanyMotionClient:
         self._desired_view = None
         self._sent_view = None
         self._visible = {}
+        self._hidden = set()
         # Retained pairs can receive a frame already in flight on an older
         # revision. Removed pairs cannot resume on that revision if reselected.
         self._route_revisions = {}
@@ -78,24 +85,28 @@ class CompanyMotionClient:
         }
         self._retire_outside(desired)
 
-    def _retire_outside(self, views):
+    def _retire_outside(self, views, *, transport_lost=False):
         failure = None
         for index, (sector, generation) in tuple(self._visible.items()):
             if view_matches(views, index, sector):
                 continue
             try:
-                self._end(index, generation)
+                self._end(index, generation, transport_lost=transport_lost)
             except Exception as error:
                 failure = error
         if failure is not None:
             raise failure
 
-    def _end(self, index, generation):
+    def _end(self, index, generation, *, transport_lost=False):
         visible = self._visible.get(index)
         if visible is not None and visible[1] == generation:
             del self._visible[index]
+            self._hidden.discard(index)
             self._stats['visibility_ends'] += 1
-            self._on_end(index, generation)
+            if transport_lost and self._on_transport_lost is not None:
+                self._on_transport_lost(index, generation)
+            else:
+                self._on_end(index, generation)
 
     def _snapshot(self, sample):
         index, sector = sample['index'], sample['sector_macro']
@@ -107,6 +118,7 @@ class CompanyMotionClient:
         if visible is not None and visible != (sector, generation):
             self._end(index, visible[1])
         self._latest_seen[index] = generation, sequence
+        self._hidden.discard(index)
         self._visible[index] = sector, generation
         self._on_snapshot(dict(sample))
 
@@ -114,6 +126,10 @@ class CompanyMotionClient:
         fields = {'kind', 'window', 'running'}
         if binding:
             fields.add('last_sequence')
+            if self._on_transport_lost is not None:
+                fields.add('loss_notifications')
+                if message.get('loss_notifications') is not True:
+                    raise ValueError('movement bind lacks negotiated loss notifications')
         window = message.get('window')
         if (set(message) != fields or type(window) is not int or not 0 <= window <= MAX_COUNTER or
                 type(message['running']) is not bool or binding != (self._window is None)):
@@ -131,6 +147,8 @@ class CompanyMotionClient:
         self._view_id = 0
         self._route_revisions.clear()
         self._retire_outside({})
+        if self._on_clock is not None:
+            self._on_clock(window, self._running)
         if not binding and self._on_view_reset is not None:
             self._on_view_reset()
 
@@ -169,14 +187,21 @@ class CompanyMotionClient:
                 self._snapshot(sample)
             self._receipt = {'kind': 'motion_received', 'view_id': view_id, 'index': sample['index'],
                              'sequence': sample['sequence'], 'generation': sample['generation']}
-        elif kind == 'motion_end' and set(message) == {'kind', 'window', 'view_id', 'index', 'generation'}:
+        elif (kind == 'motion_end' or (kind == 'motion_hidden' and self._on_transport_lost is not None)) and (
+                set(message) == {'kind', 'window', 'view_id', 'index', 'generation'}
+        ):
             index, generation = message['index'], message['generation']
             if (type(index) is not int or not 1 <= index <= 200000 or
                     type(generation) is not str or not _HEX32.fullmatch(generation)):
                 raise ValueError('invalid movement visibility end')
             visible = self._visible.get(index)
-            if visible is not None and view_id >= self._route_revisions.get((index, visible[0]), MAX_COUNTER + 1):
-                self._end(index, generation)
+            if (visible is not None and visible[1] == generation
+                    and view_id >= self._route_revisions.get((index, visible[0]), MAX_COUNTER + 1)):
+                if kind == 'motion_end':
+                    self._end(index, generation)
+                elif index not in self._hidden:
+                    self._hidden.add(index)
+                    self._on_transport_lost(index, generation)
         else:
             raise ValueError('unknown remote movement frame')
 
@@ -240,11 +265,14 @@ class CompanyMotionClient:
                 if not sent:
                     raise ConnectionError('movement stream closed on write')
                 self._outgoing = self._outgoing[sent:]
+        except OSError:
+            self.close(transport_lost=True)
+            raise
         except BaseException:
             self.close()
             raise
 
-    def close(self):
+    def close(self, *, transport_lost=False):
         self._outgoing = b''
         self._connection.close()
-        self._retire_outside({})
+        self._retire_outside({}, transport_lost=transport_lost)

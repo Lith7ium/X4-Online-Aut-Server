@@ -165,6 +165,7 @@ class CompanyMotionObserver:
             return
 
     def snapshot(self, sample):
+        received_at = time.monotonic()
         self.expire()
         sample = motion_value(sample)
         if sample['version'] != 3 or sample['epoch'] != self._epoch:
@@ -186,18 +187,31 @@ class CompanyMotionObserver:
                 'REMOTE', slot, view.serial, self._epoch, sample['index'], sample['generation'],
                 sample['sequence'], sample['sector_macro'], *values,
             )))
+            if trial is not None:
+                # Only the opt-in local writer needs the original launcher
+                # timestamp. The remote sender clock is a separate domain.
+                message += '|' + format(received_at, '.17g')
             if self._send(message):
                 view.pending.append((sample, values, time.monotonic()))
                 if trial is not None:
                     self._trial = trial
 
-    def end(self, index, generation):
-        if self._trial is not None and self._trial[1:3] == (index, generation):
-            self._end_trial()
+    def transport_lost(self, index, generation):
+        """Clear old receipt candidates without revoking the local trial's authorization."""
         for view in self._slots.values():
             if view.active is not None and view.active[1] == index:
                 view.pending = deque((item for item in view.pending if item[0]['generation'] != generation),
                                      maxlen=_MAX_PENDING)
+
+    def end(self, index, generation):
+        if self._trial is not None and self._trial[1:3] == (index, generation):
+            self._end_trial()
+        self.transport_lost(index, generation)
+
+    def reset_world(self):
+        self._end_trial()
+        for view in self._slots.values():
+            view.pending.clear()
 
     def stats(self):
         slots = {

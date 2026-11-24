@@ -38,7 +38,8 @@ class ReconnectingCompanyMotionClient:
     owner to a later admission. The optional observation callbacks run on this
     same thread. An explicit view survives a link reset without retaining poses.
     """
-    def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None):
+    def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
+                 on_transport_lost=None, on_world_reset=None):
         if ((on_snapshot is not None or on_end is not None)
                 and not (callable(on_snapshot) and callable(on_end))):
             raise ValueError('an observed view needs snapshot and visibility callbacks')
@@ -47,6 +48,9 @@ class ReconnectingCompanyMotionClient:
         self._source = _LocalSource(source)
         self._validate_peer = validate_peer
         self._on_snapshot, self._on_end = on_snapshot, on_end
+        self._on_transport_lost = on_transport_lost
+        self._on_world_reset = on_world_reset
+        self._clock = None
         self._view = None
         self._latest_seen = {}
         self._client = None
@@ -89,11 +93,22 @@ class ReconnectingCompanyMotionClient:
             # Local callback errors must never cause a transport retry.
             raise ValueError('local movement observer failed') from None
 
+    def _bound_clock(self, window, running):
+        clock = (window, running)
+        if self._clock is not None and clock != self._clock:
+            self._notify(self._on_world_reset)
+        self._clock = clock
+
     def _fail(self):
         self.failure = 'motion_local_or_protocol_failure'
         self._credential = None
         self._view = None
         self._latest_seen.clear()
+        if self._on_world_reset is not None:
+            try:
+                self._notify(self._on_world_reset)
+            except ValueError:
+                pass
 
     def _finish_link(self):
         client, self._client = self._client, None
@@ -130,6 +145,11 @@ class ReconnectingCompanyMotionClient:
                         on_end=lambda index, generation: self._notify(self._on_end, index, generation),
                         _latest_seen=self._latest_seen,
                     )
+                    if self._on_transport_lost is not None:
+                        observer['on_transport_lost'] = lambda index, generation: self._notify(
+                            self._on_transport_lost, index, generation)
+                    if self._on_world_reset is not None:
+                        observer['on_clock'] = self._bound_clock
                 self._client = CompanyMotionClient(self._port, self._credential,
                                                    self._source, self._validate_peer, **observer)
                 self._apply_view()
@@ -147,7 +167,10 @@ class ReconnectingCompanyMotionClient:
     @classmethod
     def observing(cls, port, credential, source, validate_peer):
         observer = source.observe(validate_peer)
-        client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end)
+        trial = {}
+        if getattr(source, 'playback_index', None) is not None:
+            trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world)
+        client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end, **trial)
         observer.bind_views(client.set_views)
         return client
 
@@ -162,4 +185,8 @@ class ReconnectingCompanyMotionClient:
         self._credential = None
         self._view = None
         self._latest_seen.clear()
-        self._finish_link()
+        try:
+            self._finish_link()
+        finally:
+            if self._on_world_reset is not None:
+                self._notify(self._on_world_reset)

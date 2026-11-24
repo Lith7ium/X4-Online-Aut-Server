@@ -16,6 +16,7 @@ _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
 # A stopped game sampler cannot refresh a new viewer from an indefinitely old pose.
 MAX_SAMPLE_AGE = 3.0
+_MAX_HIDDEN_AGE = 5.0
 
 
 @dataclass
@@ -29,6 +30,7 @@ class _Grant:
     last_accepted: dict | None = None
     last_sequence: int = 0
     visible_until: float = 0
+    last_accepted_at: float = 0
 
 
 @dataclass
@@ -41,6 +43,8 @@ class _Peer:
     notices: deque = field(default_factory=deque)
     latest: dict = field(default_factory=dict)
     delivered: dict = field(default_factory=dict)
+    hidden_until: dict = field(default_factory=dict)
+    loss_notifications: bool = False
     awaiting_ack: tuple | None = None
     source_ack: bytes = b''
     view_id: int = 0
@@ -114,28 +118,40 @@ class CompanyMotionService:
         return {'ticket': grant.ticket, 'epoch': grant.epoch, 'generation': grant.generation,
                 'index': ship_index, 'session_epoch': session_epoch}
 
-    def _drop(self, peer):
+    def _drop(self, peer, *, transport_lost=True):
         if self._peers.pop(peer.connection, None) is None:
             return
         peer.connection.close()
         grant = peer.grant
         if grant is not None and self._grants.get(grant.handle) is grant and grant.last_sample is not None:
-            self._retire_sample(grant)
+            self._retire_sample(grant, transport_lost=transport_lost)
             grant.last_sample = None
 
     def _notice(self, peer, message):
         if len(peer.notices) >= 2 * MAX_PEERS:
-            self._drop(peer)
+            self._drop(peer, transport_lost=False)
         else:
             peer.notices.append(encode_frame(message))
 
-    def _retire_sample(self, grant):
+    def _retire_sample(self, grant, *, transport_lost=False):
         for viewer in tuple(self._peers.values()):
             viewer.latest.pop(grant.index, None)
-            if grant.index in viewer.delivered:
+            if grant.index not in viewer.delivered:
+                continue
+            kind = 'motion_end'
+            if transport_lost and viewer.loss_notifications:
+                if grant.index in viewer.hidden_until:
+                    continue
+                # Keep only the delivered identity through the permitted local
+                # prediction window. An explicit revoke or sector change still
+                # needs a hard end, even after the source socket was lost.
+                viewer.hidden_until[grant.index] = grant.last_accepted_at + _MAX_HIDDEN_AGE
+                kind = 'motion_hidden'
+            else:
                 del viewer.delivered[grant.index]
-                self._notice(viewer, {'kind': 'motion_end', 'window': self.window, 'view_id': viewer.view_id,
-                                      'index': grant.index, 'generation': grant.generation})
+                viewer.hidden_until.pop(grant.index, None)
+            self._notice(viewer, {'kind': kind, 'window': self.window, 'view_id': viewer.view_id,
+                                  'index': grant.index, 'generation': grant.generation})
 
     def revoke(self, handle):
         self._check_owner()
@@ -166,6 +182,7 @@ class CompanyMotionService:
                 continue
             peer.latest.clear()
             peer.delivered.clear()
+            peer.hidden_until.clear()
             peer.views.clear()
             peer.awaiting_ack, peer.source_ack, peer.view_id = None, b'', 0
             self._notice(peer, {'kind': 'motion_state', 'window': self.window, 'running': running})
@@ -235,15 +252,22 @@ class CompanyMotionService:
 
     def _bind(self, peer, message):
         ticket = message.get('ticket')
-        if (set(message) != {'kind', 'ticket'} or message['kind'] != 'bind_motion' or
-                type(ticket) is not str or not _TICKET.fullmatch(ticket)):
+        fields = {'kind', 'ticket'}
+        capability = 'loss_notifications'
+        if ((set(message) != fields and (set(message) != fields | {capability}
+                                        or message[capability] is not True))
+                or message['kind'] != 'bind_motion' or type(ticket) is not str or not _TICKET.fullmatch(ticket)):
             raise ValueError('invalid movement binding')
         grant = self._tickets.get(ticket)
         if grant is None or any(other.grant is grant for other in self._peers.values()):
             raise ValueError('movement ticket unavailable')
         peer.grant = grant
-        self._notice(peer, {'kind': 'motion_bound', 'window': self.window, 'running': self.running,
-                            'last_sequence': grant.last_sequence})
+        peer.loss_notifications = capability in message
+        bound = {'kind': 'motion_bound', 'window': self.window, 'running': self.running,
+                 'last_sequence': grant.last_sequence}
+        if peer.loss_notifications:
+            bound[capability] = True
+        self._notice(peer, bound)
 
     def _view(self, peer, message):
         fields = {'kind', 'window', 'view_id'}
@@ -261,6 +285,8 @@ class CompanyMotionService:
         peer.views = views
         peer.delivered = {index: sector for index, sector in peer.delivered.items()
                           if view_matches(views, index, sector)}
+        peer.hidden_until = {index: until for index, until in peer.hidden_until.items()
+                             if index in peer.delivered}
         peer.latest = {index: sample for index, sample in peer.latest.items()
                        if view_matches(views, index, sample['sector_macro'])}
         now = time.monotonic()
@@ -284,12 +310,13 @@ class CompanyMotionService:
         if grant.last_sample is None and value['real_velocity'] is not None:
             raise ValueError('initial sample must establish a new motion baseline')
         check_motion_progress(value, grant.last_accepted)
-        if grant.last_sample is not None and grant.last_sample['sector_macro'] != value['sector_macro']:
+        if grant.last_accepted is not None and grant.last_accepted['sector_macro'] != value['sector_macro']:
             self._retire_sample(grant)
         now = time.monotonic()
         grant.last_accepted = grant.last_sample = value
         grant.last_sequence = value['sequence']
         grant.visible_until = now + MAX_SAMPLE_AGE
+        grant.last_accepted_at = now
         self._remember_application(AcceptedCompanyMotion(grant.handle, self.window, now, value))
         self.accepted_samples += 1
         self.samples_with_velocity += int(value['real_velocity'] is not None)
@@ -334,6 +361,7 @@ class CompanyMotionService:
                     index = next(iter(peer.latest))
                     sample = peer.latest.pop(index)
                     peer.delivered[index] = sample['sector_macro']
+                    peer.hidden_until.pop(index, None)
                     peer.awaiting_ack = (peer.view_id, index, sample['generation'], sample['sequence'])
                     peer.outgoing = encode_frame({'kind': 'motion_snapshot', 'window': self.window,
                                              'view_id': peer.view_id, 'sample': sample})
@@ -354,7 +382,12 @@ class CompanyMotionService:
         for grant in self._grants.values():
             if grant.visible_until and grant.visible_until <= now:
                 grant.visible_until = 0
-                self._retire_sample(grant)
+                self._retire_sample(grant, transport_lost=True)
+        for peer in self._peers.values():
+            for index, until in tuple(peer.hidden_until.items()):
+                if now >= until:
+                    del peer.hidden_until[index]
+                    peer.delivered.pop(index, None)
         for _ in range(MAX_PEERS):
             try:
                 connection, _ = self.listener.accept()
@@ -375,8 +408,10 @@ class CompanyMotionService:
                 for message in read_frames(peer.connection, peer.incoming):
                     self._receive(peer, message)
                 self._write(peer)
-            except (ValueError, OSError, RecursionError):
+            except OSError:
                 self._drop(peer)
+            except (ValueError, RecursionError):
+                self._drop(peer, transport_lost=False)
 
     def close(self):
         self._check_owner()

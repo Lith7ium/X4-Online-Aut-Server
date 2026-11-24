@@ -29,7 +29,7 @@ class CockpitTrialEndTests(unittest.TestCase):
                     x=1, y=2, z=3, real_velocity={'x': 4, 'y': 0, 'z': 0})
 
     def seen(self, observer, remote):
-        observer.receive(['SEEN', *remote[1:8], ACTOR, CODE, *remote[8:]])
+        observer.receive(['SEEN', *remote[1:8], ACTOR, CODE, *remote[8:16]])
 
     def end(self, serial=1, generation=GENERATION):
         return ['END', 'cockpit', str(serial), EPOCH, str(TRIAL_INDEX), generation, SECTOR]
@@ -44,6 +44,7 @@ class CockpitTrialEndTests(unittest.TestCase):
             client = CompanyMotionClient.__new__(CompanyMotionClient)
             client._connection = owned
             client._visible = {TRIAL_INDEX: (SECTOR, GENERATION)}
+            client._hidden = set()
             client._on_end = observer.end
             client._stats = dict(visibility_ends=0)
             client.close()
@@ -52,6 +53,27 @@ class CockpitTrialEndTests(unittest.TestCase):
         self.seen(observer, remote)
         self.assertEqual(messages, [remote, self.end()])
         self.assertEqual(observer.stats()['samples_confirmed'], 0)
+
+    def test_transport_loss_clears_pending_but_only_world_reset_sends_end(self):
+        observer, messages = self.make()
+        with patch('authority.company_motion_observer.time.monotonic', return_value=100.0) as clock:
+            self.view(observer)
+            clock.side_effect = (100.25, 100.5, 100.75)
+            observer.snapshot(self.sample(1))
+        remote, = messages
+        self.assertEqual(len(remote), 17)
+        self.assertEqual(remote[-1], '100.25')
+        observer.transport_lost(TRIAL_INDEX, GENERATION)
+        with patch('authority.company_motion_observer.time.monotonic', return_value=101):
+            self.seen(observer, remote)
+        self.assertEqual(observer.stats()['samples_confirmed'], 0)
+        self.assertEqual(messages, [remote])
+        self.view(observer)
+        observer.snapshot(self.sample(2))
+        self.seen(observer, messages[-1])
+        self.assertEqual(observer.stats()['samples_confirmed'], 1)
+        observer.reset_world()
+        self.assertEqual(messages[-1], self.end())
 
     def test_generation_replacement_ends_old_pending_and_preserves_current_seen(self):
         observer, messages = self.make()
@@ -97,6 +119,7 @@ class CockpitTrialEndTests(unittest.TestCase):
                 observer, messages = self.make(trial)
                 self.view(observer, slot, index=index)
                 observer.snapshot(self.sample(1, index=index))
+                self.assertEqual(len(messages[-1]), 16)
                 self.seen(observer, messages[-1])
                 observer.end(index, GENERATION)
                 self.view(observer, slot, serial=2, clear=True)

@@ -30,11 +30,13 @@ class CompanyMotionServiceTests(unittest.TestCase):
         connection.sendall(json.dumps(message).encode() + b'\n')
         self.service.poll()
 
-    def bind(self, grant):
+    def bind(self, grant, **capabilities):
         connection, stream = self.open()
-        self.send(connection, {'kind': 'bind_motion', 'ticket': grant['ticket']})
+        self.send(connection, {'kind': 'bind_motion', 'ticket': grant['ticket'], **capabilities})
         reply = json.loads(stream.readline())
         self.assertEqual(reply['kind'], 'motion_bound')
+        for key, value in capabilities.items():
+            self.assertIs(reply[key], value)
         return connection, stream
 
     def sample(self, grant, sequence, sector='sector_a', velocity=None):
@@ -124,6 +126,29 @@ class CompanyMotionServiceTests(unittest.TestCase):
             self.service.set_running(False)
             self.service.poll()
             self.assertEqual(json.loads(stream.readline())['kind'], 'motion_state')
+
+    def test_opt_in_ttl_preserves_only_a_bounded_hard_end_watermark(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+        third = self.grant(3)
+        viewers = [self.bind(grant, loss_notifications=True) for grant in (self.second, third)]
+        for viewer, _ in viewers:
+            self.view(viewer, [1])
+        clock_path = 'authority.company_motion_service.time.monotonic'
+        with patch(clock_path, return_value=100):
+            self.publish(source, self.first, 1)
+            for _, stream in viewers:
+                self.assertEqual(json.loads(stream.readline())['sample']['sequence'], 1)
+        with patch(clock_path, return_value=103):
+            self.service.poll()
+            for _, stream in viewers:
+                self.assertEqual(json.loads(stream.readline())['kind'], 'motion_hidden')
+            self.view(viewers[0][0], [], view_id=2)
+        with patch(clock_path, return_value=105):
+            self.service.poll()
+        for peer in self.service._peers.values():
+            self.assertEqual(peer.hidden_until, {})
+            self.assertEqual(peer.delivered, {})
 
     def test_clock_change_before_binding_sends_only_current_bound_state(self):
         connection, stream = self.open()
