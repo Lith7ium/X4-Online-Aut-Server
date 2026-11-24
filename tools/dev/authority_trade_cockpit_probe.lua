@@ -1,7 +1,8 @@
 -- Private recovered-world offer/cockpit probe. No trade is dispatched.
 local cfg = X4LAN_CONFIG
 local mode = cfg and cfg.authority_trade_probe_mode
-if mode ~= 'offer' and mode ~= 'cockpit' then return end
+local from_flight = cfg and cfg.authority_player_dock_flight == true
+if not from_flight and mode ~= 'offer' and mode ~= 'cockpit' then return end
 
 local ffi = require('ffi')
 if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
@@ -26,11 +27,12 @@ local phase, deadline, take_time, next_verify = 'init'
 local last_md_seat
 local binding, menu, hook, captured, parked
 local failed = false
+local final_status, prepared
 
 local function log(row) DebugError('[X4LAN] AUTH_TRADE_COCKPIT ' .. row) end
 
 local function finish(status)
-    phase = 'done'
+    phase, final_status = 'done', status
     log('DONE|' .. status)
 end
 
@@ -229,6 +231,15 @@ local function capture_menu(data)
     menu.slidercellShipCargo(waredata.sell.id, waredata.buy and waredata.buy.id, 'water', 0, quantity)
     menu.slidercellTradeConfirmed('water')
     assert(menu.contextMenuData == data and controlled() and external_dock(), 'context_changed')
+    prepared = {data = data, offer = offer, prior = prior}
+    phase = 'confirm_map'
+end
+
+local function confirm_map()
+    local data, offer = prepared.data, prepared.offer
+    assert(menu.contextMenuData == data and controlled() and external_dock() and data.immediate == true
+        and data.immediateObject == binding.ship and data.component == binding.station
+        and data.currentShip == binding.ship and not data.wareexchange, 'preconfirm_context_changed')
     local selected
     for key, amount in pairs(data.orders) do
         if amount ~= 0 then
@@ -238,7 +249,7 @@ local function capture_menu(data)
         end
     end
     assert(selected, 'stock_slider_no_quantity')
-    log(('SLIDER|%d|%d|%d'):format(prior, prior + quantity, -quantity))
+    log(('SLIDER|%d|%d|%d'):format(prepared.prior, prepared.prior + quantity, -quantity))
     local cents = unit_cents(selected.price)
     menu.buttonConfirmTrade()
     assert(captured and captured.price_cents == cents and hook.detach(), 'intent_not_captured')
@@ -305,7 +316,7 @@ local function on_result(_, row)
     end
 end
 
-local function frame()
+local function frame(allow_confirm)
     local now = GetCurRealTime()
     if phase == 'init' then
         assert(RegisterEvent(screen .. '.Result', function(...) guarded(on_result, ...) end) ~= false, 'register')
@@ -343,11 +354,26 @@ local function frame()
             if phase == 'wait_remote_map' then map_unavailable('map_context_timeout')
             else error('map_context_timeout', 0) end
         end
+    elseif phase == 'confirm_map' then
+        if not from_flight or allow_confirm then confirm_map() end
     elseif phase == 'inspect_reply' then
         assert(now < deadline, 'inspect_timeout')
     end
 end
 
-function X4LAN_RECOVERY_ON_PAUSED()
-    guarded(frame)
+if from_flight then
+    function X4LAN_AUTHORITY_TRADE_CAPTURE_FROM_DOCK(ship, station, dock)
+        assert(phase == 'init' and ship and station and dock, 'capture_binding')
+        binding = {ship = ship, station = station, dock = dock,
+            ship_lua = lua_id(ship), station_lua = lua_id(station)}
+        phase = 'begin_map'
+        return function(allow_confirm)
+            guarded(frame, allow_confirm)
+            return final_status, failed, phase == 'confirm_map', captured
+        end
+    end
+else
+    function X4LAN_RECOVERY_ON_PAUSED()
+        guarded(frame)
+    end
 end
