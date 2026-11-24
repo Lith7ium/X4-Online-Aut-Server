@@ -1,4 +1,4 @@
--- One opt-in cockpit playback attempt on an operator-selected company ship.
+-- One opt-in cockpit playback trial bound to an operator-selected company ship and pilot.
 local M = {}
 
 function M.new(options)
@@ -7,14 +7,33 @@ function M.new(options)
     assert(type(target_index) == 'number' and target_index % 1 == 0 and target_index >= 1
         and target_index <= 200000 and target_index ~= options.own_index, 'invalid trial target')
     local factory = options.playback or X4LAN_COMPANY_HULL_PLAYBACK
-    local binding, session, controller
+    local prediction_seconds = assert(factory.MAX_PREDICTION_SECONDS)
+    local binding, session, controller, last
     local finished = false
     local trial = {}
 
-    function trial:close()
-        finished = true
+    local function paused()
+        return options.paused and options.paused() ~= false
+    end
+
+    local function stop_track()
         if controller then controller:stop(); controller = nil end
         if session then session:close(); session = nil end
+    end
+
+    function trial:close()
+        finished = true
+        stop_track()
+    end
+
+    local function retire(reason, now)
+        local timed_out = (reason == 'stale' or reason == 'arrival_gap')
+            and last and now >= last.arrival + prediction_seconds
+        if timed_out and controller:outcome_uncertain() == false then
+            stop_track()
+        else
+            trial:close()
+        end
     end
 
     local function same_view(observed, serial)
@@ -34,40 +53,73 @@ function M.new(options)
         end
     end
 
+    local function bind(observed, serial, generation)
+        binding = binding or {
+            slot = 'cockpit', serial = serial, epoch = observed.epoch, index = observed.index,
+            actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
+            generation = generation,
+        }
+        session = options.adapter:bind(binding)
+        if not session then
+            trial:close()
+            options.fault('native_binding')
+            return false
+        end
+        local active_session = session
+        controller = assert(factory.new({
+            enabled = true, own_index = options.own_index, binding = binding,
+            clock = options.clock, game = options.game, paused = options.paused,
+            guard = function() return active_session:guard() end,
+            read = function() return active_session:read() end,
+            write = function(_, target, before) return active_session:write(target, before) end,
+            record = options.record, fault = options.fault,
+        }))
+        return true
+    end
+
+    function trial:tick()
+        if finished then return end
+        if paused() then self:close(); return end
+        if controller then
+            local ok, reason = controller:tick()
+            if not ok then retire(reason or controller:state(), options.clock()) end
+        end
+    end
+
     function trial:sample(observed, serial, sample, arrival)
         if finished or observed.index ~= target_index then return end
-        if options.clock() - arrival >= factory.MAX_PREDICTION_SECONDS then return end
+        if paused() then self:close(); return end
+        local now = options.clock()
+        if type(arrival) ~= 'number' or not (arrival >= 0 and arrival <= now)
+                or now - arrival >= prediction_seconds then return end
         if binding and (not same_view(observed, serial) or binding.generation ~= sample.generation) then
             self:close()
             return
         end
-        if not binding then
-            if not sample.real_velocity then return end
-            binding = {
-                slot = 'cockpit', serial = serial, epoch = observed.epoch, index = observed.index,
-                actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
-                generation = sample.generation,
-            }
-            session = options.adapter:bind(binding)
-            if not session then
-                self:close()
-                options.fault('native_binding')
-                return
-            end
-            controller = assert(factory.new({
-                enabled = true, own_index = options.own_index, binding = binding,
-                clock = options.clock, game = options.game, paused = options.paused,
-                guard = function() return session:guard() end,
-                read = function() return session:read() end,
-                write = function(_, target, before) return session:write(target, before) end,
-                record = options.record, fault = options.fault,
-            }))
-        end
-        if not controller:push(binding, sample, arrival) then self:close() end
-    end
+        if not sample.real_velocity then return end
 
-    function trial:tick()
-        if controller and not controller:tick() then self:close() end
+        if last then
+            -- Compare source clocks only with the preceding source sample. Compare
+            -- ingress with the local deadline, even if Lua only drained it later.
+            if not (sample.sequence > last.sequence and sample.capture_time > last.capture_time
+                    and sample.source_time >= last.source_time and arrival >= last.arrival) then return end
+            local deadline = last.arrival + prediction_seconds
+            if now >= deadline then
+                if arrival < deadline then return end
+                -- Settle the last native write on its readback tick before closing.
+                if controller then self:tick() end
+                if finished or controller then return end
+            end
+        end
+
+        if not controller and not bind(observed, serial, sample.generation) then return end
+        local ok, reason = controller:push(binding, sample, arrival)
+        if not ok then
+            retire(reason or controller:state(), now)
+            return
+        end
+        last = {sequence=sample.sequence, capture_time=sample.capture_time,
+                source_time=sample.source_time, arrival=arrival}
     end
 
     return trial

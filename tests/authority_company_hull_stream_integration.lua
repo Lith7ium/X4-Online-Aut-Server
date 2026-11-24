@@ -42,6 +42,7 @@ local api = {
         local write = {actor=id, pose=pose, when=state.local_time}
         state.writes[#state.writes+1] = write
         state.pending = write
+        if state.unsafe_write then error('native setter may already have mutated') end
     end,
 }
 package.loaded.ffi = {
@@ -69,7 +70,7 @@ local function wait_for_hull_then_lose_it(loss)
     state = {
         paused=false, visible=remote_actor, local_time=12, game_time=230,
         pose={[own_actor]=pose(90), [remote_actor]=pose(100), [other_actor]=pose(120)},
-        writes={}, events={}, faults={}, incoming={}, sent={},
+        writes={}, events={}, faults={}, incoming={}, sent={}, binds=0,
     }
     local function clock() return state.local_time end
     local function paused() return state.paused end
@@ -93,6 +94,11 @@ local function wait_for_hull_then_lose_it(loss)
         enabled=true, pinned=pinned, own_index=own_index, observer=cockpit,
         guard=function() return not paused() end,
     })
+    local bind = adapter.bind
+    function adapter:bind(binding)
+        state.binds = state.binds + 1
+        return bind(self, binding)
+    end
     local trial = trial_module.new({
         enabled=true, own_index=own_index, target_index=remote_index, adapter=adapter,
         clock=clock, game=function() return state.game_time end, paused=paused,
@@ -123,11 +129,14 @@ local function wait_for_hull_then_lose_it(loss)
     end
 
     local trace = {}
-    local function deliver(sequence, x, source, capture, serial)
-        trace[sequence] = {source=source, capture=capture, x=x}
+    local function deliver(sequence, x, source, capture, serial, options)
+        options = options or {}
+        trace[sequence] = {source=source, capture=capture, x=x, arrival=options.arrival or state.local_time}
+        local velocity = options.without_velocity and {'-', '-', '-'} or {18, 0, 0}
         state.incoming[#state.incoming+1] = prefix .. table.concat({
-            'REMOTE', 'cockpit', serial or 2, epoch, remote_index, generation, sequence, 'sector_a',
-            x, 2, 3, 18, 0, 0, source, capture, state.local_time,
+            'REMOTE', 'cockpit', serial or 2, epoch, remote_index, options.generation or generation,
+            sequence, 'sector_a', x, 2, 3, velocity[1], velocity[2], velocity[3], source, capture,
+            options.arrival or state.local_time,
         }, '|')
     end
 
@@ -184,6 +193,80 @@ local function wait_for_hull_then_lose_it(loss)
         error('new stock view did not resolve through the local registry')
     end
 
+    if loss ~= 'pause' and loss ~= 'target' then
+        -- Stay in the same real reader/adapter view while fresh samples stop.
+        local previous_arrival = trace[43].arrival
+        local deadline = previous_arrival + 5
+        if loss == 'uncertain' then
+            state.unsafe_write = true
+            frame(.05)
+            state.unsafe_write = false
+            assert(state.faults[1][2] == true)
+        end
+        while state.local_time + .06 < deadline do frame(.06) end
+        local before_deadline = #state.writes
+        if loss == 'arrival_gap' then
+            deliver(44, state.pose[remote_actor].x + 2, 376, 86010, nil, {arrival=deadline + .001})
+            frame(.07)
+            assert(state.binds == 2 and #state.writes > before_deadline)
+        else
+            frame(.10)
+            assert(#state.writes == before_deadline)
+            if loss ~= 'uncertain' then
+                assert(state.faults[1][1] == 'stale' and state.faults[1][2] == false)
+            end
+            local return_serial
+            if loss == 'end_during_gap' then
+                state.incoming[#state.incoming+1] = prefix .. table.concat({
+                    'END','cockpit',2,epoch,remote_index,generation,'sector_a',
+                },'|')
+                frame(.05)
+            elseif loss == 'pause_during_gap' then
+                state.paused = true
+                frame(.05)
+                state.paused = false
+                for _ = 1, 3 do frame(.06) end
+            elseif loss == 'target_during_gap' then
+                state.visible = other_actor
+                wait_view(other_index, 2)
+                state.visible = remote_actor
+                return_serial = wait_view(remote_index, 2)
+            elseif loss == 'generation_during_gap' then
+                deliver(44, state.pose[remote_actor].x + 2, 376, 86010, nil,
+                        {generation=('c'):rep(32)})
+                frame(.05)
+            elseif loss == 'distance' then
+                deliver(44, state.pose[remote_actor].x + 60, 376, 86010)
+                frame(.05)
+                assert(state.binds == 2 and state.faults[2][1] == 'correction_out_of_bounds')
+            else
+                local current = state.pose[remote_actor].x
+                deliver(44, current + 2, 376, 86010, nil, {arrival=deadline - .001})
+                deliver(43, current + 2, 376, 86010)
+                deliver(44, current + 2, 376, 86000.36)
+                deliver(44, current + 2, 376, 86010, nil, {arrival=state.local_time + 2})
+                deliver(44, current + 2, 376, 86010, nil, {without_velocity=true})
+                frame(.05)
+                assert(state.binds == 1 and #state.writes == before_deadline)
+            end
+
+            deliver(45, state.pose[remote_actor].x + 3, 377, 86011, return_serial)
+            frame(.07)
+            if loss == 'stale' then
+                assert(state.binds == 2 and #state.writes > before_deadline)
+                frame(.06)
+                local last = state.events[#state.events-1]
+                assert(last.kind == 'readback' and last.source_sequence == 45 and last.elapsed > 0)
+            else
+                assert(#state.writes == before_deadline)
+                assert(state.binds == (loss == 'distance' and 2 or 1))
+            end
+        end
+        assert(state.pose[own_actor].x == 90 and state.pose[other_actor].x == 120)
+        stream:close()
+        return
+    end
+
     local writes = #state.writes
     if loss == 'pause' then
         state.paused = true
@@ -207,3 +290,7 @@ end
 
 wait_for_hull_then_lose_it('pause')
 wait_for_hull_then_lose_it('target')
+for _, loss in ipairs({'stale', 'arrival_gap', 'end_during_gap', 'pause_during_gap',
+                        'target_during_gap', 'generation_during_gap', 'distance', 'uncertain'}) do
+    wait_for_hull_then_lose_it(loss)
+end
