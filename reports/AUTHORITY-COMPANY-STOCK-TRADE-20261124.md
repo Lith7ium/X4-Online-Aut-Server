@@ -223,3 +223,21 @@ The run wrote no save and left no test processes. Both supported server
 purchase quantities now check the transaction journal and the buying ship's
 actual before/after ware counts. The revised provider verifier has focused
 regression coverage for a 58.19 Cr quote and a 58 Cr debit.
+
+## Authoritative check of the recorded pilot order
+
+The GPU-free provider imported the nearby pilot's recorded request by its
+capture ID and SHA-256. It rechecked the evidence, restored the same original
+world and staged the remote Company ship at a real BIM-169 trading berth.
+The server avatar stayed at XPJ-169. The recorded client's ship component
+ID differed between these two processes; the request identified its target
+by the Company ship, sector and station instead.
+
+The server quote at game age 307.43 s matched the pilot's 58.77 Cr. By the
+separate booking step at 307.96 s the price was 58.48 Cr. The native price
+check refused the order. The readings on each side of the refusal both showed
+10,000 Cr in the Company account and zero water aboard WRN. There was no
+new order, save, client connection or surviving test process. The price
+approval rule requires a fresh pilot confirmation for a lower or higher
+price. This run used a local recording as the input to the real server.
+Result SHA-256: `b1897e759fa9b565fad7c7346910f87482cef03486af1032c925812c0cf0e4dc`.

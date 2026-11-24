@@ -9,7 +9,9 @@ server. The server checks the current offer, performs the transaction in
 its X4 world and returns the confirmed result. Two pilots spending the
 Company's last credits must each see the outcome of the server's decision.
 A lost reply must allow the player to discover whether a purchase went
-through without buying the goods a second time.
+through without buying the goods a second time. The pilot approves an exact
+unit price. Any change, including a decrease, requires another confirmation.
+The receipt uses the amount booked in X4's ledger.
 
 The first isolated trial uses one unit of water, the Company ship WRN-302
 and a normal Teladi station with its own stock and sell offer. The server
