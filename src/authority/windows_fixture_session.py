@@ -207,7 +207,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     source_options['company_motion'] = company_source
                 if company_purchases:
                     from .company_purchase_source import CompanyPurchaseSource
-                    purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch)
+                    purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
+                                                            server_fingerprint=server_fingerprint)
                     source_options['company_purchase'] = purchase_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
@@ -237,7 +238,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 purchase_options = {}
                 if purchase_source is not None:
                     purchase_source.bind_validator(WindowsMotionPeer(process, purchase_source.socket))
-                    purchase_options['company_purchase_exchange'] = purchase_source.exchange
+                    purchase_options = purchase_source.control_callbacks(owner)
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,

@@ -21,9 +21,9 @@ assert(not source:request(intent, settle))
 source:set_running(true)
 assert(not source:request(intent, settle))
 available = true
-assert(source:request(intent, settle) and not source:request(intent, settle))
+assert(source:request(intent, settle, 34914) and not source:request(intent, settle))
 source:tick()
-assert(outgoing[1] == prefix .. '1|cluster_01_sector001_macro|BIM-169|water|6|5819')
+assert(outgoing[1] == prefix .. '1|cluster_01_sector001_macro|BIM-169|water|6|5819|34914')
 now = 1
 source:tick()
 assert(#outgoing == 2 and outgoing[1] == outgoing[2])
@@ -47,3 +47,14 @@ source:tick()
 assert(#receipts == 2 and receipts[2].price_cents == 5800 and receipts[2].settled_total_cents == 34800
     and receipts[2].company_balance_cents == 965200 and receipts[2].cargo_units == 6
     and receipts[2].ship_code == 'WRN-302')
+
+assert(source:request(intent, settle, 34914))
+incoming = {prefix .. 'RECEIPT|3|accepted_pending_statement',
+    prefix .. 'RECEIPT|3|accepted_pending_statement'}
+source:tick()
+assert(#receipts == 3 and receipts[3].outcome == 'accepted_pending_statement')
+assert(not source:request(intent, settle))
+incoming = {prefix .. 'RECEIPT|3|pilot_reported|34914'}
+source:tick()
+assert(#receipts == 4 and receipts[4].outcome == 'pilot_reported'
+    and receipts[4].settled_total_cents == 34914 and receipts[4].company_balance_cents == nil)

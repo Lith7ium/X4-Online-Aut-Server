@@ -349,3 +349,26 @@ menu.contextMenuData = second_context
 menu.buttonConfirmTrade()
 assert(#live_attempts == 3 and native_calls == originals)
 assert(live_capture.detach())
+
+-- The stale fixture's native basket is observed as displayed, rather than
+-- derived from the quoted unit price or from a later native debit.
+local pilot_result
+local reported = assert(module.install_x4({
+    enabled = true, dynamic_station = true, menu = menu, ship = ship_id,
+    request = function(intent, settle, displayed_total)
+        assert(displayed_total == 34914 and intent.quantity == 6)
+        pilot_result = {intent = intent, settle = settle}
+        return true
+    end,
+}))
+menu.contextMenuData = fresh_context()
+menu.contextMenuData.totalsellcost = 349.14
+menu.buttonConfirmTrade()
+reply(pilot_result, 'accepted_pending_statement', {})
+local waiting = 'Company purchase accepted. Awaiting reconciliation with your purchase record.'
+assert(lines[#lines] == waiting)
+reply(pilot_result, 'accepted_pending_statement', {})
+assert(lines[#lines] == waiting and lines[#lines - 1] ~= waiting)
+reply(pilot_result, 'pilot_reported', {settled_total_cents = 34914})
+assert(lines[#lines] == 'Company purchase recorded from your report: 349.14 Cr.')
+assert(reported.detach())

@@ -28,14 +28,16 @@ function M.new(options)
     local prefix = 'T|' .. options.lease .. '|'
     local api = {}
 
-    function api:request(intent, settle)
+    function api:request(intent, settle, displayed_total_cents)
         if not running or pending or sequence >= max_order_integer or not options.available()
                 or #intent.sector > 128 or not intent.sector:match('^[A-Za-z0-9_]+$')
                 or not intent.station_code:match(ship_code) or #intent.ware > 128
                 or not intent.ware:match('^[a-z][a-z0-9_]*$') then return false end
         sequence = sequence + 1
         local packet = prefix .. table.concat({sequence, intent.sector, intent.station_code, intent.ware,
-                                                intent.quantity, intent.price_cents}, '|')
+                                                intent.quantity, intent.price_cents,
+                                                displayed_total_cents and string.format('%.0f', displayed_total_cents)
+                                                    or '-'}, '|')
         pending = {intent = intent, settle = settle, packet = packet}
         next_send = 0
         return true
@@ -70,21 +72,32 @@ function M.new(options)
                         if not receipt.current_price_cents or receipt.current_price_cents == pending.intent.price_cents then
                             receipt = nil
                         end
-                    elseif #row ~= 3 or (row[3] ~= 'refused' and row[3] ~= 'unknown') then
+                    elseif row[3] == 'pilot_reported' and #row == 4 then
+                        receipt.settled_total_cents = exact_decimal(row[4], 1)
+                        if not receipt.settled_total_cents then receipt = nil end
+                    elseif #row ~= 3 or (row[3] ~= 'refused' and row[3] ~= 'unknown'
+                            and row[3] ~= 'accepted_pending_statement') then
                         receipt = nil
                     end
                     if receipt then
-                        local settle = pending.settle
-                        pending = nil
-                        settle(receipt)
-                        return
+                        if receipt.outcome == 'accepted_pending_statement' then
+                            if not pending.awaiting_statement then
+                                pending.awaiting_statement = true
+                                pending.settle(receipt)
+                            end
+                        else
+                            local settle = pending.settle
+                            pending = nil
+                            settle(receipt)
+                            return
+                        end
                     end
                 end
             end
         end
         local now = options.clock()
         if now >= next_send then
-            next_send = now + 0.25
+            next_send = now + (pending.awaiting_statement and 1 or 0.25)
             options.net:send(pending.packet)
         end
     end
@@ -124,7 +137,9 @@ function M.new_x4(config, pinned, udp)
         if not map then return false end
         assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
             enabled = true, menu = map, ship = actor, dynamic_station = true,
-            request = function(intent, settle) return source:request(intent, settle) end,
+            request = function(intent, settle, displayed_total_cents)
+                return source:request(intent, settle, displayed_total_cents)
+            end,
         }))
         selected = actor
         return true

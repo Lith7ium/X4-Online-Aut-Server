@@ -3,6 +3,8 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import tempfile
+from types import SimpleNamespace
 import unittest
 
 from authority.company_purchase_source import CompanyPurchaseSource
@@ -10,7 +12,11 @@ from authority.company_purchase_source import CompanyPurchaseSource
 
 class CompanyPurchaseSourceTests(unittest.TestCase):
     def setUp(self):
-        self.source = CompanyPurchaseSource(expected_epoch='a' * 32)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state_dir = directory.name
+        self.source = CompanyPurchaseSource(expected_epoch='a' * 32, server_fingerprint='b' * 64,
+                                            state_dir=self.state_dir)
         self.addCleanup(self.source.close)
         self.settings = self.source.configure('a' * 32, 7354)
         self.client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -20,9 +26,9 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.peer_valid = True
         self.source.bind_validator(lambda peer: self.peer_valid and peer == self.client.getsockname())
 
-    def send(self, sequence, price=5819, *, lease=None, ware='water'):
+    def send(self, sequence, price=5819, *, lease=None, ware='water', total='-'):
         lease = self.settings['lease'] if lease is None else lease
-        self.client.send(f'T|{lease}|{sequence}|cluster_01_sector001_macro|BIM-169|{ware}|6|{price}'.encode())
+        self.client.send(f'T|{lease}|{sequence}|cluster_01_sector001_macro|BIM-169|{ware}|6|{price}|{total}'.encode())
 
     def receive(self):
         return self.client.recv(512).decode().split('|')[2:]
@@ -71,6 +77,43 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         intent = self.source.exchange(None)
         self.assertIsNone(self.source.exchange(dict(intent, outcome='unknown')))
         self.assertEqual(self.receive(), ['RECEIPT', '1', 'unknown'])
+
+    def test_statement_survives_a_fresh_session_without_resubmitting(self):
+        self.send(1, total=34914)
+        intent = self.source.exchange(None)
+        token = intent['purchase_id']
+        statement = dict(purchase_id=token, ware='water', quantity=6, settled_total_cents=34914)
+        self.assertEqual(self.source.statement(token), statement)
+        self.assertEqual(self.source.statement(token), statement)
+        self.assertIsNone(self.source.exchange(dict(intent, outcome='accepted_pending_statement')))
+        self.assertEqual(self.receive(), ['RECEIPT', '1', 'accepted_pending_statement'])
+        self.send(2, total=34914)
+        self.assertIsNone(self.source.exchange(None))
+        result = dict(intent, outcome='pilot_reported', settled_total_cents=34914)
+        self.assertFalse(self.source.statement_result(dict(result, settled_total_cents=34900)))
+        self.assertFalse(self.source.statement_result(dict(result, station_code='ABC-123')))
+
+        for fingerprint, epoch, index, expected in (
+                ('b' * 64, 'a' * 32, 7354, statement), ('c' * 64, 'a' * 32, 7354, None),
+                ('b' * 64, 'c' * 32, 7354, None), ('b' * 64, 'a' * 32, 1970, None)):
+            fresh = CompanyPurchaseSource(server_fingerprint=fingerprint, state_dir=self.state_dir)
+            self.addCleanup(fresh.close)
+            fresh.configure(epoch, index)
+            self.assertEqual(fresh.statement(token), expected)
+            self.assertIs(fresh.statement_result(result), expected is not None)
+        self.assertTrue(self.source.statement_result(result))
+        self.assertTrue(self.source.statement_result(result))
+        self.assertEqual(self.receive(), ['RECEIPT', '1', 'pilot_reported', '34914'])
+        self.send(2, total=34914)
+        self.assertNotEqual(self.source.exchange(None)['purchase_id'], token)
+
+    def test_missing_native_total_stays_unavailable_and_callbacks_are_negotiated(self):
+        self.send(1)
+        token = self.source.exchange(None)['purchase_id']
+        self.assertIsNone(self.source.statement(token))
+        self.assertEqual(set(self.source.control_callbacks(SimpleNamespace())), {'company_purchase_exchange'})
+        self.assertEqual(set(self.source.control_callbacks(SimpleNamespace(_company_purchase_statement_version=1))),
+                         {'company_purchase_exchange', 'company_purchase_statement', 'company_purchase_statement_result'})
 
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_native_queue_requires_admission_and_matches_one_receipt(self):

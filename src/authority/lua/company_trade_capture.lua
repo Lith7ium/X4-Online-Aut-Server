@@ -11,11 +11,12 @@ local function exact_cents(total)
     return type(total) == 'number' and total >= 0 and total <= max_exact_lua_integer and total % 1 == 0
 end
 
-local function cents(price)
-    if type(price) ~= 'number' or not (price > 0 and price <= max_integer / 100) then return end
+local function cents(price, maximum)
+    maximum = maximum or max_integer
+    if type(price) ~= 'number' or not (price > 0 and price <= maximum / 100) then return end
     local scaled = price * 100
     local exact = math.floor(scaled + 0.5)
-    if positive_integer(exact) and math.abs(exact - scaled) <= 1e-7 then return exact end
+    if exact >= 1 and exact <= maximum and math.abs(exact - scaled) <= 1e-7 then return exact end
 end
 
 local function stock_order(menu, data, o, station)
@@ -134,7 +135,8 @@ function M.install(o)
         local attempt = {}
         local submitted_orders = data.orders
         active_attempt, price_retry, phase = attempt, nil, 'dispatching'
-        local answered, early_receipt
+        local answered, early_receipt, awaiting_statement
+        local displayed_total = dynamic_station and cents(data.totalsellcost, max_exact_lua_integer) or nil
         local function settle(receipt)
             if active_attempt ~= attempt then return end
             if phase == 'dispatching' then
@@ -142,6 +144,14 @@ function M.install(o)
                 return
             end
             if phase ~= 'pending' then return end
+            if dynamic_station and type(receipt) == 'table' and receipt.outcome == 'accepted_pending_statement'
+                    and matches(intent, receipt) then
+                if not awaiting_statement then
+                    awaiting_statement = true
+                    o.notice('accepted_pending_statement')
+                end
+                return
+            end
             active_attempt, phase = nil, 'finished'
             if type(receipt) == 'table' and receipt.outcome == 'confirmed' and matches(intent, receipt)
                     and exact_cents(receipt.settled_total_cents) and receipt.settled_total_cents > 0 then
@@ -159,6 +169,12 @@ function M.install(o)
                     o.notice('confirmed', receipt.settled_total_cents)
                 end
                 if dynamic_station then phase = 'ready' end
+            elseif dynamic_station and type(receipt) == 'table' and receipt.outcome == 'pilot_reported'
+                    and matches(intent, receipt) and displayed_total
+                    and receipt.settled_total_cents == displayed_total then
+                completed_contexts[data], completed_orders[submitted_orders] = true, true
+                o.notice('pilot_reported', displayed_total)
+                phase = 'ready'
             elseif type(receipt) == 'table' and receipt.outcome == 'refused' and matches(intent, receipt) then
                 local price = receipt.current_price_cents
                 if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
@@ -180,7 +196,7 @@ function M.install(o)
         local sent, accepted = pcall(o.request, {
             sector = intent.sector, station_code = intent.station_code, ware = intent.ware,
             quantity = intent.quantity, price_cents = intent.price_cents,
-        }, settle)
+        }, settle, displayed_total)
         if sent and accepted == true then
             phase = 'pending'
             if answered then settle(early_receipt) else o.notice('pending') end
@@ -203,6 +219,7 @@ end
 
 local trade_notices = {
     pending = 'Company purchase awaiting confirmation.',
+    accepted_pending_statement = 'Company purchase accepted. Awaiting reconciliation with your purchase record.',
     refused = 'Company purchase refused.',
     uncertain = 'Company purchase status uncertain. Check the authoritative receipt.',
     already_attempted = 'Company purchase already submitted.',
@@ -298,6 +315,8 @@ function M.install_x4(o)
                 text = text .. ' Company balance ' .. format_credits(details.company_balance_cents)
                     .. '. ' .. details.ship_code .. ': ' .. details.cargo_units .. ' ' .. details.ware .. '.'
             end
+        elseif status == 'pilot_reported' then
+            text = 'Company purchase recorded from your report: ' .. format_credits(settled_total_cents) .. '.'
         elseif status == 'refused' and details then
             text = 'Company purchase refused. Unit price changed from ' .. format_credits(details.price_cents)
                 .. ' to ' .. format_credits(details.current_price_cents) .. '.'

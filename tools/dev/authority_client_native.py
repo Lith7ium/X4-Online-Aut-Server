@@ -119,7 +119,8 @@ def verify_receipts(path, ticket, marker):
 
 
 def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
-                         registry_check=None, motion_consumer=None, company_purchase_exchange=None):
+                         registry_check=None, motion_consumer=None, company_purchase_exchange=None,
+                         company_purchase_statement=None, company_purchase_statement_result=None):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -153,6 +154,9 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
     if company_purchase_exchange is not None:
         motion_options['company_purchase_exchange'] = company_purchase_exchange
+    if company_purchase_statement is not None:
+        motion_options.update(company_purchase_statement=company_purchase_statement,
+                              company_purchase_statement_result=company_purchase_statement_result)
     owner.activate(attempt, participant, participant_timeout=min(30, marked.remaining(participant.deadline)),
                    **motion_options)
     guard(full=True)
@@ -375,7 +379,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         company_source = CompanyMotionSource(playback_index=company_hull_playback_index)
                         source_options['company_motion'] = company_source
                     if company_purchases:
-                        purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch)
+                        purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
+                            server_fingerprint=connection_settings['server_fingerprint'])
                         source_options['company_purchase'] = purchase_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)
@@ -424,7 +429,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             peer, purchase_source.socket.getsockname(), participant.process)
 
                     purchase_source.bind_validator(validate_purchase_peer)
-                    purchase_options['company_purchase_exchange'] = purchase_source.exchange
+                    purchase_options = purchase_source.control_callbacks(owner)
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
                     guard, verify_loaded, result, registry_check=registry_check,
                     motion_consumer=(playback_driver.accept_motion
