@@ -14,6 +14,14 @@ from .experimental_tcp_participant_client import (
 )
 
 
+class CompanyShipChoiceDenied(ValueError):
+    """The server rejected a catalogue query or choice without closing the offer."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class ExperimentalClientOwner:
     """Own the load socket and transfer it once to the participant adapter.
 
@@ -87,6 +95,22 @@ class ExperimentalClientOwner:
         with self._operation('loading'):
             self._offer = self._load.request_offer()
             return self._offer
+
+    def list_company_ships(self) -> tuple[dict, ...]:
+        """List offered public ships. A CompanyShipChoiceDenied leaves the offer usable."""
+        with self._operation('loading'):
+            result = self._load.list_company_ships()
+        if type(result) is str:
+            raise CompanyShipChoiceDenied(result)
+        return result
+
+    def choose_company_ship(self, ship_index: int) -> dict:
+        """Choose an offered ship. A CompanyShipChoiceDenied leaves the offer usable."""
+        with self._operation('loading'):
+            result = self._load.choose_company_ship(ship_index)
+        if type(result) is str:
+            raise CompanyShipChoiceDenied(result)
+        return result
 
     def download(self, new_directory):
         with self._operation('loading'):

@@ -22,6 +22,30 @@ from .save_transfer import SaveOffer, receive
 from .trusted_load_messages import decode_bound_offer, encode_load_claim
 
 
+_COMPANY_SHIP_MAX_INDEX = 200_000
+_COMPANY_SHIP_DENIALS = ('company_ship_unavailable', 'stale_ship_choice', 'company_ship_catalog_unavailable')
+_COMPANY_SHIP_SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
+_COMPANY_SHIP_CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
+_COMPANY_REPLY_FIELDS = {'version', 'kind', 'attempt_id'}
+
+
+def _company_ship_index(value):
+    return type(value) is int and 1 <= value <= _COMPANY_SHIP_MAX_INDEX
+
+
+def _company_ship(value):
+    if type(value) is not dict or set(value) != {'ship_index', 'sector_macro', 'name', 'code'}:
+        raise ValueError('invalid company ship fields')
+    sector, name, code = value['sector_macro'], value['name'], value['code']
+    if (not _company_ship_index(value['ship_index'])
+            or type(sector) is not str or not _COMPANY_SHIP_SECTOR.fullmatch(sector)
+            or (name is not None and (type(name) is not str or not 1 <= len(name) <= 128
+                 or name.strip() != name or not name.isprintable() or '{' in name or '}' in name))
+            or (code is not None and (type(code) is not str or not _COMPANY_SHIP_CODE.fullmatch(code)))):
+        raise ValueError('invalid company ship values')
+    return value
+
+
 class ExperimentalRemoteLoadClient:
     """Single-owner, single-attempt state machine.
 
@@ -192,6 +216,68 @@ class ExperimentalRemoteLoadClient:
                     self._next_keepalive = time.monotonic() + self._keepalive_interval
                 self._state = 'offered'
                 return self._bound
+
+    def _company_ship_exchange(self, kind, **fields):
+        attempt = self._bound.offer.attempt_id
+        readable, _, exceptional = select.select([self._conn], [], [self._conn], 0)
+        if readable or exceptional:
+            raise ConnectionError('unexpected input before company ship request')
+        request = {'version': 1, 'kind': kind, 'attempt_id': attempt, **fields}
+        self._send(json.dumps(request, separators=(',', ':'), sort_keys=True).encode('ascii') + b'\n')
+        try:
+            reply = json.loads(self._read_frame().decode('utf-8'), object_pairs_hook=_pairs,
+                               parse_constant=_reject_constant)
+        except (UnicodeError, json.JSONDecodeError, RecursionError) as error:
+            raise ValueError('invalid company ship response') from error
+        if (type(reply) is not dict or type(reply.get('version')) is not int or reply['version'] != 1
+                or type(reply.get('kind')) is not str or reply.get('attempt_id') != attempt):
+            raise ValueError('company ship response differs from current attempt')
+        if reply['kind'] in _COMPANY_SHIP_DENIALS:
+            if set(reply) != _COMPANY_REPLY_FIELDS:
+                raise ValueError('invalid company ship denial fields')
+            return reply['kind']
+        return reply
+
+    def list_company_ships(self):
+        """Read the ordered public ship catalogue or return a recoverable denial kind."""
+        with self._operation('offered'):
+            ships, cursor = [], 0
+            while True:
+                reply = self._company_ship_exchange('list_company_ships', after_index=cursor)
+                if type(reply) is str:
+                    return reply
+                if (set(reply) != _COMPANY_REPLY_FIELDS | {'ships', 'next_index'}
+                        or reply['kind'] != 'company_ships' or type(reply['ships']) is not list):
+                    raise ValueError('invalid company ship page')
+                last_index = cursor
+                for item in reply['ships']:
+                    ship = _company_ship(item)
+                    if ship['ship_index'] <= last_index:
+                        raise ValueError('company ship page does not advance in index order')
+                    last_index = ship['ship_index']
+                    ships.append(ship)
+                next_index = reply['next_index']
+                if next_index is None:
+                    return tuple(ships)
+                if (not _company_ship_index(next_index) or next_index != last_index
+                        or next_index <= cursor or next_index == _COMPANY_SHIP_MAX_INDEX):
+                    raise ValueError('invalid company ship page cursor')
+                cursor = next_index
+
+    def choose_company_ship(self, ship_index):
+        """Return the chosen public ship or a recoverable denial kind."""
+        with self._operation('offered'):
+            if not _company_ship_index(ship_index):
+                raise ValueError('invalid company ship index')
+            reply = self._company_ship_exchange('choose_company_ship', ship_index=ship_index)
+            if type(reply) is str:
+                return reply
+            if set(reply) != _COMPANY_REPLY_FIELDS | {'ship'} or reply['kind'] != 'company_ship_chosen':
+                raise ValueError('invalid company ship choice response')
+            ship = _company_ship(reply['ship'])
+            if ship['ship_index'] != ship_index:
+                raise ValueError('company ship choice differs from requested index')
+            return ship
 
     def download(self, new_directory):
         """Download to a new exclusively owned directory; no retry or load."""

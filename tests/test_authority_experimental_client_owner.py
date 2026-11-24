@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 sys.path.insert(0, str(ROOT / 'tools/dev'))
-from authority.experimental_client_owner import ExperimentalClientOwner
+from authority.experimental_client_owner import CompanyShipChoiceDenied, ExperimentalClientOwner
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient
 from authority.experimental_tcp_control import offer_request
 from authority.experimental_tcp_motion import motion_digest
@@ -54,7 +54,8 @@ class ClientOwnerTests(unittest.TestCase):
         self.addCleanup(self.service.close)
         self.service.offer('j1.xml.gz', source)
 
-    def connect(self, *, accepted_attempt=None, send_command=True, host='127.0.0.1', authority_commands=None):
+    def connect(self, *, accepted_attempt=None, send_command=True, host='127.0.0.1',
+                authority_commands=None, company_exchanges=()):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind((host, 0))
         listener.listen(1)
@@ -70,6 +71,12 @@ class ClientOwnerTests(unittest.TestCase):
                     if stream.readline() != offer_request():
                         raise AssertionError('unexpected offer request')
                     conn.sendall(encode_bound_offer(MarkerBoundOffer(self.offer, self.marker)) + b'\n')
+                    for expected, response in company_exchanges:
+                        request = json.loads(stream.readline())
+                        if request != {'version': 1, 'attempt_id': self.offer.attempt_id, **expected}:
+                            raise AssertionError(f'unexpected company ship request: {request}')
+                        raw = response if isinstance(response, bytes) else json.dumps(response).encode()
+                        conn.sendall(raw + b'\n')
                     line = stream.readline()
                     if not line:
                         return
@@ -134,6 +141,79 @@ class ClientOwnerTests(unittest.TestCase):
         self.assertEqual(replies[0]['status'], 'confirmed')
         owner.close()
         self.assertEqual(client.fileno(), -1)
+
+    def company_reply(self, kind, **fields):
+        return {'version': 1, 'attempt_id': self.offer.attempt_id, 'kind': kind, **fields}
+
+    @staticmethod
+    def company_ship(index):
+        return {'ship_index': index, 'sector_macro': 'cluster_14_sector001_macro',
+                'name': None, 'code': 'WOO-831'}
+
+    def test_company_ship_pages_and_recoverable_choice_denials(self):
+        first, second = self.company_ship(1970), self.company_ship(1980)
+        owner, client, thread, errors, _, _ = self.connect(send_command=False, company_exchanges=(
+            ({'kind': 'list_company_ships', 'after_index': 0},
+             self.company_reply('company_ship_catalog_unavailable')),
+            ({'kind': 'list_company_ships', 'after_index': 0},
+             self.company_reply('company_ships', ships=[first], next_index=1970)),
+            ({'kind': 'list_company_ships', 'after_index': 1970},
+             self.company_reply('company_ships', ships=[second], next_index=None)),
+            ({'kind': 'choose_company_ship', 'ship_index': 1970},
+             self.company_reply('company_ship_unavailable')),
+            ({'kind': 'choose_company_ship', 'ship_index': 1980},
+             self.company_reply('stale_ship_choice')),
+            ({'kind': 'choose_company_ship', 'ship_index': 1980},
+             self.company_reply('company_ship_chosen', ship=second)),
+        ))
+        owner.request_offer()
+        with self.assertRaises(CompanyShipChoiceDenied) as denied:
+            owner.list_company_ships()
+        self.assertEqual(denied.exception.reason, 'company_ship_catalog_unavailable')
+        self.assertEqual(owner.list_company_ships(), (first, second))
+        for index, reason in ((1970, 'company_ship_unavailable'), (1980, 'stale_ship_choice')):
+            with self.assertRaises(CompanyShipChoiceDenied) as denied:
+                owner.choose_company_ship(index)
+            self.assertEqual(denied.exception.reason, reason)
+            self.assertNotEqual(client.fileno(), -1)
+        self.assertEqual(owner.choose_company_ship(1980), second)
+        path = owner.download(self.root / 'company-download')
+        self.assertEqual(path.read_bytes(), self.content)
+        owner.close()
+        thread.join(3)
+        self.assertEqual(errors, [])
+
+    def test_invalid_company_ship_pages_close_connection(self):
+        ship = self.company_ship(10)
+        cases = (
+            self.company_reply('company_ships', ships=[dict(ship, component_ref='[0x1]')], next_index=None),
+            self.company_reply('company_ships', ships=[ship, self.company_ship(7)], next_index=None),
+            self.company_reply('company_ships', ships=[ship], next_index=9),
+            self.company_reply('company_ships', ships=[], next_index=10),
+            dict(self.company_reply('company_ships', ships=[], next_index=None), attempt_id='a' * 32),
+            b'x' * 4097,
+        )
+        for response in cases:
+            with self.subTest(response=str(response)[:120]):
+                owner, client, thread, _, _, _ = self.connect(send_command=False, company_exchanges=(
+                    ({'kind': 'list_company_ships', 'after_index': 0}, response),
+                ))
+                owner.request_offer()
+                with self.assertRaises(ValueError):
+                    owner.list_company_ships()
+                self.assertEqual(client.fileno(), -1)
+                thread.join(3)
+
+    def test_wrong_company_ship_choice_closes_connection(self):
+        owner, client, thread, _, _, _ = self.connect(send_command=False, company_exchanges=(
+            ({'kind': 'choose_company_ship', 'ship_index': 10},
+             self.company_reply('company_ship_chosen', ship=self.company_ship(11))),
+        ))
+        owner.request_offer()
+        with self.assertRaisesRegex(ValueError, 'differs from requested index'):
+            owner.choose_company_ship(10)
+        self.assertEqual(client.fileno(), -1)
+        thread.join(3)
 
     @staticmethod
     def motion_grant():
