@@ -6,13 +6,11 @@ import select
 import socket
 import time
 
-from authority_station_parking import SHIPS
 from authority_tcp_job_client_live import socket_owner
 
 PARKED_SAVE = '68dc79959984dbd3499b7b6360bde5b0e24d5cbc845b49d24a908d043a7612ca'
 # Stable identities of the two ships in the pinned disposable world.
-SHIP_CODES = {ship['index']: ship['code'] for ship in SHIPS}
-_PARKED_SECTORS = {ship['index']: ship['sector'] for ship in SHIPS}
+SHIP_CODES = {1970: 'WOO-831', 7354: 'WRN-302'}
 _SHIP_INDICES = {str(index): index for index in SHIP_CODES}
 _MOVEMENT_PROOF_VERSION = 1
 # Compare sector-space metres. Native UI coordinates use single precision.
@@ -277,17 +275,9 @@ def _check_movement(move, item):
         raise ValueError('invalid checkpoint movement proof')
 
 
-def _paused_poses(prior, report):
-    legacy = 'movement_proof_version' not in report
-    if legacy:
-        operations = prior.get('engine_operations')
-        if type(operations) is not list or operations.count('resume') != 1:
-            raise ValueError('legacy movement proof requires one resume')
-        largest = report.get('largest_verified_move')
-        if type(largest) is not dict or {'generation', 'sector_macro'} & largest.keys():
-            raise ValueError('missing legacy movement proof')
-    elif (type(report['movement_proof_version']) is not int
-          or report['movement_proof_version'] != _MOVEMENT_PROOF_VERSION):
+def _paused_poses(report):
+    version = report.get('movement_proof_version')
+    if type(version) is not int or version != _MOVEMENT_PROOF_VERSION:
         raise ValueError('unsupported checkpoint movement proof')
 
     poses = {}
@@ -301,32 +291,19 @@ def _paused_poses(prior, report):
             raise ValueError('invalid saved company ship pose')
         position = _report_xyz(item.get('position'))
         movement = False
-        if legacy:
-            latest = report.get('last_verified', {}).get(key)
-            if (type(latest) is not dict
-                    or {'movement', 'generation', 'md_position', 'target'} & item.keys()
-                    or item['sector_macro'] != _PARKED_SECTORS[index]
-                    or latest.get('sequence') != item['sequence']
-                    or latest.get('sector_macro') != item['sector_macro']
-                    or math.dist(_report_xyz(latest.get('target')), position) > READBACK_METRES):
-                raise ValueError('legacy paused pose does not match the pinned ship and sample')
-            if largest.get('code') == item['code']:
-                _check_movement(largest, item)
-                movement = True
-        else:
-            generation = item.get('generation')
-            md_position = _report_xyz(item.get('md_position'))
-            target = _report_xyz(item.get('target'))
-            if (type(generation) is not str or not _TOKEN.fullmatch(generation)
-                    or _readback_error(target, md_position, position) > READBACK_METRES
-                    or math.dist(md_position, position) > READBACK_METRES):
-                raise ValueError('invalid paused checkpoint readback')
-            if 'movement' in item:
-                move = item['movement']
-                _check_movement(move, item)
-                if move.get('generation') != generation or move.get('sector_macro') != item['sector_macro']:
-                    raise ValueError('checkpoint movement proof belongs to another grant or sector')
-                movement = True
+        generation = item.get('generation')
+        md_position = _report_xyz(item.get('md_position'))
+        target = _report_xyz(item.get('target'))
+        if (type(generation) is not str or not _TOKEN.fullmatch(generation)
+                or _readback_error(target, md_position, position) > READBACK_METRES
+                or math.dist(md_position, position) > READBACK_METRES):
+            raise ValueError('invalid paused checkpoint readback')
+        if 'movement' in item:
+            move = item['movement']
+            _check_movement(move, item)
+            if move.get('generation') != generation or move.get('sector_macro') != item['sector_macro']:
+                raise ValueError('checkpoint movement proof belongs to another grant or sector')
+            movement = True
         poses[index] = (item, position, movement)
     if not any(movement for _, _, movement in poses.values()):
         raise ValueError('cold pose check requires a checkpoint movement proof')
@@ -345,7 +322,7 @@ def verify_reloaded(channel, prior, checkpoint):
             or report['writes_verified'] <= 0):
         raise ValueError('cold pose check requires a confirmed checkpoint with a verified movement write')
     verified = {}
-    for index, (item, target, movement) in _paused_poses(prior, report).items():
+    for index, (item, target, movement) in _paused_poses(report).items():
         sample = dict(index=index, epoch=channel.epoch, generation=secrets.token_hex(16),
                       sector_macro=item['sector_macro'], **dict(zip('xyz', target)))
         channel.begin('inspect', sample)

@@ -1,6 +1,5 @@
 """Company pose trial regressions using owned loopback UDP and synthetic game replies."""
 from collections import deque
-from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
@@ -335,35 +334,21 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertTrue(verified[str(INDEX)]['movement_verified'])
         self.assertFalse(verified[str(other_index)]['movement_verified'])
 
-    def test_legacy_format_requires_one_resume_and_plausible_same_ship_movement(self):
+    def test_unversioned_proof_is_rejected_before_readback(self):
         trial, report, service = self.trial()
         self.move(trial, service)
         self.read_pause(trial)
         prior, checkpoint = self.saved_prior(trial, report)
-        prior['engine_operations'] = ['pause', 'save', 'checkpoint_published', 'resume', 'pause', 'save',
-                                      'checkpoint_published']
+        prior['engine_operations'] = ['pause', 'save', 'resume', 'pause', 'save']
         del report['movement_proof_version']
-        item = report['paused'][str(INDEX)]
         for key in ('generation', 'md_position', 'target', 'movement'):
-            del item[key]
-        largest = report['largest_verified_move']
+            del report['paused'][str(INDEX)][key]
         for key in ('generation', 'sector_macro'):
-            del largest[key]
-        largest['sequence'] = 5
-        self.assertEqual(TARGET, self.cold_read(prior, checkpoint)[str(INDEX)]['expected'])
-        for bad_field, wrong in (('sequence', 9), ('code', 'WOO-831'), ('before', TARGET),
-                                 ('md', ORIGIN), ('ui', ORIGIN), ('target', ORIGIN)):
-            with self.subTest(field=bad_field):
-                broken = deepcopy(prior)
-                broken['company_pose_trial']['largest_verified_move'][bad_field] = wrong
-                with self.assertRaises(ValueError):
-                    verify_reloaded(self.channel, broken, checkpoint)
-                self.assert_no_command()
-        for operations in ([], ['resume', 'pause', 'resume', 'pause']):
-            with self.subTest(operations=operations):
-                with self.assertRaisesRegex(ValueError, 'one resume'):
-                    verify_reloaded(self.channel, dict(prior, engine_operations=operations), checkpoint)
-                self.assert_no_command()
+            del report['largest_verified_move'][key]
+
+        with self.assertRaisesRegex(ValueError, 'unsupported checkpoint movement proof'):
+            verify_reloaded(self.channel, prior, checkpoint)
+        self.assert_no_command()
 
 
 if __name__ == '__main__':
