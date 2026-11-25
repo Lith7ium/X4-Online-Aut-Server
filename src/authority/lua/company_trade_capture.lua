@@ -253,6 +253,14 @@ local function format_credits(cents)
     return amount .. ' Cr'
 end
 
+function M.show_recovered_purchase(notice)
+    local text = 'Earlier Company purchase recorded from your report. '
+        .. notice.quantity .. ' ' .. notice.ware .. ' at ' .. notice.station_code .. ' for '
+        .. format_credits(notice.settled_total_cents) .. '.'
+    require('ffi').C.ShowInfoLine(text, 4)
+    return true
+end
+
 function M.install_x4(o)
     if o.enabled ~= true then return nil, 'disabled' end
     local ffi = require('ffi')

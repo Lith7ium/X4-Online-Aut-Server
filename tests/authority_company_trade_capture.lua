@@ -403,3 +403,7 @@ assert(lines[#lines] == waiting and lines[#lines - 1] ~= waiting)
 reply(pilot_result, 'pilot_reported', {settled_total_cents = 34914})
 assert(lines[#lines] == 'Company purchase recorded from your report: 349.14 Cr.')
 assert(reported.detach())
+
+assert(module.show_recovered_purchase({quantity = 6, ware = 'water', station_code = 'BIM-169',
+    settled_total_cents = 34914}))
+assert(lines[#lines] == 'Earlier Company purchase recorded from your report. 6 water at BIM-169 for 349.14 Cr.')

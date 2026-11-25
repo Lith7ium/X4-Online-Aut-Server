@@ -3,6 +3,7 @@ import re
 import secrets
 import socket
 import threading
+import time
 
 from .company_purchase_statements import CompanyPurchaseStatements
 
@@ -58,6 +59,9 @@ class CompanyPurchaseSource:
         self._registry = self._validator = self._peer = self._intent = self._answer = None
         self._sequence = 0
         self._awaiting_statement = False
+        self._notice = None
+        self._notice_serial = 0
+        self._next_notice_scan = 0.
 
     @property
     def socket(self):
@@ -143,6 +147,40 @@ class CompanyPurchaseSource:
         if self._undock_intent == value:
             self._send_undock()
 
+    def _receive_notice(self, fields, peer):
+        if self._statements is None:
+            return
+        if fields == ['NOTICE_POLL']:
+            if self._notice is None:
+                now = time.monotonic()
+                if now < self._next_notice_scan:
+                    return
+                if self._validator(peer) is not True:
+                    return
+                self._notice = self._statements.next_notice()
+                # New local results invalidate this delay immediately. Check
+                # occasionally for receipts written by an earlier client process.
+                self._next_notice_scan = now + 30
+                if self._notice is None:
+                    return
+                self._notice_serial += 1
+            elif self._validator(peer) is not True:
+                return
+            self._peer = peer
+            notice = self._notice
+            message = (f"NOTICE|{self._notice_serial}|{notice['purchase_id']}|{notice['ware']}|"
+                       f"{notice['quantity']}|{notice['station_code']}|{notice['settled_total_cents']}")
+            try:
+                self._socket.sendto(self._prefix + message.encode('ascii'), peer)
+            except BlockingIOError:
+                pass  # A later poll retries the same serial.
+        elif (self._notice is not None and self._peer == peer
+              and fields == ['NOTICE_ACK', str(self._notice_serial), self._notice['purchase_id']]
+              and self._validator(peer) is True):
+            self._statements.acknowledge_notice(self._notice['purchase_id'])
+            self._notice = None
+            self._next_notice_scan = 0.
+
     def _receive(self):
         for _ in range(16):
             try:
@@ -159,6 +197,9 @@ class CompanyPurchaseSource:
             try:
                 fields = packet[len(self._prefix):].decode('ascii').split('|')
             except UnicodeError:
+                continue
+            if fields[0] in ('NOTICE_POLL', 'NOTICE_ACK'):
+                self._receive_notice(fields, peer)
                 continue
             if fields[0] == 'UNDOCK':
                 self._receive_undock(fields[1:], peer)
@@ -243,9 +284,14 @@ class CompanyPurchaseSource:
 
     def statement_result(self, receipt):
         self._owner()
-        if self._statements is None or type(receipt) is not dict or not self._statements.retain_result(receipt):
+        if self._statements is None or type(receipt) is not dict:
             return False
-        if self._awaiting_statement and self._intent['purchase_id'] == receipt['purchase_id']:
+        current_basket = self._intent is not None and self._intent['purchase_id'] == receipt.get('purchase_id')
+        if not self._statements.retain_result(receipt, queue_notice=not current_basket):
+            return False
+        if not current_basket:
+            self._next_notice_scan = 0.
+        elif self._awaiting_statement or self._answer is None:
             total = str(receipt['settled_total_cents'])
             self._answer = self._prefix + f'RECEIPT|{self._sequence}|pilot_reported|{total}'.encode('ascii')
             self._awaiting_statement = False

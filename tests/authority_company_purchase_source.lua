@@ -78,3 +78,90 @@ assert(#outgoing == last_sent)
 source:set_running(true)
 source:tick()
 assert(#outgoing == last_sent + 1)
+
+local displayed = {}
+local display_attempts = 0
+local display_available = true
+local function new_notice_source()
+    return module.new({
+        lease = lease,
+        clock = function() return now end,
+        available = function() return available end,
+        recovered_notice = function(notice)
+            display_attempts = display_attempts + 1
+            if display_available == 'error' then error('HUD unavailable') end
+            if not display_available then return false end
+            displayed[#displayed + 1] = notice
+            return true
+        end,
+        net = {
+            send = function(_, packet) outgoing[#outgoing + 1] = packet end,
+            receive = function() return table.remove(incoming, 1) end,
+        },
+    })
+end
+
+local notice_source = new_notice_source()
+local purchase_id = string.rep('b', 32)
+local row = 'NOTICE|1|' .. purchase_id .. '|water|6|BIM-169|0'
+local ack = prefix .. 'NOTICE_ACK|1|' .. purchase_id
+incoming, outgoing, now, available = {prefix .. row}, {}, 0, false
+notice_source:tick()
+notice_source:set_running(true)
+notice_source:tick()
+assert(#outgoing == 0 and display_attempts == 0)
+available = true
+now = 0.25
+notice_source:tick()
+assert(#outgoing == 1 and outgoing[1] == prefix .. 'NOTICE_POLL')
+now = 3.99
+notice_source:tick()
+assert(#outgoing == 1)
+now = 4.25
+notice_source:tick()
+assert(#outgoing == 2 and outgoing[2] == prefix .. 'NOTICE_POLL')
+
+local function tick_notice()
+    now = now + 0.25
+    notice_source:tick()
+end
+
+incoming = {
+    prefix .. row:gsub('|1|', '|01|'),
+    prefix .. row:gsub(purchase_id, string.rep('B', 32)),
+    prefix .. row:gsub('water', 'Water'),
+    prefix .. row:gsub('|6|', '|2147483648|'),
+    prefix .. row:gsub('BIM%-169', 'bim-169'),
+    prefix .. row:gsub('|0$', '|00'),
+    prefix .. row:gsub('|0$', '|9007199254740992'),
+    prefix .. row .. '|',
+}
+tick_notice()
+assert(display_attempts == 0 and #outgoing == 2)
+display_available = false
+incoming = {prefix .. row}
+tick_notice()
+assert(display_attempts == 1 and #displayed == 0 and #outgoing == 2)
+display_available = 'error'
+incoming = {prefix .. row}
+tick_notice()
+assert(display_attempts == 2 and #displayed == 0 and #outgoing == 2)
+display_available = true
+incoming = {prefix .. row, prefix .. row:gsub('water', 'energycells'), prefix .. row}
+tick_notice()
+assert(display_attempts == 3 and #displayed == 1 and #outgoing == 4)
+assert(outgoing[3] == ack and outgoing[4] == ack)
+assert(displayed[1].purchase_id == purchase_id and displayed[1].ware == 'water'
+    and displayed[1].quantity == 6 and displayed[1].station_code == 'BIM-169'
+    and displayed[1].settled_total_cents == 0)
+
+local next_id = string.rep('c', 32)
+incoming = {prefix .. 'NOTICE|2|' .. next_id .. '|energycells|10|BIM-169|2450', prefix .. row}
+tick_notice()
+assert(#displayed == 2 and #outgoing == 5 and outgoing[5] == prefix .. 'NOTICE_ACK|2|' .. next_id)
+
+local fresh_source = new_notice_source()
+fresh_source:set_running(true)
+incoming = {prefix .. row}
+fresh_source:tick()
+assert(#displayed == 3 and outgoing[6] == ack and outgoing[7] == prefix .. 'NOTICE_POLL')

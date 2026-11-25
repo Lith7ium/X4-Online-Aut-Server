@@ -23,9 +23,30 @@ local function exact_decimal(field, minimum)
     if number >= minimum and number <= max_exact_integer then return number end
 end
 
+local function canonical_decimal(field, minimum, maximum)
+    if #field > 1 and field:sub(1, 1) == '0' then return end
+    local number = exact_decimal(field, minimum)
+    if number and number <= maximum then return number end
+end
+
+local function decode_notice(row)
+    if #row ~= 7 or #row[3] ~= 32 or not row[3]:match('^[0-9a-f]+$')
+            or #row[4] > 128 or not row[4]:match('^[a-z][a-z0-9_]*$')
+            or not row[6]:match(ship_code) then return end
+    local serial = canonical_decimal(row[2], 1, max_exact_integer)
+    local quantity = canonical_decimal(row[5], 1, max_order_integer)
+    local total = canonical_decimal(row[7], 0, max_exact_integer)
+    if serial and quantity and total then
+        return serial, {purchase_id = row[3], ware = row[4], quantity = quantity,
+            station_code = row[6], settled_total_cents = total}
+    end
+end
+
 function M.new(options)
     local pending, sequence, next_send = nil, 0, 0
     local running = false
+    local last_notice_serial, last_notice_packet = 0, nil
+    local next_notice_poll, next_notice_read = 0, 0
     local prefix = 'T|' .. options.lease .. '|'
     local api = {}
 
@@ -49,8 +70,26 @@ function M.new(options)
     end
 
 
+    local function handle_notice(packet, row)
+        local serial, notice = decode_notice(row)
+        if not serial or serial < last_notice_serial then return end
+        if serial == last_notice_serial then
+            if packet ~= last_notice_packet then return end
+        else
+            local ok, shown = pcall(options.recovered_notice, notice)
+            if not ok or shown ~= true then return end
+            last_notice_serial, last_notice_packet = serial, packet
+        end
+        options.net:send(prefix .. 'NOTICE_ACK|' .. row[2] .. '|' .. row[3])
+    end
+
     function api:tick()
-        if not pending and not options.undock_result then return end
+        if not pending and not options.undock_result then
+            if not options.recovered_notice or not running then return end
+            local now = options.clock()
+            if now < next_notice_read then return end
+            next_notice_read = now + 0.25
+        end
         for _ = 1, 8 do
             local packet = options.net:receive()
             if not packet then break end
@@ -58,6 +97,8 @@ function M.new(options)
                 local row = fields(packet:sub(#prefix + 1))
                 if row[1] == 'UNDOCK_RESULT' and options.undock_result then
                     options.undock_result(row)
+                elseif row[1] == 'NOTICE' and options.recovered_notice and running and options.available() then
+                    handle_notice(packet, row)
                 elseif pending and row[1] == 'RECEIPT' and row[2] == tostring(sequence) then
                     local receipt = {outcome = row[3]}
                     for key, value in pairs(pending.intent) do receipt[key] = value end
@@ -102,6 +143,10 @@ function M.new(options)
             end
         end
         local now = options.clock()
+        if options.recovered_notice and running and now >= next_notice_poll and options.available() then
+            next_notice_poll = now + 4
+            options.net:send(prefix .. 'NOTICE_POLL')
+        end
         if pending and running and options.available() and now >= next_send then
             next_send = now + (pending.awaiting_statement and 1 or 0.25)
             options.net:send(pending.packet)
@@ -129,6 +174,9 @@ function M.new_x4(config, pinned, udp)
             and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor()) == selected
     end
     local options = {net = net, lease = config.lease, clock = udp.monotonic, available = available}
+    options.recovered_notice = function(notice)
+        return X4LAN_COMPANY_TRADE_CAPTURE.show_recovered_purchase(notice)
+    end
     local undock
     if config.undock_nonce then
         undock = assert(X4LAN_COMPANY_UNDOCK_HOLD.new_ipc(config, net, udp.monotonic, available))

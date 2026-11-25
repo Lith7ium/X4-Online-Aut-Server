@@ -170,6 +170,62 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.send(2, total=34914)
         self.assertNotEqual(self.source.exchange(None)['purchase_id'], token)
 
+    def test_reconciled_notice_after_ship_change_and_lost_ack(self):
+        self.send(1, total=34914)
+        original = self.source.exchange(None)
+        purchase_id = original['purchase_id']
+        result = dict(original, outcome='pilot_reported', settled_total_cents=34914)
+        self.source.close()
+
+        def open_cockpit(index):
+            source = CompanyPurchaseSource(server_fingerprint='b' * 64, state_dir=self.state_dir)
+            self.addCleanup(source.close)
+            config = source.configure('a' * 32, index)
+            cockpit = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.addCleanup(cockpit.close)
+            cockpit.connect(('127.0.0.1', config['port']))
+            cockpit.setblocking(False)
+            source.bind_validator(lambda peer: peer == cockpit.getsockname())
+            return source, cockpit, f"T|{config['lease']}|".encode()
+
+        source, cockpit, prefix = open_cockpit(1970)
+        cockpit.send(prefix + b'NOTICE_POLL')
+        self.assertIsNone(source.exchange(None))
+        cockpit.send(prefix + b'1|cluster_01_sector002_macro|AAA-321|water|1|6000|6000')
+        new_basket = source.exchange(None)
+        self.assertNotEqual(new_basket['purchase_id'], purchase_id)
+        self.assertTrue(source.statement_result(result))
+        notice = f'NOTICE|1|{purchase_id}|water|6|BIM-169|34914'.encode()
+        ack = f'NOTICE_ACK|1|{purchase_id}'.encode()
+        cockpit.send(prefix + b'NOTICE_POLL')
+        self.assertEqual(source.exchange(None), new_basket)
+        self.assertEqual(cockpit.recv(512), prefix + notice)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as wrong_peer:
+            wrong_peer.sendto(prefix + ack, cockpit.getpeername())
+        cockpit.send(prefix + f'NOTICE_ACK|2|{purchase_id}'.encode())
+        cockpit.send(prefix + b'NOTICE_POLL')
+        self.assertEqual(source.exchange(None), new_basket)
+        self.assertEqual(cockpit.recv(512), prefix + notice)
+        source.close()
+
+        # The participant acknowledged the server result before the cockpit
+        # acknowledged its display. Recover it from disk without another order.
+        restored, cockpit, fresh_prefix = open_cockpit(1970)
+        cockpit.send(fresh_prefix + b'NOTICE_POLL')
+        self.assertIsNone(restored.exchange(None))
+        self.assertEqual(cockpit.recv(512), fresh_prefix + notice)
+        cockpit.send(prefix + ack)
+        cockpit.send(fresh_prefix + b'NOTICE_POLL')
+        self.assertIsNone(restored.exchange(None))
+        self.assertEqual(cockpit.recv(512), fresh_prefix + notice)
+        cockpit.send(fresh_prefix + ack)
+        self.assertIsNone(restored.exchange(None))
+        self.assertTrue(restored.statement_result(result))
+        cockpit.send(fresh_prefix + b'NOTICE_POLL')
+        self.assertIsNone(restored.exchange(None))
+        with self.assertRaises(BlockingIOError):
+            cockpit.recv(512)
+
     def test_missing_native_total_stays_unavailable_and_callbacks_are_negotiated(self):
         self.send(1)
         token = self.source.exchange(None)['purchase_id']

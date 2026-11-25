@@ -460,8 +460,11 @@ dispatch another purchase.
 
 For a later reconnect, use the same client OS account and device, the same
 pinned server certificate and the same Company registry. The client can
-recognize the original purchase after choosing another free ship. It reports
-only a retained basket and leaves a new cockpit basket alone. An absent or
+recognize the original purchase after choosing another free ship. When the
+server accepts the pilot's report for an earlier basket, the client stores a
+separate cockpit notice with the ware, quantity, station and reported total.
+The notice survives a client restart until the active cockpit acknowledges
+showing it. The pilot can keep using a new basket during delivery. An absent or
 unrecognized local record leaves the purchase unresolved. The host can
 recover durable purchase decisions from a verified checkpoint with its
 purchase-ledger sidecar. Keep the checkpoint and sidecar together.

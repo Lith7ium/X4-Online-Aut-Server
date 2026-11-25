@@ -75,6 +75,15 @@ class CompanyPurchaseStatements:
                 CREATE UNIQUE INDEX IF NOT EXISTS cockpit_statement_device_key
                 ON cockpit_statement (fingerprint, registry_epoch, purchase_id)
             ''')
+            connection.execute('''
+                CREATE TABLE IF NOT EXISTS cockpit_notice (
+                    fingerprint TEXT NOT NULL,
+                    registry_epoch TEXT NOT NULL,
+                    purchase_id TEXT NOT NULL,
+                    acknowledged INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (fingerprint, registry_epoch, purchase_id)
+                )
+            ''')
 
     def _connect(self):
         _ordinary_owned(self._database, directory=False)
@@ -113,7 +122,7 @@ class CompanyPurchaseStatements:
             if self._read(connection, purchase_id) != observed:
                 raise ValueError('Company purchase statement changed')
 
-    def retain_result(self, receipt):
+    def retain_result(self, receipt, *, queue_notice=False):
         purchase_id = receipt.get('purchase_id')
         if (receipt.get('outcome') != 'pilot_reported' or type(purchase_id) is not str
                 or not _TOKEN.fullmatch(purchase_id)):
@@ -124,11 +133,44 @@ class CompanyPurchaseStatements:
             if observed is None or any(type(receipt.get(key)) is not type(value) or receipt.get(key) != value
                                        for key, value in zip(fields, observed[1:])):
                 return False
-            connection.execute('''
+            settled = connection.execute('''
                 UPDATE cockpit_statement SET pilot_reported = 1
                 WHERE fingerprint = ? AND registry_epoch = ? AND purchase_id = ? AND pilot_reported = 0
             ''', (*self._scope, purchase_id))
+            if queue_notice and settled.rowcount == 1:
+                connection.execute('''
+                    INSERT INTO cockpit_notice (fingerprint, registry_epoch, purchase_id)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                ''', (*self._scope, purchase_id))
         return True
+
+    def next_notice(self):
+        with closing(self._connect()) as connection:
+            row = connection.execute('''
+                SELECT basket.purchase_id, basket.ware, basket.quantity,
+                       basket.displayed_total_cents, basket.station_code
+                FROM cockpit_notice AS notice
+                JOIN cockpit_statement AS basket USING (fingerprint, registry_epoch, purchase_id)
+                WHERE notice.fingerprint = ? AND notice.registry_epoch = ?
+                    AND notice.acknowledged = 0 AND basket.pilot_reported = 1
+                ORDER BY notice.rowid
+                LIMIT 1
+            ''', self._scope).fetchone()
+        if row is None:
+            return None
+        purchase_id, ware, quantity, total, station_code = row
+        return dict(purchase_id=purchase_id, ware=ware, quantity=quantity,
+                    settled_total_cents=total, station_code=station_code)
+
+    def acknowledge_notice(self, purchase_id):
+        if type(purchase_id) is not str or not _TOKEN.fullmatch(purchase_id):
+            return
+        with closing(self._connect()) as connection, connection:
+            connection.execute('''
+                UPDATE cockpit_notice SET acknowledged = 1
+                WHERE fingerprint = ? AND registry_epoch = ? AND purchase_id = ? AND acknowledged = 0
+            ''', (*self._scope, purchase_id))
 
     def statement(self, purchase_id):
         if type(purchase_id) is not str or not _TOKEN.fullmatch(purchase_id):
