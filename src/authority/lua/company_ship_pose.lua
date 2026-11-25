@@ -3,6 +3,7 @@ local M = {}
 local SCREEN = 'X4AuthorityCompanyShipPose'
 local HELLO_INTERVAL = 0.5
 local MD_TIMEOUT = 2
+local VERIFY_TIMEOUT = 4
 local INSPECT_DRAIN_TIME = 1
 local inspect_unavailable = {
     SHIP_NOT_COMPANY_OPERATIONAL = true, PLAYER_CONTEXT = true, PILOT_PRESENT = true,
@@ -131,6 +132,13 @@ function M.new(config, engine, net)
             end
             local read = not writes_pose[args.action]
             local live, x, y, z, code = engine.actor(args, row[7], read, row[8])
+            if args.action == 'verify' then
+                local finished = engine.clock()
+                if finished >= pending.deadline then
+                    timeout_pending('verify_readback_deadline', finished)
+                    return
+                end
+            end
             if not live and args.action == 'transfer' then
                 -- The relocation may still be pending when MD acknowledges dispatch.
                 live = engine.actor(args, row[7], false, args.source_frame)
@@ -234,7 +242,7 @@ function M.new(config, engine, net)
                 return
             end
         end
-        local deadline = now + MD_TIMEOUT
+        local deadline = now + (args.action == 'verify' and VERIFY_TIMEOUT or MD_TIMEOUT)
         -- Only inspect may drain late. Keep its original request in flight
         -- until the drain ends, without issuing a second MD query.
         local drain_deadline = args.action == 'inspect' and deadline + INSPECT_DRAIN_TIME or deadline

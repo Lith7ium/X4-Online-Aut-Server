@@ -156,7 +156,9 @@ use the same Company ship catalogue from the confirmed checkpoint. This also
 works with the catalogue from a subsequent save. Before writing a position,
 the server checks the current reservation, registry binding, ownership, seat
 and sector in the live game. It reads the resulting position back through MD
-and the native UI. A sector change requires the same pilot to have reported
+and the native UI. After a position write, the provider allows four seconds
+from the first verification request for both readings to confirm the expected
+position. Subsequent read-only checks share that deadline. A sector change requires the same pilot to have reported
 both the old and new sector. The server locates the reserved ship, transfers
 it once and checks its position in the destination sector. A pilot's first
 sample after joining cannot by itself trigger a transfer. A later

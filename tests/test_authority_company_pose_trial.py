@@ -453,6 +453,27 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertEqual(TARGET, report['last_verified'][str(INDEX)]['ui'])
         self.assert_no_command()
 
+    def test_pose_verification_uses_one_four_second_window_across_reads(self):
+        trial, report, service = self.trial()
+        with patch('authority_company_pose_trial.time.monotonic', return_value=100.) as clock:
+            trial.poll(service)
+            self.reply(self.command('inspect'), ORIGIN)
+            trial.poll(service)
+            self.reply(self.command('apply'))
+            trial.poll(service)
+            first = self.command('verify')
+            clock.return_value = 102.01597
+            self.reply(first, ORIGIN)
+            trial.poll(service)
+            second = self.command('verify')
+            self.assertNotEqual(second[3], first[3])
+            clock.return_value = 104.
+            self.reply(second, TARGET)
+            with self.assertRaises(TimeoutError):
+                trial.poll(service)
+        self.assertEqual(report['writes_verified'], 0)
+        self.assert_no_command()
+
     def test_revoked_grant_after_inspection_does_not_dispatch_apply(self):
         trial, report, service = self.trial()
         trial.poll(service)

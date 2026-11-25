@@ -238,6 +238,7 @@ local callback, issued, reply, packet
 local actual_frame, owner, docked, docking, stored = source, 'player', false, false, false
 local sequence = 0
 local now, logs = 1, {}
+local read_duration, reads = 0, 0
 local C = {
     IsGamePaused=function() return false end, IsPlayerValid=function() return true end,
     GetSaveFolderPath=function() return '/save' end,
@@ -247,7 +248,11 @@ local C = {
     GetContextByClass=function(id, class) return id == 25 and class == 'sector' and 41 or 0 end,
     GetPlayerOccupiedShipID=function() return 0 end, GetPlayerControlledShipID=function() return 0 end,
     GetPlayerContainerID=function() return 42 end,
-    GetObjectPositionInSector=function() return {x=0,y=0,z=0} end,
+    GetObjectPositionInSector=function()
+        now=now+read_duration
+        reads=reads+1
+        return {x=0,y=0,z=0}
+    end,
     GetObjectIDCode=function() return 'WRN-302' end,
 }
 package.loaded.ffi = {C=C, typeof=function() end, cdef=function() end, string=function(value) return value end}
@@ -282,8 +287,8 @@ local function request(action, frame, requested_actor, captain_seed)
     bridge:tick()
     return id
 end
-local function answer(status, frame, resolved_actor, position)
-    callback(nil, table.concat({assert(issued).request_id,epoch,'17',generation,issued.action,status,
+local function answer(status, frame, resolved_actor, position, granted_generation)
+    callback(nil, table.concat({assert(issued).request_id,epoch,'17',granted_generation or generation,issued.action,status,
                                resolved_actor or actor,frame,position or '0|0|0'},'|'))
 end
 local function inspect(action)
@@ -437,10 +442,62 @@ callback(nil, malformed .. '|invalid')
 expect_refusal('inspect', source, 'BRIDGE_MD_INVALID', '0', malformed)
 
 bridge = new_bridge()
-request('verify', source)
-now = now + 2.25
+local verify_id = request('verify', source)
+now = now + 2.01597
+bridge:tick()
+assert(issued.request_id == verify_id and reply == 'P|' .. lease .. '|HELLO')
 answer('OBSERVED', source)
-assert(reply:find('|verify|BRIDGE_MD_TIMEOUT|', 1, true))
+assert(reply:find('|verify|OBSERVED|'..actor..'|'..source..'|0|0|0|0|0|0|WRN-302', 1, true))
+
+for _, identity in ipairs({
+    {source, '0x23', generation},
+    {dest, actor, generation},
+    {source, actor, ('f'):rep(32)},
+}) do
+    verify_id = request('verify', source)
+    now = now + 2.01597
+    local previous_reads = reads
+    answer('OBSERVED', identity[1], identity[2], '0|0|0', identity[3])
+    expect_refusal('verify', source, 'BRIDGE_MD_INVALID', '0', verify_id)
+    assert(reads == previous_reads)
+end
+verify_id = request('verify', source)
+now = now + 2.01597
+actual_frame = dest
+answer('OBSERVED', source)
+expect_refusal('verify', source, 'BRIDGE_LOCAL_REFUSED', '0', verify_id)
+actual_frame = source
+
+for _, expire in ipairs({'tick', 'callback', 'native_read'}) do
+    verify_id = request('verify', source)
+    local previous_reads = reads
+    if expire == 'native_read' then
+        now = now + 3.875
+        read_duration = 0.125
+        answer('OBSERVED', source)
+        read_duration = 0
+        assert(reads == previous_reads + 1)
+        assert(logs[#logs]:find('reason=verify_readback_deadline', 1, true))
+    else
+        now = now + 4
+        if expire == 'tick' then bridge:tick() else answer('OBSERVED', source) end
+        assert(reads == previous_reads)
+    end
+    expect_refusal('verify', source, 'BRIDGE_MD_TIMEOUT', '0', verify_id)
+    answer('OBSERVED', source)
+    expect_refusal('verify', source, 'BRIDGE_MD_TIMEOUT', '0', verify_id)
+end
+
+for _, action in ipairs({'apply', 'transfer'}) do
+    bridge = new_bridge()
+    inspect(action)
+    local frame = action == 'apply' and source or dest
+    local timed_out = request(action, frame)
+    assert(issued and issued.request_id == timed_out)
+    now = now + 2
+    answer('DISPATCHED', frame)
+    expect_refusal(action, frame, 'BRIDGE_MD_TIMEOUT', '0', timed_out)
+end
 
 '''
         subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)

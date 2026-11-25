@@ -36,6 +36,7 @@ _WRITE_ACTIONS = {'apply', 'transfer'}
 _MOVEMENT_PROOF_VERSION = 2
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
+VERIFY_TIMEOUT_SECONDS = 4.0
 _ACTOR = re.compile(r'0[xX][0-9a-fA-F]{1,16}')
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
@@ -113,7 +114,7 @@ class GamePoseChannel:
                     return
         raise TimeoutError('registered X4 pose channel did not bind')
 
-    def begin(self, action, sample, actor='0'):
+    def begin(self, action, sample, actor='0', *, verify_deadline=None):
         if self.pending is not None:
             raise RuntimeError('previous company pose command is still pending')
         if action not in _SUCCESS:
@@ -136,9 +137,16 @@ class GamePoseChannel:
         if captain_seed is not None:
             fields += (captain_seed,)
         packet = '|'.join(fields).encode('ascii')
+        now = time.monotonic()
+        if verify_deadline is not None:
+            if action != 'verify' or not math.isfinite(verify_deadline):
+                raise ValueError('invalid X4 pose verification deadline')
+            if now >= verify_deadline:
+                raise TimeoutError('X4 company pose verification window expired')
+        deadline = verify_deadline if verify_deadline is not None else now + 7
         if self.socket.sendto(packet, self.peer) != len(packet):
             raise ConnectionError('could not send X4 pose command')
-        self.pending = (identity, action, sector, actor, time.monotonic() + 7)
+        self.pending = (identity, action, sector, actor, deadline)
 
     def poll(self):
         if self.pending is None:
@@ -284,18 +292,19 @@ class CompanyPoseTrial:
             self.report['within_tolerance'] += 1
         elif stage in ('apply', 'transfer'):
             active['stage'] = 'verify'
-            active['verify_deadline'] = time.monotonic() + 4
-            self.channel.begin('verify', sample, active['actor'])
+            active['verify_deadline'] = time.monotonic() + VERIFY_TIMEOUT_SECONDS
+            self._request_verification()
             return
         elif stage == 'verify':
-            if not _observed_move(active['before'], target, reply['md'], reply['ui'],
-                                  changed_sector='source_sector_macro' in active):
-                if time.monotonic() < active['verify_deadline']:
-                    # The stock relocation can become visible several frames after dispatch.
-                    self.channel.begin('verify', sample, active['actor'])
-                    return
-                self.report['failed_readback'] = {'index': sample['index'], 'target': target, **reply}
-                raise ValueError('server pose did not show the required movement on readback')
+            observed = _observed_move(active['before'], target, reply['md'], reply['ui'],
+                                      changed_sector='source_sector_macro' in active)
+            if time.monotonic() >= active['verify_deadline']:
+                if not observed:
+                    self.report['failed_readback'] = {'index': sample['index'], 'target': target, **reply}
+                raise TimeoutError('X4 company pose verification window expired')
+            if not observed:
+                self._request_verification()
+                return
             self.report['writes_verified'] += 1
             move = {'sequence': sample['sequence'], 'code': reply['code'], 'before': active['before'],
                     'target': target, 'md': reply['md'], 'ui': reply['ui'],
@@ -318,6 +327,13 @@ class CompanyPoseTrial:
             'pre_write': active['before'],
         }
         self.active = None
+
+    def _request_verification(self):
+        # Stock relocation may take several frames. Every read shares the
+        # deadline set after dispatching the one position write.
+        active = self.active
+        self.channel.begin('verify', active['sample'], active['actor'],
+                           verify_deadline=active['verify_deadline'])
 
     def _skip_unavailable(self, sample, stage, reason):
         index = sample['index']
@@ -346,7 +362,7 @@ class CompanyPoseTrial:
         except TransferNotVisible:
             if 'source_sector_macro' not in self.active or time.monotonic() >= self.active['verify_deadline']:
                 raise
-            self.channel.begin('verify', self.active['sample'], self.active['actor'])
+            self._request_verification()
             return
         except ShipUnavailable as unavailable:
             self._skip_unavailable(self.active['sample'], self.active['stage'], str(unavailable))
