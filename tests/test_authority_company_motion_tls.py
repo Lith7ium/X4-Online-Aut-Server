@@ -256,6 +256,8 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
                          and len(seen_a) == 1)
         self.assertEqual([(sample['index'], sample['real_velocity']) for sample in seen_a], [(7354, None)])
         self.assertEqual(seen_b, [])
+        self.assertEqual(b.stats()['last_acknowledged_sample'], dict(seen_a[0], window=1))
+        self.assertNotIn('last_nonzero_velocity_acknowledged', b.stats())
         await self.control_roundtrip(control_port, b'both-motion-slots-occupied')
 
         b.set_view('sector_a', [1970])
@@ -269,6 +271,11 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         for sample, grant, x in ((seen_a[-1], second_grant, 36), (seen_b[-1], first_grant, 26)):
             self.assertEqual((sample['index'], sample['generation'], sample['x'], sample['real_velocity']),
                              (grant['index'], grant['generation'], x, VELOCITY))
+
+        moving_receipt = dict(seen_b[-1], window=1)
+        self.assertEqual(a.stats()['last_nonzero_velocity_acknowledged'], moving_receipt)
+        a.stats()['last_nonzero_velocity_acknowledged']['real_velocity']['x'] = -999
+        self.assertEqual(a.stats()['last_acknowledged_sample'], moving_receipt)
 
         source_a.stage(3, 'sector_c', 42)
         await self.drive(lambda: lost_b and a.stats()['samples_acknowledged'] == 3)
@@ -284,6 +291,8 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         await self.drive(lambda: source_a.sample is None)
         await self.control_roundtrip(control_port, b'paused-control')
         self.assertEqual(self.service.accepted_samples, 5)
+        self.assertEqual(a.stats()['last_acknowledged_sample'], dict(seen_b[-1], window=1))
+        self.assertEqual(a.stats()['last_nonzero_velocity_acknowledged'], moving_receipt)
         self.assertEqual(len(seen_b), 3)
         self.service.set_running(True)
         await self.drive(lambda: a._window == b._window == 3)
@@ -334,7 +343,8 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         with patch.object(self.service, '_write'):  # Sequence 2 reaches the server, but its ACK cannot reach the client.
             source.stage(2, 'sector_a', 26)
             await self.drive(lambda: self.service.accepted_samples == 2)
-        self.assertEqual(client.stats()['samples_acknowledged'], 1)
+        self.assertEqual(client.stats()['last_acknowledged_sample']['sequence'], 1)
+        self.assertNotIn('last_nonzero_velocity_acknowledged', client.stats())
         self.service._drop(peer)
         await self.drive(lambda: client._client is None)
         source.stage(3, 'sector_a', 42)
@@ -357,9 +367,23 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         self.assertEqual(client.stats()['velocity_samples_acknowledged'], 1)
         await check_control(b'after-motion-rebind')
 
+        moving_receipt = client.stats()['last_nonzero_velocity_acknowledged']
+        self.assertEqual((moving_receipt['sequence'], moving_receipt['real_velocity']), (5, VELOCITY))
+        self.service._drop(next(iter(self.service._peers.values())))
+        await self.drive(lambda: client._client is None)
+        self.assertEqual(client.stats()['last_nonzero_velocity_acknowledged'], moving_receipt)
+        await self.drive(lambda: client._client is not None and client._client._running)
+        for sequence in (6, 7):
+            source.stage(sequence, 'sector_a', 74)
+            source.sample['real_velocity'] = dict.fromkeys(VELOCITY, 0.0)
+            await self.drive(lambda: client.stats()['last_acknowledged_sample']['sequence'] == sequence)
+
         client.close()
         await self.drive(lambda: not self.service._peers)
-        self.assertEqual(client.stats()['samples_acknowledged'], 3)
+        self.assertEqual(client.stats()['samples_acknowledged'], 5)
+        self.assertEqual(client.stats()['velocity_samples_acknowledged'], 2)
+        self.assertEqual(client.stats()['last_acknowledged_sample']['real_velocity'], dict.fromkeys(VELOCITY, 0.0))
+        self.assertEqual(client.stats()['last_nonzero_velocity_acknowledged'], moving_receipt)
         self.assertIsNone(client._credential)
         await check_control(b'after-motion-close')
 

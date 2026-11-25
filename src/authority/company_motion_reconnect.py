@@ -1,4 +1,5 @@
 """Keep the optional movement stream scoped to one already-admitted player."""
+from copy import deepcopy
 import time
 
 from .company_motion_client import CompanyMotionClient
@@ -74,7 +75,7 @@ class ReconnectingCompanyMotionClient:
         self._closed = False
         self._retry_at = 0.0
         self._retry_delay = _INITIAL_DELAY
-        self._counts = dict.fromkeys(_COUNTERS, 0)
+        self._finished_stats = dict.fromkeys(_COUNTERS, 0)
         self.failure = None
 
     def set_view(self, sector, indices):
@@ -138,13 +139,16 @@ class ReconnectingCompanyMotionClient:
             except ValueError:
                 self._fail()
             finally:
-                self._add_counts(self._counts, client)
+                self._merge_link_stats(self._finished_stats, client)
 
     @staticmethod
-    def _add_counts(totals, client):
-        counts = client.stats()
+    def _merge_link_stats(totals, client):
+        link = client.stats()
         for key in _COUNTERS:
-            totals[key] += counts[key]
+            totals[key] += link[key]
+        for key in ('last_acknowledged_sample', 'last_nonzero_velocity_acknowledged'):
+            if key in link:
+                totals[key] = link[key]
 
     def poll(self):
         if self._closed or self.failure is not None:
@@ -212,10 +216,10 @@ class ReconnectingCompanyMotionClient:
         return client
 
     def stats(self):
-        counts = self._counts.copy()
+        result = deepcopy(self._finished_stats)
         if self._client is not None:
-            self._add_counts(counts, self._client)
-        return counts
+            self._merge_link_stats(result, self._client)
+        return result
 
     def close(self):
         self._closed = True

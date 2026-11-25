@@ -138,8 +138,14 @@ the latest confirmed sample, which may already be stationary. The same
 slot's `last_nonzero_velocity_confirmed` preserves the latest confirmed
 sample that carried a nonzero velocity, including its ship, sector,
 generation, sequence, clocks, position and velocity. It is `null` until a
-matching sample is confirmed in that slot. Compare these fields with the
-Linux pilot's source capture. This measures delivery to the selected local
+matching sample is confirmed in that slot. In builds with sender receipts,
+the pilot's result records the last sample acknowledged by the movement
+service under `company_motion.last_acknowledged_sample`. The field
+`last_nonzero_velocity_acknowledged` retains the last acknowledged sample
+with a nonzero velocity even after the pilot stops. Each field first appears
+after its corresponding acknowledgement. Match the registry epoch, ship
+index, generation and sequence when comparing a sender receipt with a
+confirmation from the observer. This measures delivery to the selected local
 hull. Verifying visible motion also requires a later read of its actual pose.
 
 ### Two-pilot cockpit playback

@@ -1,4 +1,5 @@
 """Publish the selected cockpit and receive explicitly observed ships over the TLS bridge."""
+from copy import deepcopy
 import re
 import socket
 import time
@@ -90,7 +91,7 @@ class CompanyMotionClient:
         self._running = False
         self._last_sequence = 0
         self._last_sector = None
-        self._awaiting = self._latest = self._receipt = None
+        self._awaiting_sample = self._latest = self._receipt = None
         self._desired_view = None
         self._sent_view = None
         self._visible = {}
@@ -105,7 +106,7 @@ class CompanyMotionClient:
                            snapshots_received=0, visibility_ends=0)
 
     def stats(self):
-        return dict(self._stats)
+        return deepcopy(self._stats)
 
     def set_view(self, sector, indices):
         """Replace the local observation set. Callers own game visibility and rendering."""
@@ -198,7 +199,7 @@ class CompanyMotionClient:
         elif window != self._window + 1 or message['running'] == self._running:
             raise ValueError('movement clock transition out of order')
         self._window, self._running = window, message['running']
-        self._latest = self._awaiting = self._receipt = self._last_sector = None
+        self._latest = self._awaiting_sample = self._receipt = self._last_sector = None
         self._sent_view = None
         self._view_id = 0
         self._route_revisions.clear()
@@ -236,11 +237,18 @@ class CompanyMotionClient:
         if kind == 'motion_sampled':
             sequence = message.get('sequence')
             if (set(message) != {'kind', 'sequence', 'window'} or type(sequence) is not int or
-                    self._awaiting is None or sequence != self._awaiting[0]):
+                    self._awaiting_sample is None or sequence != self._awaiting_sample['sequence']):
                 raise ValueError('unexpected source receipt')
+            sample = self._awaiting_sample
+            velocity = sample['real_velocity']
             self._stats['samples_acknowledged'] += 1
-            self._stats['velocity_samples_acknowledged'] += int(self._awaiting[1])
-            self._awaiting = None
+            self._stats['velocity_samples_acknowledged'] += int(velocity is not None)
+            # Keep exactly what went on the wire, including stripped baseline rates.
+            receipt = dict(sample, window=window)
+            self._stats['last_acknowledged_sample'] = receipt
+            if velocity is not None and any(component != 0 for component in velocity.values()):
+                self._stats['last_nonzero_velocity_acknowledged'] = receipt
+            self._awaiting_sample = None
             return
         view_id = message.get('view_id')
         if type(view_id) is not int or not 1 <= view_id <= self._view_id:
@@ -304,13 +312,13 @@ class CompanyMotionClient:
                 row = rows[0] if rows else {'sector_macro': 'none', 'indices': []}
                 return {'kind': 'motion_view', 'view_id': self._view_id, **row}
             return {'kind': 'motion_views', 'view_id': self._view_id, 'views': rows}
-        if self._awaiting is not None or self._latest is None:
+        if self._awaiting_sample is not None or self._latest is None:
             return None
         sample, self._latest = self._latest, None
         if sample['sector_macro'] != self._last_sector:
             sample['real_velocity'] = None
         self._last_sector, self._last_sequence = sample['sector_macro'], sample['sequence']
-        self._awaiting = (self._last_sequence, sample['real_velocity'] is not None)
+        self._awaiting_sample = sample
         return {'kind': 'motion_sample', 'sample': sample}
 
     def poll(self):
