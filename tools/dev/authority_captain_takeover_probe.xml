@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityCaptainTakeoverProbe" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <!-- Disposable client probe. Stock conversation signals release and restore the
+       chair. The probe never changes crew assignment or creates an actor. -->
+  <cues>
+    <cue name="Run" namespace="this">
+      <conditions>
+        <event_ui_triggered screen="'X4AuthorityCaptainTakeoverProbe'" control="'Run'"/>
+      </conditions>
+      <actions>
+        <set_value name="$Request" exact="event.param3"/>
+        <set_value name="$Nonce" exact="@$Request.$nonce"/>
+        <set_value name="$Index" exact="@$Request.$index"/>
+        <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$Index}"/>
+        <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+        <set_value name="$CaptainSeed" exact="@$Captain.seed"/>
+        <set_value name="$Avatar" exact="player.entity"/>
+        <set_value name="$Phase" exact="'baseline'"/>
+        <include_actions ref="CheckIdentity"/>
+        <do_if value="$Identity and $Ship.pilot == $Captain and $Captain.owner == faction.player
+                      and $Captain.assignedcontrolled == $Ship and $Ship.dock
+                      and not player.controlled and not player.occupiedship and player.container != $Ship">
+          <set_value name="$Phase" exact="'board'"/>
+          <set_value name="$Deadline" exact="player.age + 30s"/>
+          <include_actions ref="Report"/>
+          <teleport_player object="$Ship" control="false" instant="true" force="true"/>
+        </do_if>
+        <do_else>
+          <include_actions ref="Fail"/>
+        </do_else>
+      </actions>
+      <cues>
+        <cue name="Aboard" checkinterval="0.5s">
+          <conditions>
+            <check_value value="$Phase == 'board'"/>
+            <check_value value="player.age ge $Deadline or (player.container == $Ship and @player.room.exists
+                                and @$Captain.ship == $Ship and $Ship.pilot == $Captain)"/>
+          </conditions>
+          <delay exact="2s"/>
+          <actions>
+            <include_actions ref="CheckIdentity"/>
+            <include_actions ref="CheckHelm"/>
+            <do_if value="$Identity and player.age lt $Deadline and player.container == $Ship
+                          and not player.controlled and $CaptainAboard and $Ship.pilot == $Captain
+                          and $ChairActor == $Captain and (not $Ship.order or $Ship.order.canplayercancel)">
+              <set_value name="$Phase" exact="'relief'"/>
+              <set_value name="$Deadline" exact="player.age + 30s"/>
+              <include_actions ref="Report"/>
+              <!-- The stock conversation's Get up choice emits this on its pilot. -->
+              <signal_objects object="$Captain" param="'npc__leave_post'"/>
+            </do_if>
+            <do_else>
+              <include_actions ref="Fail"/>
+            </do_else>
+          </actions>
+        </cue>
+        <cue name="ChairClear" checkinterval="0.5s">
+          <conditions>
+            <check_value value="$Phase == 'relief'"/>
+            <check_value value="player.age ge $Deadline or ($Captain.isbusy and not @$Chair.component.slotactor.{$Chair})"/>
+          </conditions>
+          <actions>
+            <include_actions ref="CheckIdentity"/>
+            <include_actions ref="CheckHelm"/>
+            <do_if value="$Identity and player.age lt $Deadline and $CaptainAboard and $Chair and not $ChairActor
+                          and $Captain.isbusy and player.container == $Ship and not player.controlled">
+              <set_value name="$Phase" exact="'control'"/>
+              <set_value name="$Deadline" exact="player.age + 30s"/>
+              <include_actions ref="Report"/>
+              <!-- Stock teleport only grants control if the seat is free. Force allows
+                   this private save to test without completing teleport research. -->
+              <teleport_player object="$Ship" control="true" instant="true" force="true"/>
+            </do_if>
+            <do_else>
+              <include_actions ref="Fail"/>
+            </do_else>
+          </actions>
+        </cue>
+        <cue name="AtHelm" checkinterval="0.5s">
+          <conditions>
+            <check_value value="$Phase == 'control'"/>
+            <check_value value="player.age ge $Deadline or (player.controlled == $Ship
+                                and player.occupiedship == $Ship and player.container == $Ship)"/>
+          </conditions>
+          <delay exact="1s"/>
+          <actions>
+            <include_actions ref="CheckIdentity"/>
+            <include_actions ref="CheckHelm"/>
+            <do_if value="$Identity and player.age lt $Deadline and $CaptainAboard and player.entity == $Avatar
+                          and player.controlled == $Ship and player.occupiedship == $Ship
+                          and player.container == $Ship and $ChairActor == $Avatar">
+              <set_value name="$Phase" exact="'taken_over'"/>
+              <include_actions ref="Report"/>
+              <set_value name="$Phase" exact="'release'"/>
+              <set_value name="$Deadline" exact="player.age + 30s"/>
+              <raise_lua_event name="'X4AuthorityCaptainTakeoverProbe.GetUp'" param="$Nonce"/>
+            </do_if>
+            <do_else>
+              <include_actions ref="Fail"/>
+            </do_else>
+          </actions>
+        </cue>
+        <cue name="Released" checkinterval="0.5s">
+          <conditions>
+            <check_value value="$Phase == 'release'"/>
+            <check_value value="player.age ge $Deadline or (player.container == $Ship and not player.controlled)"/>
+          </conditions>
+          <actions>
+            <include_actions ref="CheckIdentity"/>
+            <include_actions ref="CheckHelm"/>
+            <do_if value="$Identity and player.age lt $Deadline and $CaptainAboard and player.container == $Ship
+                          and not player.controlled and $ChairActor != $Avatar">
+              <set_value name="$Phase" exact="'restore'"/>
+              <set_value name="$Deadline" exact="player.age + 30s"/>
+              <include_actions ref="Report"/>
+              <do_if value="$ChairActor != $Captain or $Ship.pilot != $Captain">
+                <signal_objects object="$Captain" param="'npc__return_to_post'"/>
+              </do_if>
+            </do_if>
+            <do_else>
+              <include_actions ref="Fail"/>
+            </do_else>
+          </actions>
+        </cue>
+        <cue name="Restored" checkinterval="0.5s">
+          <conditions>
+            <check_value value="$Phase == 'restore'"/>
+            <check_value value="player.age ge $Deadline or ($Ship.pilot == $Captain
+                                and @$Chair.component.slotactor.{$Chair} == $Captain and not $Captain.isbusy)"/>
+          </conditions>
+          <delay exact="1s"/>
+          <actions>
+            <include_actions ref="CheckIdentity"/>
+            <include_actions ref="CheckHelm"/>
+            <do_if value="$Identity and player.age lt $Deadline and $CaptainAboard and player.entity == $Avatar
+                          and not player.controlled and $Ship.pilot == $Captain and $ChairActor == $Captain
+                          and not $Captain.isbusy and player.container == $Ship">
+              <set_value name="$Phase" exact="'restored'"/>
+              <include_actions ref="Report"/>
+            </do_if>
+            <do_else>
+              <include_actions ref="Fail"/>
+            </do_else>
+          </actions>
+        </cue>
+      </cues>
+    </cue>
+
+    <library name="CheckIdentity" purpose="include_actions">
+      <actions>
+        <set_value name="$Identity" exact="@$Request.$epoch == @md.X4AuthorityShipRegistry.State.$epoch
+                         and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
+                         and @$Ship.isclass.ship and $Ship.isoperational
+                         and @md.X4AuthorityShipRegistry.State.$ships.{$Index} == $Ship
+                         and @md.X4AuthorityShipRegistry.State.$byship.{$Ship} == $Index
+                         and $Ship.idcode == @$Request.$ship_code and $Ship.sector.macro.id == @$Request.$sector
+                         and $Ship.owner == faction.player and $Ship.trueowner == faction.player
+                         and @$Captain.isclass.npc and $Captain.owner == faction.player and $Captain.seed == $CaptainSeed
+                         and '%s'.[$CaptainSeed] == @$Request.$captain_seed
+                         and $Ship.assignedaipilot == $Captain and $Captain.assignedcontrolled == $Ship"/>
+      </actions>
+    </library>
+
+    <library name="CheckHelm" purpose="include_actions">
+      <actions>
+        <find_npc_slot name="$Chair" object="$Ship" post="controlpost.aipilot" excludefilled="false"/>
+        <set_value name="$ChairActor" exact="@$Chair.component.slotactor.{$Chair}"/>
+        <set_value name="$CaptainAboard" exact="@$Captain.ship == $Ship and @$Captain.hascontext.{$Ship}"/>
+      </actions>
+    </library>
+
+    <library name="Fail" purpose="include_actions">
+      <actions>
+        <include_actions ref="CheckHelm"/>
+        <set_value name="$Phase" exact="'failed_%s'.[$Phase]"/>
+        <include_actions ref="Report"/>
+      </actions>
+    </library>
+
+    <library name="Report" purpose="include_actions">
+      <actions>
+        <debug_text text="'[X4LAN] AUTH_CAPTAIN_TAKEOVER %s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$Nonce,$Phase,
+                          $Identity,@$CaptainAboard,(if @$ChairActor == $Captain then 'captain' else if @$ChairActor == $Avatar then 'player' else 'clear'),
+                          (player.controlled == $Ship),(player.occupiedship == $Ship),(player.container == $Ship),
+                          @$Captain.isbusy,player.age]" chance="100"/>
+      </actions>
+    </library>
+  </cues>
+</mdscript>
