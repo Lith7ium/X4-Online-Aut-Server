@@ -5,9 +5,9 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 12:00 check-in
-covers the matching flight packages and the staged Fedora upgrade.
-[Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795604471235909)
+hour, Berlin time, in `#x4-authorative-server`. The 13:00 check-in
+covers the four-Pulsar world and the Windows flight package for Cobalt.
+[Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795608053962909)
 
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
@@ -136,9 +136,12 @@ Sun V to IV. X4 briefly returned no sector in the corridor. The motion
 sender now resumes with a fresh destination baseline under the same
 grant. The authenticated service accepted subsequent velocity samples.
 The optional server position writer was disabled for this diagnostic.
-With the writer enabled, an earlier two-pilot run had ended on an
-unconfirmed position request before entry. Cold, authoritative adoption
-of this flight remains open. [Native transit and provider timeout](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
+An earlier two-pilot run ended on an unconfirmed provider position request
+before entry. In a subsequent one-pilot flight at `f20dc23a`, the GPU-free
+provider transferred HVC-420 to Black Hole Sun IV at sample 161 and saved it
+there after departure. A fresh provider found it in Black Hole Sun IV
+within 0.47 mm of the recorded position. A second pilot staying online through that passage
+still needs testing. [Native flight and authority transfer](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot

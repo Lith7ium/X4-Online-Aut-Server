@@ -1,4 +1,33 @@
-# Native Company sender resumed after a stock superhighway passage
+# Company superhighway passage and authoritative sector transfer
+
+## Pilot flight with a native provider position writer
+
+At `f20dc23a`, one Linux pilot flew HVC-420 (registry index 1073) from
+Black Hole Sun V to Black Hole Sun IV using stock autopilot. The player
+and a GPU-free Linux provider ran on Bazzite over pinned loopback TLS.
+The provider started from a copy of the near-entrance checkpoint identified
+below and enabled `--company-ship-positions`.
+
+The pilot's last accepted origin sample was 142. Sample 143 opened the
+destination stream with a fresh position, and sample 145 carried velocity.
+The provider moved the same HVC-420 into the destination sector once, at
+sample 161, and read its position back from X4. Across the flight the
+provider accepted 558 samples and verified eight position writes. By the
+last accepted sample (671) X4 already held the requested destination
+position. When the only pilot left, the provider paused the world and
+confirmed `checkpoint-5efd90adfaa04dd49dc37b0b48de99d7` (save SHA-256
+`86810d09532cfcad018b1170f265b5f995282cca52d71632a735f4d4919f7d19`).
+The remaining difference between the saved position and the paused target
+was 0.48 mm. Both processes exited normally. A fresh GPU-free provider
+then loaded that checkpoint, confirmed its marker and read HVC-420 back
+in Black Hole Sun IV within 0.47 mm of the recorded position. This run
+used one pilot.
+
+Private evidence under `.local/native-authority-transit/native-01`
+includes `transition-source.json`, `server/result.json`, and `verified.json`
+(verification SHA-256 `9feb7c3b7076b1e5e3f6a4ead4993cb4a3a0651f60f15263a68319ef554d351e`).
+
+## Earlier sender-only flight
 
 On 25 November 2026, one regular native Linux player joined a regular
 recovered Linux provider on Bazzite at `c8b46a13` through pinned
@@ -90,8 +119,7 @@ Neither a map subscription nor a map receipt was verified.
 The later diagnostic in `b7ab1d33` records whether a waiting request
 expired in the update callback or its request prefix returned past the
 deadline. It retains the existing timeout and stops on an uncertain
-write. Six focused tests passed. There was no further writer-enabled
-native run. The private approach and timeout reports had SHA-256
+write. Six focused tests passed. The private approach and timeout reports had SHA-256
 `e36494d27a61a7b556cada543b01946ba07284ceb62ff72ab8a7d2c7e4128c4c` and
 `f892fb0e4c002eb06c51975986c9f6de3bbc80cc2350b0aa51a8211d44539b95`.
 
