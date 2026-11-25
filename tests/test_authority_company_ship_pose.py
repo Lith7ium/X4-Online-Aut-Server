@@ -29,6 +29,25 @@ class CompanyShipPoseTests(unittest.TestCase):
         self.assertIsNotNone(apply.find("do_if/set_value[@exact=\"'DISPATCHED'\"]"))
         self.assertFalse({'teleport_player', 'save_game', 'set_owner', 'create_order'} & {node.tag for node in doc.iter()})
 
+    def test_saved_captain_requires_live_idle_helm_and_the_same_inspected_ship(self):
+        root = ET.parse(MD)
+        guard = root.find(".//library[@name='CheckRetainedCaptain']//set_value[@name='$retainedCaptainReady']")
+        for required in ("'%s'.[$captain.seed] == $args.$captain_seed", '$ship.pilot == $captain',
+                         '$captain.assignedcontrolled == $ship', '$captain.ship == $ship', 'not $captain.isbusy',
+                         'not $ship.orders.count', 'not $ship.tradeorders.count', 'not @$ship.tradecomputer.exists',
+                         "@$ship.order.id == 'Wait'", '$ship.order.state != orderstate.critical',
+                         'not player.controlled', '@player.station.isclass.station',
+                         '@State.$crewBinding.$ship == $ship', '@State.$crewBinding.$captain == $captain',
+                         '@State.$crewBinding.$sector == $ship.sector', '@State.$crewBinding.$generation == $args.$generation'):
+            self.assertIn(required, guard.get('exact'))
+        self.assertNotIn("'transfer'", guard.get('exact'))
+        self.assertNotIn("'locate'", guard.get('exact'))
+        capture = root.find(".//library[@name='CheckShip']//set_value[@name='State.$crewBinding']/..")
+        self.assertEqual(capture.get('value'), "$action == 'inspect' and $retainedCaptainReady")
+        refusal = root.find(".//library[@name='CheckShip']//set_value[@exact=\"'PILOT_PRESENT'\"]/..")
+        self.assertIn('$args.$captain_seed?', refusal.get('value'))
+        self.assertIn('not $retainedCaptainReady', refusal.get('value'))
+
     def test_transfer_consumes_bound_locate_and_requires_one_matching_sector(self):
         doc = ET.parse(MD).getroot()
         request = doc.find("./cues/cue[@name='Request']/actions/do_if")
@@ -248,11 +267,13 @@ local bridge = pose.new_x4({lease=lease, epoch=epoch, port=1, allow_apply=true},
             receive=function() local value=packet;packet=nil;return value end,
         }
     end})
-local function request(action, frame, requested_actor)
+local function request(action, frame, requested_actor, captain_seed)
     sequence=sequence+1
     issued,reply=nil,nil
     local id=string.format('%032x', sequence)
-    packet=table.concat({'P',lease,action,id,epoch,'17',generation,frame,requested_actor or actor,1,2,3},'|')
+    local fields={'P',lease,action,id,epoch,'17',generation,frame,requested_actor or actor,1,2,3}
+    if captain_seed then fields[#fields+1] = captain_seed end
+    packet=table.concat(fields,'|')
     bridge:tick()
     return id
 end
@@ -267,6 +288,21 @@ end
 local function expect_refusal(action, frame, status, resolved_actor, id)
     assert(reply == table.concat({'P',lease,'RESULT',id,epoch,'17',generation,
                                  action,status,resolved_actor,frame,'0|0|0|0|0|0|-'},'|'), reply)
+end
+for _, seed in ipairs({'-9223372036854775808', '0', '9223372036854775807', '2211373338772438693'}) do
+    request('inspect', source, '0', seed)
+    assert(issued and issued.captain_seed == seed)
+    answer('INSPECTED', source)
+    local id = request('apply', source)
+    assert(not issued)
+    expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', id)
+    request('apply', source, actor, seed)
+    assert(issued and issued.captain_seed == seed)
+    answer('DISPATCHED', source)
+end
+for _, invalid in ipairs({'01','-0','1e4','+1','9223372036854775808','-9223372036854775809','1|'}) do
+    request('inspect', source, '0', invalid)
+    assert(not issued and not reply)
 end
 for _, action in ipairs({'apply', 'transfer'}) do
     local frame = action=='apply' and source or dest

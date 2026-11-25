@@ -70,6 +70,7 @@ class GamePoseChannel:
             raise ValueError('invalid source registry epoch')
         self.ship_codes = {}
         self.ship_sectors = {}
+        self.captain_seeds = {}
         self.epoch, self.lease = epoch, secrets.token_hex(16)
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -85,11 +86,14 @@ class GamePoseChannel:
         """Refresh eligible indices from the same verified snapshot used for seat selection."""
         self.ship_codes.clear()
         self.ship_sectors.clear()
-        catalogue = read_company_ship_catalogue(checkpoint)
+        self.captain_seeds.clear()
+        catalogue = read_company_ship_catalogue(checkpoint, include_captains=True)
         if catalogue.registry_epoch != self.epoch:
             raise ValueError('company ship catalogue belongs to another registry')
         self.ship_codes = {ship.ship_index: ship.code for ship in catalogue.ships}
         self.ship_sectors = {ship.ship_index: ship.sector_macro for ship in catalogue.ships}
+        self.captain_seeds = {ship.ship_index: ship.captain_seed for ship in catalogue.ships
+                              if ship.captain_seed is not None}
         return catalogue
 
     def bind(self, process, guard):
@@ -124,6 +128,9 @@ class GamePoseChannel:
         identity = (sequence, self.epoch, str(sample['index']), sample['generation'])
         coordinates = _xyz(sample[key] for key in 'xyz')
         fields = ('P', self.lease, action, *identity, sector, actor, *(format(n, '.17g') for n in coordinates))
+        captain_seed = self.captain_seeds.get(sample['index'])
+        if captain_seed is not None:
+            fields += (captain_seed,)
         packet = '|'.join(fields).encode('ascii')
         if self.socket.sendto(packet, self.peer) != len(packet):
             raise ConnectionError('could not send X4 pose command')

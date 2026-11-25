@@ -49,7 +49,7 @@ def render_pose(data, generation):
           "or ($action != 'inspect' and $action != 'apply' and $action != 'verify')")
     # The unchanged registry and avatar checks still execute at every read/write.
     check = root.find("./cues/library[@name='CheckShip']/actions/do_else")
-    pilot = check.find("do_elseif[@value='$ship.pilot.exists or $ship.assignedpilot.exists']")
+    pilot = check.find("do_elseif/set_value[@exact=\"'PILOT_PRESENT'\"]/..")
     pilot.set('value',
               f"not @{_RELEASE} or {_RELEASE}.$ship != $ship or $ship.idcode != '{SHIP}' "
               f"or $ship.trueowner != faction.player or not @{_RELEASE}.$captain.isclass.npc "

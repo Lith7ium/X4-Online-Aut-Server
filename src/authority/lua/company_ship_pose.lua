@@ -26,34 +26,41 @@ local function number(value)
     return string.format('%.17g', value)
 end
 
-local function fields(value, count)
+local function fields(value, count, optional_count)
     if type(value) ~= 'string' or #value > 768 then return nil end
     local row = {}
     for field in value:gmatch('[^|]+') do row[#row + 1] = field end
-    if #row ~= count or table.concat(row, '|') ~= value then return nil end
+    if (#row ~= count and #row ~= optional_count) or table.concat(row, '|') ~= value then return nil end
     return row
 end
 
 local function request_fields(value, lease, epoch)
-    local row = fields(value, 12)
+    local row = fields(value, 12, 13)
     if not row or row[1] ~= 'P' or row[2] ~= lease or row[5] ~= epoch then return nil end
     local action, request, index, generation, frame, actor = row[3], row[4], row[6], row[7], row[8], row[9]
     if not success_status[action] then return nil end
     if not token(request) or not token(generation) or #index > 6 or not index:match('^[1-9]%d*$')
             or tonumber(index) > 200000 or #frame > 128 or not frame:match('^[a-z0-9_]+$') then return nil end
     if (resolves_actor[action] and actor ~= '0') or (not resolves_actor[action] and not actor_id(actor)) then return nil end
+    -- A saved NPC seed is a signed 64-bit integer. Do not round it through Lua numbers.
+    local captain_seed = row[13]
+    if captain_seed and captain_seed ~= '0' then
+        local sign, digits = captain_seed:match('^(%-?)([1-9]%d*)$')
+        local bound = sign == '-' and '9223372036854775808' or '9223372036854775807'
+        if not digits or #digits > #bound or (#digits == #bound and digits > bound) then return nil end
+    end
     local x, y, z = tonumber(row[10]), tonumber(row[11]), tonumber(row[12])
     for _, axis in ipairs({x or false, y or false, z or false}) do
         if not finite(axis) or math.abs(axis) > POSITION_LIMIT then return nil end
     end
     return {
         action = action, request_id = request, epoch = epoch, index = tonumber(index),
-        generation = generation, frame = frame, actor = actor, x = x, y = y, z = z,
+        generation = generation, frame = frame, actor = actor, x = x, y = y, z = z, captain_seed = captain_seed,
     }
 end
 
 local function binding(args, actor)
-    return table.concat({args.epoch, tostring(args.index), args.generation, args.frame, actor}, '|')
+    return table.concat({args.epoch, tostring(args.index), args.generation, args.frame, actor, args.captain_seed or '-'}, '|')
 end
 
 function M.new(config, engine, net)

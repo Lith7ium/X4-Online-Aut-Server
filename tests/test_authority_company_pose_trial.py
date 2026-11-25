@@ -82,7 +82,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
         checkpoint = SimpleNamespace(sha256=SOURCE_DIGEST)
         with patch('authority_company_pose_trial.read_company_ship_catalogue', return_value=catalogue) as read:
             self.assertIs(channel.read_company_catalogue(checkpoint), catalogue)
-        read.assert_called_once_with(checkpoint)
+        read.assert_called_once_with(checkpoint, include_captains=True)
 
     def command(self, action, *, actor=ACTOR, peer=None, channel=None, index=INDEX, sector=SECTOR):
         if peer is None:
@@ -170,6 +170,25 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.reply(command, peer=peer, code='HVC-420')
         with self.assertRaisesRegex(ValueError, 'pose readers disagree'):
             channel.wait()
+
+    def test_only_the_verified_seat_gets_its_saved_captain_seed(self):
+        seed = '2211373338772438693'
+        crewed = CompanyShip(INDEX, '[0x3752f]', SECTOR, None, CODE, captain_seed=seed)
+        other = CompanyShip(1970, '[0x37544]', SECTOR, None, 'WOO-831')
+        with patch('authority_company_pose_trial.read_company_ship_catalogue',
+                   return_value=CompanyShipCatalogue(EPOCH, (crewed, other))):
+            self.channel.read_company_catalogue(SimpleNamespace(sha256=SOURCE_DIGEST))
+        self.channel.begin('inspect', self.sample)
+        command = self.peer.recv(1025).decode('ascii').split('|')
+        self.assertEqual(13, len(command))
+        self.assertEqual(seed, command[-1])
+        self.reply(command[:-1])
+        self.channel.wait()
+        self.channel.begin('inspect', dict(self.sample, index=1970))
+        self.reply(self.command('inspect', index=1970), code='WOO-831')
+        self.channel.wait()
+        self.load_catalogue(self.channel, {INDEX: CODE})
+        self.assertEqual({}, self.channel.captain_seeds)
 
     def test_catalogue_refresh_replaces_ships_and_rejects_a_foreign_epoch(self):
         self.load_catalogue(self.channel, {45: None})
