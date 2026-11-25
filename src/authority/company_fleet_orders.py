@@ -11,8 +11,23 @@ def _matches(value, expression):
     return type(value) is str and re.fullmatch(expression, value) is not None
 
 
-def fleet_order(value):
-    if type(value) is not dict or value.keys() != _ORDER_FIELDS:
+def _fields_for_version(value, version):
+    if type(value) is not dict:
+        raise ValueError('invalid Company fleet message')
+    if version is None:
+        version = 2 if 'queue_mode' in value else 1
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('unsupported Company fleet order version')
+    if version == 2:
+        if value.get('queue_mode') not in ('append', 'replace'):
+            raise ValueError('invalid Company fleet queue mode')
+        return _ORDER_FIELDS | {'queue_mode'}
+    return _ORDER_FIELDS
+
+
+def fleet_order(value, *, version=None):
+    fields = _fields_for_version(value, version)
+    if value.keys() != fields:
         raise ValueError('invalid Company fleet order fields')
     if (not _matches(value['order_id'], r'[0-9a-f]{32}')
             or type(value['ship_index']) is not int or not 1 <= value['ship_index'] <= 200_000
@@ -26,10 +41,11 @@ def fleet_order(value):
     return dict(value)
 
 
-def fleet_receipt(value):
+def fleet_receipt(value, *, version=None):
     if type(value) is not dict:
         raise ValueError('invalid Company fleet receipt')
-    fields = _ORDER_FIELDS | {'outcome'}
+    order_fields = _fields_for_version(value, version)
+    fields = order_fields | {'outcome'}
     outcome = value.get('outcome')
     if outcome == 'refused':
         fields.add('reason')
@@ -39,5 +55,5 @@ def fleet_receipt(value):
         raise ValueError('invalid Company fleet outcome')
     if value.keys() != fields:
         raise ValueError('invalid Company fleet receipt fields')
-    fleet_order({key: value[key] for key in _ORDER_FIELDS})
+    fleet_order({key: value[key] for key in order_fields}, version=version)
     return dict(value)
