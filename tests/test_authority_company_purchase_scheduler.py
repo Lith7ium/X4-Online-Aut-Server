@@ -19,21 +19,22 @@ def confirmed(purchase):
                 company_balance_cents=965100, cargo_units=6, ship_code='WRN-302')
 
 
-def world_fixture(test, **options):
+def world_fixture(test, *, pilot_count=2, **options):
     epoch = 'a' * 32
+    handles = range(1, pilot_count + 1)
     peers = {h: dict(handle=h, stage='admitted', attempt_id=f'{h:032x}',
                      company_purchase_epoch=epoch, company_purchase_ship=7353+h,
                      company_purchase_statement_version=1)
-             for h in (1, 2)}
-    reservations = {h: Ns(ship_index=7353+h, code=code)
-                    for h, code in ((1, 'WRN-302'), (2, 'ABC-123'))}
+             for h in handles}
+    reservations = {h: Ns(ship_index=7353+h, code='WRN-302' if h == 1 else 'ABC-123')
+                    for h in handles}
     session = Ns(_peer=lambda conn: conn, _admitted_ships=reservations, _live=Mock())
     host = Ns(_check=Mock(), _control=Ns(_session=session, _peers=peers, _reader_free=Mock()),
               _world=Ns(session=Ns(state='running', pending=None, world_epoch='world',
-                                    ready_players=[(1, None), (2, None)])))
+                                    ready_players=[(h, None) for h in handles])))
     participants = Ns(_host=host)
     now = [0.]
-    outcomes = {1: deque(), 2: deque()}
+    outcomes = {h: deque() for h in handles}
     received = []
 
     def poll(owner, handle, attempt, index, receipt, *, guard):
@@ -69,6 +70,76 @@ def world_fixture(test, **options):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_four_pilot_paging_reserves_regular_purchase_and_undock_turns(self):
+        market = Mock()
+        offer = dict(side='buy', ware='water', price_cents=100, amount=10, min_amount=1,
+                     cargo_units=0, free_units=10)
+        market.begin.return_value = dict(outcome='observed', company_balance_cents=500,
+                                         offers=[offer] * 512)
+        world = world_fixture(self, pilot_count=4, undock=Mock(), market=market)
+        for peer in world.peers.values():
+            peer.update(trade_view_version=1, company_undock_version=1)
+        events = []
+        seen = {handle: [] for handle in world.peers}
+        completed = {}
+
+        def purchase(_, handle, *args, page, **kwargs):
+            events.append((world.now[0], handle, 'purchase'))
+            if page is not None and page['offset'] not in seen[handle]:
+                seen[handle].append(page['offset'])
+            offset = len(seen[handle]) * 8
+            if offset == 512:
+                completed.setdefault(handle, world.now[0])
+            view = (dict(view_id=f'{handle:032x}', sector='sector_1', station_code='BIM-169', offset=offset)
+                    if offset < 512 else None)
+            return dict(purchase=None, view=view)
+
+        def undock(_, handle, *args, **kwargs):
+            events.append((world.now[0], handle, 'undock'))
+
+        with patch.object(scheduler, 'poll_company_purchase', side_effect=purchase), \
+                patch.object(control, 'poll_company_undock', side_effect=undock):
+            for tick in range(401):
+                before = len(events)
+                world.step(tick / 4)
+                self.assertLessEqual(len(events) - before, 1)
+            self.assertTrue(all(offsets == list(range(0, 512, 8)) for offsets in seen.values()))
+            before = len(events)
+            world.step(100.25)
+            self.assertEqual(len(events), before)  # all four windows closed
+        self.assertLessEqual(max(completed.values()), 90)
+
+        regular = [(handle, kind) for time, handle, kind in events if not time % .5]
+        self.assertEqual(regular, [(h, kind) for _ in range(25)
+                                   for kind in ('purchase', 'undock') for h in range(1, 5)] + [(1, 'purchase')])
+        self.assertEqual(market.begin.call_count, 4)
+        market.poll.assert_not_called()
+
+    def test_repeated_offsets_and_slow_reopen_do_not_claim_extra_slots(self):
+        market = Mock()
+        market.begin.return_value = dict(outcome='observed', company_balance_cents=500, offers=[])
+        world = world_fixture(self, market=market)
+        world.peers[1]['trade_view_version'] = 1
+        request = dict(view_id='a' * 32, sector='sector_1', station_code='BIM-169', offset=0)
+        events = []
+
+        def purchase(_, handle, *args, page=None, **kwargs):
+            now = world.now[0]
+            events.append((now, handle, page is not None))
+            if handle != 1:
+                return None
+            if now >= 1:
+                world.now[0] += .2
+                return dict(purchase=None, view=dict(request, view_id=f'{int(now) + 1:032x}'))
+            return dict(purchase=None, view=request)
+
+        with patch.object(scheduler, 'poll_company_purchase', side_effect=purchase):
+            for tick in range(26):
+                world.step(tick / 4)
+        self.assertEqual([(time, handle) for time, handle, _ in events if time % .5], [(0.25, 1)])
+        self.assertEqual([time for time, handle, _ in events if handle == 2], [.5, 1.5, 2.5, 3.5, 4.5, 5.5])
+        self.assertEqual(market.begin.call_count, 7)
+
     def test_undock_is_bound_to_a_confirmed_purchase_and_held_for_physical_readback(self):
         undock = Mock()
         undock.begin.return_value = undock.poll.return_value = None

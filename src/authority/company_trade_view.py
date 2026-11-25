@@ -1,6 +1,6 @@
 """Read-only, paged station offers for an admitted pilot's stock trade window."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from .load_messages import MAX_INTEGER
@@ -79,6 +79,7 @@ def view_page(value):
 class _OpenView:
     request: dict
     snapshot: dict | None = None
+    sent_offsets: set[int] = field(default_factory=set)
 
 
 class CompanyTradeViews:
@@ -122,6 +123,15 @@ class CompanyTradeViews:
             return {**state.request, 'outcome': 'unavailable', 'reason': 'reopen_trade_window'}
         return dict(state.request, outcome='observed', company_balance_cents=snapshot['company_balance_cents'],
                     total_offers=len(offers), offers=offers[offset:offset + PAGE_SIZE])
+
+    def has_unsent_page(self, binding):
+        state = self._views.get(binding)
+        return (state is not None and state.snapshot is not None
+                and state.request['offset'] not in state.sent_offsets)
+
+    def mark_page_sent(self, binding):
+        state = self._views[binding]
+        state.sent_offsets.add(state.request['offset'])
 
     def step(self, bindings, *, can_start):
         """Advance one read without executing an economic order or delaying a world transition."""

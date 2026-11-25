@@ -12,6 +12,11 @@ from .company_purchase_control import (
 
 from .company_trade_view import CompanyTradeViews
 
+_PEER_POLL_INTERVAL = 0.5
+_EXTRA_PAGE_DELAY = 0.25
+_SLOW_MARKET_EXCHANGE = 0.125
+_SLOW_MARKET_COOLDOWN = 4.0
+
 
 @dataclass(frozen=True)
 class _Binding:
@@ -67,6 +72,9 @@ class CompanyPurchaseScheduler:
         self._report_search = {}
         self._last_handle = 0
         self._next_poll = float('-inf')
+        self._next_market_poll = float('inf')
+        self._last_market_handle = 0
+        self._market_backoff = {}
         self._market = None if market is None else CompanyTradeViews(market)
         self._undock = undock
         self._active_undock = None
@@ -261,7 +269,7 @@ class CompanyPurchaseScheduler:
         self._advance_undock(captain=captain)
 
     def step(self):
-        """Advance native work, then poll at most one peer each half-second."""
+        """Advance native work and poll one peer, preserving regular half-second turns."""
         self._check()
         bindings = self._bindings()
         if self._active is not None:
@@ -283,10 +291,14 @@ class CompanyPurchaseScheduler:
                                if binding in current}
         self._begin_one(bindings)
         if self._market is not None:
+            self._market_backoff = {binding: until for binding, until in self._market_backoff.items()
+                                    if binding in current}
             self._market.step(bindings, can_start=self._active is None and self._active_undock is None)
 
         now = self._clock()
-        if now < self._next_poll:
+        regular_turn = now >= self._next_poll
+        if not regular_turn and (self._market is None or now < self._next_market_poll
+                                 or self._next_poll - now < _SLOW_MARKET_EXCHANGE):
             return
         busy = {binding for binding, _ in self._queue}
         if self._active is not None:
@@ -294,11 +306,26 @@ class CompanyPurchaseScheduler:
         if self._active_undock is not None:
             busy.add(self._active_undock[0])
         eligible = [handle for handle, binding in bindings.items() if binding not in busy]
+        if not regular_turn:
+            # Spend at most one extra turn between regular turns. This cursor
+            # never changes which pilot gets the next purchase or undock turn.
+            eligible = [handle for handle in eligible
+                        if handle not in self._receipts
+                        and now >= self._market_backoff.get(bindings[handle], float('-inf'))
+                        and self._market.has_unsent_page(bindings[handle])
+                        and supports_trade_view(self._participants._host._control._peers[bindings[handle].conn])]
+            if eligible:
+                handle = min(eligible, key=lambda candidate: (candidate <= self._last_market_handle, candidate))
+                self._last_market_handle = handle
+                self._next_market_poll = float('inf')
+                self._poll_purchase(bindings[handle], None)
+            return
         if not eligible:
             return
         handle = min(eligible, key=lambda candidate: (candidate <= self._last_handle, candidate))
         self._last_handle = handle
-        self._next_poll = now + 0.5
+        self._next_poll = now + _PEER_POLL_INTERVAL
+        self._next_market_poll = now + _EXTRA_PAGE_DELAY
         binding = bindings[handle]
         _, receipt = self._receipts.get(handle, (None, None))
         if self._undock is not None:
@@ -310,13 +337,25 @@ class CompanyPurchaseScheduler:
                     self._poll_undock(binding)
                     return
                 self._undock_turn.add(binding)
+        self._poll_purchase(binding, receipt, recover_at=now)
+
+    def _poll_purchase(self, binding, receipt, *, recover_at=None):
+        handle = binding.handle
         try:
-            if receipt is None and self._recover_one(binding, now):
+            if receipt is None and recover_at is not None and self._recover_one(binding, recover_at):
                 return
             endpoint = (self._participants, handle, binding.attempt_id, binding.ship_index, receipt)
             if self._market is not None and supports_trade_view(self._participants._host._control._peers[binding.conn]):
-                response = poll_company_purchase(*endpoint, guard=self._guard, market=True,
-                                                 page=self._market.page(binding))
+                page = self._market.page(binding)
+                started = self._clock()
+                response = poll_company_purchase(*endpoint, guard=self._guard, market=True, page=page)
+                finished = self._clock()
+                # A synchronous exchange can overrun a spare slot. Let this
+                # binding use its regular turns while the cooldown elapses.
+                if finished - started > _SLOW_MARKET_EXCHANGE:
+                    self._market_backoff[binding] = finished + _SLOW_MARKET_COOLDOWN
+                if page is not None:
+                    self._market.mark_page_sent(binding)
                 self._market.request(binding, response['view'])
                 purchase = response['purchase']
             else:
