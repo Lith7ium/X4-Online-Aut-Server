@@ -454,6 +454,26 @@ purchase-ledger sidecar. Keep the checkpoint and sidecar together.
 Use this path in the disposable fixture. A live two-player purchase and
 reconnect still require validation.
 
+
+### Try server-confirmed undocking after a purchase
+
+Use matching builds with `--company-undock-test` on the provider and
+Linux pilot, or `-CompanyUndockTest` on the Windows pilot. Enable Company
+purchases at both ends. Use a disposable world and profile for this
+one-departure experiment. The test requires a ship with its saved
+Company captain and the same verified external trading bay on both sides.
+
+Complete a confirmed purchase during this admission. Open the stock
+Docked menu and select **Undock** once. The pilot waits at the berth
+until the server has checked the captain and ship, issued the stock
+departure order, and read back physical disengagement. Closing the
+Docked menu while waiting can invalidate the captured action.
+
+A native Linux session verified the server's clearance, the pilot's stock
+undock events and the saved ship and economy. The pilot's independent
+post-maneuver dock readback and Windows operation remain unverified.
+[Linux purchase and departure evidence](../reports/AUTHORITY-PURCHASE-AND-UNDOCK-LINUX-20261125.md)
+
 ## Check the deployment from the host
 
 Start a loopback run as above. Once its private `endpoint.json` appears, use a

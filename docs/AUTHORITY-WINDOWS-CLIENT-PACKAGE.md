@@ -125,6 +125,12 @@ purchase unresolved. The server retains supported purchase decisions with its
 verified checkpoints. This route has offline integration coverage. A live
 two-player Windows purchase awaits verification.
 
+For the separate server-confirmed departure experiment, use a matching
+build that lists `-CompanyUndockTest` in addition to `-CompanyPurchases`.
+The previously distributed `d0756d51` Windows package predates this
+option. Native Windows departure still needs verification.
+[Departure test instructions](AUTHORITY-SERVER-PACKAGE.md#try-server-confirmed-undocking-after-a-purchase)
+
 ### Observe a short cross-sector flight
 
 For the older parked-ship fixture, the Windows observer chooses WOO-831 (1970)
