@@ -42,7 +42,17 @@ reader, real LuaJIT and a simulated X4 ABI. The prior game's generic
 3,217. Use the fixed player build for both pilots when the operator
 returns. Check for sustained native flight and actual cockpit playback.
 
-Use the private player packages built from `2ad3fc46` for the next flight.
+The 13:00 check-in assigned the private `2ad3fc46` packages for Cobalt's
+fixed-index comparison. For automatic radar with live pilot priorities,
+use a matching provider and players from `f564ab66`. The new archives are
+in `.local/flight-build-f564ab66`: Linux SHA-256
+`4e003266f9ad726cfa54c9019f75514a82a3922c103b9574b53121c4b6f21c6f`,
+Windows SHA-256 `70b4761261076a9f078c1f4871a9b70ca96345a705f6b68e977ad2a797bbea77`.
+On Bazzite both regular pilots found their peer ahead of two closer idle
+ships and measured reciprocal motion with automatic cockpit playback.
+[Native radar flight](AUTHORITY-TWO-PILOT-FLIGHT-20261125.md)
+
+The earlier `2ad3fc46` packages remain available for the assigned comparison.
 They preserve the observed ship's attitude on position writes and include
 the earlier fix for corrections over 50 m after a rejected first position.
 The cockpit controller, native pose adapter and position reader in both

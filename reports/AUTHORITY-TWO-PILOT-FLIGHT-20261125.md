@@ -1,5 +1,33 @@
 # Two live Linux Company pilots with reciprocal cockpit movement
 
+## Automatic radar with two closer idle Company ships
+
+At `f564ab66`, two ordinary Linux players flew BBS-493 (1077) and XNA-002
+(1080) on the four-Pulsar seed. Both players and the GPU-free provider
+ran on Bazzite over loopback TLS. Each cockpit used automatic playback
+with three slots. Neither player specified a remote ship index or locked
+a target. The pilots started 4,242.64 m apart. EST-929 and OVO-739 were
+idle, each 3,000 m from each pilot.
+
+Both clients received the other pilot's ship index from the provider.
+In each cockpit the native radar query returned that pilot first, ahead
+of both closer idle ships. The observer retained the existing playback
+slot for the ship. Each pilot then strafed for 0.30 s using stock input.
+
+| Pilot ship | Sample | Displacement measured in the other cockpit | Error from pilot position |
+| --- | ---: | ---: | ---: |
+| BBS-493 | 154 | 1.264 m | 0.096 m |
+| XNA-002 | 51 | 1.354 m | 0.023 m |
+
+After both pilots left, the provider saved both positions within 0.5 mm
+of its paused readbacks in `checkpoint-c300850107d442d0832c8ab2f96b7dd8`.
+All three processes exited normally. Private evidence is in
+`.local/four-radar-flight/native-01/verified.json` (SHA-256
+`858eaa5fa5e49687677313d534c1a730dad2abd9b6860565874aedca70861c10`)
+and the two cockpit logs. This was a same-host, two-pilot flight.
+
+## Earlier flight with a fixed remote ship index
+
 On 25 November 2026, two regular Linux pilots joined one regular recovered
 provider on a single Bazzite host through pinned TLS on loopback. Each
 pilot used the explicit reciprocal cockpit-playback index. Both receiving
