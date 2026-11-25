@@ -1,12 +1,52 @@
-# Current handover for Neon and Cobalt
+# Authoritative fork team handover
 
-**24 November 2026. Last team check-in at 18:00 Berlin time.** Astra leads Lith7ium's
-authoritative fork. Silver runs his separate fork. Lith7ium approves major
-architecture changes. Compare results and allocate further work in
-`#x4-authorative-server` at HH:00 Berlin time. Between checks, continue the
-current task. This document supersedes the [20 November handover](HANDOVER-NEON-20261120.md).
+## 25 November 2026
 
-## Current assignments
+Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
+`test/base-game-two-pilots-20261124`. The latest trade evidence is in
+`4abcc9b9`. Lith7ium approves major architecture decisions. The session
+limit is four pilots. Compare findings and assign work at the top of the
+hour, Berlin time, in `#x4-authorative-server`. The 03:00 team check-in
+records the current Windows assignment. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795572055496379)
+
+- **Cobalt** owns the Windows-to-Fedora flight check. Use the private
+  connection instructions once the Windows operator has cleared the profile
+  issue. During a real flight, record the Windows ship, its movement-channel
+  binding and acknowledged moving samples. The last human test showed both
+  fighters, but Fedora's 392 samples all matched Bazzite's count. A native
+  Windows observer has since played back recorded trajectories locally.
+  [Human flight](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md) ·
+  [Windows playback](AUTHORITY-COMPANY-COCKPIT-MULTIPILOT-WINDOWS-20261125.md)
+- **Neon** delivered Windows observations of shield and hull damage from
+  weapons. Shared damage across machines and boarding remain open.
+  Before implementing damage replication, ask Lith7ium which simulation
+  should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
+- **Quartz** has the read-only investigation of the Company fleet command
+  “Fly and Wait”.
+- **Astra** owns server and client integration. A pilot can board a reserved
+  ship as a passenger while its NPC captain finishes a trade. Lith7ium
+  wants the client to wait for the server ship to clear its berth before
+  flying. The server verified physical departure and the client responded
+  to a simulated confirmation in separate native trials. Connecting these
+  steps is outstanding. [Captain handover](AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md) ·
+  [Client undock trial](AUTHORITY-COMPANY-UNDOCK-LOCK-20261125.md)
+
+Two consecutive server purchases survived a save with matching cargo and
+Company balance. A separate Linux run sold two water, credited 69 Cr,
+and matched the ship and station inventories to the native transaction
+journal. The sale used a disposable world and did not exercise a remote
+pilot's trade menu or a save. An earlier one-unit sale has an unknown
+outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
+
+The strict Linux run on `11dd1a65` exited 1. Of 5,697 tests, 5,660 passed,
+12 errored on a missing census fixture, and 25 were skipped. After the
+original fixture was staged, all 38 tests in the nine affected modules
+passed separately on the same commit. Thirteen skips require Windows and
+twelve require the original local references or released lane tool.
+
+## Archived handover from 24 November, 18:00 Berlin time
+
+### Assignments on 24 November
 
 **Neon owns NPC movement from the server to a Windows pilot's screen.**
 Build on your native reacquisition branch at `8416b817`. Bring gameplay
@@ -54,7 +94,7 @@ accounts, a PR from a personal fork or a patch with a source commit works.
 Bring the result, outstanding decisions and next substantive milestone to
 the hourly check.
 
-## NPC work already verified
+### NPC work already verified
 
 The Linux loopback on Neon’s port `05e68bf7` exercised ENH-870 with real TCP
 and UDP, simulated visibility and a synthetic source. Neon then enrolled a
@@ -71,7 +111,7 @@ stays unchanged. If the source never arrives, another reentry for that pilot
 can wait until a barrier, loss of view or disconnect. The change is on Neon's
 branch. [Transport change](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/8416b817ef876c9d1d8c324c36963d81e34495b1)
 
-## What changed since the previous handover
+### What changed since the previous handover
 
 - The GPU-free provider runs the full licensed Linux X4 9.00 build with
   CPU Vulkan (lavapipe) and Xvfb. A native save, last departure and cold restart
@@ -128,7 +168,7 @@ occupied sectors, one high-attention owner per area, visibility-based movement
 updates and pause/save on last departure remain the working constraints.
 Saves, connection files, TLS credentials and native logs stay private.
 
-## Internal operator kit and validation
+### Internal operator kit and validation
 
 The owner has the private archive
 `X4-Authority-GPU-Free-Company-Trial-20261124.zip` (30,185,896 bytes,
