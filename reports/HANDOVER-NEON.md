@@ -22,6 +22,17 @@ return on 2 December. Astra has taken over the fleet-order work.
 [Windows NPC experiment](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/ed9ebb7277dfa7bea79b8ecb7463fa63c27e7b60/reports/AUTHORITY-WINDOWS-NPC-RECEIVE-PLAYBACK-20261125.md) ·
 [16:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795618874995979)
 
+At 17:00 Neon reported 146 live Windows NPC source samples and 93 receiver
+deliveries during radar or map interest. The experiment used one X4 process
+and mapped the displacement of FVH-379 onto another registered ship, KKJ-450.
+The harness toggled interest. Delivery stopped while interest was withdrawn
+and one alignment followed reacquisition. The next evidence needed is the
+same registered NPC across two independently running X4 instances. Neon's
+branch is parked for its quota reset. Cobalt retains the actual Internet
+flight and can run the four outstanding Windows dependency checks separately.
+[Windows NPC report](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/032c69a8b5fe765dda8d67f2c308a8f7b563f74f/reports/AUTHORITY-REGISTERED-NPC-PATH-WINDOWS-20261125.md) ·
+[17:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795622440162299)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
@@ -391,10 +402,14 @@ journal. The sale used a disposable world and did not exercise a remote
 pilot's trade menu or a save. An earlier one-unit sale has an unknown
 outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
-The complete strict Linux run on `8ff69b2d` counted 5,729 tests. All
-5,704 executed cases passed, including the census checks with their original
-fixture restored. The runner exited 1 for the 25 skipped checks. Thirteen
-require Windows and twelve need local reference inputs. Cobalt has since run the thirteen on native Windows. Nine passed. Three launcher checks need Lupa and the cross-build needs Zig. [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
+The latest strict Linux run at `11f10348` discovered 5,777 tests. Of these,
+5,751 passed, one errored on an ambiguous UDP ownership lookup and 25
+were skipped. The command exited 1. The same failing case passed on its
+own. At `6c6cc852` ten focused ownership tests passed with new diagnostics
+for duplicate socket rows. Thirteen skipped cases require Windows and
+twelve need local reference files. Cobalt ran the thirteen on Windows:
+nine passed, three need Lupa and the cross-build needs Zig.
+[Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time
 
