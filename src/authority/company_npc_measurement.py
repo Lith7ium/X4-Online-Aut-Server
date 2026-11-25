@@ -3,6 +3,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import math
 import re
+import sys
+import time
 
 from .company_motion_frames import MAX_COUNTER, view_matches
 
@@ -25,6 +27,11 @@ def validate_measurement_trial(enabled, *, base_game_only, observed_npc, pilot_i
             base_game_only is not True or observed_npc != (NPC_INDEX, NPC_CODE)
             or type(pilot_index) is not int or pilot_index != PILOT_INDEX)):
         raise ValueError('NPC measurement requires vanilla pilot 1073 observing 943 MFQ-419')
+
+
+def native_capture_now():
+    """Read the same local clock as the native X4 UDP measurement helper."""
+    return time.perf_counter() if sys.platform == 'win32' else time.monotonic()
 
 
 def _number(value, maximum):

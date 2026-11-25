@@ -3,24 +3,18 @@ import re
 import secrets
 import select
 import socket
-import sys
 import threading
 import time
 
 from .company_motion_observer import MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
 from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
-                                      REGISTRY_EPOCH, measurement_value)
+                                      REGISTRY_EPOCH, measurement_value, native_capture_now as _npc_now)
 from .experimental_tcp_motion import check_motion_progress, motion_value
 
 
 _MAX_SAMPLER_DATAGRAM = 512
 _MAX_NPC_AGE = 1.0
 _NATIVE_NUMBER = re.compile(r'-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
-
-
-def _npc_now():
-    # The native UDP helper uses QPC on Windows and CLOCK_MONOTONIC on Linux.
-    return time.perf_counter() if sys.platform == 'win32' else time.monotonic()
 
 
 def _decode_npc_point(fields):

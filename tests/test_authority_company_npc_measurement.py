@@ -127,6 +127,42 @@ class NpcMeasurementTests(unittest.TestCase):
         self.assertIsNone(self.ingress.latest)
         self.assertEqual(len(self.rows), 1)
 
+    def test_client_transmits_only_fresh_native_qpc_measurements(self):
+        source = SimpleNamespace(registry=(REGISTRY_EPOCH, PILOT_INDEX), observed_npc=(NPC_INDEX, 'MFQ-419'),
+                                 poll=lambda validate: None)
+        current = None
+        client = CompanyMotionClient(self.service.port, self.pilot, source, lambda: True,
+                                     on_snapshot=lambda _: self.fail('measurement was forwarded'),
+                                     on_end=lambda *_: None, npc_measurement_source=lambda: current)
+        self.addCleanup(client.close)
+
+        def drive():
+            for _ in range(4):
+                client.poll()
+                self.service.poll()
+
+        client.set_view(SECTOR, [NPC_INDEX])
+        drive()
+        # Simulate GetTickCount64 rounding to 15.625 ms and a separate QPC origin.
+        ticks = int(time.monotonic() * 64) / 64
+        qpc = ticks + 0.750 + 0.008
+        point = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
+                 'actor': '0x41961', 'attention': 'inzone', 'position': [5., 6., 7.],
+                 'game_time': 100., 'velocity_m_per_game_second': [100., 2., 0.]}
+        with patch('authority.company_npc_measurement.sys.platform', 'win32'), \
+                patch('authority.company_npc_measurement.time.monotonic', return_value=ticks), \
+                patch('authority.company_npc_measurement.time.perf_counter', return_value=qpc):
+            current = dict(point, sequence=1, capture_time=qpc - 0.002)
+            drive()
+            self.assertEqual([row['sample'] for row in self.rows], [current])
+
+            # Stale to QPC but apparently fresh if compared with GetTickCount64.
+            current = dict(point, sequence=2, capture_time=qpc - 1.002)
+            drive()
+            current = dict(point, sequence=3, capture_time=qpc + 0.002)
+            drive()
+            self.assertEqual([row['sample']['sequence'] for row in self.rows], [1])
+
     def test_pause_revokes_measurement_and_drops_delayed_window(self):
         connection, stream = self.open(self.pilot)
         stream.readline()
