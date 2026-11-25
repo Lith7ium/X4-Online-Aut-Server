@@ -5,8 +5,8 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 06:00 team check-in
-records the current Windows assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795582842624059)
+hour, Berlin time, in `#x4-authorative-server`. The 07:00 team check-in
+records the Windows sender, WAN flight and Windows test assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795586425233399)
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
@@ -128,11 +128,11 @@ journal. The sale used a disposable world and did not exercise a remote
 pilot's trade menu or a save. An earlier one-unit sale has an unknown
 outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
-The strict Linux run on `11dd1a65` exited 1. Of 5,697 tests, 5,660 passed,
-12 errored on a missing census fixture, and 25 were skipped. After the
-original fixture was staged, all 38 tests in the nine affected modules
-passed separately on the same commit. Thirteen skips require Windows and
-twelve require the original local references or released lane tool.
+The complete strict Linux run on `8ff69b2d` counted 5,729 tests. All
+5,704 executed cases passed, including the census checks with their original
+fixture restored. The runner exited 1 for the 25 skipped checks. Thirteen
+require Windows and twelve need local reference inputs. Cobalt has the
+Windows selection for when the machine is available. [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time
 
