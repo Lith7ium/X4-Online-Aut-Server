@@ -161,6 +161,24 @@ Windows is 3,098,037 bytes (SHA-256
 Both refer to `04f409f68eae3078666191a6c0c4221ac7415ec6`. All 176
 shared files matched. Deployment and human flight with this build are pending.
 
+Run 11 at `9c558603` moved the same freighter observations onto the
+regular pilot's game-to-launcher UDP socket. The provider accepted
+154/160 samples over the authenticated movement channel. It also
+acknowledged 159 own-ship samples and ended NPC reception at radar
+loss. The Linux and Windows operator packages for this trial are in
+`.local/flight-build-9c558603`. Linux SHA-256 is
+`daae6d2e373ff970dd10ef12a9262e7dce30ed438d8c3dac62a1fbf6f1490756`
+(1,632,127 bytes). Windows SHA-256 is
+`6d2bac188052fcfc37100ba35080bf640f4091991b84ad13171ddb31c149b22c`
+(3,110,247 bytes). All 176 shared source entries matched.
+[Regular game IPC and Linux acceptance](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
+The confirmed private vanilla seed `.local/base-four-fighters-trade-seed.zip`
+preserves all four start fighters and the existing Company scout.
+BBS-493 has an assigned captain and four energy cells. The other
+three fighters retain their original start positions and equipment.
+[Seed, formation and verified restore](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
