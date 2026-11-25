@@ -132,7 +132,7 @@ class CompanyPurchaseSource:
                 if price == self._intent['price_cents']:
                     raise ValueError('stale Company quote did not change')
                 fields.extend((reason, _amount(price, 1, _MAX_EXACT)))
-            elif reason in ('captain_required', 'dock_mismatch', 'provider_busy'):
+            elif reason in ('captain_required', 'dock_mismatch', 'provider_busy', 'no_unique_offer', 'not_tradeable'):
                 fields.append(reason)
         elif outcome == 'accepted_pending_statement':
             self._awaiting_statement = True

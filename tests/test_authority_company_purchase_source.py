@@ -112,7 +112,8 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.assertEqual(self.receive(), ['RECEIPT', '1', 'unknown'])
 
     def test_clean_booking_refusals_survive_cockpit_ipc(self):
-        for sequence, reason in enumerate(('captain_required', 'dock_mismatch', 'provider_busy'), 1):
+        reasons = ('captain_required', 'dock_mismatch', 'provider_busy', 'no_unique_offer', 'not_tradeable')
+        for sequence, reason in enumerate(reasons, 1):
             with self.subTest(reason=reason):
                 self.send(sequence)
                 intent = self.source.exchange(None)

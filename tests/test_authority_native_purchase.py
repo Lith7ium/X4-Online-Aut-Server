@@ -228,6 +228,10 @@ class NativePurchaseProviderTests(unittest.TestCase):
                 wrong_epoch = dict(BINDING, registry_epoch='f' * 32)
                 refused = dict(PURCHASE, purchase_id='c' * 32)
                 self.assertEqual(buy(wrong_epoch, refused)['reason'], 'invalid_registry')
+                missing_offer = dict(PURCHASE, purchase_id='1' * 32, ware='silicon')
+                unavailable_quantity = dict(PURCHASE, purchase_id='2' * 32, quantity=7)
+                for basket, reason in ((missing_offer, 'no_unique_offer'), (unavailable_quantity, 'not_tradeable')):
+                    self.assertEqual(buy(BINDING, basket), dict(basket, outcome='refused', reason=reason))
                 stale = dict(PURCHASE, purchase_id='d' * 32, price_cents=5848)
                 self.assertEqual(buy(BINDING, stale),
                                  dict(stale, outcome='refused', reason='price_changed', current_price_cents=5819),

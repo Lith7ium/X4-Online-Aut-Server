@@ -4,7 +4,10 @@ local seat
 local max_order_integer = 2147483647
 local max_exact_integer = 9007199254740991
 local ship_code = '^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$'
-local booking_refusals = {captain_required = true, dock_mismatch = true, provider_busy = true}
+local booking_refusals = {
+    captain_required = true, dock_mismatch = true, provider_busy = true,
+    no_unique_offer = true, not_tradeable = true,
+}
 
 function M.arm(verified_seat)
     assert(seat == nil or seat == verified_seat)

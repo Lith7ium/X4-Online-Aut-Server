@@ -7,6 +7,8 @@ local refusal_notices = {
     captain_required = 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
     dock_mismatch = 'The server could not confirm this ship at a trading berth on the selected station. Reopen the offer after docking.',
     provider_busy = 'The server is busy with another purchase. Reopen the offer to try again.',
+    no_unique_offer = 'The server could not match this offer at the station. Reopen trade to see current offers.',
+    not_tradeable = 'The server could not book that quantity. Reopen trade to check stock, funds and cargo space.',
 }
 
 local function positive_integer(n)

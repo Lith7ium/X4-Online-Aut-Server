@@ -59,7 +59,8 @@ source:tick()
 assert(#receipts == 4 and receipts[4].outcome == 'pilot_reported'
     and receipts[4].settled_total_cents == 34914 and receipts[4].company_balance_cents == nil)
 
-for offset, reason in ipairs({'captain_required', 'dock_mismatch', 'provider_busy'}) do
+local clean_refusals = {'captain_required', 'dock_mismatch', 'provider_busy', 'no_unique_offer', 'not_tradeable'}
+for offset, reason in ipairs(clean_refusals) do
     assert(source:request(intent, settle))
     incoming = {prefix .. 'RECEIPT|' .. (3 + offset) .. '|refused|' .. reason}
     source:tick()

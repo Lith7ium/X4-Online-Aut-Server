@@ -362,7 +362,8 @@ local retry_capture = assert(module.install_x4({
         return true
     end,
 }))
-for attempt_index, reason in ipairs({'captain_required', 'dock_mismatch', 'provider_busy'}) do
+local clean_refusals = {'captain_required', 'dock_mismatch', 'provider_busy', 'no_unique_offer', 'not_tradeable'}
+for attempt_index, reason in ipairs(clean_refusals) do
     menu.contextMenuData = fresh_context()
     menu.buttonConfirmTrade()
     assert(#retry_attempts == attempt_index)
@@ -376,10 +377,10 @@ for attempt_index, reason in ipairs({'captain_required', 'dock_mismatch', 'provi
 end
 menu.contextMenuData = fresh_context()
 menu.buttonConfirmTrade()
-reply(retry_attempts[4], 'unknown', {})
+reply(retry_attempts[#clean_refusals + 1], 'unknown', {})
 menu.contextMenuData = fresh_context()
 menu.buttonConfirmTrade()
-assert(#retry_attempts == 4 and native_calls == originals and retry_capture.detach())
+assert(#retry_attempts == #clean_refusals + 1 and native_calls == originals and retry_capture.detach())
 
 -- The stale fixture's native basket is observed as displayed, rather than
 -- derived from the quoted unit price or from a later native debit.

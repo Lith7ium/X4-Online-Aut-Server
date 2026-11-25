@@ -67,6 +67,16 @@ function AddUITriggeredEvent(name, action, request)
         event('Result', id .. '|invalid_registry|0')
         return true
     end
+    if not sale_mode and request.ware == 'silicon' then
+        event('Result', id .. '|no_unique_offer|0')
+        return true
+    end
+    if not sale_mode and request.ware == 'water' and request.quantity == 7 then
+        event('Bound', id .. '|READY|0x10|0x20|0x30|' .. game_time)
+        event('Result', id .. '|quote|5819')
+        event('Result', id .. '|not_tradeable|5819')
+        return true
+    end
     local function join(...) return table.concat({...}, '|') end
     if sale_mode then
         assert(not previous and request.ware == 'water' and request.quantity == 2)
