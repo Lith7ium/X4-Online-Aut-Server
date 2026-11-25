@@ -922,6 +922,9 @@ def run(args):
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
     npc_args = getattr(args, 'observe_registered_npc', None)
+    npc_measurement = getattr(args, 'trial_registered_npc_measurement', False)
+    if type(npc_measurement) is not bool or (npc_measurement and tuple(npc_args or ()) != ('943', 'MFQ-419')):
+        raise ValueError('registered NPC measurement requires observation of index 943 MFQ-419')
     npc_target = npc_source = None
     if npc_args is not None:
         if not company_motion or getattr(args, 'base_game_only', False) is not True:
@@ -1343,7 +1346,7 @@ def run(args):
             fleet_provider = NativeFleetOrderProvider()
             protected.extend(fleet_provider.install(case))
         if npc_target is not None:
-            npc_source = RegisteredNpcSource(npc_target.confirmed(saved_evidence))
+            npc_source = RegisteredNpcSource(npc_target.confirmed(saved_evidence), trial_measurement=npc_measurement)
             protected.extend(npc_source.install(case))
         protected = list(dict.fromkeys(protected))
         expected = {path:live.sha(path) for path in protected}
@@ -2381,6 +2384,8 @@ def main(argv=None, *, display_hostname=None):
                        help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the separate participant-bound TLS movement channel')
+    parser.add_argument('--trial-registered-npc-measurement', action='store_true',
+                        help='receive bounded read-only cockpit measurements for the private MFQ-419 trial')
     parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),
                         help='observe one confirmed base-game NPC during the first running movement window')
     parser.add_argument('--company-purchases', action='store_true',

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from authority.checkpoints import Checkpoint
 from authority.company_motion_service import CompanyMotionService
+from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, REGISTRY_EPOCH
 from authority.company_ships import CompanyShip
 from authority_recovered_registry_snapshot import RegistrySnapshotState
 from authority_registered_npc_source import NpcCheckpointTarget, RegisteredNpcSource
@@ -52,6 +53,41 @@ class NpcCheckpointTargetTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_native_bootstrap_binds_runtime_handle_and_refuses_wrong_code_or_owner(self):
         subprocess.run(['luajit', 'tests/authority_registered_npc_source.lua'], cwd=ROOT, check=True, timeout=5)
+
+
+class RegisteredNpcMeasurementTests(unittest.TestCase):
+    def test_opt_in_installs_only_for_confirmed_trial_target(self):
+        for mismatch in ({'epoch': EPOCH}, {'index': 40}, {'code': 'ABC-401'}):
+            selection = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': NPC_CODE, **mismatch}
+            with self.subTest(mismatch=mismatch), self.assertRaisesRegex(ValueError, 'confirmed MFQ-419'):
+                RegisteredNpcSource(selection, trial_measurement=True)
+
+        selection = dict(target(), epoch=REGISTRY_EPOCH, index=NPC_INDEX, code=NPC_CODE)
+        service = CompanyMotionService()
+        self.addCleanup(service.close)
+        default_source = RegisteredNpcSource(selection)
+        self.addCleanup(default_source.close)
+        source = RegisteredNpcSource(selection, trial_measurement=True)
+        self.addCleanup(source.close)
+
+        def guard():
+            return False
+
+        default_source.attach(service, guard)
+        self.assertIsNone(service._npc_measurement)
+        self.assertNotIn('trial_measurement', default_source.stats())
+        rows = []
+        source.attach(service, guard, on_measurement=rows.append)
+        ingress = service._npc_measurement
+        self.assertIs(ingress.guard, guard)
+        self.assertEqual(ingress.on_sample, rows.append)
+        self.assertEqual(source.stats()['trial_measurement'], {'accepted': 0, 'end_reason': None})
+        ingress.deadline = 2
+        ingress.check(1)
+        source.close()
+        self.assertEqual(source.stats()['trial_measurement'],
+                         {'accepted': 0, 'end_reason': 'provider_binding_lost'})
+        self.assertEqual(rows, [])
 
 
 class RegisteredNpcSourceTests(unittest.TestCase):

@@ -7,6 +7,7 @@ import secrets
 import socket
 import time
 
+from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, REGISTRY_EPOCH, NpcMeasurementIngress
 from authority.experimental_tcp_motion import check_motion_progress, motion_value
 from authority_tcp_job_client_live import socket_owner
 
@@ -65,7 +66,12 @@ class NpcCheckpointTarget:
 class RegisteredNpcSource:
     """Read process-owned native samples and feed one server-owned publication."""
 
-    def __init__(self, target, *, clock=time.monotonic):
+    def __init__(self, target, *, clock=time.monotonic, trial_measurement=False):
+        if type(trial_measurement) is not bool or (trial_measurement and
+                (target['epoch'], target['index'], target['code']) != (REGISTRY_EPOCH, NPC_INDEX, NPC_CODE)):
+            raise ValueError('private measurement requires the confirmed MFQ-419 provider binding')
+        self._trial_measurement = trial_measurement
+        self._measurement = None
         self.target, self._clock = dict(target), clock
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -181,9 +187,16 @@ class RegisteredNpcSource:
             raise ValueError('one owned NPC source process required')
         self._process = dict(process)
 
-    def attach(self, service, reservation_guard):
+    def attach(self, service, reservation_guard, *, on_measurement=None):
         if self._service is not None or not callable(reservation_guard):
             raise ValueError('one NPC publication guard required')
+        if on_measurement is not None and not self._trial_measurement:
+            raise ValueError('NPC measurement is not enabled')
+        if self._trial_measurement:
+            ingress = NpcMeasurementIngress(
+                reservation_guard, on_measurement if on_measurement is not None else lambda _row: None)
+            service.install_npc_measurement(ingress)
+            self._measurement = ingress
         self._service, self._reservation_guard = service, reservation_guard
 
     def _withdraw(self, reason):
@@ -301,7 +314,7 @@ class RegisteredNpcSource:
             self._recent_publications.append(sample)
 
     def stats(self):
-        return {'epoch': self.target['epoch'], 'ship_index': self.target['index'], 'ship_code': self.target['code'],
+        result = {'epoch': self.target['epoch'], 'ship_index': self.target['index'], 'ship_code': self.target['code'],
                 'owner': self.target['owner'], 'saved_component_ref': self.target['actor'],
                 'join_component_ref': self._join_component, 'runtime_component_ref': self._runtime_ref,
                 'join_checkpoint_id': self._join_checkpoint.checkpoint_id if self._join_checkpoint else None,
@@ -311,9 +324,18 @@ class RegisteredNpcSource:
                 'samples_with_velocity': self._velocity_samples, 'last_native_sample': self._previous,
                 'recent_publications': list(self._recent_publications), 'end_reason': self._end_reason}
 
+        if self._measurement is not None:
+            result['trial_measurement'] = {
+                'accepted': self._measurement.accepted,
+                'end_reason': self._measurement.retired_reason,
+            }
+        return result
+
     def close(self):
         try:
             if self._end_reason is None:
                 self._withdraw('provider_closed')
+            if self._measurement is not None:
+                self._measurement.retire('provider_closed')
         finally:
             self._socket.close()
