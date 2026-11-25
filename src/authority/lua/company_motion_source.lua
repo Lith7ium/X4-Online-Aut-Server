@@ -173,6 +173,10 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
             assert(not measure or (config.registered_npc_hold_trial ~= true and
                 config.index == 1073 and config.observed_npc_index == 943 and config.observed_npc_code == 'MFQ-419'))
             local hold_trial
+            local function send_npc_measurement(message)
+                local packet = prefix .. message
+                return #packet <= 576 and net:send(packet) == true
+            end
             local function radar_withdrawn()
                 if hold_trial then hold_trial:withdraw() end
             end
@@ -181,6 +185,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                     enabled = true, mode = mode, target_index = config.observed_npc_index,
                     target_code = assert(config.observed_npc_code), clock = udp.monotonic,
                     local_measurement = measure and mode == 'radar',
+                    send_measurement = measure and mode == 'radar' and send_npc_measurement or nil,
                     on_withdrawal = config.registered_npc_hold_trial == true and mode == 'radar' and radar_withdrawn or nil,
                 }))
             end

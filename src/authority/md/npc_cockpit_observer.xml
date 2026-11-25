@@ -48,13 +48,15 @@
      </do_if>
     </do_if>
     <do_if value="$observed != null">
+     <set_value name="$reply" exact="'%s|%s|OBSERVED|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$obs_reg,$observed,$observed.sector.macro.id,$observed.idcode,$obs_mode,$obs_dist,$obs_radar]"/>
      <do_if value="$obs_mode == 'radar' and $args.$own == 1073 and $obs_reg == 943 and $observed.idcode == 'MFQ-419' and @$args.$local_measurement ge 1 and $args.$local_measurement le 160 and $args.$local_measurement == ($args.$local_measurement)i">
       <set_value name="$attention" exact="$observed.attention"/>
       <set_value name="$velocity" exact="$observed.velocity"/>
       <set_value name="$basis" exact="$observed.relativerotation.{$observed.sector}"/>
       <debug_text text="'[X4LAN] AUTH_NPC_LOCAL_MD %s|%s|%s|%s|%s|%s|%s|attention=%s|visible=%s|nearby=%s|inzone=%s|velocity=%s,%s,%s|right=%s,%s,%s|up=%s,%s,%s|forward=%s,%s,%s'.[$args.$local_measurement,$args.$epoch,$obs_reg,$observed.idcode,$observed,$observed.sector.macro.id,player.age / 1s,$attention,($attention ge attention.visible),($attention ge attention.nearby),($attention ge attention.inzone),$velocity.x / 1m,$velocity.y / 1m,$velocity.z / 1m,$basis.right.x / 1m,$basis.right.y / 1m,$basis.right.z / 1m,$basis.up.x / 1m,$basis.up.y / 1m,$basis.up.z / 1m,$basis.forward.x / 1m,$basis.forward.y / 1m,$basis.forward.z / 1m]"/>
+      <set_value name="$reply" exact="$reply + '|MEASURED|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$local_measurement,$attention,player.age / 1s,$velocity.x / 1m,$velocity.y / 1m,$velocity.z / 1m,$basis.right.x / 1m,$basis.right.y / 1m,$basis.right.z / 1m,$basis.up.x / 1m,$basis.up.y / 1m,$basis.up.z / 1m,$basis.forward.x / 1m,$basis.forward.y / 1m,$basis.forward.z / 1m]"/>
      </do_if>
-     <raise_lua_event name="'X4AuthorityNpcCockpitObserver.Result'" param="'%s|%s|OBSERVED|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$obs_reg,$observed,$observed.sector.macro.id,$observed.idcode,$obs_mode,$obs_dist,$obs_radar]"/>
+     <raise_lua_event name="'X4AuthorityNpcCockpitObserver.Result'" param="$reply"/>
     </do_if>
     <do_else>
      <raise_lua_event name="'X4AuthorityNpcCockpitObserver.Result'" param="'%s|%s|NONE|0|-|-|-|-|-|%s'.[@$args.$request_id,@$args.$epoch,$obs_radar]"/>

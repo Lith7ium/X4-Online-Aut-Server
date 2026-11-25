@@ -7,6 +7,35 @@ local SCREEN = 'X4AuthorityNpcCockpitObserver'
 local INTERVAL, FRESHNESS = 0.12, 0.45
 local MAX_INDEX = 200000
 local LOCAL_MEASUREMENT_LIMIT = 160
+local ATTENTION = {visible=true, inzone=true, nearby=true, adjacentroom=true, inroom=true}
+
+local function bounded_number(number, limit)
+    return type(number) == 'number' and number == number and math.abs(number) <= limit
+end
+
+local function native_velocity(values, sequence, game_before)
+    if not values then return nil end
+    local serial, attention, observed_time, vx, vy, vz, rx, ry, rz, ux, uy, uz, fx, fy, fz = values:match(
+        '^([0-9]+)|([a-z]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
+    if tonumber(serial) ~= sequence or not ATTENTION[attention] then return nil end
+    observed_time = tonumber(observed_time)
+    if not bounded_number(observed_time, 1e12) or observed_time < 0
+            or math.abs(game_before - observed_time) > 0.05 then return nil end
+    local velocity = {tonumber(vx), tonumber(vy), tonumber(vz)}
+    local right, up, forward = {tonumber(rx), tonumber(ry), tonumber(rz)},
+        {tonumber(ux), tonumber(uy), tonumber(uz)}, {tonumber(fx), tonumber(fy), tonumber(fz)}
+    local sector_velocity = {}
+    for axis = 1, 3 do
+        if not bounded_number(velocity[axis], 1e5) or not bounded_number(right[axis], 1.001)
+                or not bounded_number(up[axis], 1.001) or not bounded_number(forward[axis], 1.001) then return nil end
+    end
+    for axis = 1, 3 do
+        local value = velocity[1] * right[axis] + velocity[2] * up[axis] + velocity[3] * forward[axis]
+        if not bounded_number(value, 1e5) then return nil end
+        sector_velocity[axis] = value
+    end
+    return attention, sector_velocity
+end
 
 local function token(value)
     return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
@@ -63,6 +92,7 @@ function M.new(pinned, own_index, engine)
     local sequence = 0
     local measurement_stopped = false
     local measurement_count = 0
+    local measurement_sent = false
     local closed = false
     local ever_observed = false
     local was_withdrawn = false
@@ -80,8 +110,16 @@ function M.new(pinned, own_index, engine)
         end
     end
 
+    local function stop_measurement()
+        measurement_stopped = true
+        if measurement_sent and engine.measurement_end then
+            measurement_sent = false
+            pcall(engine.measurement_end, target_index, target_code)
+        end
+    end
+
     local function clear_observation(reason, detail, distance, range)
-        if observed then measurement_stopped = true end
+        if observed then stop_measurement() end
         if observed == nil then return end
         local previous = observed.row
         observed = nil
@@ -141,6 +179,11 @@ function M.new(pinned, own_index, engine)
         local probe, now = inspect()
         local eligible = pending == request and probe ~= nil and interest_active
         pending = nil
+        local witness
+        if request.measurement and #row <= 768 then
+            local base, fields = row:match('^(.-)|MEASURED|(.+)$')
+            if base then row, witness = base, fields end
+        end
         if not eligible or #row > 448 then
             stats.rejections = stats.rejections + 1
             clear_observation('response_rejected')
@@ -173,8 +216,9 @@ function M.new(pinned, own_index, engine)
             return
         end
         if request.measurement and not measurement_stopped then
-            local ok = pcall(engine.measure, request.measurement, epoch, index, code, actor_text, hull)
-            if not ok then measurement_stopped = true end
+            local ok, sent = pcall(engine.measure, request.measurement, epoch, index, code, actor_text, hull, witness)
+            if not ok then stop_measurement()
+            elseif sent == true then measurement_sent = true end
         end
         local was_new = (observed == nil)
         observed = {
@@ -282,6 +326,7 @@ function M.new(pinned, own_index, engine)
     end
 
     function api:close()
+        stop_measurement()
         closed = true
         pending = nil
         if observed then report('END', observed.row, 'reader_closed') end
@@ -400,7 +445,7 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         pcall(ffi.cdef, 'UIPosRot GetObjectPositionInSector(UniverseID);')
         pcall(ffi.cdef, 'double GetCurrentGameTime(void);')
         local clock = assert(options.clock)
-        measure = function(request, epoch, index, code, actor, hull)
+        measure = function(request, epoch, index, code, actor, hull, witness)
             local before = clock()
             local game_before = tonumber(C.GetCurrentGameTime())
             local pose = C.GetObjectPositionInSector(hull.actor)
@@ -413,6 +458,17 @@ function M.new_x4(pinned, own_index, registry_ready, options)
             DebugError(('[X4LAN] AUTH_NPC_LOCAL_POSE %d|%s|%d|%s|%s|%s|%.17g|%.17g|%.17g|%.17g|%.17g,%.17g,%.17g'):format(
                 request, epoch, index, code, actor, hull.sector_macro, before, after, game_before, game_after,
                 pose.x, pose.y, pose.z))
+            if not options.send_measurement then return false end
+            if not bounded_number(before, 1e12) or before < 0 or not bounded_number(game_before, 1e12)
+                    or game_before < 0 or not actor:match('^0x[0-9a-f]+$') or #actor > 18
+                    or not bounded_number(pose.x, 1e7) or not bounded_number(pose.y, 1e7)
+                    or not bounded_number(pose.z, 1e7) then return false end
+            local attention, rate = native_velocity(witness, request, game_before)
+            if not attention then return false end
+            return options.send_measurement(('NPC_POINT|%d|%s|%s|%s|%d|%s|'
+                .. '%.17g|%.17g|%.17g|%.17g|%.17g|%.17g|%.17g|%.17g'):format(
+                    index, code, hull.sector_macro, actor, request, attention, before, game_before,
+                    pose.x, pose.y, pose.z, rate[1], rate[2], rate[3]))
         end
     end
 
@@ -423,6 +479,9 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         mode = mode,
         initial_interest = options.initial_interest,
         measure = measure,
+        measurement_end = measure and options.send_measurement and function(index, code)
+            return options.send_measurement(('NPC_END|%d|%s'):format(index, code))
+        end or nil,
         clock = options.clock or GetCurRealTime,
         on_withdrawal = options.on_withdrawal,
         on_reacquire = options.on_reacquire,

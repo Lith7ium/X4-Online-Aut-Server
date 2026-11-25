@@ -223,3 +223,52 @@ assert(measured == 1 and measurement_args.local_measurement == nil)
 visible = true
 measurement_step()
 assert(measured == 1 and measurement_args.local_measurement == nil)
+
+-- Exercise the native reader's one-frame wire output and terminal radar loss.
+local dispatched = {}
+local native_api = package.loaded.ffi.C
+native_api.GetObjectPositionInSector = function(id)
+    assert(id == npc)
+    return {x=10, y=20, z=30}
+end
+native_api.GetCurrentGameTime = function() return 568.125 end
+frame[key(sector)], code[key(npc)] = 'cluster_06_sector001_macro', 'MFQ-419'
+local measurement_fixture = {epoch=pinned.epoch, nonce=('d'):rep(32), issued_count=5048}
+local measured_radar = observer.new_x4(measurement_fixture, 1073, function() return true end, {
+    enabled=true, mode='radar', target_index=943, target_code='MFQ-419', local_measurement=true,
+    clock=function() return now end,
+    send_measurement=function(message) dispatched[#dispatched + 1] = message; return true end,
+})
+local function measured_step(suffix)
+    now = now + .17
+    measured_radar:tick()
+    local request = assert(waiting.radar)
+    local fields = table.concat({request.request_id, measurement_fixture.epoch, 'OBSERVED', '943',
+        actor_text[key(npc)], frame[key(sector)], code[key(npc)], 'radar', '1000', '10000'}, '|')
+    handlers[#handlers](nil, fields .. (suffix or ''))
+    return request
+end
+
+local axes = '|0|0|100|0|0|1|0|1|0|1|0|0'
+assert(measured_step('|MEASURED|2|inzone|568.125' .. axes).local_measurement == 1)
+assert(#dispatched == 0) -- Mismatched request sequence.
+assert(measured_step('|MEASURED|2|inzone|565' .. axes).local_measurement == 2)
+assert(#dispatched == 0) -- Stale MD game clock.
+assert(measured_step('|MEASURED|3|inzone|568.125' .. axes:gsub('100', '1e309')).local_measurement == 3)
+assert(#dispatched == 0) -- Non-finite native rate.
+assert(measured_step('|MEASURED|4|inzone|568.125' .. axes).local_measurement == 4)
+assert(#dispatched == 1)
+local point = {}
+for field in dispatched[1]:gmatch('[^|]+') do point[#point + 1] = field end
+assert(#point == 15 and point[1] == 'NPC_POINT' and point[2] == '943' and point[3] == 'MFQ-419'
+    and point[4] == 'cluster_06_sector001_macro' and point[5] == actor_text[key(npc)]
+    and point[6] == '4' and point[7] == 'inzone' and tonumber(point[8]) == now
+    and point[9] == '568.125' and point[10] == '10' and point[11] == '20' and point[12] == '30'
+    and point[13] == '100' and point[14] == '0' and point[15] == '0')
+radar_visible = false
+assert(measured_step().local_measurement == nil)
+assert(dispatched[2] == 'NPC_END|943|MFQ-419')
+radar_visible = true
+assert(measured_step().local_measurement == nil)
+measured_radar:close()
+assert(#dispatched == 2) -- No reacquisition or repeated terminal frame.
