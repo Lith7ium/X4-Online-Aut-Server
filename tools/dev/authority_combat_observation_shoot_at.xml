@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable test-only AI script for native combat observation (reuses LAN x4lan.interaction.fire pattern). -->
+<aiscript name="x4neon.combat.shoot_at" version="1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">
+ <params>
+  <param name="ship"/>
+  <param name="target"/>
+  <param name="duration" default="5s"/>
+ </params>
+ <attention min="visible">
+  <actions>
+   <shoot_at object="$ship" target="$target" fixedtarget="true"/>
+   <wait exact="$duration"/>
+   <stop_shooting object="$ship"/>
+   <debug_text text="'[X4LAN] AUTH_COMBAT_PROBE shoot_at_done ship=%s target=%s'.[$ship,$target]"/>
+  </actions>
+ </attention>
+</aiscript>
