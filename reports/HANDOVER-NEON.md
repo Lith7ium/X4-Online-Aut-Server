@@ -15,6 +15,8 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   connection file and assigned seat. A Windows-Python filesystem check under
   Wine preserved 45841, used 45850 and stopped on an exhausted pool.
   A native Windows join with an alternate profile is still open.
+  The Windows package from `837a2680` includes the recorded network DLL.
+  Its SHA-256 is `0773e1d41b4526777e5b4bcda1d233ae13e6831d5acb1e500b5034bb1ead51fe`.
   During a real flight, record the Windows ship, its movement-channel binding
   and acknowledged moving samples. [Windows launch instructions](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#run-on-windows)
   The last human test showed both
@@ -22,6 +24,10 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   Windows observer has since played back recorded trajectories locally.
   [Human flight](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md) ·
   [Windows playback](AUTHORITY-COMPANY-COCKPIT-MULTIPILOT-WINDOWS-20261125.md)
+  A native Linux cockpit with an unrelated HUD target selected the correct
+  remote ship on radar, then lost the view before the first recorded pose.
+  The new indexed observer logs why an established view was withdrawn.
+  [Native radar evidence](AUTHORITY-COMPANY-INDEXED-HUD-20261125.md)
 - **Neon** delivered Windows observations of shield and hull damage from
   weapons. Shared damage across machines and boarding remain open.
   Before implementing damage replication, ask Lith7ium which simulation
@@ -35,6 +41,11 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   to a simulated confirmation in separate native trials. Connecting these
   steps is outstanding. [Captain handover](AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md) ·
   [Client undock trial](AUTHORITY-COMPANY-UNDOCK-LOCK-20261125.md)
+  When connecting them, track the client's original berth and the server's
+  actual berth separately. Both belong to the same station, but the server
+  can assign another free trading bay. The release must cover the reserved
+  ship leaving that server bay while the client still occupies its original
+  bay. [Native alternate-bay trial](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,

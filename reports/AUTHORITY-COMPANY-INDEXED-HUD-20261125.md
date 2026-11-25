@@ -57,8 +57,14 @@ in the table. The regular observer then published cockpit serial 2 for
 WRN-302, registry index 7354, in `cluster_01_sector001_macro`. Its route
 mode was `radar` while YRD-027 remained the native HUD target.
 
-The fixture next reported `cockpit-view-lost`. The log gives no cause
-for the withdrawal. It contains no `LOCAL_REPLAY` or
+The engine log timestamps the radar observation at 57.99 and the next
+`cockpit-view-lost` at 58.99. The fixture stops on the first subsequent
+cockpit view that does not identify WRN-302. It recorded neither that
+view's fields nor the observer's reason for withdrawing it. The observer
+requires a fresh observation within 450 ms of issuing the request.
+The log lacks the request and poll times needed to establish expiry.
+The private replay used `GetCurRealTime`; normal cockpit playback uses
+the network module's monotonic clock. The run contains no `LOCAL_REPLAY` or
 `FOLLOWER_READBACK` records. There are no final positions for WOO-831,
 YRD-027 or WRN-302 in this run, so displacement cannot be measured for
 any of the three ships. No further run was made.
@@ -66,3 +72,10 @@ any of the three ships. No further run was made.
 The game exited with no remaining owned processes and the source save
 retained its SHA-256. The private result-file digest is
 `df70ee95bc7b760e18c224e9e63ffbdbf9d72a894090238bc01d62a8ef949745`.
+
+Starting with `837a2680`, the indexed cockpit observer records the first
+occurrence of each withdrawal reason after a successful binding. For a
+live flight, retain `AUTH_COMPANY_COCKPIT_WITHDRAWAL` and
+`AUTH_COMPANY_COCKPIT_READBACK` from the observing game alongside the
+flying pilot's acknowledged samples. A LuaJIT regression exercises the
+diagnostics. The original native run predates them.
