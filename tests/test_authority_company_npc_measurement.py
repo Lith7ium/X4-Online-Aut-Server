@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from authority.company_motion_client import CompanyMotionClient
+from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_npc_measurement import (MEASUREMENT_KIND, NPC_INDEX, PILOT_INDEX,
                                               RADAR_ENDED, REGISTRY_EPOCH, SECTOR, NpcMeasurementIngress)
@@ -174,3 +175,76 @@ class NpcMeasurementTests(unittest.TestCase):
         self.sample(client._connection, sequence=2)
         self.assertEqual(len(self.rows), 1)
         self.assertEqual(client._connection.recv(1), b'')
+
+    def test_private_ingress_uses_regular_reconnecting_observer_and_own_source(self):
+        probe, own = None, None
+        observer = SimpleNamespace(snapshot=lambda _: self.fail('NPC measurement was forwarded'),
+                                   end=lambda *_: None)
+        def save_view_callback(callback):
+            observer.set_views = callback
+        observer.bind_views = save_view_callback
+
+        source = SimpleNamespace(
+            registry=(REGISTRY_EPOCH, PILOT_INDEX), local_generation='b' * 32,
+            observed_npc=(NPC_INDEX, 'MFQ-419'), registered_npc_hold_trial=False,
+            poll=lambda validate: own, observe=lambda validate: observer)
+        initialize = CompanyMotionClient.__init__
+        def install_diagnostic(client, *args, **kwargs):
+            initialize(client, *args, **kwargs, npc_measurement_source=lambda: probe)
+
+        client = ReconnectingCompanyMotionClient.observing(self.service.port, self.pilot, source, lambda: True)
+        self.addCleanup(client.close)
+        def drive():
+            for _ in range(4):
+                client.poll()
+                self.service.poll()
+            self.assertIsNone(client.failure)
+
+        with patch.object(CompanyMotionClient, '__init__', install_diagnostic):
+            drive()
+            self.assertEqual(self.rows, [])
+            observer.set_views([{'sector_macro': SECTOR, 'indices': [NPC_INDEX]}])
+            own = {'version': 3, 'epoch': REGISTRY_EPOCH, 'generation': source.local_generation,
+                   'index': PILOT_INDEX, 'sequence': 1, 'sector_macro': SECTOR, 'source_time': 10.,
+                   'capture_time': time.monotonic(), 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
+            probe = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
+                     'actor': '0x41961', 'sequence': 1, 'attention': 'inzone', 'position': [1., 2., 3.],
+                     'game_time': 10., 'capture_time': time.monotonic(),
+                     'velocity_m_per_game_second': [2., 0., 1.]}
+            drive()
+            self.assertEqual(client.stats()['samples_acknowledged'], 1)
+            self.assertEqual(self.rows[0]['sample'], probe)
+            probe = RADAR_ENDED
+            own = dict(own, sequence=2, source_time=11., capture_time=time.monotonic())
+            drive()
+            self.assertEqual(self.ingress.retired_reason, 'radar_ended')
+            self.assertEqual(client.stats()['samples_acknowledged'], 2)
+            self.assertEqual(len(self.rows), 1)
+
+    def test_expiry_does_not_retire_ordinary_pilot_motion(self):
+        connection, stream = self.open(self.pilot)
+        stream.readline()
+        self.view(connection, [NPC_INDEX], 1)
+        self.sample(connection)
+        with patch('authority.company_motion_service.time.monotonic', return_value=self.ingress.deadline):
+            normal = {'version': 3, 'epoch': REGISTRY_EPOCH, 'generation': self.pilot['generation'],
+                      'index': PILOT_INDEX, 'sequence': 1, 'sector_macro': SECTOR, 'source_time': 10.,
+                      'capture_time': 10., 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
+            self.send(connection, {'kind': 'motion_sample', 'window': self.service.window, 'sample': normal})
+        self.assertEqual(self.ingress.retired_reason, 'timeout')
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_sampled')
+        self.assertEqual(self.service.accepted_samples, 1)
+        self.sample(connection, sequence=2)
+        self.assertEqual(stream.read(1), b'')
+        # A late diagnostic frame closes this movement socket, but does not
+        # revoke the pilot's separate admitted grant or ordinary rebind.
+        self.assertIn(self.pilot['ticket'], self.service._tickets)
+        replacement = socket.create_connection(('127.0.0.1', self.service.port), timeout=1)
+        self.addCleanup(replacement.close)
+        replacement_stream = replacement.makefile('rb')
+        self.addCleanup(replacement_stream.close)
+        self.send(replacement, {'kind': 'bind_motion', 'ticket': self.pilot['ticket']})
+        self.assertEqual(json.loads(replacement_stream.readline())['last_sequence'], 1)
+        self.send(replacement, {'kind': 'motion_sample', 'window': self.service.window,
+                                'sample': dict(normal, sequence=2, source_time=11., capture_time=11.)})
+        self.assertEqual(json.loads(replacement_stream.readline())['sequence'], 2)

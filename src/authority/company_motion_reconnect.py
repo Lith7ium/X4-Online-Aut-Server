@@ -25,6 +25,14 @@ class _LocalSource:
     def local_generation(self):
         return self._source.local_generation
 
+    @property
+    def observed_npc(self):
+        return getattr(self._source, 'observed_npc', None)
+
+    @property
+    def registered_npc_hold_trial(self):
+        return getattr(self._source, 'registered_npc_hold_trial', False)
+
     def poll(self, validate_peer):
         try:
             return self._source.poll(validate_peer)
