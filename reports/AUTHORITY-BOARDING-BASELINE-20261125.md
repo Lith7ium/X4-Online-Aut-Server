@@ -125,6 +125,35 @@ each staged source retained the exact confirmed hash above. Private
 evidence is in `.local/native-boarding-crew-seed/stock-start-01/` and
 `stock-start-02/`. The runtime index 5049 did not enter a saved registry.
 
+## Native start through stock exports
+
+A separate one-provider run at `bdec1390` invoked the stock X4 exports
+on a fresh disposable copy of the same checkpoint. The private driver
+read ARU-541's eight available marines with `GetRoleTiers2` and selected
+the same default behaviour and approach/insertion thresholds as the
+stock map (30 and 80). It called `CreateBoardingOperation`,
+`AddAttackerToBoardingOperation` and `StartBoardingOperation` once each.
+All three returned true. The driver used the software-rendered provider
+without opening its map or attaching any player connection.
+
+The sealed-target witness recorded one native operation `0x42d9` at
+game time 568.53 s, targeting ZNG-430 `0x41f82` at saved index 1666.
+A separate MD listener confirmed ARU-541 `0x4204b` as the sole
+attacker with eight assigned marines and resolved its temporary
+index 5049 in the live registry. The stock engine getters independently
+returned that attacker, eight assigned marines and the matching
+per-tier allocation. The observed stock default was `targetengines`.
+The provider paused again at game time 568.97 s.
+
+The provider exited normally with an empty checkpoint output directory
+and no remaining X4 process. An independent SHA-256 check confirmed the
+original and staged source bytes above. Only the loaded world held
+ARU-541's temporary registry association. The trial ended before pods,
+combat or ownership transfer. Connecting a real client menu action to
+this provider remains separate work. Raw logs and
+`independent-start.json` are in
+`.local/native-boarding-crew-seed/stock-exports-01/`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
