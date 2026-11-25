@@ -583,7 +583,11 @@ and two headless TLS participants exercised the regular control path. A
 acknowledged Resume. B requested admission 3.048 seconds later. A
 received and validated Pause, then closed its TLS socket without a Pause
 receipt 0.760 seconds after B's request. B received its only ordinary
-offer 85.168 seconds after A closed and downloaded the confirmed save.
+offer 85.168 seconds after A's close callback and then downloaded the
+confirmed save. File timestamps on the provider placed `CURRENT` 2.378
+seconds after the native save's last write and `CONFIRMED` another
+30.479 seconds later. The logs do not separately time the registry
+capture, native save operation or TLS delivery.
 
 Independent reads of the downloaded files matched each offer's size and
 SHA-256 and found distinct native checkpoint markers. Saved game time
