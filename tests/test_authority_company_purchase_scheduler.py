@@ -73,7 +73,7 @@ class SchedulerTests(unittest.TestCase):
     def test_four_pilot_paging_reserves_regular_purchase_and_undock_turns(self):
         market = Mock()
         offer = dict(side='buy', ware='water', price_cents=100, amount=10, min_amount=1,
-                     cargo_units=0, free_units=10)
+                     cargo_units=0, free_units=10, tradeable=True)
         market.begin.return_value = dict(outcome='observed', company_balance_cents=500,
                                          offers=[offer] * 512)
         world = world_fixture(self, pilot_count=4, undock=Mock(), market=market)
