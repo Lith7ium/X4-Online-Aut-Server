@@ -9,13 +9,13 @@ import secrets
 import socket
 import time
 
-from authority.company_purchase_control import purchase_value
-from authority_trade_settlement import bound_dock, live_purchase_before, purchase_settlement
+from authority.company_trade_messages import purchase_value, sale_value
+from authority_trade_settlement import bound_dock, live_purchase_before, purchase_settlement, sale_settlement
 
 
 _IDS = re.compile(r'[0-9a-f]{32}')
 _COMPONENT = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
-_PURCHASE_FIELDS = ('purchase_id', 'sector', 'station_code', 'ware', 'quantity', 'price_cents')
+_BASKET_FIELDS = ('sector', 'station_code', 'ware', 'quantity', 'price_cents')
 _BINDING_FIELDS = ('registry_epoch', 'ship_index', 'ship_code')
 _REFUSALS = {'captain_required', 'dock_mismatch', 'invalid_registry', 'no_unique_offer',
              'request_binding_invalid', 'provider_busy', 'provider_limit'}
@@ -39,14 +39,15 @@ def _valid_binding(binding):
 @dataclass
 class _Attempt:
     binding: dict
-    purchase: dict
+    request: dict
+    kind: str
     deadline: float
     rows: list = field(default_factory=list)
     sent: bool = False
 
     @property
     def id(self):
-        return self.purchase['purchase_id']
+        return self.request[f'{self.kind}_id']
 
 
 class NativePurchaseProvider:
@@ -55,7 +56,7 @@ class NativePurchaseProvider:
     Calls are serialized by the supervisor. Pending is None. Exact duplicate
     calls read pending or cached state. A loss after dispatch remains unknown
     and disables further dispatch. No command changes ship or station state
-    outside the guarded stock native purchase.
+    outside the guarded stock native booking.
     """
 
     def __init__(self, *, timeout=45, clock=time.monotonic):
@@ -142,14 +143,20 @@ class NativePurchaseProvider:
         return destination
 
     def begin(self, binding, purchase):
+        return self._begin(binding, purchase_value(purchase), 'purchase')
+
+    def begin_sale(self, binding, sale):
+        """Submit an explicit Company sale through the same serialized native slot."""
+        return self._begin(binding, sale_value(sale), 'sale')
+
+    def _begin(self, binding, request, kind):
         try:
             binding = {name: binding[name] for name in _BINDING_FIELDS}
         except (TypeError, KeyError):
             raise ValueError('incomplete native purchase binding') from None
         if not _valid_binding(binding):
             raise ValueError('invalid native purchase binding')
-        purchase = purchase_value(purchase)
-        attempt = _Attempt(binding, purchase, self._clock() + self._timeout)
+        attempt = _Attempt(binding, request, kind, self._clock() + self._timeout)
         prior = self._history.get(attempt.id)
         if prior is not None:
             previous, receipt, _ = prior
@@ -160,9 +167,9 @@ class NativePurchaseProvider:
             return self.poll()
 
         if len(self._history) >= _MAX_IDS:
-            return dict(purchase, outcome='refused', reason='provider_limit')
-        if purchase['quantity'] > _MAX_NATIVE_QUANTITY or purchase['price_cents'] > _MAX_UNIT_PRICE:
-            return self._record(attempt, 'refused', reason='unsupported_purchase')
+            return dict(request, outcome='refused', reason='provider_limit')
+        if request['quantity'] > _MAX_NATIVE_QUANTITY or request['price_cents'] > _MAX_UNIT_PRICE:
+            return self._record(attempt, 'refused', reason=f'unsupported_{kind}')
         if self._exhausted:
             return self._record(attempt, 'refused', reason='provider_limit')
         if self._attempt is not None or self._awaiting_commit is not None:
@@ -172,8 +179,8 @@ class NativePurchaseProvider:
 
     @staticmethod
     def _same_request(previous, attempt):
-        if previous.binding != attempt.binding or previous.purchase != attempt.purchase:
-            raise ValueError('native purchase ID already bound to different input')
+        if previous.binding != attempt.binding or previous.request != attempt.request:
+            raise ValueError('native trade ID already bound to different input')
 
     def evidence(self, purchase_id):
         """Return the private native rows and verification for audit."""
@@ -190,15 +197,16 @@ class NativePurchaseProvider:
             try:
                 parts = [row.split('|') for row in attempt.rows[:3]]
                 before = live_purchase_before(parts, attempt.id, attempt.binding['registry_epoch'],
-                                              ware=attempt.purchase['ware'], quantity=attempt.purchase['quantity'])
-                if before['price_cents'] != attempt.purchase['price_cents']:
+                                              ware=attempt.request['ware'], quantity=attempt.request['quantity'],
+                                              sell=attempt.kind == 'sale')
+                if before['price_cents'] != attempt.request['price_cents']:
                     before = None
             except ValueError:
                 pass
         return {'reason': reason, 'before': before, 'rows': tuple(attempt.rows), 'settlement': audit}
 
     def _record(self, attempt, outcome, *, reason=None, audit=None, **fields):
-        receipt = dict(attempt.purchase, outcome=outcome, **fields)
+        receipt = dict(attempt.request, outcome=outcome, **fields)
         if outcome == 'refused':
             receipt['reason'] = reason
         self._history[attempt.id] = (attempt, receipt, self._observations(attempt, reason, audit))
@@ -212,23 +220,42 @@ class NativePurchaseProvider:
 
     def confirm_persisted(self, receipt):
         """Release the exact native confirmation after the host commits its ledger."""
-        purchase_id = receipt['purchase_id']
-        if (self._exhausted or self._awaiting_commit != purchase_id
-                or self._history[purchase_id][1] != receipt or receipt['outcome'] != 'confirmed'):
-            raise ValueError('no matching native purchase confirmation awaiting ledger commit')
-        self._previous_confirmed = purchase_id
+        self._confirm(receipt, 'purchase')
+
+    def confirm_sale_persisted(self, receipt):
+        """Release the shared slot after the host durably records the native sale."""
+        self._confirm(receipt, 'sale')
+
+    def _confirm(self, receipt, kind):
+        request_id = receipt.get(f'{kind}_id')
+        if (self._exhausted or request_id is None or self._awaiting_commit != request_id
+                or self._history[request_id][1] != receipt or receipt['outcome'] != 'confirmed'):
+            raise ValueError(f'no matching native {kind} confirmation awaiting ledger commit')
+        self._previous_confirmed = request_id
         self._awaiting_commit = None
 
     def _settle(self, attempt):
         parts = [row.split('|') for row in attempt.rows]
         try:
-            if 'DEAL' in [part[0] for part in parts]:
+            steps = {part[0] for part in parts}
+            if attempt.kind == 'sale' and 'SALE_COMPLETE' in steps:
+                audit = sale_settlement(attempt.rows, attempt.id, attempt.binding['registry_epoch'],
+                                        ware=attempt.request['ware'], quantity=attempt.request['quantity'])
+                balances = (audit['credited_cents'], audit['company_balance_cents'], audit['cargo_units'])
+                if (not audit['verified'] or audit['price_cents'] != attempt.request['price_cents']
+                        or any(not 0 <= value <= _MAX_SAFE_NUMBER for value in balances)):
+                    return self._record(attempt, 'unknown', reason='native_settlement_unverified', audit=audit)
+                return self._record(
+                    attempt, 'confirmed', audit=audit, ship_code=attempt.binding['ship_code'],
+                    credited_cents=balances[0], company_balance_cents=balances[1], cargo_units=balances[2],
+                )
+            if attempt.kind == 'purchase' and 'DEAL' in steps:
                 audit = purchase_settlement(attempt.rows, attempt.id, attempt.binding['registry_epoch'],
-                                            'live_purchase', ware=attempt.purchase['ware'],
-                                            quantity=attempt.purchase['quantity'])
+                                            'live_purchase', ware=attempt.request['ware'],
+                                            quantity=attempt.request['quantity'])
                 balances = (audit['settled_total_cents'], audit['deal']['faction_after_ct'],
                             audit['ship_ware_units_after'])
-                if (not audit['verified'] or audit['price_cents'] != attempt.purchase['price_cents']
+                if (not audit['verified'] or audit['price_cents'] != attempt.request['price_cents']
                         or any(not 0 <= value <= _MAX_SAFE_NUMBER for value in balances)):
                     return self._record(attempt, 'unknown', reason='native_settlement_unverified', audit=audit)
                 return self._record(
@@ -255,7 +282,7 @@ class NativePurchaseProvider:
                 if len(refusal) != 9 or refusal[:3] != ['REFUSED', attempt.id, 'price_changed']:
                     raise ValueError('unbound price refusal')
                 original, current, before_cargo, after_cargo, before_cash, after_cash = map(int, refusal[3:])
-                if (original == attempt.purchase['price_cents'] and 0 < current <= _MAX_UNIT_PRICE
+                if (original == attempt.request['price_cents'] and 0 < current <= _MAX_UNIT_PRICE
                         and current != original and price == str(current)
                         and before_cargo == after_cargo >= 0 and before_cash == after_cash >= 0):
                     return self._record(attempt, 'refused', reason=reason, current_price_cents=current)
@@ -304,8 +331,9 @@ class NativePurchaseProvider:
             return self._record(attempt, 'refused', reason='provider_unavailable')
         if self._peer and not attempt.sent:
             fields = [attempt.binding[key] for key in _BINDING_FIELDS]
-            fields.extend(attempt.purchase[key] for key in _PURCHASE_FIELDS[1:])
-            packet = '|'.join(map(str, ('PURCHASE', self._lease, attempt.id, *fields, self._previous_confirmed))).encode('ascii')
+            fields.extend(attempt.request[key] for key in _BASKET_FIELDS)
+            packet = '|'.join(map(str, (attempt.kind.upper(), self._lease, attempt.id, *fields,
+                                        self._previous_confirmed))).encode('ascii')
             attempt.sent = True
             try:
                 if self._socket.sendto(packet, self._peer) != len(packet):

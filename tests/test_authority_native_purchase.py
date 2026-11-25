@@ -13,11 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
 from authority.company_purchase_ledger import CompanyPurchaseLedger
 from authority_native_purchase import NativePurchaseProvider
-from authority_trade_settlement import purchase_settlement
+from authority_trade_settlement import purchase_settlement, sale_settlement
 
 BINDING = {'registry_epoch': 'e' * 32, 'ship_index': 7354, 'ship_code': 'WRN-302'}
 PURCHASE = {'purchase_id': 'a' * 32, 'sector': 'cluster_01_sector001_macro',
             'station_code': 'BIM-169', 'ware': 'water', 'quantity': 6, 'price_cents': 5819}
+SALE = {'sale_id': 'a' * 32, 'sector': 'cluster_43_sector001_macro',
+        'station_code': 'CTD-093', 'ware': 'water', 'quantity': 2, 'price_cents': 3473}
 STOCK = ROOT / 'tools/dev/authority_company_stock_trade.xml'
 
 
@@ -81,6 +83,10 @@ class NativePurchaseProviderTests(unittest.TestCase):
         provider = self.provider()
         with self.assertRaisesRegex(ValueError, 'invalid company purchase'):
             provider.begin(BINDING, dict(PURCHASE, side='sell'))
+        with self.assertRaisesRegex(ValueError, 'invalid company purchase'):
+            provider.begin(BINDING, SALE)
+        with self.assertRaisesRegex(ValueError, 'invalid company sale'):
+            provider.begin_sale(BINDING, PURCHASE)
         self.assertIsNone(provider.poll())
         self.assertIsNone(provider.begin(BINDING, PURCHASE))
 
@@ -316,3 +322,117 @@ class NativePurchaseProviderTests(unittest.TestCase):
                          {'name': 'State.$monitor_ready', 'exact': 'event.param'})
         self.assertEqual(acknowledged.find('.//raise_lua_event').attrib,
                          {'name': "'X4AuthorityCompanyStockTrade.Armed'", 'param': 'event.param'})
+
+        self.assertEqual(request.find('.//event_ui_triggered[@control="\'Sell\'"]').tag, 'event_ui_triggered')
+        bid = request.find('.//find_buy_offer')
+        self.assertEqual({field: bid.get(field) for field in ('buyer', 'tradepartner', 'space', 'excludemissions')},
+                         {'buyer': '$station', 'tradepartner': '$ship', 'space': '$station.sector',
+                          'excludemissions': 'true'})
+        price_guard = next(node for node in request.iter('do_elseif')
+                           if '$submit and $fixed and $quote gt 0' in node.get('value', ''))
+        self.assertIn('$v.$price_cents * 1ct != $price', price_guard.get('value'))
+        self.assertLess(ordered.index(price_guard), ordered.index(buys[0]))
+        sale_completed = monitor.find("./cues/cue[@name='CompletedSale']")
+        self.assertEqual(sale_completed.find('./conditions/event_trade_completed').attrib,
+                         {'buyer': '@State.$purchase.$station', 'seller': '@State.$purchase.$ship',
+                          'ware': '@State.$purchase.$ware'})
+        self.assertIn('event.param == State.$purchase.$deal',
+                      sale_completed.find('./conditions/check_value').get('value'))
+        readback = root.find(".//cue[@name='SaleReadback']")
+        self.assertIsNone(readback.find('.//create_trade_order'))
+
+    @unittest.skipUnless(shutil.which('cc') and shutil.which('luajit'), 'LuaJIT and C compiler required')
+    def test_real_udp_luajit_sale_requotes_both_ways_and_verifies_actual_credit(self):
+        with TemporaryDirectory() as directory:
+            native = Path(directory) / 'x4lan_net.so'
+            subprocess.run(['cc', '-std=c11', '-shared', '-fPIC', str(ROOT / 'src/native/net.c'),
+                            '-ldl', '-o', str(native)], check=True, timeout=10)
+            provider = self.provider(timeout=3)
+            proc = subprocess.Popen(
+                ['luajit', 'tests/authority_native_purchase_peer.lua',
+                 str(provider._socket.getsockname()[1]), provider._lease, str(native), 'sale'], cwd=ROOT)
+            try:
+                def sell(sale):
+                    deadline = time.monotonic() + 3
+                    result = provider.begin_sale(BINDING, sale)
+                    while result is None and time.monotonic() < deadline:
+                        time.sleep(.005)
+                        result = provider.poll()
+                    self.assertIsNotNone(result)
+                    return result
+
+                for price, ident in ((3472, 'b' * 32), (3474, 'c' * 32)):
+                    stale = dict(SALE, sale_id=ident, price_cents=price)
+                    self.assertEqual(sell(stale), dict(stale, outcome='refused', reason='price_changed',
+                                                      current_price_cents=3473))
+                    rows = provider.evidence(ident)['rows']
+                    self.assertFalse(any(row.startswith(('BEFORE|', 'SALE_COMPLETE|')) for row in rows))
+                receipt = sell(SALE)
+                self.assertEqual(receipt, dict(SALE, outcome='confirmed', ship_code='WRN-302',
+                                               credited_cents=6900, company_balance_cents=937000, cargo_units=10))
+                self.assertEqual(sell(SALE), receipt)
+                self.assertEqual(provider.begin(BINDING, dict(PURCHASE, purchase_id='d' * 32))['reason'],
+                                 'provider_busy')
+                with self.assertRaisesRegex(ValueError, 'awaiting ledger commit'):
+                    provider.confirm_persisted(receipt)
+                with self.assertRaisesRegex(ValueError, 'awaiting ledger commit'):
+                    provider.confirm_sale_persisted(dict(receipt, credited_cents=6946))
+                provider.confirm_sale_persisted(receipt)
+                self.assertEqual(sell(SALE), receipt)
+                self.assertIsNone(proc.poll())
+            finally:
+                proc.terminate()
+                proc.wait(timeout=3)
+
+            rows = list(provider.evidence(SALE['sale_id'])['rows'])
+            def settlement(rows):
+                return sale_settlement(rows, SALE['sale_id'], BINDING['registry_epoch'],
+                                       ware=SALE['ware'], quantity=SALE['quantity'])
+
+            self.assertEqual(settlement(rows)['matched_sale_entries'][0]['source'], 'ship')
+            for index, original, replacement, expected in (
+                (4, '|0x20|0x10|', '|0x10|0x20|', None),
+                (5, '|2|0|', '|2|1|', None),
+                (7, '|3310|', '|3308|', 'sale_cargo_readback_disagrees'),
+                (9, '|32|16|', '|16|32|', 'ledger_completed_trade_unconfirmed'),
+                (9, '|6900|', '|-6900|', 'ledger_credit_disagrees'),
+            ):
+                with self.subTest(index=index, replacement=replacement):
+                    altered = rows.copy()
+                    self.assertIn(original, altered[index])
+                    altered[index] = altered[index].replace(original, replacement, 1)
+                    if expected is None:
+                        with self.assertRaises(ValueError):
+                            settlement(altered)
+                    else:
+                        self.assertEqual(settlement(altered)['reason'], expected)
+            altered = rows.copy()
+            altered[9] = altered[9].replace('ENTRY|ship|', 'ENTRY|station|', 1)
+            self.assertEqual(settlement(altered)['reason'], 'ledger_ship_sale_missing')
+            altered = rows.copy()
+            altered[2] = altered[2].replace('|3473|12|', '|3473|2|')
+            for index in (6, 7):
+                altered[index] = altered[index].replace('|10|3310|', '|0|3310|')
+            self.assertEqual(settlement(altered)['cargo_units'], 0)
+            self.assertTrue(settlement(altered)['verified'])
+
+    def test_dispatched_sale_loss_is_retained_without_resending(self):
+        now = [0]
+        provider = self.provider(timeout=1, clock=lambda: now[0])
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(('127.0.0.1', 0))
+            peer.settimeout(1)
+            peer.sendto(f'PURCHASE_HELLO|{provider._lease}'.encode(), provider._socket.getsockname())
+            self.assertIsNone(provider.begin_sale(BINDING, SALE))
+            packet, _ = peer.recvfrom(768)
+            self.assertEqual(packet.decode().split('|')[:3], ['SALE', provider._lease, SALE['sale_id']])
+            now[0] = 2
+            self.assertEqual(provider.poll(), dict(SALE, outcome='unknown'))
+            self.assertEqual(provider.begin_sale(BINDING, SALE), dict(SALE, outcome='unknown'))
+            with self.assertRaisesRegex(ValueError, 'already bound'):
+                provider.begin(BINDING, PURCHASE)
+            self.assertEqual(provider.begin_sale(BINDING, dict(SALE, sale_id='b' * 32))['reason'],
+                             'provider_limit')
+            peer.setblocking(False)
+            with self.assertRaises(BlockingIOError):
+                peer.recvfrom(768)

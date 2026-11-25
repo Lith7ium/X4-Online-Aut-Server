@@ -1,4 +1,4 @@
--- Privately staged in an authority provider. Only the MD Buy cue can book.
+-- Privately staged in an authority provider. Only the guarded MD Buy and Sell controls can book.
 local M = {}
 local C = require('ffi').C
 local screen = 'X4AuthorityCompanyStockTrade'
@@ -82,14 +82,31 @@ function M.new(lease, net)
         active.observed = C.GetCurrentGameTime()
         active.next_read = active.observed + 1
     end)
+    RegisterEvent(screen .. '.SaleComplete', function(_, row)
+        if not matches(row) or not active.sell or not active.submitted or active.observed then return end
+        emit('SALE_COMPLETE|' .. row)
+        active.observed = C.GetCurrentGameTime()
+        active.next_read = active.observed
+    end)
+    RegisterEvent(screen .. '.SaleTransfer', function(_, row)
+        if not matches(row) or not active.sell or not active.observed or active.transferred then return end
+        emit('SALE_TRANSFER|' .. row)
+        active.transferred = true
+    end)
+    RegisterEvent(screen .. '.SaleReadback', function(_, row)
+        if not matches(row) or not active.sell or not active.transferred or active.readbacks == 2 then return end
+        emit('SALE_READBACK|' .. row)
+        active.readbacks = active.readbacks + 1
+    end)
 
     local function receive(real_time)
         if not net:pending() then return end
         local data = net:receive()
         if type(data) ~= 'string' then return end
-        local packet_lease, id, epoch, index, code, sector, station, ware, quantity, cents, previous = data:match(
-            '^PURCHASE|([0-9a-f]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([A-Za-z0-9_]+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([a-z][a-z0-9_]*)|(%d+)|(%d+)|([0-9a-f%-]+)$')
-        if packet_lease ~= lease or #id ~= 32 or #epoch ~= 32 or #sector > 128 or #ware > 128
+        local verb, packet_lease, id, epoch, index, code, sector, station, ware, quantity, cents, previous =
+            data:match('^([A-Z]+)|([0-9a-f]+)|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([A-Za-z0-9_]+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|([a-z][a-z0-9_]*)|(%d+)|(%d+)|([0-9a-f%-]+)$')
+        if (verb ~= 'PURCHASE' and verb ~= 'SALE') or packet_lease ~= lease
+                or #id ~= 32 or #epoch ~= 32 or #sector > 128 or #ware > 128
                 or active or seen[id] then return end
         index = positive_integer(index, 2147483647)
         quantity = positive_integer(quantity, 65535)
@@ -104,11 +121,11 @@ function M.new(lease, net)
             send(id, 2, 'DONE')
             return
         end
-        active = {id=id, sequence=0, deadline=real_time + 15}
+        active = {id=id, sequence=0, deadline=real_time + 15, sell=verb == 'SALE', readbacks=0}
         active.request = {
             request_id=id, epoch=epoch, ship_index=index, ship_code=code, sector=sector,
             station_code=station, ware=ware, quantity=quantity, price_cents=cents,
-            trial='live_purchase', fixed_request=true, live_request=true,
+            trial=active.sell and 'live_sale' or 'live_purchase', fixed_request=true, live_request=true,
             provider_lease=lease, previous_confirmed=previous,
         }
     end
@@ -147,8 +164,9 @@ function M.new(lease, net)
     end
 
     local function dispatch()
+        local id = active.id
         active.start = C.GetCurrentGameTime()
-        local ok, result = pcall(AddUITriggeredEvent, screen, 'Buy', active.request)
+        local ok, result = pcall(AddUITriggeredEvent, screen, active.sell and 'Sell' or 'Buy', active.request)
         if (not ok or result == false) and active then
             attempted = active.id
             emit('RESULT|' .. id .. '|dispatch_uncertain|0')
@@ -165,14 +183,20 @@ function M.new(lease, net)
             return
         end
         if not active.next_read or now < active.next_read then return end
+        if active.sell and active.readbacks < 2 then
+            active.next_read = now + 1
+            pcall(AddUITriggeredEvent, screen, 'SaleReadback', active.request)
+            return
+        end
         local ok, result = pcall(X4LAN_AUTHORITY_TRADE_LEDGER.collect, {
             ship=active.ship, station=active.station, start_time=active.start,
             end_time=now, quantity=active.request.quantity, ware=active.request.ware,
+            side=active.sell and 'sell' or nil,
         })
         if not ok or type(result) ~= 'table' or type(result.rows) ~= 'table' then
             result = {status='unknown', reason='collector_error', rows={}}
         end
-        if result.status ~= 'observed' and now < math.min(active.observed + 5, cutoff - 1) then
+        if result.status ~= 'observed' and now < math.min(active.observed + (active.sell and 30 or 5), cutoff - 1) then
             active.next_read = now + 1
             return
         end

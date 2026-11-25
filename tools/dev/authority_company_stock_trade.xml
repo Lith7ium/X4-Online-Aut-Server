@@ -13,6 +13,7 @@
             <set_value name="$args" exact="event.param3"/>
             <set_value name="$request" exact="@$args.$request_id"/>
             <set_value name="$lease" exact="@$args.$provider_lease"/>
+            <set_value name="$sell" exact="@$args.$trial == 'live_sale'"/>
             <set_value name="$status" exact="'invalid_registry'"/>
             <do_if value="typeof $request == datatype.string and $request and typeof $lease == datatype.string
                 and $lease and @$args.$live_request == true and @$args.$epoch == @md.X4AuthorityShipRegistry.State.$epoch
@@ -29,7 +30,7 @@
                 <set_value name="State.$monitor_ready" exact="null"/>
                 <set_value name="State.$purchase" exact="table[
                     $request=$request, $provider_lease=$lease, $epoch=$args.$epoch, $ship=$ship,
-                    $bay=$bay, $station=$station, $ware=$ware, $live=true
+                    $bay=$bay, $station=$station, $ware=$ware, $live=true, $sell=$sell
                 ]"/>
                 <set_value name="$arm_timeout" exact="player.age + 3s"/>
                 <set_value name="$prepared" exact="true"/>
@@ -63,6 +64,7 @@
             <check_any>
               <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Quote'"/>
               <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Buy'"/>
+              <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Sell'"/>
             </check_any>
           </conditions>
           <actions>
@@ -74,7 +76,10 @@
             <set_value name="$fixed" exact="@$v.$fixed_request == true"/>
             <set_value name="$live" exact="@$v.$live_request == true"/>
             <set_value name="$provider_lease" exact="@$v.$provider_lease"/>
-            <set_value name="$live_request_valid" exact="not $live or ($trial == 'live_purchase' and $fixed and event.param2 == 'Buy'
+            <set_value name="$sell" exact="event.param2 == 'Sell'"/>
+            <set_value name="$submit" exact="event.param2 == 'Buy' or $sell"/>
+            <set_value name="$live_request_valid" exact="(not $live and not $sell) or ($live and $fixed
+                and (($trial == 'live_purchase' and event.param2 == 'Buy') or ($trial == 'live_sale' and $sell))
                 and typeof $provider_lease == datatype.string and $provider_lease
                 and typeof @$v.$previous_confirmed == datatype.string
                 and @$v.$ship_index ge 1 and @$v.$ship_index le 2147483647 and ($v.$ship_index)i == $v.$ship_index
@@ -119,7 +124,8 @@
                 <do_elseif value="$live and (@State.$monitor_ready != $request
                     or @State.$purchase.$request != $request or @State.$purchase.$provider_lease != $provider_lease
                     or @State.$purchase.$epoch != $v.$epoch or @State.$purchase.$ship != $ship
-                    or @State.$purchase.$bay != $bay or @State.$purchase.$station != $station or @State.$purchase.$ware != $ware)">
+                    or @State.$purchase.$bay != $bay or @State.$purchase.$station != $station or @State.$purchase.$ware != $ware
+                    or @State.$purchase.$sell != $sell)">
                   <set_value name="$status" exact="'provider_limit'"/>
                 </do_elseif>
                 <do_elseif value="event.param2 == 'Buy' and not $live and (@State.$attempted or @State.$refused)">
@@ -128,14 +134,28 @@
                 <do_elseif value="$live and (not @$ship.assignedaipilot.exists or $ship.assignedaipilot == player.entity or @$ship.assignedaipilot.owner != faction.player)">
                   <set_value name="$status" exact="'captain_required'"/>
                 </do_elseif>
+                <do_elseif value="$sell and (not @$ship.pilot.isclass.npc or @$ship.pilot.ship != $ship
+                    or @$ship.pilot.assignedcontrolled != $ship or not @$ship.pilot.hascontext.{$ship})">
+                  <set_value name="$status" exact="'captain_required'"/>
+                </do_elseif>
                 <do_elseif value="$live and (not $ship.pilot or $ship.pilot != $ship.assignedaipilot
                     or $ship.orders.count != 0 or ($ship.defaultorder and $ship.defaultorder.id != 'Wait'))">
                   <set_value name="$status" exact="'dock_mismatch'"/>
                 </do_elseif>
+                <do_elseif value="$sell and ($ship.pilot.isbusy or $ship.tradeorders.count != 0
+                    or @$ship.tradecomputer.exists or @$ship.order.id != 'Wait' or @$ship.order.state == orderstate.critical)">
+                  <set_value name="$status" exact="'dock_mismatch'"/>
+                </do_elseif>
                 <do_else>
                   <set_value name="$status" exact="'no_unique_offer'"/>
-                  <find_sell_offer result="$offers" multiple="true" tradepartner="$ship" seller="$station" wares="$ware" excludemissions="true"/>
-                  <do_if value="$offers.count == 1">
+                  <do_if value="$sell">
+                    <find_buy_offer result="$offers" multiple="true" tradepartner="$ship" buyer="$station" space="$station.sector" wares="$ware" excludeempty="true" excludemissions="true"/>
+                  </do_if>
+                  <do_else>
+                    <find_sell_offer result="$offers" multiple="true" tradepartner="$ship" seller="$station" wares="$ware" excludemissions="true"/>
+                  </do_else>
+                  <do_if value="$offers.count == 1 and (not $sell or ($offers.{1}.available and $offers.{1}.isbuyoffer
+                      and not $offers.{1}.ismission and $offers.{1}.buyer == $station and $offers.{1}.ware == $ware))">
                     <set_value name="$offer" exact="$offers.{1}"/>
                     <set_value name="$price" exact="$offer.unitprice"/>
                     <set_value name="$quote" exact="($price / 1ct)L"/>
@@ -143,13 +163,13 @@
                     <do_if value="$live">
                       <raise_lua_event name="'X4AuthorityCompanyStockTrade.Bound'" param="'%s|READY|%s|%s|%s|%s'.[$request,$ship,$station,$bay,$fresh_quote_time]"/>
                     </do_if>
-                    <do_if value="event.param2 == 'Buy' and $fixed and $quote gt 0">
+                    <do_if value="$submit and $fixed and $quote gt 0">
                       <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|quote|%s'.[$request,$quote]"/>
                     </do_if>
                     <do_if value="event.param2 == 'Buy' and not $fixed and (@State.$quoted_request != $request or @State.$quoted_epoch != $v.$epoch or @State.$quoted_trial != $trial)">
                       <set_value name="$status" exact="'quote_required'"/>
                     </do_if>
-                    <do_elseif value="event.param2 == 'Buy' and $fixed and $quote gt 0 and $v.$price_cents * 1ct != $price">
+                    <do_elseif value="$submit and $fixed and $quote gt 0 and $v.$price_cents * 1ct != $price">
                       <set_value name="$status" exact="'refusal_unverified'"/>
                       <set_value name="$refusal_cargo_before" exact="$ship.cargo.{$ware}.count"/>
                       <set_value name="$refusal_cash_before" exact="(player.money / 1ct)L"/>
@@ -166,8 +186,16 @@
                       </do_if>
                     </do_elseif>
                     <do_else>
-                      <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" bundle="false" unbundle="false"/>
-                      <set_value name="$tradeable" exact="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity and $ship.money ge ($price * $quantity) and player.money ge ($price * $quantity) and (not $live or (faction.player.hasownaccount and faction.player.money == player.money))"/>
+                      <do_if value="$sell">
+                        <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$station" seller="$ship" bundle="false" unbundle="false" updatedeal="false"/>
+                      </do_if>
+                      <do_else>
+                        <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" bundle="false" unbundle="false"/>
+                      </do_else>
+                      <set_value name="$tradeable" exact="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity
+                          and (if $sell then ($station.owner != faction.player and $offer.minamount le $quantity and $ship.cargo.{$ware}.count ge $quantity)
+                               else ($ship.money ge ($price * $quantity) and player.money ge ($price * $quantity)))
+                          and (not $live or (faction.player.hasownaccount and faction.player.money == player.money))"/>
                       <set_value name="$status" exact="'not_tradeable'"/>
                       <do_if value="event.param2 == 'Quote' and not $fixed and $tradeable">
                         <set_value name="$status" exact="'quote'"/>
@@ -177,7 +205,7 @@
                         <set_value name="State.$quoted_trial" exact="$trial"/>
                         <set_value name="State.$quoted_at" exact="$fresh_quote_time"/>
                       </do_if>
-                      <do_elseif value="event.param2 == 'Buy' and $tradeable">
+                      <do_elseif value="$submit and $tradeable">
                         <do_if value="(not $fixed and State.$quoted_price != $price) or not @$v.$price_cents or $v.$price_cents * 1ct != $price">
                           <set_value name="$status" exact="'price_changed'"/>
                         </do_if>
@@ -188,6 +216,8 @@
                             $ship=$ship, $index=$index, $ship_code=$ship.idcode, $station=$station,
                             $station_code=$station.idcode, $sector=$station.sector, $parking=$parking,
                             $live=$live, $provider_lease=$provider_lease, $bay=$bay, $ware=$ware, $price=$price,
+                            $sell=$sell,
+                            $captain=if $sell then $ship.pilot else null, $station_owner=$station.owner,
                             $before_ship_cargo=$ship.cargo.{$ware}.count, $before_station_cargo=$station.cargo.{$ware}.count,
                             $before_ship_money=$ship.money, $before_station_money=$station.money,
                             $before_player_money=player.money, $before_faction_has_account=faction.player.hasownaccount,
@@ -206,7 +236,11 @@
                               <set_value name="State.$attempted" exact="true"/>
                             </do_else>
                             <do_if value="$live">
-                              <raise_lua_event name="'X4AuthorityCompanyStockTrade.Before'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$request,$v.$epoch,$ship,$station,$bay,$ware.id,$quantity,$quote,State.$purchase.$before_ship_cargo,(State.$purchase.$before_player_money / 1ct)L,State.$purchase.$before_faction_money,$fresh_quote_time]"/>
+                              <set_value name="$before" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$request,$v.$epoch,$ship,$station,$bay,$ware.id,$quantity,$quote,State.$purchase.$before_ship_cargo,(State.$purchase.$before_player_money / 1ct)L,State.$purchase.$before_faction_money,$fresh_quote_time]"/>
+                              <do_if value="$sell">
+                                <set_value name="$before" exact="'%s|%s'.[$before,State.$purchase.$before_station_cargo]"/>
+                              </do_if>
+                              <raise_lua_event name="'X4AuthorityCompanyStockTrade.Before'" param="$before"/>
                             </do_if>
                             <create_trade_order name="State.$purchase.$order" object="$ship" tradeoffer="$offer" amount="$quantity" price="$price" bundle="false" unbundle="false" immediate="true"/>
                             <set_value name="State.$purchase.$deal" exact="@State.$purchase.$order.trade"/>
@@ -240,7 +274,7 @@
             <cue name="Completed" namespace="this">
               <conditions>
                 <event_trade_completed buyer="@State.$purchase.$ship" seller="@State.$purchase.$station" ware="@State.$purchase.$ware"/>
-                <check_value value="@State.$purchase.$deal and (event.param == State.$purchase.$deal
+                <check_value value="not @State.$purchase.$sell and @State.$purchase.$deal and (event.param == State.$purchase.$deal
                     or (event.param2 == State.$purchase.$order and @event.param2.trade == State.$purchase.$deal))
                     and (not State.$purchase.$live or (State.$purchase.$provider_lease == @State.$live_lease
                     and State.$purchase.$request == @State.$live_request))"/>
@@ -279,9 +313,83 @@
                 <raise_lua_event name="'X4AuthorityCompanyStockTrade.Observed'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$entry.$request,($entry.$price / 1ct)L,$delta_ship_cargo,$delta_station_cargo,$delta_ship_money,$delta_station_money,$delta_player_money,$docked,$parked]"/>
               </actions>
             </cue>
+            <cue name="CompletedSale" namespace="this">
+              <conditions>
+                <event_trade_completed buyer="@State.$purchase.$station" seller="@State.$purchase.$ship" ware="@State.$purchase.$ware"/>
+                <check_value value="@State.$purchase.$sell and @State.$purchase.$deal
+                    and (event.param == State.$purchase.$deal or (event.param2 == State.$purchase.$order and @event.param2.trade == State.$purchase.$deal))
+                    and State.$purchase.$provider_lease == @State.$live_lease and State.$purchase.$request == @State.$live_request"/>
+              </conditions>
+              <actions>
+                <set_value name="$entry" exact="State.$purchase"/>
+                <do_if value="$entry.$deal.buyer == $entry.$station and $entry.$deal.seller == $entry.$ship and $entry.$deal.ware == $entry.$ware">
+                  <set_value name="$entry.$sale_completed" exact="true"/>
+                  <raise_lua_event name="'X4AuthorityCompanyStockTrade.SaleComplete'" param="'%s|%s|%s|%s|%s|%s|%s|%s'.[$entry.$request,$entry.$epoch,$entry.$deal.buyer,$entry.$deal.seller,$entry.$ware.id,$entry.$order,$entry.$deal,player.age / 1s]"/>
+                  <include_actions ref="CaptureSaleTransfer"/>
+                </do_if>
+              </actions>
+            </cue>
           </cues>
+        </cue>
+        <!-- A completed sale may still be transferring the credit or retiring
+             its order. Take two separate snapshots after the ship is idle. -->
+        <cue name="SaleReadback" instantiate="true" namespace="this">
+          <conditions>
+            <event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'SaleReadback'"/>
+            <check_value value="@State.$purchase.$sell and @State.$purchase.$sale_completed
+              and @event.param3.$request_id == @State.$live_request
+              and @event.param3.$provider_lease == @State.$live_lease
+              and @State.$purchase.$request == @State.$live_request and @State.$purchase.$provider_lease == @State.$live_lease"/>
+          </conditions>
+          <actions>
+            <set_value name="$entry" exact="State.$purchase"/>
+            <set_value name="$ship" exact="$entry.$ship"/>
+            <set_value name="$station" exact="$entry.$station"/>
+            <set_value name="$bay" exact="$entry.$bay"/>
+            <set_value name="$captain" exact="$entry.$captain"/>
+            <set_value name="$ware" exact="$entry.$ware"/>
+            <do_if value="@md.X4AuthorityShipRegistry.State.$epoch == $entry.$epoch and @md.X4AuthorityShipRegistry.State.$faulted == false
+                and @md.X4AuthorityShipRegistry.State.$ships.{$entry.$index} == $ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $entry.$index
+                and @$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player and $ship.trueowner == faction.player
+                and $ship.idcode == $entry.$ship_code and $ship.sector == $entry.$sector
+                and @$station.isclass.station and $station.isoperational and $station.sector == $entry.$sector
+                and $station.idcode == $entry.$station_code and $station.owner == $entry.$station_owner and $station.trueowner == $station.owner
+                and @$captain.isclass.npc and $captain.owner == faction.player and $ship.pilot == $captain and $ship.assignedaipilot == $captain
+                and $captain.ship == $ship and $captain.assignedcontrolled == $ship and $captain.hascontext.{$ship}
+                and @$bay.isclass.dockingbay and $bay.external and not $bay.isstorage and $bay.istradingallowed
+                and $bay.container == $station and $bay.dockstate == dockstate.default and $bay.docked.indexof.{$ship}
+                and $ship.dock == $bay and not $ship.isinternallystored and player.station == $entry.$parking
+                and not player.controlled and not player.occupiedship and @player.room.exists">
+              <include_actions ref="CaptureSaleTransfer"/>
+              <do_if value="@$entry.$sale_transferred and player.age ge @$entry.$sale_next_readback
+                  and @$entry.$sale_readbacks != 2 and not @$entry.$order.exists and $ship.orders.count == 0 and $ship.tradeorders.count == 0
+                  and not @$ship.tradecomputer.exists and @$ship.order.id == 'Wait' and @$ship.order.state != orderstate.critical
+                  and faction.player.hasownaccount and faction.player.money == player.money and player.money gt $entry.$before_player_money
+                  and $ship.money - $entry.$before_ship_money == player.money - $entry.$before_player_money
+                  and $ship.cargo.{$ware}.count == $entry.$before_ship_cargo - $entry.$quantity
+                  and $station.cargo.{$ware}.count == $entry.$before_station_cargo + $entry.$quantity">
+                <set_value name="$entry.$sale_readbacks" exact="if @$entry.$sale_readbacks then $entry.$sale_readbacks + 1 else 1"/>
+                <set_value name="$entry.$sale_next_readback" exact="player.age + 1s"/>
+                <do_if value="$entry.$sale_readbacks == 2">
+                  <set_value name="State.$live_completed" exact="true"/>
+                </do_if>
+                <raise_lua_event name="'X4AuthorityCompanyStockTrade.SaleReadback'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$entry.$request,$entry.$epoch,$ship,$station,$bay,player.age / 1s,$ship.cargo.{$ware}.count,$station.cargo.{$ware}.count,(player.money / 1ct)L,(faction.player.money / 1ct)L,(($ship.money - $entry.$before_ship_money) / 1ct)L]"/>
+              </do_if>
+            </do_if>
+          </actions>
         </cue>
       </cues>
     </cue>
+    <library name="CaptureSaleTransfer" purpose="include_actions">
+      <actions>
+        <do_if value="not @$entry.$sale_transferred and @$entry.$deal.buyer == $entry.$station and @$entry.$deal.seller == $entry.$ship
+            and @$entry.$deal.ware == $entry.$ware and @$entry.$deal.unitprice == $entry.$price
+            and @$entry.$deal.transferredamount == $entry.$quantity and @$entry.$deal.destroyedamount == 0">
+          <set_value name="$entry.$sale_transferred" exact="true"/>
+          <set_value name="$entry.$sale_next_readback" exact="player.age + 1s"/>
+          <raise_lua_event name="'X4AuthorityCompanyStockTrade.SaleTransfer'" param="'%s|%s|%s|%s|%s|%s'.[$entry.$request,$entry.$deal,$entry.$deal.transferredamount,$entry.$deal.destroyedamount,($entry.$deal.unitprice / 1ct)L,player.age / 1s]"/>
+        </do_if>
+      </actions>
+    </library>
   </cues>
 </mdscript>
