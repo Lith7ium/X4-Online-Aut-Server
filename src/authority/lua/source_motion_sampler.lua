@@ -29,6 +29,8 @@ function M.new(o)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
  assert(c.allow_superhighway_gap==nil or type(c.allow_superhighway_gap)=='boolean')
+ assert(c.recheck_superhighway_boundary==nil or (type(c.recheck_superhighway_boundary)=='boolean'
+  and (not c.recheck_superhighway_boundary or c.allow_superhighway_gap)))
  assert(c.recover_expired_pending==nil or type(c.recover_expired_pending)=='boolean')
  assert(not (c.real_time_motion and c.include_orientation))
  local state,busy='ready',false
@@ -46,7 +48,7 @@ function M.new(o)
  local expired_pending={}
  local function before_deadline(t)
   if not pending or t<pending.deadline then return true end
-  if c.recover_expired_pending then
+  if c.recover_expired_pending and not pending.entry.boundary_recheck then
    last_clock=t
    error(expired_pending,0)
   end
@@ -147,14 +149,41 @@ function M.new(o)
   return true
  end
  function api:expected_request()return state=='pending' and pending.request or nil end
+ local response_faults={response_type=true,response_mismatch=true,descriptor_unavailable=true,
+  descriptor_invalid=true,transit_rejected=true,actor_changed=true,sector_id=true,
+  snapshot_callback=true,snapshot_invalid=true,capture_clock_invalid=true,orientation_invalid=true}
  function api:event(value)
   if busy or state~='pending' or type(value)~='string' or value:sub(1,32)~=pending.request or value:sub(33,33)~='|' then return fail('event')end
   busy=true
-  local result,gap
+  local result,gap,response_fault
   local ok,err=pcall(function()
    assert(check());local e=pending.entry;assert(checked_binding(e))
-   local accepted,sample,withdrawal=pending.reader:response(value)
-   if c.allow_superhighway_gap and accepted==true and sample==nil and withdrawal=='superhighway_transit' then
+   local accepted,sample,withdrawal,witness=pending.reader:response(value)
+   if accepted~=true and c.diagnostics and (response_faults[sample] or descriptor_faults[sample]) then
+    response_fault='sample_reader_response_'..sample
+   end
+   if accepted==true and sample==nil and c.allow_superhighway_gap then
+    if withdrawal=='superhighway_transit' then
+     e.boundary_recheck=nil
+    elseif withdrawal=='superhighway_boundary_recheck' and c.recheck_superhighway_boundary then
+     if e.boundary_recheck then
+      if c.diagnostics then response_fault='sample_boundary_recheck_exhausted' end
+      error('repeated stale sector descriptor')
+     end
+     assert(type(witness)=='table' and name(witness.sector_macro)
+      and type(witness.local_sector_key)=='string' and witness.local_sector_key:match('^[1-9]%d*$')
+      and (e.sent_sector~=witness.sector_macro or e.sent_local_sector_key==witness.local_sector_key)
+      and finite(witness.game_before) and finite(witness.game_after)
+      and witness.game_before>=(last_game or 0) and witness.game_after>=witness.game_before and witness.game_after<=1e12)
+     if c.real_time_motion then
+      assert(finite(witness.capture_before) and finite(witness.capture_after)
+       and witness.capture_before>=(last_capture_after or 0) and witness.capture_after>=witness.capture_before
+       and witness.capture_after<=1e12)
+      last_capture_after=witness.capture_after
+     end
+     last_game=witness.game_after
+     e.boundary_recheck=true
+    else error('unexpected descriptor withdrawal') end
     assert(check() and checked_binding(e) and state=='pending')
     e.previous=nil
     e.next_due=last_clock+c.interval
@@ -195,6 +224,7 @@ function M.new(o)
    end
    assert(not e.sent_sector or e.sent_sector~=sample.sector_macro or
     e.sent_local_sector_key==sample.local_sector_key,'sent local sector identity changed under same macro')
+   e.boundary_recheck=nil
    -- Legacy samples suppress duplicate game times after a baseline reset.
    -- Real-time samples instead retain both capture-clock progression fences.
    if not c.real_time_motion and not previous and e.last_emitted_time and t==e.last_emitted_time then
@@ -263,7 +293,7 @@ function M.new(o)
    else previous.last_time=t end
    pending=nil;state='ready'
   end)
-  busy=false;if not ok then return finish_failure('sample',err)end;return true,result,gap
+  busy=false;if not ok then return finish_failure(response_fault or 'sample',err)end;return true,result,gap
  end
  function api:state()return state end
  function api:discard_pending()
@@ -351,7 +381,7 @@ function M.new_x4(c)
    row=row,actor=actor,expected_save_path=c.expected_save_path,normalize_save_path=c.normalize_save_path,
    guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
    include_capture_time=c.real_time_motion,capture_clock=c.capture_clock,
-   allow_superhighway_gap=c.allow_superhighway_gap,
+   allow_superhighway_gap=c.allow_superhighway_gap,recheck_superhighway_boundary=c.recheck_superhighway_boundary,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
  return M.new(opts)

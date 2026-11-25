@@ -174,3 +174,99 @@ local probe={enabled=true,epoch=epoch,request_id=nonce,timeout=5,actor=41,
 assert(not pcall(descriptor.new,probe)) -- no implicit baseline mode
 probe.saved_baseline=1;probe.row.index=2;assert(not pcall(descriptor.new,probe))
 probe.row.index=1;probe.row.sequence=1;assert(not pcall(descriptor.new,probe))
+
+-- Drive the real native adapter across the MD/pose boundary. The fake
+-- X4 symbols change sector either before the snapshot or inside its pose read.
+ffi.cdef[[
+ void TestMotionContext(uint64_t sector,uint64_t zone,uint64_t highway,uint64_t controlled,bool enter);
+ int TestPoseReads(void);
+]]
+local old_sector='ok|0x29|ship_a|argon|0x2b|sector_a'
+local boundary='superhighway_boundary_recheck'
+local function crossing(opt_in)
+ ffi.C.TestMotionContext(43,0,0,41,false)
+ ffi.C.TestReset();ffi.C.TestUnpause()
+ baseline_ok=true;now=10
+ local opts,failures=saved_opts(),{}
+ opts.allow_superhighway_gap=true
+ opts.recheck_superhighway_boundary=opt_in
+ opts.real_time_motion=true
+ opts.recover_expired_pending=true
+ opts.capture_clock=function()return now end
+ opts.diagnostics=true
+ opts.fault=function(reason)failures[#failures+1]=reason end
+ local source=assert(sampler.new_x4(opts))
+ assert(source:register({epoch=epoch,index=1,classification='saved_baseline'},41))
+ return source,failures
+end
+local function request(source)
+ now=now+.2;ffi.C.TestAdvance(.2)
+ assert(source:tick())
+ return assert(source:expected_request())
+end
+local function respond(source,rid,body)
+ return source:event(rid..'|'..epoch..'|1|'..(body or old_sector))
+end
+for _,inside_pose in ipairs({false,true}) do
+ local source,failures=crossing(true)
+ local success,pose=respond(source,request(source))
+ assert(success and pose.sequence==1)
+ success,pose=respond(source,request(source))
+ assert(success and pose.sequence==2 and pose.real_velocity)
+ local rid=request(source)
+ local reads=ffi.C.TestPoseReads()
+ ffi.C.TestMotionContext(inside_pose and 43 or 0,45,45,41,inside_pose)
+ local gap
+ success,pose,gap=respond(source,rid)
+ assert(success and pose==nil and gap==boundary and source:state()=='ready')
+ assert(ffi.C.TestPoseReads()==reads+(inside_pose and 1 or 0))
+
+ local followup=request(source)
+ assert(followup~=rid)
+ if inside_pose then
+  success,pose,gap=respond(source,followup,'transit|0x29')
+  assert(success and pose==nil and gap=='superhighway_transit')
+  followup=request(source)
+ end
+ ffi.C.TestMotionContext(43,0,0,41,false)
+ success,pose,gap=respond(source,followup)
+ assert(success and not gap and pose.sequence==3 and not pose.real_velocity and #failures==0)
+end
+
+for _,context in ipairs({
+ {false,0,45,45,41}, -- disabled
+ {true,99,45,45,41}, -- a different nonzero sector
+ {true,0,0,0,41},   -- no zone
+ {true,0,45,46,41}, -- different native zone and highway
+ {true,0,45,45,42}, -- player now controls another ship
+}) do
+ local source,failures=crossing(context[1])
+ local rid=request(source)
+ ffi.C.TestMotionContext(context[2],context[3],context[4],context[5],false)
+ assert(not respond(source,rid) and source:state()=='failed')
+ assert(failures[1]=='sample_reader_response_snapshot_callback')
+end
+
+for _,failure in ipairs({
+ {old_sector,'sample_boundary_recheck_exhausted'},
+ {'unavailable','sample_reader_response_descriptor_unavailable'},
+ {'ok|garbage','sample_reader_response_descriptor_invalid'},
+ {'transit|0x2a','sample_reader_response_transit_rejected'},
+}) do
+ local source,failures=crossing(true)
+ local rid=request(source)
+ ffi.C.TestMotionContext(0,45,45,41,false)
+ local accepted,pose,gap=respond(source,rid)
+ assert(accepted and not pose and gap==boundary)
+ assert(not respond(source,request(source),failure[1]) and source:state()=='failed')
+ assert(failures[1]==failure[2])
+end
+
+local source=crossing(true)
+local rid=request(source)
+ffi.C.TestMotionContext(0,45,45,41,false)
+local accepted,_,gap=respond(source,rid)
+assert(accepted and gap==boundary)
+request(source)
+now=now+5
+assert(not source:tick() and source:state()=='failed')

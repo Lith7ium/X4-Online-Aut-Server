@@ -27,6 +27,15 @@ for _, operation in ipairs({'tick_reader_start', 'tick_reader_tick'}) do
     end
 end
 
+for _, check in ipairs({'response_type', 'response_mismatch', 'descriptor_unavailable',
+                         'descriptor_invalid', 'transit_rejected', 'actor_changed', 'sector_id',
+                         'snapshot_callback', 'snapshot_invalid', 'capture_clock_invalid', 'orientation_invalid',
+                         'clock_invalid', 'clock_timeout', 'context_lost', 'clock_failed',
+                         'guard_failed', 'reentrant', 'state_changed', 'callback_failed', 'unavailable'}) do
+    fault_labels['sample_reader_response_' .. check] = true
+end
+fault_labels.sample_boundary_recheck_exhausted = true
+
 function M.arm(verified_seat)
     assert(seat == nil or seat == verified_seat)
     seat = verified_seat
@@ -52,11 +61,14 @@ function M.new(options)
     local function sample_outcome(ok, gap)
         if not ok then
             failed = true
-        elseif gap == 'superhighway_transit' then
-            if not in_transit then
+        elseif gap == 'superhighway_transit' or gap == 'superhighway_boundary_recheck' then
+            local was_in_transit = in_transit
+            if not was_in_transit then
                 in_transit = true
                 options.send('GAP')
-                if options.superhighway_gap then options.superhighway_gap() end
+            end
+            if options.superhighway_gap and (not was_in_transit or gap == 'superhighway_boundary_recheck') then
+                options.superhighway_gap(gap)
             end
             return false
         elseif gap == 'pending_timeout' then
@@ -202,7 +214,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({
         observer = observer, observer_fault = observer_fault,
-        superhighway_gap = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP superhighway_transit') end,
+        superhighway_gap = function(reason) DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP ' .. reason) end,
         pending_timeout = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP pending_timeout') end,
         epoch = pinned.epoch, index = config.index, available = available, actor = actor,
         send = function(payload) net:send(prefix .. payload) end,
@@ -212,7 +224,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 nonce = config.nonce, max_tracks = 1, scan_budget = 1,
                 interval = .10, timeout = 1, min_dt = .02, max_dt = 1,
                 real_time_motion = true, capture_clock = udp.monotonic, recover_expired_pending = true,
-                allow_superhighway_gap = true,
+                allow_superhighway_gap = true, recheck_superhighway_boundary = true,
                 expected_save_path = expected, normalize_save_path = normalize,
                 guard = guard, binding_guard = function() return false end,
                 saved_baseline_limit = pinned.issued_count,

@@ -12,6 +12,8 @@ function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
  assert(o.allow_superhighway_gap==nil or type(o.allow_superhighway_gap)=='boolean')
+ assert(o.recheck_superhighway_boundary==nil or (type(o.recheck_superhighway_boundary)=='boolean'
+  and (not o.recheck_superhighway_boundary or o.allow_superhighway_gap)))
  assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
  assert(o.include_orientation==nil or type(o.include_orientation)=='boolean')
  assert(o.include_capture_time==nil or type(o.include_capture_time)=='boolean')
@@ -67,51 +69,66 @@ function M.new(o)
   if accepted~=true then return fail('dispatch') end
   return check()
  end
+ local function complete(check_before_actor)
+  if check_before_actor then
+   local checked,reason=check()
+   if not checked then return false,reason end
+  end
+  local verified,current=call(o.actor_key,o.actor)
+  if not verified then return false,current end
+  if current~=actor_key then return fail('actor_changed') end
+  local checked,reason=check()
+  if not checked then return false,reason end
+  state='done';deadline=nil
+  return true
+ end
  function api:response(value)
   if state~='waiting' then return fail('unexpected_response') end
-  if not check() then return false end
+  local checked,reason=check()
+  if not checked then return false,reason end
   if type(value)~='string' or #value>768 then return fail('response_type') end
-  local rid,epoch,index,status,rest=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|([a-z]+)|?(.*)$')
+  local rid,epoch,index,body=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|(.+)$')
   if rid~=o.request_id or epoch~=o.epoch or index~=string.format('%.0f',o.row.index) then return fail('response_mismatch') end
-  if status=='transit' and o.allow_superhighway_gap then
-   local actor=value:match('^[0-9a-f]+|[0-9a-f]+|[0-9]+|transit|(0[xX][0-9a-fA-F]+)$')
-   if not actor then return fail('descriptor_invalid') end
+  if body=='transit' or body:sub(1,8)=='transit|' then
+   local actor=body:match('^transit|(0[xX][0-9a-fA-F]+)$')
+   if not o.allow_superhighway_gap or not actor then return fail('transit_rejected') end
    local ok,key=call(o.hex_key,actor)
-   if not ok then return false end
-   local verified,current=call(o.actor_key,o.actor)
-   if not verified then return false end
-   if key~=actor_key or current~=actor_key then return fail('actor_changed') end
-   if not check() then return false end
-   state='done';deadline=nil
+   if not ok or key~=actor_key then return fail('transit_rejected') end
+   local accepted,rejection=complete()
+   if not accepted then return false,rejection end
    return true,nil,'superhighway_transit'
   end
-  if status~='ok' then return fail('response_mismatch') end
-  local actor,macro,owner,sector,sector_macro=rest:match('^(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|(0[xX][0-9a-fA-F]+)|([^|]+)$')
+  if body=='unavailable' then return fail('descriptor_unavailable') end
+  local actor,macro,owner,sector,sector_macro=body:match('^ok|(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|(0[xX][0-9a-fA-F]+)|([^|]+)$')
   if not actor or not sector or not name(macro) or not name(owner) or not name(sector_macro) then return fail('descriptor_invalid') end
-  local ok,key=call(o.hex_key,actor);if not ok then return false end
+  local ok,key=call(o.hex_key,actor);if not ok then return fail('descriptor_invalid') end
   if key~=actor_key then return fail('actor_changed') end
-  local sok,sector_key=call(o.hex_key,sector);if not sok then return false end
+  local sok,sector_key=call(o.hex_key,sector);if not sok then return fail('sector_id') end
   if type(sector_key)~='string' or not sector_key:match('^[1-9]%d*$') then return fail('sector_id') end
   local good,sample=call(o.snapshot,o.actor,sector)
-  if not good then return false end
-  if (type(sample)~='table' or sample.sector_local~=sector_key or
-      not coord(sample.x) or not coord(sample.y) or not coord(sample.z) or not finite(sample.game_before) or
+  if not good then return fail('snapshot_callback') end
+  if (type(sample)~='table' or sample.sector_local~=sector_key or not finite(sample.game_before) or
       not finite(sample.game_after) or sample.game_before<query_game or sample.game_after<sample.game_before) then
    return fail('snapshot_invalid')
   end
   if o.include_capture_time and (not finite(sample.capture_before) or not finite(sample.capture_after) or
       sample.capture_after<sample.capture_before or sample.capture_after>1e12) then return fail('capture_clock_invalid') end
+  if sample.boundary==true and o.recheck_superhighway_boundary then
+   local accepted,rejection=complete(true)
+   if not accepted then return false,rejection end
+   return true,nil,'superhighway_boundary_recheck',{
+    game_before=sample.game_before,game_after=sample.game_after,
+    capture_before=sample.capture_before,capture_after=sample.capture_after,
+    sector_macro=sector_macro,local_sector_key=sector_key}
+  end
+  if not coord(sample.x) or not coord(sample.y) or not coord(sample.z) then return fail('snapshot_invalid') end
   if o.include_orientation then
    for _,axis in ipairs({'yaw','pitch','roll'}) do
     if not coord(sample[axis]) or math.abs(sample[axis])>2*math.pi then return fail('orientation_invalid') end
    end
   end
-  if not check() then return false end
-  local verified,current=call(o.actor_key,o.actor)
-  if not verified then return false end
-  if current~=actor_key then return fail('actor_changed') end
-  if not check() then return false end
-  state='done';deadline=nil
+  local accepted,rejection=complete(true)
+  if not accepted then return false,rejection end
   local result={epoch=o.epoch,index=o.row.index,sequence=o.row.sequence,macro=macro,owner=owner,
    sector_macro=sector_macro,x=sample.x,y=sample.y,z=sample.z,
    game_before_request=query_game,game_before_pose=sample.game_before,game_after_pose=sample.game_after,
@@ -146,6 +163,7 @@ local function get_native_ffi()
     ffi.cdef[[
         bool IsGamePaused(void);
         bool IsPlayerValid(void);
+        UniverseID GetPlayerControlledShipID(void);
         bool IsValidComponent(UniverseID);
         bool IsComponentOperational(UniverseID);
         bool IsComponentClass(UniverseID, const char*);
@@ -196,9 +214,17 @@ function M.new_x4(cfg)
   assert(converted and original==converted)
   return component_key(converted)
  end
- local function live(actor,sector)
-  return C.IsValidComponent(actor) and C.IsComponentOperational(actor) and C.IsComponentClass(actor,'ship')
-   and C.IsValidComponent(sector) and C.IsComponentClass(sector,'sector') and C.GetContextByClass(actor,'sector',false)==sector
+ -- A sectorless context only qualifies when both native lookups identify
+ -- the same highway. Guard and exact component checks also fence ordinary poses.
+ local function context(actor,sector)
+  assert(o.guard() and C.IsValidComponent(actor) and C.IsComponentOperational(actor)
+   and C.IsComponentClass(actor,'ship') and C.IsValidComponent(sector) and C.IsComponentClass(sector,'sector'))
+  local current=C.GetContextByClass(actor,'sector',false)
+  if current==sector then return end
+  assert(cfg.recheck_superhighway_boundary and current==0 and C.GetPlayerControlledShipID()==actor)
+  local zone=C.GetContextByClass(actor,'zone',false)
+  assert(zone~=0 and zone==C.GetContextByClass(actor,'highway',false))
+  return zone
  end
  o.actor_key=actor_key
  o.hex_key=function(value) local id=X4LAN_RESOLVE_STRING.parse_hex(value);assert(id);return component_key(id) end
@@ -211,15 +237,25 @@ function M.new_x4(cfg)
  o.issue=function(screen,operation,args) return AddUITriggeredEvent(screen,operation,args)~=false end
  o.snapshot=function(actor,sector_hex)
   local a=X4LAN_RESOLVE_STRING.actor_u64(actor);local s=X4LAN_RESOLVE_STRING.parse_hex(sector_hex)
-  assert(a and s and o.guard() and live(a,s))
+  assert(a and s)
+  local highway_before=context(a,s)
   local capture_before=cfg.include_capture_time and cfg.capture_clock() or nil
-  local before=tonumber(C.GetCurrentGameTime());local p=C.GetObjectPositionInSector(a)
+  local before=tonumber(C.GetCurrentGameTime())
+  local p
+  if not highway_before then p=C.GetObjectPositionInSector(a) end
   local after=tonumber(C.GetCurrentGameTime())
   local capture_after=cfg.include_capture_time and cfg.capture_clock() or nil
-  assert(o.guard() and live(a,s))
-  return {sector_local=component_key(s),x=tonumber(p.x),y=tonumber(p.y),z=tonumber(p.z),
-   yaw=tonumber(p.yaw),pitch=tonumber(p.pitch),roll=tonumber(p.roll),game_before=before,game_after=after,
+  local highway_after=context(a,s)
+  if highway_before then assert(highway_before==highway_after) end
+  local result={sector_local=component_key(s),game_before=before,game_after=after,
    capture_before=capture_before,capture_after=capture_after}
+  if highway_after then
+   result.boundary=true
+  else
+   result.x=tonumber(p.x);result.y=tonumber(p.y);result.z=tonumber(p.z)
+   result.yaw=tonumber(p.yaw);result.pitch=tonumber(p.pitch);result.roll=tonumber(p.roll)
+  end
+  return result
  end
  return M.new(o)
 end
