@@ -63,18 +63,23 @@ class ParticipantTest(unittest.TestCase):
         self.participant.config = path
         self.participant.config_identity = (identity.st_dev, identity.st_ino)
 
-    def test_redacts_market_and_undock_options_in_installed_order(self):
-        for market, undock in ((False, False), (True, False), (False, True), (True, True)):
-            with self.subTest(market=market, undock=undock), tempfile.TemporaryDirectory() as directory:
-                source = CompanyPurchaseSource(trade_view=market, undock=undock)
-                try:
-                    purchase = company_purchase_config(source, 7354, {'epoch': 'a' * 32})
-                finally:
-                    source.close()
-                path = Path(directory) / 'config.lua'
-                self.write_owned_config(path, purchase)
-                self.participant.redact()
-                self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
+    def test_redacts_all_staged_purchase_options(self):
+        for market, sales in ((False, False), (True, False), (True, True)):
+            for undock in (False, True):
+                with self.subTest(market=market, sales=sales, undock=undock):
+                    self.check_staged_purchase_redaction(market, sales, undock)
+
+    def check_staged_purchase_redaction(self, market, sales, undock):
+        with tempfile.TemporaryDirectory() as directory:
+            source = CompanyPurchaseSource(trade_view=market, sales=sales, undock=undock)
+            try:
+                purchase = company_purchase_config(source, 7354, {'epoch': 'a' * 32})
+            finally:
+                source.close()
+            path = Path(directory) / 'config.lua'
+            self.write_owned_config(path, purchase)
+            self.participant.redact()
+            self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
 
     def test_malformed_or_duplicate_purchase_settings_leave_config_untouched(self):
         base = ',authority_company_purchase={epoch="' + 'a' * 32 + '",index=42,port=3100,lease="' + 'b' * 32 + '"'
@@ -82,6 +87,10 @@ class ParticipantTest(unittest.TestCase):
         invalid = {
             'false option': base + ',trade_view=false}',
             'duplicate option': base + ',trade_view=true,trade_view=true}',
+            'sales without market': base + ',sales=true}',
+            'false sales option': base + ',trade_view=true,sales=false}',
+            'duplicate sales option': base + ',trade_view=true,sales=true,sales=true}',
+            'sales after undock fields': base + ',trade_view=true' + undock_nonce + undock_request + ',sales=true}',
             'unpaired nonce': base + undock_nonce + '}',
             'reverse undock fields': base + undock_request + undock_nonce + '}',
             'view after undock fields': base + undock_nonce + undock_request + ',trade_view=true}',
