@@ -14,7 +14,11 @@ It accepted 38 stationary pilot samples and issued no pose write. Run-03
 restored the last clean source with the native position writer disabled.
 Bazzite entered the cockpit and received 2,653 service acknowledgements
 before the native Linux sampler reported a generic tick failure. Bazzite
-left cooperatively. The Windows operator was away and no WAN pilot flew.
+left cooperatively. Fedora confirmed the last-pilot checkpoint
+`checkpoint-803481d8df9f484cbd07bd590a342123` (SHA-256
+`a043498c333d4adf89027ff4e1158908f635aa85ddadb8ea7ef70b40d6afae76`).
+Control, file and movement services passed authenticated LAN checks after
+the save. The Windows operator was away and no WAN pilot flew.
 A new sampler build reports fixed error codes for the failing stage. Use it
 when the operator returns. Avoid repeating the idle-only run.
 
