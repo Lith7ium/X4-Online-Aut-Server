@@ -67,3 +67,40 @@ position writer had previously been exercised on a different two-ship world.
   LAN implementation offers separate health and hit mechanisms to investigate.
   The test did not measure the target's authoritative health on Fedora.
   [Movement message format](../src/authority/experimental_tcp_motion.py)
+
+## Private four-Pulsar trade preparation, 25 November 2026
+
+The provider-only preparation started from the confirmed Black Hole Sun V
+checkpoint `checkpoint-4184bc8dbb414f188d96b7e7caf08918`, save SHA-256
+`88f9f8ffba964a1da47761dac1a1ddd6e319ecd0d3d3d5b5afca813bc76d1f19`.
+The original private archive `.local/base-four-fighters-seed.zip` retained
+SHA-256 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`.
+The Company catalogue held the existing scout YWK-071 (1076) and four
+Pulsar Vanguards, BBS-493 (1077), EST-929 (1078), OVO-739 (1079) and
+XNA-002 (1080). The Pulsars started on a 3 km square in one zone.
+
+Both runs assigned one Company NPC captain to BBS-493 and added four
+energy cells. The four loadouts and all five catalogue entries passed
+the save checks. BBS-493 moved 5 m along the same zone's positive Z axis
+during engine updates. The other three Pulsars held their exact saved
+positions. Run01 on `04f409f6` wrote a marked candidate and stopped at
+the original exact-position check. Run02 on `561dc9db` started from a
+fresh copy of the original and passed the revised 5 m limit for
+BBS-493. It paused and confirmed
+`checkpoint-924ab73caa75491d97598b73b85de645`, save SHA-256
+`2966ae73ef1c0779684fb9dbd88cb031e89f44d31f874907d8648f9e809cae28`.
+The saved captain seed matched the native readback
+`-97168325741795052`.
+
+DMU-594 reported a free external S berth and an energy-cell bid of
+15.80 Cr per unit, with 9,507 units requested and a minimum of one.
+The ships stayed in space and the Company balance stayed at 10,000 Cr.
+This world now has one prepared seller. The trials booked zero sales.
+Their private evidence is under `.local/vanilla-four-trade-seed/`.
+
+The portable exporter wrote `.local/base-four-fighters-trade-seed.zip`,
+SHA-256 `290b8cd2308acfbd6bfa0d2ffd0eaaccbdf9d436c95e5d02cd16233fbb0e55cf`.
+An offline restore matched all ten payload files byte for byte and verified
+the save marker, captain, registry indices, loadouts and positions. The
+private archive includes only the seed manifest and the allowed recovery
+files. Operator logs and connection credentials stayed outside it.
