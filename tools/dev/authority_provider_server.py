@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 import authority_recovered_loopback_server as supervisor
-from authority_software_vulkan import display_namespace
+from authority_software_vulkan import PROVIDER_RENDER_SIZE, display_namespace
 from linux_gate_live import lavapipe_icd
 
 
@@ -35,9 +35,10 @@ def private_display(xvfb, xauth, xdpyinfo):
         ready, notify = os.pipe()
         process = None
         try:
+            width, height = PROVIDER_RENDER_SIZE
             with (Path(directory) / 'xvfb.log').open('wb') as log:
                 process = subprocess.Popen(
-                    [xvfb, '-displayfd', str(notify), '-screen', '0', '800x600x24',
+                    [xvfb, '-displayfd', str(notify), '-screen', '0', f'{width}x{height}x24',
                      '-nolisten', 'tcp', '-noreset', '-auth', str(authorization)],
                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, pass_fds=(notify,),
                     start_new_session=True)

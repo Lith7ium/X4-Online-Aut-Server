@@ -23,6 +23,7 @@ import xml.etree.ElementTree as ET
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'src'))
 sys.path.insert(0, str(REPO / 'tools/dev'))
+from authority_software_vulkan import PROVIDER_RENDER_SIZE
 from lockstep.launcher import extension
 from lockstep.launcher.profile import config_xml
 import linux_gate_live as live
@@ -64,7 +65,8 @@ def prepare_case(out, game, home, *, base_game_only=False, software_rendering=Fa
     (case / 'runtime').chmod(0o700)
     # Only the private CPU-rendered provider uses the unattended graphics preset.
     # Both paths avoid the color artifacts seen with chromatic aberration on RADV.
-    graphics = config_xml(800, 600, fast=software_rendering, disable_chromatic_aberration=True)
+    dimensions = PROVIDER_RENDER_SIZE if software_rendering else (800, 600)
+    graphics = config_xml(*dimensions, fast=software_rendering, disable_chromatic_aberration=True)
     (profile / 'config.xml').write_text(graphics, encoding='ascii')
     for name in ('root', 'steam.pid', 'sdk32', 'sdk64'):
         source = home / '.steam' / name

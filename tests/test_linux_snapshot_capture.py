@@ -207,7 +207,7 @@ class CaptureTests(unittest.TestCase):
             self.assertNotIn('<gfxquality>', default_graphics)
             _, cpu_profile, _, _ = capture.prepare_case(root / 'cpu-provider', game, home, software_rendering=True)
             graphics = (cpu_profile / 'config.xml').read_text()
-            self.assertEqual(graphics, capture.config_xml(800, 600, fast=True))
+            self.assertEqual(graphics, capture.config_xml(640, 360, fast=True))
             self.assertNotIn('<lodfactor>', graphics)
             self.assertNotIn('<effectdistance>', graphics)
 

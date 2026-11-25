@@ -5,6 +5,10 @@ import subprocess
 from pathlib import Path
 
 
+# Match the private X server to the CPU-rendered game's window.
+PROVIDER_RENDER_SIZE = (640, 360)
+
+
 def display_namespace(hostname):
     """Select the same local X11 identity that was written to private Xauthority."""
     if not isinstance(hostname, str) or re.fullmatch(r'x4-private-[a-f0-9]{16}', hostname) is None:
