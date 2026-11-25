@@ -1112,6 +1112,8 @@ def run(args):
                 'metrics': fixture_save_guards.metrics,
             }
         case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+        if software_icd is not None:
+            case_options['software_rendering'] = True
         case, profile, binds, lock = snapshot.prepare_case(out, game, home, **case_options)
         stage = out/'staged-profile'; stage.mkdir(mode=0o700)
         checkpoint, staged = stage_confirmed_recovery(source_store, stage, marker_script=marker_script)

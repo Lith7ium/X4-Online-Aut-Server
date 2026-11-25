@@ -96,9 +96,12 @@ FAST = {'gfxquality': 0, 'shaderquality': 0, 'shadows': 0, 'softshadows': 'false
         'pom': 'off', 'envmapprobes': 'low', 'frameratelimit': 'false', 'presentmode': 'immediate', 'nosound': 'true'}
 
 
-def config_xml(width, height, fast=False, borderless=False):
+def config_xml(width, height, fast=False, borderless=False, *, disable_chromatic_aberration=False):
     """borderless: X4's borderless window (it fills the screen and cannot be resized: a resize reloads X4's UI)."""
-    extra = ''.join(f'<{k}>{v}</{k}>' for k, v in FAST.items()) if fast else ''
+    settings = FAST if fast else {}
+    if disable_chromatic_aberration and not fast:
+        settings = {'chromaticaberration': 'false'}
+    extra = ''.join(f'<{key}>{value}</{key}>' for key, value in settings.items())
     return ('<?xml version="1.0"?><root><autosave>false</autosave><uisafemode>false</uisafemode>'
             f'<fullscreen>false</fullscreen><borderless>{"true" if borderless else "false"}</borderless><res_width>{width}</res_width>'
             f'<res_height>{height}</res_height><antialiasing>0</antialiasing><vsync>false</vsync>{extra}</root>\n')

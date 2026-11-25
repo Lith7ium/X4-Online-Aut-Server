@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'src'))
 sys.path.insert(0, str(REPO / 'tools/dev'))
 from lockstep.launcher import extension
+from lockstep.launcher.profile import config_xml
 import linux_gate_live as live
 import native_gate_scenarios as scenarios
 
@@ -54,20 +55,17 @@ def output_path(path):
     return out
 
 
-def prepare_case(out, game, home, *, base_game_only=False):
+def prepare_case(out, game, home, *, base_game_only=False, software_rendering=False):
     case = out / 'case'
     profile = case / 'home/.config/EgoSoft/X4/45841'
     for path in (profile / 'save', case / 'tmp', case / 'cache', case / 'data', case / 'runtime',
                  case / 'game', case / 'extensions', case / 'home/.steam'):
         path.mkdir(parents=True, exist_ok=True)
     (case / 'runtime').chmod(0o700)
-    # Match the comparison runner's isolated graphics workaround; normal
-    # graphics settings are neither read nor changed.
-    (profile / 'config.xml').write_text(
-        '<?xml version="1.0"?><root><autosave>false</autosave><uisafemode>false</uisafemode>'
-        '<fullscreen>false</fullscreen><borderless>false</borderless><res_width>800</res_width>'
-        '<res_height>600</res_height><antialiasing>0</antialiasing><vsync>false</vsync>'
-        '<chromaticaberration>false</chromaticaberration></root>\n')
+    # Only the private CPU-rendered provider uses the unattended graphics preset.
+    # Both paths avoid the color artifacts seen with chromatic aberration on RADV.
+    graphics = config_xml(800, 600, fast=software_rendering, disable_chromatic_aberration=True)
+    (profile / 'config.xml').write_text(graphics, encoding='ascii')
     for name in ('root', 'steam.pid', 'sdk32', 'sdk64'):
         source = home / '.steam' / name
         if source.exists():

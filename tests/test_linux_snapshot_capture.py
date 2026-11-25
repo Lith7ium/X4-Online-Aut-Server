@@ -202,6 +202,14 @@ class CaptureTests(unittest.TestCase):
             config = (case / 'extensions/x4_lan_lab/ui/config.lua').read_text()
             self.assertIn('native_gate_snapshot_fixed = false', config)
             self.assertIn('x4ls_autostart = "custom_creative"', config)
+            default_graphics = (profile / 'config.xml').read_text()
+            self.assertIn('<chromaticaberration>false</chromaticaberration>', default_graphics)
+            self.assertNotIn('<gfxquality>', default_graphics)
+            _, cpu_profile, _, _ = capture.prepare_case(root / 'cpu-provider', game, home, software_rendering=True)
+            graphics = (cpu_profile / 'config.xml').read_text()
+            self.assertEqual(graphics, capture.config_xml(800, 600, fast=True))
+            self.assertNotIn('<lodfactor>', graphics)
+            self.assertNotIn('<effectdistance>', graphics)
 
 
 if __name__ == '__main__':
