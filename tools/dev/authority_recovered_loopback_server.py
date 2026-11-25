@@ -96,7 +96,8 @@ def read_evidence(path, limit=65536):
 
 def verify_previous_source(store, checkpoint, profile, *, registry_status=False, witness_source=False,
                            require_registry_snapshot=False, return_supervisor_result=False,
-                           require_ready_registry_script=False, return_purchase_reference=False):
+                           require_ready_registry_script=False, return_purchase_reference=False,
+                           observe_registry=None):
     """Accept only a compatible, cleanly ended local supervisor generation.
 
     This is local provenance, not authentication or a concurrent-writer fence.
@@ -159,7 +160,8 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         raise ValueError('source checkpoint changed during verification')
     if require_registry_snapshot:
         from authority.registry_availability_evidence import verify_join_snapshot
-        saved_evidence = verify_join_snapshot(checkpoint)
+        observe = {'observe_universe': observe_registry} if observe_registry is not None else {}
+        saved_evidence = verify_join_snapshot(checkpoint, **observe)
         registry_snapshots.verify_previous_receipt(result, checkpoint, saved_evidence)
         reference = result.get('company_purchase_ledger')
         verify_purchase_ledger(checkpoint, reference, registry_epoch=saved_evidence['epoch'])
@@ -677,7 +679,7 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
 
 
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
-          motion_service=None, pose_trial=None, purchases=None):
+          motion_service=None, pose_trial=None, purchases=None, npc_source=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -731,6 +733,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             if session.pending is None and session.state == 'running':
                 purchases.step()
         if motion_service is not None:
+            if npc_source is not None:
+                npc_source.poll()
             motion_service.poll()
             if pose_trial is not None and motion_service.running:
                 pose_trial.poll(motion_service)
@@ -917,6 +921,14 @@ def run(args):
     company_motion = getattr(args, 'company_motion', False)
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    npc_args = getattr(args, 'observe_registered_npc', None)
+    npc_target = npc_source = None
+    if npc_args is not None:
+        if not company_motion or getattr(args, 'base_game_only', False) is not True:
+            raise ValueError('registered NPC observation requires pinned Company motion and the base game')
+        from authority_registered_npc_source import NpcCheckpointTarget, RegisteredNpcSource
+
+        npc_target = NpcCheckpointTarget(*npc_args)
     company_purchases = getattr(args, 'company_purchases', False)
     if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
         raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
@@ -1119,7 +1131,8 @@ def run(args):
                                  or getattr(args, 'registry_enroll', False) or bool(witness_phase)),
                 witness_source=witness_phase == 'verify', require_registry_snapshot=require_snapshot,
                 return_supervisor_result=bootstrap_snapshot, require_ready_registry_script=bootstrap_snapshot,
-                return_purchase_reference=require_snapshot)
+                return_purchase_reference=require_snapshot,
+                **({'observe_registry': npc_target.observe} if npc_target is not None else {}))
         bootstrap_status = None
         first_capture_state = None
         if bootstrap_snapshot:
@@ -1324,6 +1337,9 @@ def run(args):
 
             fleet_provider = NativeFleetOrderProvider()
             protected.extend(fleet_provider.install(case))
+        if npc_target is not None:
+            npc_source = RegisteredNpcSource(npc_target.confirmed(saved_evidence))
+            protected.extend(npc_source.install(case))
         protected = list(dict.fromkeys(protected))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
@@ -1403,7 +1419,7 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
-        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider, fleet_provider)):
+        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider, fleet_provider, npc_source)):
             game_stat = (game/'X4').stat()
             process_identity = {'pid': identity[0], 'start_ticks': identity[1],
                                 'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}
@@ -1413,6 +1429,8 @@ def run(args):
             market_provider.bind(process_identity, check)
         if fleet_provider is not None:
             fleet_provider.bind(process_identity, check)
+        if npc_source is not None:
+            npc_source.bind(process_identity)
         if pose_channel is not None:
             pose_channel.bind(process_identity, check)
             if pose_cold:
@@ -1567,6 +1585,18 @@ def run(args):
                 application_drops = {}
                 pose_trial.report['application_drops'] = application_drops
             motion_service = CompanyMotionService(application_drops=application_drops)
+        if npc_source is not None:
+            npc = npc_source.target
+            component = f"[0x{int(npc['actor'], 16):x}]"
+
+            def npc_unreserved():
+                with session._lock:
+                    session._live()
+                    return (registry_snapshot_state.latest_receipt['checkpoint_id'] == checkpoint.checkpoint_id
+                            and not any(ship.ship_index == npc['index'] or ship.component_ref == component
+                                        for ship in session._reserved_ships(checkpoint)))
+
+            npc_source.attach(motion_service, npc_unreserved)
         undock_capability = {'company_undock': True} if company_undock else {}
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
                                          motion_service=motion_service, company_purchases=company_purchases,
@@ -2096,7 +2126,7 @@ def run(args):
 
         service_deadline = None if getattr(args, 'persistent', False) else deadline
         result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
-                            purchases=purchases, should_stop=lambda: stop[0] or gateway_stopped()))
+                            purchases=purchases, npc_source=npc_source, should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -2150,6 +2180,12 @@ def run(args):
         if control is not None and not (control._closed or control._failed):
             try: control.close()
             except BaseException as error: errors.append('control cleanup: '+type(error).__name__)
+        if npc_source is not None:
+            try:
+                npc_source.close()
+                result['registered_npc_observation'] = npc_source.stats()
+            except (OSError, RuntimeError, ValueError) as error:
+                errors.append('registered NPC source cleanup: ' + type(error).__name__)
         if motion_service is not None:
             result['company_motion_samples_received'] = motion_service.accepted_samples
             result['company_motion_samples_with_velocity'] = motion_service.samples_with_velocity
@@ -2258,6 +2294,8 @@ def run(args):
                     market_provider.archive_cue(case, out)
                 if fleet_provider is not None:
                     fleet_provider.archive_cue(case, out)
+                if npc_source is not None:
+                    npc_source.archive_cue(out)
                 if trade_mode:
                     trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:
@@ -2331,6 +2369,8 @@ def main(argv=None, *, display_hostname=None):
                        help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the separate participant-bound TLS movement channel')
+    parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),
+                        help='observe one confirmed base-game NPC during the first running movement window')
     parser.add_argument('--company-purchases', action='store_true',
                         help='enable Company purchases for a verified company ship over pinned TLS')
     parser.add_argument('--company-fleet-orders', action='store_true',

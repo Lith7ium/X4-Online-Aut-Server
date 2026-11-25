@@ -85,6 +85,8 @@ def main(argv=None):
                         help='keep accepting pilots after the last one leaves, until the operator stops the server')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
+    parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),
+                        help='enable one read-only registered NPC sample stream during an internal run')
     parser.add_argument('--company-purchases', action='store_true',
                         help='enable Company purchases and require company ship selection and pinned TLS')
     parser.add_argument('--company-fleet-orders', action='store_true',
@@ -132,6 +134,10 @@ def main(argv=None):
         parser.error('--company-fleet-orders requires --company-purchases and pinned TLS')
     if args.company_undock_test and (not args.company_purchases or not server_flags):
         parser.error('--company-undock-test requires --company-purchases and pinned TLS')
+    if args.observe_registered_npc is not None:
+        if not (args.company_motion and args.base_game_only and server_flags):
+            parser.error('--observe-registered-npc requires --company-motion, --base-game-only and pinned TLS')
+        server_flags.extend(('--observe-registered-npc', *args.observe_registered_npc))
     if server_flags or args.require_company_ship or args.company_motion or args.company_purchases:
         if args.company_shuttle_pair:
             parser.error('--company-shuttle-pair uses an isolated fixture with no TLS or Company hosting options')

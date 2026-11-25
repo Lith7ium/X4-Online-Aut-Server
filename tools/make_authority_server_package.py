@@ -59,6 +59,8 @@ REQUIRED = {
     'tools/dev/authority_identity_fixture.xml',
     'tools/dev/authority_loopback_simulated_client.py',
     'tools/dev/authority_provider_server.py',
+    'tools/dev/authority_registered_npc_source.py',
+    'tools/dev/authority_registered_npc_source.lua',
     'tools/dev/authority_portable_seed.py',
     'tools/dev/authority_software_vulkan.py',
     'tools/run_authority_server.sh',
