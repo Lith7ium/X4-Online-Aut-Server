@@ -22,22 +22,18 @@ The standard HUD and map readers can match a crewed ship and return a
 indexed and multi-pilot HUD and radar readers exclude ships with a
 locally active or assigned captain. The native hull adapter rechecks
 `pilot`, `assignedpilot` and `assignedaipilot` before writing. The
-separate provider position cue also rejects ships with an active or
-assigned pilot.
+opt-in provider position cue can now follow a ship in its current sector
+after verifying its original idle NPC captain against the join checkpoint.
 [Standard reader](../src/authority/lua/company_observer_target.lua) ·
 [Cockpit reader](../src/authority/lua/company_cockpit_observer.lua) ·
 [Cockpit MD](../src/authority/md/company_cockpit_observer.xml) ·
 [Hull adapter](../src/authority/lua/company_hull_playback_x4.lua) ·
 [Provider pose cue](../src/authority/md/company_ship_pose.xml)
 
-A private server trial moved one ship with its idle NPC captain under
-additional identity and order checks. The retained-captain berth trial
-also confirmed physical docking with the original captain. Those
-experiments leave regular flight playback unchanged. A focused
-read-only receiver check could compare the three local crew fields
-and a standard HUD receipt against the indexed route for the same
-copied ship.
-[Private pose trial](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#one-server-pose-after-departure-with-the-original-npc-captain) ·
+In a private server experiment X4 applied two position updates to the same
+ship after undocking, kept its captain aboard, and saved the second position.
+A separate experiment confirmed physical docking with the original captain.
+[Two server moves and saved position](AUTHORITY-TWO-IDLE-NPC-POSES-20261125.md) ·
 [Berth evidence](AUTHORITY-COMPANY-BERTH-RETAINED-CAPTAIN-20261125.md)
 
 ## Native observer with a nearby Company NPC captain

@@ -82,6 +82,19 @@ at the helm and WRN-302 alone in the bay. The alternate-bay trial used
 an uncrewed ship. Transmitting a newly observed landing from a pilot
 remains open. [Crewed berth trial](AUTHORITY-COMPANY-BERTH-RETAINED-CAPTAIN-20261125.md)
 
+The private Linux provider moved the undocked WRN-302 twice with its
+original idle captain PYN-740 aboard. The final saved position was within
+1 mm of the second target. Both targets came from a test driver.
+The regular opt-in provider in `ee4ed8f5` can now check the saved
+captain's identity when applying same-sector pilot motion. [Provider move and save](AUTHORITY-TWO-IDLE-NPC-POSES-20261125.md)
+
+A separate native Bazzite observer saw WRN-302 at 800 m. The ordinary
+HUD identified the ship while the indexed radar reader declined it because
+of the NPC captain at its helm. WRN-302 moved 46.44 m locally during
+the observation with no playback writer. Remote flight with that captain
+still needs a way to coordinate local simulation on the observing client.
+[Native cockpit observation](AUTHORITY-COMPANY-FLIGHT-RETAINED-CAPTAIN-20261125.md)
+
 A pre-booking refusal for a busy provider, a missing captain or an
 unconfirmed trading berth now reaches the cockpit. The pilot can open a
 fresh offer after resolving the cause. The old Confirm button cannot
