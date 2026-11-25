@@ -1,11 +1,14 @@
--- Explicit single-fixture ownership intervention; no position/clock protocol changes.
+-- One explicitly selected test ship per process; the controller owns only its temporary Wait.
 -- The caller must stop/drain playback before release. No AI-stack restoration claim.
 -- A 30-second finite Wait has a conservative 29-second game-time lifetime here.
 -- Release observes two advancing samples, separated by at least 0.1 game seconds;
 -- it does not reproduce native08's seven-sample, six-second observation span.
 -- Zero linear velocity is requested, never reported as a measured native value.
 local M = {}
-local EPOCH = '4ba7be438ebb04ec5bb85fdb95b5a488'
+local fixtures = {
+  recovery_enh_870 = {epoch = '4ba7be438ebb04ec5bb85fdb95b5a488', index = 1318},
+  recovery_mfq_419 = {epoch = '26a1a365c66788aa06f0aeb9e18ff62e', index = 943},
+}
 local SCREEN = 'X4AuthoritySavedReplicaControl'
 local registered = false
 local function finite(value)
@@ -19,8 +22,10 @@ function M.new(options)
     return nil, 'disabled'
   end
   local binding = options.binding
-  assert(type(binding) == 'table' and binding.index == 1318 and binding.epoch == EPOCH and
-  binding.sector_macro == 'cluster_06_sector001_macro')
+  local fixture_name = options.fixture or 'recovery_enh_870'
+  local fixture = assert(fixtures[fixture_name], 'unknown replica control fixture')
+  assert(type(binding) == 'table' and binding.index == fixture.index and binding.epoch == fixture.epoch and
+    binding.sector_macro == 'cluster_06_sector001_macro')
   for _, key in ipairs({'actor_key', 'sector_key', 'zone_key'}) do
     assert(decimal(binding[key]))
   end
@@ -80,7 +85,7 @@ function M.new(options)
     if operation == 'Prepare' or operation == 'Hold' or operation == 'Release' then
       mutation_possible = true
     end
-    return options.issue(operation, {request_id = pending, epoch = identity.epoch, index = identity.index,
+    return options.issue(operation, {request_id = pending, fixture = fixture_name, epoch = identity.epoch, index = identity.index,
       actor_key = identity.actor_key, sector_key = identity.sector_key, zone_key = identity.zone_key, owner = options.nonce, request_sequence = serial}) == true and check()
   end
   local function operation(callback)
@@ -238,22 +243,16 @@ function M.new_x4(options)
   if type(options) ~= 'table' or options.enabled ~= true then
     return nil, 'disabled'
   end
-  assert(options.fixture == 'recovery_enh_870' and type(options.resolve) == 'table' and
+  assert(fixtures[options.fixture] and type(options.resolve) == 'table' and
   options.resolve == X4LAN_RESOLVE_STRING and type(options.resolve.parse_hex) == 'function' and
   type(options.resolve.actor_u64) == 'function')
   assert(not registered and type(RegisterEvent) == 'function' and type(AddUITriggeredEvent) == 'function')
   assert(type(X4LAN_SAVED_MOTION_APPLY) == 'table')
   local ffi = require('ffi')
-  local reader = assert(X4LAN_SAVED_MOTION_APPLY.new_playback_x4({enabled = true, fixture = options.fixture,
-    test_profile = '45841', expected_save_path = options.expected_save_path, resolve = options.resolve,
-    binding = options.binding, max_step = 50, max_age = 1, guard = options.guard,
-    buffer = X4LAN_MOTION_BUFFER, record = function()
-      return true
-    end, fault = options.fault,
-    playback = {new = function(callbacks)
-        -- Read-only capabilities: no native writer/controller escapes this factory.
-        return {read = callbacks.read, guard = callbacks.guard, game = callbacks.game}
-      end}}))
+  local reader = assert(X4LAN_SAVED_MOTION_APPLY.new_inspector_x4({
+    enabled = true, fixture = options.fixture, test_profile = '45841', expected_save_path = options.expected_save_path,
+    resolve = options.resolve, binding = options.binding, guard = options.guard,
+  }))
   local function key(value)
     local identifier = options.resolve.actor_u64(value)
     return identifier and tostring(identifier):gsub('ULL$', '') or nil
@@ -279,11 +278,8 @@ function M.new_x4(options)
   native_options.guard = reader.guard
   native_options.game = reader.game
   native_options.inspect = function()
-    if reader.guard() ~= true then
-      return false
-    end
-    local pose = reader.read() -- Reuses fixed ENH-870, player, docking, profile and reference fences.
-    return type(pose) == 'table' and reader.guard() == true
+    -- read() checks the local ship, sector, zone and pilot exclusion before and after reading its pose.
+    return type(reader.read()) == 'table'
   end
   native_options.issue = function(operation, arguments)
     local actor = reference(arguments.actor_key)

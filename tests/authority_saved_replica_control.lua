@@ -9,7 +9,17 @@ local options={enabled=true,binding={actor_key='41',sector_key='43',zone_key='45
  clock=function()return now end,game=function()return game end,guard=function()return healthy end,
  inspect=function()return true end,issue=function(action,args)requests[#requests+1]={action=action,args=args};return true end,
  fault=function(reason,uncertain)faults[#faults+1]={reason,uncertain}end}
+if mode=='mfq' or mode=='mfq_mismatched' then
+ options.fixture='recovery_mfq_419'
+ if mode=='mfq_mismatched' then assert(not pcall(module.new,options));return end
+ options.binding.index=943;options.binding.epoch='26a1a365c66788aa06f0aeb9e18ff62e'
+end
 local controller=assert(module.new(options))
+if mode=='mfq' then
+ assert(controller:prepare() and #requests==1)
+ assert(requests[1].args.fixture=='recovery_mfq_419' and requests[1].args.index==943)
+ return
+end
 local function step(kind,action,advance)
  local last=requests[#requests];assert(last and (not action or last.action==action))
  assert(controller:event({request_id=last.args.request_id,kind=kind}))

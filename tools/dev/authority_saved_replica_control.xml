@@ -19,13 +19,16 @@
     <set_value name="$request" exact="event.param3" />
     <include_actions ref="Guard" />
     <do_if value="$valid and not State.$faulted">
-     <do_if value="not State.$used and @$ship.order.exists and $request.$owner?">
+     <do_if value="not State.$used and @$ship.order.exists and $request.$owner? and ($fixture_code != 'MFQ-419' or $ship.order.state == orderstate.started)">
       <set_value name="State.$used" exact="true" />
       <set_value name="State.$ship" exact="$ship" />
       <set_value name="State.$sector" exact="$ship.sector" />
       <set_value name="State.$zone" exact="$ship.parent" />
       <set_value name="State.$owner" exact="$request.$owner" />
       <set_value name="State.$prior_order" exact="$ship.order" />
+      <do_if value="$fixture_code == 'MFQ-419'">
+       <set_value name="State.$pilot" exact="$ship.pilot" />
+      </do_if>
       <create_order object="$ship" id="'Wait'" immediate="true" name="State.$owned_wait">
        <param name="timeout" value="30s" />
        <param name="skipalignment" value="true" />
@@ -201,12 +204,19 @@
     <set_value name="$valid" exact="false" />
     <do_if value="$request.$request_id? and $request.$request_sequence? and $request.$owner? and $request.$epoch? and $request.$index? and $request.$actor? and $request.$sector? and $request.$zone?">
      <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and md.X4AuthorityShipRegistry.State.$faulted?">
-      <do_if value="not md.X4AuthorityShipRegistry.State.$faulted and $request.$epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and $request.$epoch == md.X4AuthorityShipRegistry.State.$epoch and $request.$index == 1318 and md.X4AuthorityShipRegistry.State.$last ge 1318">
-       <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{1318}" />
-       <do_if value="@$ship.isoperational and $ship.isclass.ship and @$ship == @$request.$actor and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == 1318">
-        <do_if value="@$ship.idcode == 'ENH-870' and @$ship.macro.id == 'ship_arg_m_trans_container_02_b_macro' and @$ship.owner.id == 'antigone'">
+      <set_value name="$fixture_code" exact="null" />
+      <do_if value="(not $request.$fixture? or $request.$fixture == 'recovery_enh_870') and $request.$epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and $request.$index == 1318">
+       <set_value name="$fixture_code" exact="'ENH-870'" />
+      </do_if>
+      <do_elseif value="@$request.$fixture == 'recovery_mfq_419' and $request.$epoch == '26a1a365c66788aa06f0aeb9e18ff62e' and $request.$index == 943">
+       <set_value name="$fixture_code" exact="'MFQ-419'" />
+      </do_elseif>
+      <do_if value="$fixture_code and not md.X4AuthorityShipRegistry.State.$faulted and $request.$epoch == md.X4AuthorityShipRegistry.State.$epoch and md.X4AuthorityShipRegistry.State.$last ge $request.$index">
+       <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$request.$index}" />
+       <do_if value="@$ship.isoperational and $ship.isclass.ship and @$ship == @$request.$actor and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $request.$index">
+        <do_if value="@$ship.idcode == $fixture_code and @$ship.macro.id == 'ship_arg_m_trans_container_02_b_macro' and @$ship.owner.id == 'antigone'">
          <do_if value="@$ship.sector == @$request.$sector and @$ship.parent == @$request.$zone and @$ship.parent.isclass.zone and @$ship.sector.macro.id == 'cluster_06_sector001_macro'">
-          <do_if value="$ship != player.controlled and $ship != player.ship and $ship != player.occupiedship and $ship != player.container and not $ship.dock.exists and not $ship.isinternallystored">
+          <do_if value="$ship != player.controlled and $ship != player.ship and $ship != player.occupiedship and $ship != player.container and not $ship.dock.exists and not $ship.isinternallystored and ($fixture_code != 'MFQ-419' or (@$ship.pilot.exists and $ship.pilot != player.entity and (not State.$used or $ship.pilot == @State.$pilot)))">
            <do_if value="$request.$request_sequence ge 1 and $request.$request_sequence == ($request.$request_sequence)i and ((not State.$used and $request.$request_sequence == 1) or (State.$used and $request.$owner == State.$owner and $request.$request_sequence == State.$last_request + 1))">
             <set_value name="State.$last_request" exact="$request.$request_sequence" />
             <set_value name="$valid" exact="true" />

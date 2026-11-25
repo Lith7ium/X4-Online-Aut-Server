@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class SavedReplicaControlTests(unittest.TestCase):
     def test_controller_contracts(self):
         for case in ('success','disabled','invalid_fixture','pre_guard','duplicate','wrong_request',
-                     'wrong_order','timeout','backward_game','identity','expiry','revalidate','late'):
+                     'mfq','mfq_mismatched','wrong_order','timeout','backward_game','identity','expiry','revalidate','late'):
             with self.subTest(case=case):
                 result = subprocess.run(['luajit', 'tests/authority_saved_replica_control.lua'],
                     cwd=ROOT, env=dict(os.environ, CONTROL_CASE=case), capture_output=True, text=True, timeout=5)
@@ -39,6 +39,10 @@ class SavedReplicaControlTests(unittest.TestCase):
         for required in ('ENH-870','antigone','State.$byship','State.$prior_order','orderstate.started',
                          '30s','vector.[0m, 0m, 0m]','player.container'):
             self.assertIn(required, text)
+        self.assertIn("$request.$epoch == '26a1a365c66788aa06f0aeb9e18ff62e' and $request.$index == 943", text)
+        prepare = root.find(".//cue[@name='Prepare']//create_order/..")
+        self.assertIn("$ship.order.state == orderstate.started", prepare.get('value'))
+        self.assertIn('$ship.pilot == @State.$pilot', text)
         self.assertFalse(root.findall('.//create_ship'))
         self.assertFalse(root.findall('.//set_object_position'))
 
