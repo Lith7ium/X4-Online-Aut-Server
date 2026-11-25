@@ -333,3 +333,24 @@ both contained 10,000 Cr in the Company account and zero water on WRN.
 The ordinary provider requires an assigned Company NPC pilot before placing
 a trade order. The player-side test above establishes which berth a human
 pilot occupies and what they selected in the stock menu.
+
+### Purchase with an assigned Company captain
+
+A separate native Linux provider loaded a copy of the same docked world. A
+test fixture assigned Company captain PYN-740 to WRN-302 at its existing berth
+on BIM-169. A simulated pilot used the authenticated control connection to
+request two units of water. The server rejected the first price. The pilot
+then confirmed a new request at X4's quoted unit price of 58.48 Cr.
+
+The stock trade journal recorded a debit of 116 Cr. Both the authenticated
+receipt and the confirmed world saved after disconnect contained 9,884 Cr
+and two units of water on WRN. The source world contained 10,000 Cr and
+zero water. The receipt reports the observed debit separately from the
+116.96 Cr obtained by multiplying the quote by the quantity. This run
+establishes the observed settlement for this purchase.
+
+Checkpoint `checkpoint-1dac0e4056eb41739aeecd30dbb1f1ca` has SHA-256
+`cec4cedd6c3aa39ae189163f9baae2fe3d03e7fc7fa09923eb33ce34d32914d5`.
+It retains PYN-740 as the assigned AI pilot on WRN, at the same trading
+berth. A purchase initiated in a real player's cockpit and settled in a
+second running X4 instance remains to be verified.

@@ -353,11 +353,14 @@ The Windows pilot uses `-BaseGameOnly -CompanyMotion -CompanyShipIndex 1074
 Each cockpit follows the specified other pilot. For a later checkpoint, use
 the two indices shown in the offered ship list.
 
-To follow up to three visible other Company pilots automatically in one cockpit
-(selected HUD target plus nearby radar-visible pilots, preserving independent
-map interest and per-ship loss/generation/reacquisition state), pass
+To follow up to three Company ships in one cockpit, pass
 `--company-cockpit-playback` on Linux or `-CompanyCockpitPlayback` on Windows
-together with `--company-motion` / `-CompanyMotion` instead of a single index.
+alongside the Company motion option. The cockpit gives the selected HUD target
+priority, then fills the available slots with nearby eligible ships on radar.
+A nearby idle Company ship can take a slot ahead of a more distant pilot.
+The observer currently requires an empty NPC helm and no assigned captain on
+each observed ship. Map interest and the five-second motion timeout operate
+independently of the other cockpit slots.
 
 1. Join both cockpits and wait for the server to resume. Keep both ships in the
    same sector, within radar range, and near their starting positions.
