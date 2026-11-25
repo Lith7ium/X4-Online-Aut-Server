@@ -215,7 +215,9 @@ class CompanyMotionSourceTest(unittest.TestCase):
             observer.receive(['VIEW', slot, '1', epoch, 'sector_a', '943', '0xab', 'MFQ-419'])
         sample = dict(version=3, epoch=epoch, index=943, sequence=7, generation=generation, sector_macro='sector_a',
                       source_time=31.0, capture_time=113.0, x=1.0, y=2.0, z=3.0, real_velocity=None)
-        with patch('authority.company_motion_observer.time.monotonic', return_value=29.0):
+        # Receipt uses the native capture clock: time.monotonic on Linux, QPC on Windows.
+        with patch('authority.company_motion_observer.time.monotonic', return_value=29.0), \
+                patch('authority.company_motion_observer.time.perf_counter', return_value=29.0):
             observer.snapshot(sample)
         rows = {packet.split('|')[1]: packet.split('|') for packet in packets if packet.startswith('REMOTE|')}
         self.assertEqual((len(rows['cockpit']), rows['cockpit'][-2:]), (17, ['113', '29']))
