@@ -6,12 +6,13 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tests')]
 from authority.checkpoints import CheckpointStore
 from authority.experimental_local_host import ExperimentalLocalHost
+from authority.experimental_tcp_job_delivery import ExperimentalTCPJobDelivery
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_tcp_participants import ExperimentalTCPParticipants
 from authority.save_transfer import SaveOffers
@@ -23,7 +24,9 @@ from test_authority_experimental_local_host import Engine
 from test_authority_trusted_marker_load_session import claim_for
 
 
-class ParticipantTCPTest(unittest.TestCase):
+class ParticipantTCPFixture(unittest.TestCase):
+    retire_disconnected_on_resume = False
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name); (root/'store').mkdir()
@@ -35,7 +38,10 @@ class ParticipantTCPTest(unittest.TestCase):
         self.control = ExperimentalTCPControl(TrustedMarkerLoadSession(self.world, enabled=True), enabled=True)
         self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
         self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
-        self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3)
+        options = {}
+        if self.retire_disconnected_on_resume:
+            options['retire_disconnected_on_resume'] = True
+        self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3, **options)
         self.world._participants = self.participants
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.bind(('127.0.0.1', 0)); self.listener.listen(3); self.addCleanup(self.listener.close)
@@ -53,7 +59,7 @@ class ParticipantTCPTest(unittest.TestCase):
         bound = decode_bound_offer(client.recv(8192).rstrip(b'\n'))
         client.sendall(encode_load_claim(claim_for(bound.offer))+b'\n'); self.host.tick(.1)
 
-    def responder(self, client, mode='ok'):
+    def responder(self, client, mode='ok', *, on_command=None):
         records = []; stop = threading.Event()
         self.receipt_sent = threading.Event()
         client.settimeout(.1)
@@ -69,6 +75,8 @@ class ParticipantTCPTest(unittest.TestCase):
                     raw, data = data.split(b'\n', 1); item = json.loads(raw)
                     if item['kind'] == 'accepted': continue
                     records.append(item)
+                    if on_command is not None:
+                        on_command(item)
                     if mode == 'timeout': continue
                     if mode == 'disconnect': client.shutdown(socket.SHUT_RDWR); return
                     answer = dict(item, kind='participant_receipt', status='confirmed')
@@ -78,7 +86,11 @@ class ParticipantTCPTest(unittest.TestCase):
                     payload = json.dumps(answer, separators=(',', ':')).encode()+b'\n'
                     if mode == 'duplicate': payload += payload
                     try:
-                        client.sendall(payload[:8]); client.sendall(payload[8:])
+                        client.sendall(payload[:8])
+                        if mode == 'incomplete_fin':
+                            client.shutdown(socket.SHUT_WR)
+                            return
+                        client.sendall(payload[8:])
                         if mode == 'fin_after': client.shutdown(socket.SHUT_WR)
                         self.receipt_sent.set()
                     except OSError: return
@@ -89,6 +101,8 @@ class ParticipantTCPTest(unittest.TestCase):
         self.addCleanup(finish)
         return records
 
+
+class ParticipantTCPTest(ParticipantTCPFixture):
     def test_pause_resume_and_socket_handle_binding(self):
         client = self.connect(); self.offer_and_claim(client)
         records = self.responder(client)
@@ -135,9 +149,211 @@ class ParticipantTCPTest(unittest.TestCase):
         with self.assertRaises(socket.timeout): client.recv(1)
 
 
+class ResumeDisconnectTest(ParticipantTCPFixture):
+    retire_disconnected_on_resume = True
+
+    def assert_departure_saved(self, initial):
+        self.assertEqual(self.world.session.pending.operation, 'pause')
+        self.assertEqual(self.world.session.players, ())
+        self.assertEqual(len(self.control._peers), 0)
+        self.host.tick()
+        self.host.tick()
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertIsNone(self.world.session.pending)
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
+        saved = self.store.latest_marked_confirmed()
+        self.assertNotEqual(initial.checkpoint_id, saved.checkpoint_id)
+        return saved
+
+    def test_last_pilot_closes_before_resume_command_is_written(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        initial = self.store.latest_marked_confirmed()
+        resume = self.engine.resume
+
+        def close_after_native_resume():
+            resume()
+            pilot.shutdown(socket.SHUT_WR)
+
+        with patch.object(self.engine, 'resume', side_effect=close_after_native_resume):
+            self.host.tick(.1)
+        self.assert_departure_saved(initial)
+        with pilot.makefile('rb') as stream:
+            self.assertEqual(json.loads(stream.readline())['kind'], 'accepted')
+            self.assertEqual(stream.read(), b'')
+
+    def test_last_pilot_closes_after_resume_command_and_rejoins_with_new_handle(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        initial = self.store.latest_marked_confirmed()
+        peer = next(iter(self.control._peers))
+        handle = self.control._peers[peer]['handle']
+        motion = Mock()
+        self.control._motion_service = motion
+        records = self.responder(pilot, 'disconnect')
+        self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume'])
+        motion.transport_lost.assert_called_once_with(handle)
+        self.control._motion_service = None
+        with self.assertRaisesRegex(ValueError, 'unknown or stale connection context'):
+            self.control._session._peer(peer)
+        saved = self.assert_departure_saved(initial)
+
+        replacement = self.connect()
+        replacement_handle = self.world.session.players[0][0]
+        self.assertGreater(replacement_handle, handle)
+        self.assertEqual(self.world.session.ready_players, ())
+        replacement.sendall(offer_request())
+        self.host.tick(.1)
+        self.host.tick(.1)
+        offer = decode_bound_offer(replacement.recv(8192).rstrip(b'\n')).offer
+        self.assertEqual(offer.checkpoint_id, saved.checkpoint_id)
+        self.assertEqual(offer.connection_handle, replacement_handle)
+        with self.assertRaisesRegex(ValueError, 'unknown or stale connection handle'):
+            self.world.disconnect(handle)
+        self.assertEqual(self.world.session.players[0][0], replacement_handle)
+        replacement.sendall(encode_load_claim(claim_for(offer)) + b'\n')
+        self.host.tick(.1)
+        records = self.responder(replacement)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'running')
+        self.assertEqual([record['connection_handle'] for record in records], [replacement_handle])
+
+    def test_sibling_closes_while_survivor_confirms_resume(self):
+        survivor = self.connect()
+        leaving = self.connect()
+        self.offer_and_claim(survivor)
+        self.offer_and_claim(leaving)
+        initial = self.store.latest_marked_confirmed()
+        survivor_handle = self.world.session.ready_players[0][0]
+        records = self.responder(survivor, on_command=lambda _: leaving.shutdown(socket.SHUT_WR))
+        self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume'])
+        self.assertEqual([handle for handle, _ in self.world.session.ready_players], [survivor_handle])
+        self.assertEqual(self.world.session.state, 'running')
+        self.assertIsNone(self.world.session.pending)
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume'])
+        survivor.shutdown(socket.SHUT_WR)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.pending.operation, 'save')
+        self.host.tick()
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
+        self.assertNotEqual(initial.checkpoint_id, self.store.latest_marked_confirmed().checkpoint_id)
+
+    def test_last_pilot_closes_after_valid_resume_receipt(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        initial = self.store.latest_marked_confirmed()
+        peer = next(iter(self.control._peers))
+        records = self.responder(pilot, 'fin_after')
+        read = socket.socket.recv
+
+        def read_receipt(sock, *args):
+            data = read(sock, *args)
+            if sock is peer and b'\n' in data:
+                self.assertTrue(self.receipt_sent.wait(.2))
+            return data
+
+        with patch.object(socket.socket, 'recv', read_receipt):
+            self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume'])
+        self.assert_departure_saved(initial)
+
+    def test_resume_still_fences_if_departing_pilot_had_delegated_authority(self):
+        delivery = ExperimentalTCPJobDelivery(self.host, enabled=True)
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        handle = self.world.session.ready_players[0][0]
+        delegated_owner = Mock()
+        delivery._client_authority_selected_owners = {handle: delegated_owner}
+        self.responder(pilot, 'disconnect')
+        with self.assertRaises(RuntimeError):
+            self.host.tick(.1)
+        delegated_owner._revoke_for_disconnect.assert_called_once_with()
+        self.assertTrue(delivery._failed)
+        self.assertTrue(self.host._failed)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+    def test_opt_in_keeps_non_eof_and_truncated_receipts_fatal(self):
+        for mode in ('wrong_id', 'wrong_epoch', 'duplicate', 'timeout', 'incomplete_fin'):
+            with self.subTest(mode=mode):
+                with ParticipantCase(mode, retire_disconnected_on_resume=True) as case:
+                    case.exercise()
+
+    def test_resume_opt_in_keeps_pause_receipts_strict(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+
+        def close_on_pause(command):
+            if command['operation'] == 'pause':
+                pilot.shutdown(socket.SHUT_WR)
+
+        records = self.responder(pilot, on_command=close_on_pause)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'running')
+        self.connect()  # the arrival requests a pause
+        with self.assertRaises(RuntimeError):
+            self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume', 'pause'])
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+    def test_failed_partial_resume_write_still_fences(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        peer = next(iter(self.control._peers))
+        write = socket.socket.send
+        resume_started = False
+        partial_write = False
+        resume = self.engine.resume
+
+        def begin_resume():
+            nonlocal resume_started
+            resume()
+            resume_started = True
+
+        def fail_resume_write(sock, data, *args):
+            nonlocal partial_write
+            if sock is not peer or not resume_started:
+                return write(sock, data, *args)
+            if partial_write:
+                raise BrokenPipeError('indeterminate resume command write')
+            partial_write = True
+            return write(sock, data[:8], *args)
+
+        with patch.object(self.engine, 'resume', side_effect=begin_resume), \
+                patch.object(socket.socket, 'send', fail_resume_write):
+            with self.assertRaises((OSError, RuntimeError)):
+                self.host.tick(.1)
+        self.assertTrue(partial_write)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+    def test_unsolicited_sibling_bytes_followed_by_fin_are_fatal(self):
+        replying = self.connect()
+        unexpected = self.connect()
+        self.offer_and_claim(replying)
+        self.offer_and_claim(unexpected)
+
+        def send_unsolicited_data(_command):
+            unexpected.sendall(b'{"version":1}\n')
+            unexpected.shutdown(socket.SHUT_WR)
+
+        self.responder(replying, on_command=send_unsolicited_data)
+        with self.assertRaises((RuntimeError, ValueError)):
+            self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+
 class ParticipantCase:
     """Reuse fixture lifecycle for one deliberate failure without re-running tests."""
-    def __init__(self, mode): self.mode = mode; self.case = ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
+    def __init__(self, mode, *, retire_disconnected_on_resume=False):
+        self.mode = mode
+        self.case = ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
+        self.case.retire_disconnected_on_resume = retire_disconnected_on_resume
     def __enter__(self): self.case.setUp(); return self
     def __exit__(self, *args): self.case.doCleanups()
     def exercise(self):

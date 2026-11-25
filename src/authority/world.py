@@ -22,8 +22,10 @@ engine nor restores one on restart. Session/client authentication, genuine
 client-side loading, adapter timeouts and engine fencing are external duties.
 The optional participant adapter must synchronously confirm pause/resume for
 each ready client; without it, a transition involving ready clients fails closed.
-Its pause(handles) and resume(handles) methods must return True only when all
-specified participants actually confirmed the requested state. The caller must
+Every still-admitted participant must confirm the requested state. During resume,
+an authority adapter may remove a pilot whose transport has demonstrably closed
+by revoking that pilot's session and rights before returning. The session reconciles
+the updated membership when the in-flight engine operation completes. The caller must
 authenticate and control those clients, bound its operations and fence them on
 failure; a server-side pause cannot stop an indeterminate client operation. If
 client resume fails after the engine started, the coordinator attempts to pause

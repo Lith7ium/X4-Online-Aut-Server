@@ -631,10 +631,11 @@ def finish_recovery_lock(lockbox, remaining, services_stopped, errors):
 class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
     """Fence every recovered-server participant exchange with its owner guard."""
 
-    def __init__(self, host, *, enabled, timeout, guard_process):
+    def __init__(self, host, *, enabled, timeout, guard_process, retire_disconnected_on_resume=False):
         if not callable(guard_process):
             raise ValueError('participant process guard required')
-        super().__init__(host, enabled=enabled, timeout=timeout)
+        super().__init__(host, enabled=enabled, timeout=timeout,
+                         retire_disconnected_on_resume=retire_disconnected_on_resume)
         self._guard_process = guard_process
 
     def check_process(self):
@@ -644,17 +645,18 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
             raise ParticipantGuardFailure('recovered X4 process guard failed') from error
         return True
 
-    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
+    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None,
+                  *, retire=None):
         def check_exchange():
             self.check_process()
             if check is not None:
                 check()
         return super()._exchange(conn, peer, others, raw, expected, deadline,
-                                 check=check_exchange, validate_answer=validate_answer)
+                                 check=check_exchange, validate_answer=validate_answer, retire=retire)
 
-    def _quiet(self, peers, deadline):
+    def _quiet(self, peers, deadline, *, retire=None):
         self.check_process()
-        result = super()._quiet(peers, deadline)
+        result = super()._quiet(peers, deadline, retire=retire)
         self.check_process()
         return result
 
@@ -1543,8 +1545,9 @@ def run(args):
         def verify_process():
             if overlap_guard[0] is None: return check()
             return overlap_guard[0]()
-        world._participants = RecoveredGuardedParticipants(host, enabled=True, timeout=120,
-                                                          guard_process=verify_process)
+        world._participants = RecoveredGuardedParticipants(
+            host, enabled=True, timeout=120, guard_process=verify_process,
+            retire_disconnected_on_resume=require_company_ship)
         if purchase_provider is not None:
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
             undock_options = {'undock': undock_provider} if undock_provider is not None else {}

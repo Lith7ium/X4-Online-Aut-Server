@@ -1,12 +1,13 @@
 """Synchronous, opt-in participant-control experiment on owned TCP sockets.
 
-The caller serializes the host and all sockets. This never pumps the general
-control channel or calls the coordinator while an engine operation is active.
+The caller serializes the host and all sockets. During an authoritative resume,
+a confirmed transport departure may revoke one pilot through the normal disconnect path.
 Receipts are trusted client assertions, not proof or authentication.
 """
 import json
 import math
 import select
+import socket
 import time
 
 from .experimental_local_host import ExperimentalLocalHost
@@ -25,10 +26,13 @@ class ExperimentalTCPParticipants:
     Failure permanently faults this adapter. Caller must fence all clients,
     outstanding transfers and the coordinator before attempting recovery.
     """
-    def __init__(self, host, *, enabled=False, timeout=30):
+    def __init__(self, host, *, enabled=False, timeout=30, retire_disconnected_on_resume=False):
         if (enabled is not True or type(host) is not ExperimentalLocalHost or
                 type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300):
             raise ValueError('explicitly enabled local host and bounded timeout required')
+        if type(retire_disconnected_on_resume) is not bool:
+            raise ValueError('resume departure policy must be boolean')
+        self._retire_disconnected_on_resume = retire_disconnected_on_resume
         host._check()
         if host._world.session.players:
             raise ValueError('install participant adapter before clients join')
@@ -65,8 +69,23 @@ class ExperimentalTCPParticipants:
                     peers[handle] = (conn, peer)
             if set(peers) != set(handles):
                 raise RuntimeError('participant socket missing')
+            def retire_disconnected(conn):
+                peer = host._control._peers.get(conn)
+                if peer is None:
+                    raise RuntimeError('participant connection changed')
+                handle = peer['handle']
+                tracked = peers.get(handle)
+                if (tracked is None or tracked[0] is not conn or tracked[1] is not peer or
+                        peer['stage'] != 'admitted' or peer['in'] or peer['out']):
+                    raise RuntimeError('participant connection changed')
+                host._control._drop(conn, transport_lost=True)
+                del peers[handle]
+
+            retire = retire_disconnected if operation == 'resume' and self._retire_disconnected_on_resume else None
             deadline = time.monotonic() + self._timeout
             for handle in handles:
+                if handle not in peers:
+                    continue
                 if self._next > _MAX_ID: raise RuntimeError('participant request IDs exhausted')
                 number = self._next; self._next += 1
                 command = {'version': 1, 'kind': 'participant_command',
@@ -77,9 +96,9 @@ class ExperimentalTCPParticipants:
                 if len(raw) > MAX_MESSAGE + 1: raise ValueError('participant command too large')
                 conn, peer = peers[handle]
                 others = [item[0] for key, item in peers.items() if key != handle]
-                self._exchange(conn, peer, others, raw, expected, deadline)
-                self._quiet(peers, deadline)
-            self._quiet(peers, deadline)
+                self._exchange(conn, peer, others, raw, expected, deadline, retire=retire)
+                self._quiet(peers, deadline, retire=retire)
+            self._quiet(peers, deadline, retire=retire)
             return True
         except BaseException:
             self._failed = True
@@ -87,10 +106,26 @@ class ExperimentalTCPParticipants:
         finally:
             self._busy = False
 
-    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None):
+    @staticmethod
+    def _check_idle_sockets(readable, exceptional, retire):
+        """Only a definitive end of input is a departure. Queued bytes remain a protocol fault."""
+        if exceptional or (readable and retire is None):
+            raise RuntimeError('unexpected input or disconnect during participant operation')
+        for idle in readable:
+            try:
+                data = idle.recv(1, socket.MSG_PEEK)
+            except ConnectionResetError:
+                data = b''
+            if data != b'':
+                raise RuntimeError('unexpected participant input during operation')
+            retire(idle)
+
+    def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None,
+                  *, retire=None):
         control = self._host._control
         waiting = [conn, *others]
-        sent = 0; data = b''
+        sent = 0
+        data = b''
         while True:
             if check is not None:check()
             if control._peers.get(conn) is not peer:
@@ -102,13 +137,26 @@ class ExperimentalTCPParticipants:
             if check is not None:check()
             if time.monotonic() >= deadline:
                 raise TimeoutError('participant operation indeterminate')
-            if exceptional or any(s in readable for s in others):
-                raise RuntimeError('participant connection changed during operation')
+            idle_readable = [sock for sock in readable if sock is not conn]
+            self._check_idle_sockets(idle_readable, exceptional, retire)
+            for departed in idle_readable:
+                waiting.remove(departed)
             if conn in readable:
-                if sent != len(raw): raise RuntimeError('participant response before command completed')
-                try: chunk = conn.recv(MAX_MESSAGE + 1 - len(data))
-                except BlockingIOError: chunk = None
-                if chunk == b'': raise RuntimeError('participant disconnected during operation')
+                try:
+                    chunk = conn.recv(MAX_MESSAGE + 1 - len(data))
+                except BlockingIOError:
+                    chunk = None
+                except ConnectionResetError:
+                    if retire is None:
+                        raise
+                    chunk = b''
+                if chunk == b'':
+                    if retire is None or data or sent not in (0, len(raw)):
+                        raise RuntimeError('participant disconnected during operation')
+                    retire(conn)
+                    return None
+                if chunk and sent != len(raw):
+                    raise RuntimeError('participant response before command completed')
                 if chunk:
                     data += chunk
                     if b'\n' in data:
@@ -136,17 +184,24 @@ class ExperimentalTCPParticipants:
                             if check is not None:check()
                         if time.monotonic() >= deadline:
                             raise TimeoutError('participant receipt arrived after deadline')
-                        if select.select(waiting, [], waiting, 0)[::2] != ([], []):
-                            raise RuntimeError('unexpected input or disconnect after participant receipt')
+                        readable, _, exceptional = select.select(waiting, [], waiting, 0)
+                        self._check_idle_sockets(readable, exceptional, retire)
                         return answer
                     if len(data) > MAX_MESSAGE: raise ValueError('participant frame too large')
             if conn in writable:
-                try: count = conn.send(raw[sent:])
-                except BlockingIOError: continue
+                try:
+                    count = conn.send(raw[sent:])
+                except BlockingIOError:
+                    continue
+                except (BrokenPipeError, ConnectionResetError):
+                    if retire is None or sent:
+                        raise
+                    retire(conn)
+                    return None
                 if count <= 0: raise RuntimeError('participant send failed')
                 sent += count
 
-    def _quiet(self, peers, deadline):
+    def _quiet(self, peers, deadline, *, retire=None):
         if time.monotonic() >= deadline:
             raise TimeoutError('participant operation indeterminate')
         sockets = []
@@ -155,9 +210,9 @@ class ExperimentalTCPParticipants:
                     peer['stage'] != 'admitted' or peer['in'] or peer['out']):
                 raise RuntimeError('participant connection changed')
             sockets.append(conn)
-        readable, _, exceptional = select.select(sockets, [], sockets, 0)
-        if readable or exceptional:
-            raise RuntimeError('unexpected input or disconnect after participant receipt')
+        if sockets:
+            readable, _, exceptional = select.select(sockets, [], sockets, 0)
+            self._check_idle_sockets(readable, exceptional, retire)
         if time.monotonic() >= deadline:
             raise TimeoutError('participant operation indeterminate')
 
