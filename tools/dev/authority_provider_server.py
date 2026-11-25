@@ -92,6 +92,8 @@ def main(argv=None):
                         help='enable Company purchases and require company ship selection and pinned TLS')
     parser.add_argument('--company-fleet-orders', action='store_true',
                         help='enable stock orders for eligible Company fleet ships')
+    parser.add_argument('--company-sales', action='store_true',
+                        help='enable stock Company sales over the authenticated market connection')
     parser.add_argument('--company-undock-test', action='store_true',
                         help='allow one witnessed Company departure after an admitted purchase')
     parser.add_argument('--require-company-ship', action='store_true',
@@ -133,6 +135,8 @@ def main(argv=None):
             server_flags.extend(('--tls-' + flag, str(value)))
     if args.company_fleet_orders and (not args.company_purchases or not server_flags):
         parser.error('--company-fleet-orders requires --company-purchases and pinned TLS')
+    if args.company_sales and (not args.company_purchases or not server_flags):
+        parser.error('--company-sales requires --company-purchases and pinned TLS')
     if args.company_undock_test and (not args.company_purchases or not server_flags):
         parser.error('--company-undock-test requires --company-purchases and pinned TLS')
     if args.observe_registered_npc is not None:
@@ -182,6 +186,8 @@ def main(argv=None):
         server_flags.append('--company-purchases')
     if args.company_fleet_orders:
         server_flags.append('--company-fleet-orders')
+    if args.company_sales:
+        server_flags.append('--company-sales')
     if args.company_undock_test:
         server_flags.append('--company-undock-test')
     if args.company_pose_trial:

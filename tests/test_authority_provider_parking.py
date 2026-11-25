@@ -78,10 +78,11 @@ class ProviderParkingTest(unittest.TestCase):
 
     def test_company_purchase_opt_ins_reach_the_raw_supervisor_parser(self):
         tls = ['--tls-port', '0']
-        for enabled, undock, fleet in ((False, False, False), (True, False, False),
-                                       (True, True, False), (True, False, True)):
+        for enabled, undock, fleet, sales in ((False, False, False, False), (True, False, False, False),
+                                              (True, True, False, False), (True, False, True, False),
+                                              (True, False, False, True)):
             with (
-                self.subTest(enabled=enabled, undock=undock, fleet=fleet),
+                self.subTest(enabled=enabled, undock=undock, fleet=fleet, sales=sales),
                 patch.object(provider.os, 'geteuid', return_value=1000),
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
@@ -95,9 +96,12 @@ class ProviderParkingTest(unittest.TestCase):
                     options.append('--company-undock-test')
                 if fleet:
                     options.append('--company-fleet-orders')
+                if sales:
+                    options.append('--company-sales')
                 self.assertEqual(provider.main([*ARGS, *tls, *options]), 0)
                 args, = run.call_args.args
                 self.assertIs(args.company_purchases, enabled)
+                self.assertIs(args.company_sales, sales)
                 self.assertIs(args.company_undock_test, undock)
                 self.assertIs(args.company_fleet_orders, fleet)
                 self.assertIs(args.require_company_ship, enabled)

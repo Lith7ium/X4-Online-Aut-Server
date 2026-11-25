@@ -933,6 +933,9 @@ def run(args):
     if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
         raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
     company_fleet_orders = getattr(args, 'company_fleet_orders', False)
+    company_sales = getattr(args, 'company_sales', False)
+    if type(company_sales) is not bool or (company_sales and not company_purchases):
+        raise ValueError('Company sales require authenticated Company purchases and the market view')
     if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
         raise ValueError('Company fleet orders require Company purchases')
     company_undock = getattr(args, 'company_undock_test', False)
@@ -1607,6 +1610,7 @@ def run(args):
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
                                          motion_service=motion_service, company_purchases=company_purchases,
                                          company_trade_view=market_provider is not None,
+                                         company_sales=company_sales,
                                          company_fleet_orders=fleet_provider is not None,
                                          **undock_capability)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
@@ -1622,6 +1626,8 @@ def run(args):
             purchase_options = {'undock': undock_provider} if undock_provider is not None else {}
             if fleet_provider is not None:
                 purchase_options['fleet'] = fleet_provider
+            if company_sales:
+                purchase_options['sales'] = True
             purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
                                                  guard=world._participants.check_process, market=market_provider,
                                                  **purchase_options)
@@ -2381,6 +2387,8 @@ def main(argv=None, *, display_hostname=None):
                         help='enable Company purchases for a verified company ship over pinned TLS')
     parser.add_argument('--company-fleet-orders', action='store_true',
                         help='enable stock orders for eligible Company fleet ships')
+    parser.add_argument('--company-sales', action='store_true',
+                        help='allow admitted pilots to sell from a confirmed Company trading berth')
     parser.add_argument('--company-undock-test', action='store_true',
                         help='allow one witnessed Company departure after an admitted purchase')
     parser.add_argument('--require-company-ship', action='store_true',
