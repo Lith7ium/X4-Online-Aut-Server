@@ -237,6 +237,7 @@ local actor, source, dest = '0x19', 'sector_a', 'sector_b'
 local callback, issued, reply, packet
 local actual_frame, owner, docked, docking, stored = source, 'player', false, false, false
 local sequence = 0
+local now, logs = 1, {}
 local C = {
     IsGamePaused=function() return false end, IsPlayerValid=function() return true end,
     GetSaveFolderPath=function() return '/save' end,
@@ -260,13 +261,17 @@ function GetComponentData(id)
 end
 function AddUITriggeredEvent(_, _, args) issued=args end
 function RegisterEvent(_, handle) callback=handle end
-local bridge = pose.new_x4({lease=lease, epoch=epoch, port=1, allow_apply=true},
-    function() return true end, '/save', {monotonic=function() return 1 end, open=function()
-        return {
-            send=function(_, value) reply=value end, close=function() error('unexpected bridge close') end,
-            receive=function() local value=packet;packet=nil;return value end,
-        }
-    end})
+function DebugError(line) logs[#logs+1]=line end
+local function new_bridge()
+    return pose.new_x4({lease=lease, epoch=epoch, port=1, allow_apply=true},
+        function() return true end, '/save', {monotonic=function() return now end, open=function()
+            return {
+                send=function(_, value) reply=value end, close=function() error('unexpected bridge close') end,
+                receive=function() local value=packet;packet=nil;return value end,
+            }
+        end})
+end
+local bridge = new_bridge()
 local function request(action, frame, requested_actor, captain_seed)
     sequence=sequence+1
     issued,reply=nil,nil
@@ -365,6 +370,36 @@ inspect('apply')
 id=request('apply',source)
 assert(not issued)
 expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', id)
+
+for _, reason in ipairs({'tick_deadline', 'matching_prefix_after_deadline'}) do
+    bridge = new_bridge()
+    inspect('apply')
+    local timed_out = request('apply', source)
+    assert(issued and issued.request_id == timed_out)
+    local previous_logs = #logs
+    now = now + 1.875
+    bridge:tick()
+    assert(#logs == previous_logs)
+    now = now + 0.375
+    if reason == 'tick_deadline' then
+        bridge:tick()
+    else
+        callback(nil, ('f'):rep(32) .. '|unrelated')
+        assert(#logs == previous_logs)
+        callback(nil, timed_out .. '|unvalidated callback contents')
+    end
+    expect_refusal('apply', source, 'BRIDGE_MD_TIMEOUT', '0', timed_out)
+    assert(#logs == previous_logs + 1)
+    assert(logs[#logs] == '[X4LAN] AUTH_COMPANY_POSE_TIMEOUT reason=' .. reason
+           .. ' action=apply index=17 elapsed_s=2.25')
+    answer('DISPATCHED', source)
+    expect_refusal('apply', source, 'BRIDGE_MD_TIMEOUT', '0', timed_out)
+    assert(#logs == previous_logs + 1)
+    inspect('apply')
+    local fenced = request('apply', source)
+    assert(not issued)
+    expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', fenced)
+end
 '''
         subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
 

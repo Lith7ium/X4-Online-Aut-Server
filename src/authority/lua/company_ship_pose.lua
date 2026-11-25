@@ -86,11 +86,22 @@ function M.new(config, engine, net)
         refuse(args, status)
     end
 
+    local function timeout_pending(reason, now)
+        local args, elapsed = pending.args, now - pending.started
+        fail_pending('BRIDGE_MD_TIMEOUT')
+        if engine.log then
+            pcall(engine.log, string.format(
+                '[X4LAN] AUTH_COMPANY_POSE_TIMEOUT reason=%s action=%s index=%d elapsed_s=%.6g',
+                reason, args.action, args.index, elapsed))
+        end
+    end
+
     local function reply(_, value)
         if closed or not pending or type(value) ~= 'string'
                 or value:sub(1, 33) ~= pending.args.request_id .. '|' then return end
-        if engine.clock() >= pending.deadline then
-            fail_pending('BRIDGE_MD_TIMEOUT')
+        local now = engine.clock()
+        if now >= pending.deadline then
+            timeout_pending('matching_prefix_after_deadline', now)
             return
         end
         local args = pending.args
@@ -161,7 +172,7 @@ function M.new(config, engine, net)
         end
         if pending then
             if now >= pending.deadline then
-                fail_pending('BRIDGE_MD_TIMEOUT')
+                timeout_pending('tick_deadline', now)
             end
             return
         end
@@ -196,7 +207,7 @@ function M.new(config, engine, net)
                 return
             end
         end
-        pending = {args = args, deadline = now + MD_TIMEOUT}
+        pending = {args = args, started = now, deadline = now + MD_TIMEOUT}
         if not engine.issue(args) and pending then
             pending = nil
             refuse(args, 'BRIDGE_ISSUE_FAILED')
@@ -280,6 +291,7 @@ function M.new_x4(config, registry_ready, profile_path, udp)
     local net = assert(udp.open('127.0.0.1', config.port))
     return M.new(config, {
         ready = ready, clock = udp.monotonic, paused = function() return C.IsGamePaused() end,
+        log = DebugError,
         actor = function(args, actor, read, frame)
             local id = resolve.parse_hex(actor)
             if not id then return false end
