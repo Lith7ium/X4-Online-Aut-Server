@@ -63,3 +63,16 @@ assert(source:request(intent, settle))
 incoming = {prefix .. 'RECEIPT|4|refused|captain_required'}
 source:tick()
 assert(#receipts == 5 and receipts[5].outcome == 'refused' and receipts[5].reason == 'captain_required')
+
+assert(source:request(intent, settle))
+local last_sent = #outgoing
+available = false
+source:tick()
+assert(#outgoing == last_sent)
+available = true
+source:set_running(false)
+source:tick()
+assert(#outgoing == last_sent)
+source:set_running(true)
+source:tick()
+assert(#outgoing == last_sent + 1)

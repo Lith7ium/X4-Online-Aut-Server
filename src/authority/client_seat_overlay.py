@@ -46,6 +46,7 @@ REFUSALS = frozenset(b'''
     CLOCK_INVALID TIMEOUT PAUSE_OR_REGISTRY_LOST UNEXPECTED_RESULT RESULT_MISMATCH
     RESULT_INVALID SHIP_READ_FAILED DISPATCH_FAILED REGISTRATION_FAILED
     SHIP_ID_INVALID LOCAL_CONTROL_MISSING SHIP_DOCK_STATE_UNSAFE
+    CAPTAIN_CHANGED CAPTAIN_CONTEXT
 '''.split())
 
 
@@ -112,7 +113,8 @@ def extend_seat_gate(text, index, full_registry, *, company_motion=False, compan
    client_seat=assert(X4LAN_AUTHORITY_CLIENT_SEAT.new_x4(
     cfg.authority_registry_snapshot,INDEX,full_registry_inspect,function() failed=true end))
   end
-  if not client_seat:tick() or not client_seat:ready() then return end
+  if not client_seat:tick() or not client_seat:admission_ready() then return end
+  X4LAN_AUTHORITY_SELECTED_SEAT=client_seat
 '''.replace('INDEX', str(index))
     if company_motion:
         gate += '  X4LAN_COMPANY_MOTION_SOURCE.arm(client_seat)\n'

@@ -113,3 +113,14 @@ class SeatWatch:
     def verify(self):
         if self.poll() is not True:
             raise ValueError('owned seat log incomplete')
+
+    def allow_seat_handoff(self):
+        self._receipts.allow_seat_handoff()
+
+    @property
+    def seat_at_admission(self):
+        return self._receipts.seat_at_admission
+
+    @property
+    def seat_status(self):
+        return self._receipts.seat_status

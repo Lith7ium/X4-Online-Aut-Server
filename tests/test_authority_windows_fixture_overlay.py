@@ -159,7 +159,9 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertNotIn('X4LAN_IDENTITY_READY', load)
         self.assertLess(load.index('X4LAN_AUTHORITY_MARKER_READY()'), load.index('full_registry_inspect:ready()'))
         self.assertLess(load.index('full_registry_inspect:ready()'), load.index('client_seat:tick()'))
-        self.assertLess(load.index('client_seat:ready()'), load.index('X4LAN_COMPANY_PURCHASE_SOURCE.arm(client_seat)'))
+        self.assertLess(load.index('client_seat:admission_ready()'), load.index('X4LAN_AUTHORITY_SELECTED_SEAT=client_seat'))
+        self.assertLess(load.index('X4LAN_AUTHORITY_SELECTED_SEAT=client_seat'),
+                        load.index('X4LAN_COMPANY_PURCHASE_SOURCE.arm(client_seat)'))
         self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
         root = Path(__file__).resolve().parents[1]

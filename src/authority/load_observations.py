@@ -108,14 +108,22 @@ class BoundReceiptStream:
             if not require_full_inspection:
                 raise ValueError('client seat requires full registry inspection')
             self._seat_prefix = seat_prefix(seat_index, registry_nonce, registry_status)
-            self._expected.append(('seat', self._seat_prefix + b'controlled'))
+            self._expected.append(('seat', self._seat_prefix))
         self._expected.append(('load', ('pause_observed|' + fields).encode('ascii')))
         self._on_stage = on_stage
         self._seat_index = seat_index
+        self.seat_at_admission = self.seat_status = None
+        self._seat_handoff = False
         self._stage = 0
         self._carry = b''
         self._size = 0
         self._failed = False
+
+    def allow_seat_handoff(self):
+        """Accept a later helm receipt only when the owner is resuming the loaded world."""
+        if self._failed or self._stage != len(self._expected):
+            raise ValueError('client cannot resume before verified load observations')
+        self._seat_handoff = True
 
     def feed(self, data):
         """Return true only after all records and the current line complete."""
@@ -163,14 +171,29 @@ class BoundReceiptStream:
                 if self._registry and REGISTRY_TAG in line:
                     rows.append(('registry', line.split(REGISTRY_TAG, 1)[1].strip()))
                 for row in rows:
+                    if row[0] == 'seat':
+                        phase = row[1][len(self._seat_prefix):]
+                        if row[1] != self._seat_prefix + phase or phase not in (b'aboard', b'controlled'):
+                            raise ValueError('load and marker observations differ or are out of order')
+                        if (self._seat_handoff and self._stage == len(self._expected) and self.seat_status == 'aboard'
+                                and phase == b'controlled'):
+                            self.seat_status = 'controlled'
+                            if self._on_stage is not None:
+                                self._on_stage('cockpit_control_confirmed', self._seat_index)
+                            continue
+                        row = ('seat', self._seat_prefix)
                     if self._stage >= len(self._expected) or row != self._expected[self._stage]:
                         raise ValueError('load and marker observations differ or are out of order')
                     self._stage += 1
+                    if row[0] == 'seat':
+                        self.seat_at_admission = self.seat_status = phase.decode('ascii')
                     if self._on_stage is not None:
                         if row[0] == 'marker':
                             self._on_stage('world_marker_confirmed')
                         elif row[0] == 'seat':
-                            self._on_stage('cockpit_control_confirmed', self._seat_index)
+                            stage = ('cockpit_control_confirmed' if phase == b'controlled'
+                                     else 'passenger_aboard_confirmed')
+                            self._on_stage(stage, self._seat_index)
             return self._stage == len(self._expected) and not self._carry
         except BaseException:
             self._failed = True

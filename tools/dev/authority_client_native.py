@@ -57,6 +57,7 @@ class NativeParticipant(Participant):
         self.process = None
         self.server_control = False
         self.playback = None
+        self.seat_watch = None
         self.confirmations = {'pause': 0, 'resume': 0}
         self.wait_hook = self._wait
         self.sock.settimeout(.1)
@@ -86,6 +87,8 @@ class NativeParticipant(Participant):
         if operation == 'pause' and self.server_control and self.playback is not None:
             self.playback.before_pause()
         self._peer_guard()
+        if operation == 'resume' and self.seat_watch is not None:
+            self.seat_watch.allow_seat_handoff()
         previous = self.timeout
         command_timeout = min(previous, 30)
         if self.deadline is not None:
@@ -435,6 +438,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 registry_check = None
                 if seat_watch is not None:
                     registry_check = seat_watch.verify
+                    participant.seat_watch = seat_watch
                 elif playback is not None:
                     registry_check = playback.verify_registry
                 purchase_options = {}
@@ -452,7 +456,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         if type(playback_driver) is native_playback.LiveSourceInput else None),
                     play_until_exit=player_mode and args.timeout is None, **purchase_options)
                 if player_mode:
-                    result['controlled_company_ship_index'] = index
+                    result['reserved_company_ship_index'] = index
+                    result['company_seat_at_admission'] = seat_watch.seat_at_admission
+                    if seat_watch.seat_status == 'controlled':
+                        result['controlled_company_ship_index'] = index
                     if company_source is not None:
                         from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 
@@ -465,7 +472,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             owner.ship_motion_credential, company_source, validate_peer)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
-                        participant.deadline, lambda: stop_requested, company_client=company_client)
+                        participant.deadline, lambda: stop_requested, company_client=company_client,
+                        seat_watch=seat_watch)
+                    if seat_watch.seat_status == 'controlled':
+                        result['controlled_company_ship_index'] = index
                 else:
                     active_until = time.monotonic()+args.active_seconds
                     if active_until >= join_deadline:
@@ -521,6 +531,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         verify_receipts(watch.path, ticket, bound.marker)
                         if seat_watch is not None:
                             seat_watch.verify()
+                            if result['success'] and seat_watch.seat_status == 'controlled':
+                                result['controlled_company_ship_index'] = index
                         if playback is not None:
                             playback.verify_registry()
                             playback.records()
@@ -594,8 +606,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
     return result
 
 
-def poll_player(owner, process, guard, deadline, stop_requested, *, company_client=None):
+def poll_player(owner, process, guard, deadline, stop_requested, *, company_client=None, seat_watch=None):
     """Serve the admitted client until its own game exits or the user leaves."""
+    next_seat_check = 0
     while deadline is None or time.monotonic() < deadline:
         if stop_requested():
             return 'user_left'
@@ -613,6 +626,9 @@ def poll_player(owner, process, guard, deadline, stop_requested, *, company_clie
                 pass
             raise
         owner.poll(.1)
+        if seat_watch is not None and seat_watch.seat_status == 'aboard' and time.monotonic() >= next_seat_check:
+            seat_watch.poll()
+            next_seat_check = time.monotonic() + .25
         if company_client is not None:
             company_client.poll()
     return 'session_limit'

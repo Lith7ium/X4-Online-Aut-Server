@@ -16,7 +16,6 @@ from .company_ship_selection import reserve_company_ship
 from .experimental_client_owner import CompanyShipChoiceDenied
 from .experimental_client_session import client_connection
 from .experimental_windows_fixture_overlay import install_fixture_overlay
-from .load_observations import BoundReceiptStream
 from .local_participant_control import LocalParticipantControl
 from .observed_client_session import ObservedClientSession
 from .participant_motion import ParticipantMotion
@@ -322,7 +321,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('client motion diagnostic consumed no source sample')
                 result = {'client_admitted': True, 'participant_receipts': commands}
                 if seat_index is not None:
-                    result['controlled_company_ship_index'] = seat_index
+                    result['reserved_company_ship_index'] = seat_index
+                    result['company_seat_at_admission'] = session.company_seat_at_admission
+                    if session.company_seat_status == 'controlled':
+                        result['controlled_company_ship_index'] = seat_index
                 if motion is not None:
                     result['motion_receipts'] = motion.confirmed_samples
             except BaseException as error:
@@ -379,13 +381,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         if workspace.guard() is not True:
                             raise RuntimeError('fixture workspace unavailable')
                         final_log = workspace.read_log()
-                        if (type(final_log) is not bytes or len(final_log) > 8 << 20 or
-                                not BoundReceiptStream(bound, slot='save_009',
-                                    registry_status=registry_status,
-                                    registry_nonce=registry_nonce,
-                                    require_full_inspection=require_registry_snapshot, seat_index=seat_index).feed(final_log) or
+                        if (not session.verify_final_log(final_log) or
                                 workspace.guard() is not True):
                             raise RuntimeError('final fixture observations incomplete')
+                        if seat_index is not None and session.company_seat_status == 'controlled':
+                            result['controlled_company_ship_index'] = seat_index
                     except BaseException:
                         cleanup_errors.append('final fixture observations unconfirmed')
                 if session is not None:

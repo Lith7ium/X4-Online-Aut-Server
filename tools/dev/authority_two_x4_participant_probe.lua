@@ -4,8 +4,17 @@ if not cfg or not cfg.authority_participant_port then return end
 local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);]]
 local net,state,engine,next_hello,failed=nil,nil,nil,0,false
 local company_motion, company_purchase
+local admitted_seat
+local running, sources_running=false,false
+local function set_sources_running(value)
+ if sources_running==value then return end
+ sources_running=value
+ if company_motion then company_motion:set_running(value) end
+ if company_purchase then company_purchase:set_running(value) end
+end
+
 local function frame()
- if company_motion and not ffi.C.IsPlayerValid() then company_motion:tick() end
+ if not ffi.C.IsPlayerValid() then set_sources_running(false) end
  if not ffi.C.IsPlayerValid() then return end
  if not state then
   engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
@@ -21,14 +30,16 @@ local function frame()
   end
   state=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner='isolated-client',
     world_epoch=cfg.authority_ticket.world_epoch,timeout_seconds=120},engine,function(row)
-    if company_motion and row.operation=='resume' and row.status=='confirmed' then
-     company_motion:set_running(true)
-    end
-    if company_purchase and row.operation=='resume' and row.status=='confirmed' then
-     company_purchase:set_running(true)
-    end
     assert(net:send('RECEIPT|'..cfg.authority_participant_lease..'|'..cfg.authority_ticket.world_epoch..'|'..
       string.format('%.0f',row.request_id)..'|'..row.operation..'|'..row.status))
+    if row.operation=='resume' and row.status=='confirmed' then
+     local selected=X4LAN_AUTHORITY_SELECTED_SEAT
+     if selected and not admitted_seat then
+      assert(selected:admit(), 'Company seat resume unconfirmed')
+      admitted_seat=selected
+     end
+     running=true
+    end
    end))
  end
  local now=GetCurRealTime()
@@ -41,25 +52,26 @@ local function frame()
   local lease,epoch,id,op=packet:match('^CMD|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([a-z]+)$')
   assert(lease==cfg.authority_participant_lease and epoch==cfg.authority_ticket.world_epoch)
   assert(id and #id<=16 and not id:match('^0') and (op=='pause' or op=='resume'))
-  if company_motion and op=='pause' then company_motion:set_running(false) end
-  if company_purchase then
-   if op=='pause' then
-    company_purchase:set_running(false)
-   else
-    assert(company_purchase:prepare_seat(), 'Company purchase seat unavailable before resume')
-   end
-  end
+  if op=='pause' then running=false;set_sources_running(false) end
   assert(state:submit('isolated-client',epoch,tonumber(id),op))
  end
  assert(state:on_update())
+ if running and admitted_seat then assert(admitted_seat:tick(), 'Company seat update failed') end
+ local helm_running=running and admitted_seat~=nil and admitted_seat:ready()
+ set_sources_running(helm_running)
  if company_motion then company_motion:tick() end
  if company_purchase then
-  company_purchase:prepare_seat()
+  if helm_running then company_purchase:prepare_seat() end
   company_purchase:tick()
  end
 end
 SetScript('onUpdate',function()
  if failed then return end
  local ok,err=pcall(frame)
- if not ok then failed=true;DebugError('[X4LAN] AUTH_PARTICIPANT ERROR '..tostring(err)) end
+ if not ok then
+  failed=true
+  if company_motion then pcall(company_motion.set_running,company_motion,false) end
+  if company_purchase then pcall(company_purchase.set_running,company_purchase,false) end
+  DebugError('[X4LAN] AUTH_PARTICIPANT ERROR '..tostring(err))
+ end
 end)

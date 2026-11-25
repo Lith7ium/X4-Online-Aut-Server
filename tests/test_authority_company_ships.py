@@ -46,6 +46,14 @@ class CompanyShipTests(unittest.TestCase):
         self.assertEqual(self.read(xml, reader=read_company_ship_catalogue), CompanyShipCatalogue(
             EPOCH, (CompanyShip(1, '[0x101]', 'cluster_14_sector001_macro', None, 'ABC-123'),)))
 
+    def test_operational_npc_crewed_company_ship_remains_a_catalogue_candidate(self):
+        xml = build_xml((1,), definitions=sector(
+            '<component id="[0x101]" class="ship_s" owner="player" code="ABC-123">'
+            '<connections><connection connection="controlentity">'
+            '<component id="[0x501]" class="npc" owner="player"/>'
+            '</connection></connections></component>'))
+        self.assertEqual(self.read(xml), (CompanyShip(1, '[0x101]', 'cluster_14_sector001_macro', None, 'ABC-123'),))
+
     def test_unusable_labels_are_omitted(self):
         xml = build_xml((1,), definitions=sector(
             '<component id="[0x101]" class="ship_s" owner="player" name="{123,456}" code="invalid"/>'))

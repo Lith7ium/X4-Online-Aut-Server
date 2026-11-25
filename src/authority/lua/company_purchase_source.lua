@@ -98,7 +98,7 @@ function M.new(options)
             end
         end
         local now = options.clock()
-        if now >= next_send then
+        if running and options.available() and now >= next_send then
             next_send = now + (pending.awaiting_statement and 1 or 0.25)
             options.net:send(pending.packet)
         end

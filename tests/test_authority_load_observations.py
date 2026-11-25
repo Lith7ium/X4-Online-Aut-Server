@@ -184,6 +184,43 @@ class ClientLoadObservations(unittest.TestCase):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 observations.BoundReceiptStream(self.bound, slot='save_009', **options)
 
+    def test_passenger_load_can_complete_before_the_correlated_helm_handoff(self):
+        nonce = '1' * 32
+        status = ('ready', '2' * 32, 20, '3' * 64)
+        inspected = observations.FULL_INSPECT_TAG + (self.bound.marker + ' 20\n').encode()
+        header = observations.REGISTRY_TAG + (nonce + '|startup|' + status[1] + '|20\n').encode()
+        seat = observations.SEAT_TAG + (nonce + '|' + status[1] + '|18|').encode()
+        initial = self.request + self.marker + inspected + header + seat + b'aboard\n'
+        helm = seat + b'controlled\n'
+
+        def stream(stages):
+            return observations.BoundReceiptStream(self.bound, slot='save_009',
+                registry_status=status, registry_nonce=nonce, require_full_inspection=True,
+                seat_index=18, on_stage=lambda *event: stages.append(event))
+
+        stages = []
+        checked = stream(stages)
+        self.assertFalse(checked.feed(initial))
+        with self.assertRaisesRegex(ValueError, 'before verified load'):
+            checked.allow_seat_handoff()
+        self.assertTrue(checked.feed(self.pause))
+        self.assertEqual(checked.seat_at_admission, 'aboard')
+        self.assertEqual(checked.seat_status, 'aboard')
+        self.assertEqual(stages, [('world_marker_confirmed',), ('passenger_aboard_confirmed', 18)])
+        checked.allow_seat_handoff()
+        self.assertFalse(checked.feed(helm[:-1]))
+        self.assertTrue(checked.feed(helm[-1:]))
+        self.assertEqual(checked.seat_at_admission, 'aboard')
+        self.assertEqual(checked.seat_status, 'controlled')
+        self.assertEqual(stages[-1], ('cockpit_control_confirmed', 18))
+        with self.assertRaises(ValueError):
+            checked.feed(helm)
+        for row in (helm, helm.replace(b'|18|', b'|17|')):
+            unresumed = stream([])
+            self.assertTrue(unresumed.feed(initial + self.pause))
+            with self.assertRaises(ValueError):
+                unresumed.feed(row)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,6 +34,8 @@ class _CheckedParticipant:
                 raise RuntimeError('motion preparation did not confirm')
             if not session._check():
                 raise RuntimeError('client log became incomplete before command')
+        if operation == 'resume':
+            session._records.allow_seat_handoff()
         if getattr(session.controller, operation)(handles) is not True:
             raise RuntimeError('local participant did not confirm')
         if session._motion_control is not None:
@@ -189,6 +191,13 @@ class ObservedClientSession:
         self._invariants(state, pending_command=pending_command)
         snapshot = self._read_log()
         self._invariants(state, pending_command=pending_command)
+        self._feed_log(snapshot)
+        if self._guard() is not True:
+            raise RuntimeError('observed session guard failed')
+        self._invariants(state, pending_command=pending_command)
+        return self._complete
+
+    def _feed_log(self, snapshot):
         if type(snapshot) is not bytes or len(snapshot) > MAX_SNAPSHOT:
             raise RuntimeError('observed client log unavailable')
         if snapshot is not self._snapshot:
@@ -197,10 +206,6 @@ class ObservedClientSession:
             complete = self._records.feed(snapshot[len(self._snapshot):])
             self._snapshot = snapshot
             self._complete = complete
-        if self._guard() is not True:
-            raise RuntimeError('observed session guard failed')
-        self._invariants(state, pending_command=pending_command)
-        return self._complete
 
     def _wait_hook(self):
         complete = self._check(pending_command=self._state == 'active')
@@ -264,6 +269,21 @@ class ObservedClientSession:
             if not self._check():
                 raise RuntimeError('admission evidence incomplete')
             self._deadline = None
+
+    @property
+    def company_seat_at_admission(self):
+        return self._records.seat_at_admission
+
+    @property
+    def company_seat_status(self):
+        return self._records.seat_status
+
+    def verify_final_log(self, snapshot):
+        """Finish the same receipt stream after the caller verifies X4 stopped."""
+        if threading.get_ident() != self._thread or self._busy or self._state != 'active':
+            raise RuntimeError('observed client log unavailable after cleanup')
+        self._feed_log(snapshot)
+        return self._complete
 
     def poll(self, timeout=0):
         """Poll the existing participant after checking the evolving log."""

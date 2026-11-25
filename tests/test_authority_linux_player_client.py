@@ -6,6 +6,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -46,6 +48,12 @@ def receipt_lines(offer=OFFER):
 
 
 class SeatLogTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_participant_only_activates_sources_with_confirmed_resume_and_helm(self):
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['luajit', 'tests/authority_participant_seat_lifecycle.lua'],
+                       cwd=root, check=True, timeout=5)
+
     def test_installs_real_seat_overlay_in_disposable_case(self):
         bound = MarkerBoundOffer(OFFER, MARKER)
         with tempfile.TemporaryDirectory() as temp:
@@ -330,7 +338,8 @@ class PlayerClientTests(unittest.TestCase):
 
                 owner.activate.side_effect = activate
                 process.poll.return_value = None
-                watch = SimpleNamespace(stage=2, path=None, poll=Mock(return_value=True), verify=Mock())
+                watch = SimpleNamespace(stage=2, path=None, poll=Mock(return_value=True), verify=Mock(),
+                    seat_at_admission='controlled', seat_status='controlled', allow_seat_handoff=Mock())
                 for target, name, effect in (
                     (native, 'validate_environment', lambda *args, **kwargs:
                         (out, game, root / 'auth', None, player, home, 'steam')),

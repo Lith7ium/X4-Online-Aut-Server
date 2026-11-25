@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from authority import windows_fixture_session as subject
 from authority.load_messages import Offer
+from authority.load_observations import BoundReceiptStream
 from authority.trusted_marker_load_session import MarkerBoundOffer
 
 
@@ -30,6 +31,7 @@ class FixtureSessionTests(unittest.TestCase):
         self.poll_hook = lambda: None
         self.poll_result = True
         self.final_log_extra = b''
+        self.company_seat_phase = 'controlled'
         self.offer = Offer(world_epoch='a'*32, connection_handle=1, baseline_id=2, load_generation=3,
             checkpoint_id='checkpoint-'+'b'*32, sha256='c'*64, attempt_id='d'*32, size=10, name='j1.xml.gz')
         self.bound = MarkerBoundOffer(self.offer, 'e'*32)
@@ -115,6 +117,10 @@ class FixtureSessionTests(unittest.TestCase):
         self.process = Process
 
         class Session:
+            @property
+            def company_seat_at_admission(self): return test.company_seat_phase
+            @property
+            def company_seat_status(self): return test.company_seat_phase
             def __init__(self, owner, bound, controller, *, slot, read_log, guard, deadline,
                          registry_status, registry_nonce, require_full_inspection, apply_motion, motion_control, seat_index=None, on_stage=None):
                 test.assertEqual(seat_index, test.installed_seat)
@@ -124,6 +130,9 @@ class FixtureSessionTests(unittest.TestCase):
                 test.assertEqual(registry_status, test.registry_status)
                 test.assertEqual(registry_nonce, test.registry_nonce)
                 test.calls.append(('session_create', owner is test.owner, bound == test.bound, slot, guard()))
+                self.records = BoundReceiptStream(bound, slot=slot, registry_status=registry_status,
+                    registry_nonce=registry_nonce, require_full_inspection=require_full_inspection,
+                    seat_index=seat_index)
             def start(self): test.calls.append('session_start'); return True
             def poll(self, timeout):
                 test.calls.append(('session_poll', timeout))
@@ -131,6 +140,7 @@ class FixtureSessionTests(unittest.TestCase):
                 test.poll_hook()
                 return test.poll_result
             def close(self): test.calls.append('session_close')
+            def verify_final_log(self, snapshot): return self.records.feed(snapshot)
         self.session = Session
 
         def install(view, **options):
@@ -213,6 +223,16 @@ class FixtureSessionTests(unittest.TestCase):
             result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
         self.assertEqual(result['controlled_company_ship_index'], 2)
         self.assertEqual(self.installed_seat, 2)
+
+    def test_passenger_audit_keeps_the_reservation_without_claiming_control(self):
+        snapshot = self.prepare_company_seat()
+        self.company_seat_phase = 'aboard'
+        self.log = self.log.replace(b'|2|controlled\n', b'|2|aboard\n')
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
+            result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
+        self.assertEqual(result['reserved_company_ship_index'], 2)
+        self.assertEqual(result['company_seat_at_admission'], 'aboard')
+        self.assertNotIn('controlled_company_ship_index', result)
 
     def test_company_motion_starts_only_after_admission_and_cleans_up_before_x4(self):
         ship = {'ship_index': 2, 'sector_macro': 'sector_b', 'code': 'ABC-123', 'name': None}
