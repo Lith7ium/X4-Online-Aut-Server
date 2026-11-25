@@ -109,3 +109,27 @@ full-suite failure remains open.
   `05e66eab9b3854437bbb5f91300c4617e77704ed372309c3bf78de35e3e69881`.
 
 The trial source is local and experimental, not a supported server launcher.
+
+## Software renderer CPU during a single-provider checkpoint, 25 November
+
+During vanilla four-seat world preparation at `04f409f6`, one native X4
+provider ran on a Ryzen 7 7800X3D. There were no game clients. The private
+profile requested 640×360, immediate presentation and no frame-rate limit.
+Vulkan reported a CPU device, llvmpipe (LLVM 23.1.5). After the preparation
+cue confirmed the added captain and freight, five consecutive Linux
+`/proc` measurements spanning 10.54 seconds recorded 12.03–12.91 logical
+CPU cores for X4 and 6.074 GiB of proportional set size.
+
+A separate 2.50-second measurement grouped per-thread CPU deltas by the
+kernel thread name. Threads named `llvmpipe-*` accounted for 12.344
+logical cores, `Main()` for 0.124, and the other named threads together
+for 0.056. The busiest activity observed in this checkpoint interval was
+software rendering. Simulation throughput, occupied-sector combat, and
+performance on hosted Milan hardware require their own measurements.
+These values describe the X4 process alone.
+
+Private samples are in `.local/vanilla-four-trade-seed/run-01/`.
+SHA-256 for `provider-checkpoint-resource-sample.json` is
+`39dab6f5f8e666e3b36c748c879aa95275b42ebb429fc31656bf13d353b4d07c`.
+SHA-256 for `provider-checkpoint-thread-groups.json` is
+`0d510289acb336489097098ef770409870a7a0713b538c03581f357e996d9808`.
