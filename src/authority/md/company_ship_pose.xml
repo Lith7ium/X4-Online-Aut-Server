@@ -108,22 +108,32 @@
   <library name="CheckRetainedCaptain" purpose="include_actions">
    <actions>
     <set_value name="$captain" exact="@$ship.assignedaipilot"/>
-    <set_value name="$retainedCaptainReady" exact="@$captain.isclass.npc and $ship.trueowner == faction.player and $captain.owner == faction.player
+    <set_value name="$captainIdle" exact="@$captain.isclass.npc and $ship.trueowner == faction.player and $captain.owner == faction.player
         and '%s'.[$captain.seed] == $args.$captain_seed and $ship.pilot == $captain
         and $captain.assignedcontrolled == $ship and $captain.ship == $ship and $captain.hascontext.{$ship}
         and not $captain.isbusy and not $ship.orders.count and not $ship.tradeorders.count
         and not @$ship.tradecomputer.exists and @$ship.defaultorder.id == 'Wait'
         and @$ship.order.id == 'Wait' and $ship.order.state != orderstate.critical
-        and not player.controlled and not player.occupiedship and @player.station.isclass.station and @player.room.exists
-        and ($action == 'inspect' or $action == 'locate'
-             or (@$crewBinding.$ship == $ship and @$crewBinding.$captain == $captain
-                 and @$crewBinding.$generation == $args.$generation and @$crewBinding.$epoch == $args.$epoch
-                 and (($action == 'transfer' and @$crewBinding.$sector == $ship.sector
-                       and @$crewBinding.$sector == @$located.$sector)
-                      or (($action == 'apply' or $action == 'verify')
-                          and @$crewBinding.$sector.macro.id == $args.$frame
-                          and (@$crewBinding.$sector == $ship.sector
-                               or ($action == 'verify' and @$crewBinding.$sourceSector == $ship.sector))))))"/>
+        and not player.controlled and not player.occupiedship and @player.station.isclass.station and @player.room.exists"/>
+    <do_if value="$captainIdle">
+     <!-- Initial reads establish the live binding. Only locate may read a
+          different frame, subject to the ordinary ship and sector checks. -->
+     <do_if value="$action == 'inspect' or $action == 'locate'">
+      <set_value name="$retainedCaptainReady" exact="true"/>
+     </do_if>
+     <do_else>
+      <set_value name="$captainBindingMatches" exact="@$crewBinding.$ship == $ship and @$crewBinding.$captain == $captain
+          and @$crewBinding.$generation == $args.$generation and @$crewBinding.$epoch == $args.$epoch"/>
+      <do_if value="$captainBindingMatches and $action == 'transfer'">
+       <set_value name="$retainedCaptainReady" exact="@$crewBinding.$sector == $ship.sector
+           and @$crewBinding.$sector == @$located.$sector"/>
+      </do_if>
+      <do_elseif value="$captainBindingMatches and ($action == 'apply' or $action == 'verify')">
+       <set_value name="$retainedCaptainReady" exact="@$crewBinding.$sector.macro.id == $args.$frame
+           and (@$crewBinding.$sector == $ship.sector or ($action == 'verify' and @$crewBinding.$sourceSector == $ship.sector))"/>
+      </do_elseif>
+     </do_else>
+    </do_if>
    </actions>
   </library>
 

@@ -31,20 +31,29 @@ class CompanyShipPoseTests(unittest.TestCase):
 
     def test_saved_captain_requires_live_idle_helm_and_the_same_inspected_ship(self):
         root = ET.parse(MD)
-        guard = root.find(".//library[@name='CheckRetainedCaptain']//set_value[@name='$retainedCaptainReady']")
+        guard = root.find(".//library[@name='CheckRetainedCaptain']/actions")
+        idle = guard.find("set_value[@name='$captainIdle']").get('exact')
         for required in ("'%s'.[$captain.seed] == $args.$captain_seed", '$ship.pilot == $captain',
                          '$captain.assignedcontrolled == $ship', '$captain.ship == $ship', 'not $captain.isbusy',
                          'not $ship.orders.count', 'not $ship.tradeorders.count', 'not @$ship.tradecomputer.exists',
                          "@$ship.order.id == 'Wait'", '$ship.order.state != orderstate.critical',
-                         'not player.controlled', '@player.station.isclass.station',
-                         '@$crewBinding.$ship == $ship', '@$crewBinding.$captain == $captain',
-                         '@$crewBinding.$sector == $ship.sector', '@$crewBinding.$generation == $args.$generation',
-                         '@$crewBinding.$epoch == $args.$epoch', '@$crewBinding.$sector.macro.id == $args.$frame',
-                         "$action == 'transfer' and @$crewBinding.$sector == $ship.sector",
-                         '@$crewBinding.$sector == @$located.$sector',
-                         "$action == 'verify' and @$crewBinding.$sourceSector == $ship.sector"):
-            self.assertIn(required, guard.get('exact'))
-        self.assertIn("$action == 'inspect' or $action == 'locate'", guard.get('exact'))
+                         'not player.controlled', '@player.station.isclass.station'):
+            self.assertIn(required, idle)
+        eligible = guard.find("do_if[@value='$captainIdle']")
+        self.assertEqual(eligible.find('do_if').get('value'), "$action == 'inspect' or $action == 'locate'")
+        existing = eligible.find('do_else')
+        binding = existing.find("set_value[@name='$captainBindingMatches']").get('exact')
+        for field in ('$ship', '$captain', '$generation', '$epoch'):
+            self.assertIn(f'@$crewBinding.{field} ==', binding)
+        transfer = existing.find('do_if')
+        self.assertEqual(transfer.get('value'), "$captainBindingMatches and $action == 'transfer'")
+        self.assertIn('@$crewBinding.$sector == $ship.sector', transfer.find('set_value').get('exact'))
+        self.assertIn('@$crewBinding.$sector == @$located.$sector', transfer.find('set_value').get('exact'))
+        apply_or_verify = existing.find('do_elseif')
+        self.assertEqual(apply_or_verify.get('value'), "$captainBindingMatches and ($action == 'apply' or $action == 'verify')")
+        target = apply_or_verify.find('set_value').get('exact')
+        self.assertIn('@$crewBinding.$sector.macro.id == $args.$frame', target)
+        self.assertIn("$action == 'verify' and @$crewBinding.$sourceSector == $ship.sector", target)
         capture = root.find(".//library[@name='CheckShip']//set_value[@name='State.$crewBinding']/..")
         self.assertEqual(capture.get('value'), "($action == 'inspect' or $action == 'locate') and $retainedCaptainReady")
         refusal = root.find(".//library[@name='CheckShip']//set_value[@exact=\"'PILOT_PRESENT'\"]/..")
