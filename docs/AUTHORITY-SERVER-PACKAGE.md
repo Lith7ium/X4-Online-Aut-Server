@@ -448,6 +448,15 @@ running interval and retires the source on loss of its verified binding or
 a pause. Use the provider's `registered_npc_observation` and the pilot's
 `company_observer` results for comparison.
 
+For the isolated HVC-420/MFQ-419 world, the Linux pilot can additionally
+use `--trial-registered-npc-hold` with `--company-ship-index 1073`. After
+the cockpit acknowledges its first server pose, this briefly holds the pilot's
+local freighter and restores its NPC order. The provider keeps running the
+freighter's original orders. In the X4 pilot log, look for `RESTORED` after
+`HELD`, `CHECKED` and `RELEASING`. `UNCERTAIN` means release could not be
+confirmed. Use a new disposable pilot copy for this test.
+[Linux run and saved result](../reports/AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
 ## Try a Company fleet order
 
 Use matching provider and pilot packages from `1ad21866` for the stock map's
