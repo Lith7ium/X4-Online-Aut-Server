@@ -5,9 +5,10 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 13:00 check-in
-covers the four-Pulsar world and the Windows flight package for Cobalt.
-[Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795608053962909)
+hour, Berlin time, in `#x4-authorative-server`. At 14:00 Cobalt had
+reproduced the assigned Windows flight ZIP byte for byte and verified
+the linked-extension-root check on NTFS. The Windows flight still needs
+the operator. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795611653182879)
 
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
@@ -214,7 +215,9 @@ still needs testing. [Native flight and authority transfer](AUTHORITY-SUPERHIGHW
   callbacks against KHI-630. Its registry identity and HVC-420's last-attacker
   identity matched the pilot's offered checkpoint. The provider retained
   the ships' starting health. [Registered-pilot volley](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md)
-  Shared damage across machines and boarding remain open.
+  Shared damage across machines and boarding remain open. The stock
+  boarding script identifies the captured ship before ownership changes.
+  [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
 - **Quartz** has the read-only investigation of the Company fleet command
@@ -281,6 +284,11 @@ Linux pilot rejoined WRN-302, retained PYN-740 and read 9,768 Cr and
 four water from the local engine. After this pilot left, all three
 purchase records still matched the opening ledger.
 [Native cold rejoin](AUTHORITY-STOCK-PURCHASE-COLD-REJOIN-20261125.md)
+
+At `ba9cc171` the client retains a reconciled earlier basket for cockpit
+display after a ship change. Loopback IPC covered a lost acknowledgement,
+a client process restart and delivery with an unrelated new basket open.
+The HUD text was exercised with LuaJIT and a simulated X4 display.
 
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,
