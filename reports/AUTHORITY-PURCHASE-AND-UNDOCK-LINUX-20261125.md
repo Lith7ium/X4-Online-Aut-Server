@@ -27,8 +27,8 @@ instantiated measurement cue signalled itself and X4 reported no listener.
 It never sampled again. The private trial now attaches a physical berth
 check to the stock undocked event and checks every 500 ms until the ship,
 old bay and assignment show separation. This client cue passed the X4
-9.00 MD schema. A subsequent in-game reading is still required. The
-provider's optional berth sampler now resets its delayed cue each second.
+9.00 MD schema. The provider's optional berth sampler now resets its
+delayed cue each second.
 
 On last-pilot removal the provider paused and saved checkpoint
 `checkpoint-fa46fdede9ef45248bd2db27a39e3ce5`.
@@ -42,3 +42,44 @@ games and the private display exited.
 | Confirmed final save | `0d46255c31380ae324aa3119f28b166fb80cd14d7117766942aa0da20b84b93d` |
 | Provider and client request correlation | `40b5ba60cd3ccabf43a29c188e7086b0020feaadb2af01afd278b33c1bc1a7a3` |
 | Independent save and ledger verification | `ad2bfd9d6a21d58a64227a07bb8ff2535b6ead7d34877e5fbbc69d6bf130ffc6` |
+
+## Follow-up with the event-triggered client observer
+
+One complementary native Linux run at `11f10348` restored a verified copy
+of the original pre-purchase checkpoint
+`checkpoint-1dac0e4056eb41739aeecd30dbb1f1ca`. Client X4 loaded the fresh offer
+`checkpoint-c89d95461cfb4f559cdb019b3b7888e7` with marker
+`2a06c1d3fa413bd3285f51515e0a4951` and confirmed helm control of WRN-302
+(7354). The private stock callbacks each ran once. The provider confirmed
+two water for 116 Cr, a Company balance of 9,768 Cr and four water.
+
+| Event | Native game age, s |
+| --- | ---: |
+| Client bound WRN-302 to the original BIM-169 external bay and invoked Undock | 340.073 |
+| Provider confirmed the assigned captain was idle before dispatch | 343.20 |
+| Provider witnessed the matching undocked event, with assigned dock still present | 353.73 |
+| Provider verified physical detachment, cleared assignment and old-bay membership | 377.89 |
+| Client cleared its hold on the confirmed receipt | 377.85 |
+| Client reported undock start and end for the bound ship, station and bay | 378.119 and 382.132 |
+
+Provider and client ages are from their respective X4 instances. The
+corrected observer emitted the client start and end events. It emitted
+no later physical readback before the supervisor deadline, and the
+earlier listener error did not recur. The client exited cooperatively
+with no owned processes remaining and reported a participant cleanup
+error. These results leave the client's final dock fields unverified.
+
+The provider completed the natural last-pilot save and exited paused
+with no owned processes remaining. Both checkpoint pointers agreed on
+`checkpoint-17f23f30eed444989f5f22cc65bbaaf5`. Independent parsing verified
+the new marker, detached WRN-302 in Grand Exchange I, PYN-740's original
+seed and pilot assignment, four water, and 9,768 Cr. The sealed ledger added
+exactly the new purchase with the same receipt. The input save, manifest
+and ledger matched their original bytes. The virtual display and host
+game lock were released.
+
+| Follow-up evidence | SHA-256 |
+| --- | --- |
+| Confirmed final save | `afec7163aa862c9989199eea26d3f88c3ce3fe92168a9869d6da17235015d9be` |
+| Provider check, dispatch and receipt correlation | `54c02cc97485807d15b29a9cf2cda278486b55cc67b18964c6de152276745796` |
+| Independent save and ledger verification | `89263a3dabd9adadc1ce9904278999f0e204f9f0be1bb6fdc326badca4d9b64a` |

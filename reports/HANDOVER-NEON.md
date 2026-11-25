@@ -114,7 +114,18 @@ The rehearsal did not start X4 or use the running world's files.
 A separate native purchase and departure test confirmed the server
 released WRN-302's berth before its pilot received authorization and
 X4 started the pilot's undock. The client-side final physical read was
-missing. [Linux purchase and departure evidence](AUTHORITY-PURCHASE-AND-UNDOCK-LINUX-20261125.md)
+missing. At `11f10348` a second Linux pair confirmed the same sequence
+through X4's client undocked event. The final client berth fields were
+still unavailable, and the provider saved WRN-302 detached with the
+correct captain, cargo and balance.
+[Linux purchase and departure evidence](AUTHORITY-PURCHASE-AND-UNDOCK-LINUX-20261125.md)
+
+Lith7ium approved populating the regular trade window from current server
+offers, shared funds and available cargo space for the selected ship.
+The existing native purchase receipt already displays the correct account
+and cargo. The stock slider currently reads the client's local economy.
+The new read-only station query is in development. Purchases must still
+recheck the exact unit price when the pilot confirms.
 
 Lith7ium selected a separate marker for a visible remote pilot on the
 stock map. The installed MapMenu and its exported interfaces examined so
@@ -277,8 +288,8 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   ship as a passenger while its NPC captain finishes a trade. Lith7ium
   wants the client to wait for the server ship to clear its berth before
   flying. The server verified physical departure and the client responded
-  to a simulated confirmation in separate native trials. Connecting these
-  steps is outstanding. [Captain handover](AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md) ·
+  to a simulated confirmation in separate native trials. The later paired
+  Linux runs connected these steps through X4's client undock event. [Captain handover](AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md) ·
   [Client undock trial](AUTHORITY-COMPANY-UNDOCK-LOCK-20261125.md)
   When connecting them, track the client's original berth and the server's
   actual berth separately. Both belong to the same station, but the server
