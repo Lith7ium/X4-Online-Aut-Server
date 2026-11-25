@@ -34,6 +34,7 @@ function M.new(options)
   for _, key in ipairs({'clock', 'game', 'guard', 'inspect', 'issue', 'fault'}) do
     assert(type(options[key]) == 'function', key)
   end
+  assert(options.acquire_guard == nil or type(options.acquire_guard) == 'function')
   local identity = {}
   for key, value in pairs(binding) do
     identity[key] = value
@@ -78,6 +79,10 @@ function M.new(options)
   end
   local function dispatch(operation)
     if pending or not check() or serial >= 100000 then
+      return false
+    end
+    if options.acquire_guard and (operation == 'Prepare' or operation == 'Hold')
+        and options.acquire_guard() ~= true then
       return false
     end
     serial = serial + 1

@@ -168,14 +168,26 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     local ok, observer = pcall(function()
         if config.observed_npc_index then
             assert(not config.playback_index and not config.cockpit_radar_playback)
+            local hold_trial
+            local function radar_withdrawn()
+                if hold_trial then hold_trial:withdraw() end
+            end
             local function npc_reader(mode)
                 return assert(X4LAN_NPC_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
                     enabled = true, mode = mode, target_index = config.observed_npc_index,
                     target_code = assert(config.observed_npc_code), clock = udp.monotonic,
+                    on_withdrawal = config.registered_npc_hold_trial == true and mode == 'radar' and radar_withdrawn or nil,
                 }))
             end
             local readers = {cockpit = npc_reader('radar'), map = npc_reader('map')}
-            return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic)
+            if config.registered_npc_hold_trial == true then
+                hold_trial = assert(X4LAN_REGISTERED_NPC_HOLD_TRIAL.new_x4({
+                    enabled = true, pinned = pinned, own_index = config.index, target_index = config.observed_npc_index,
+                    target_code = config.observed_npc_code, radar = readers.cockpit, nonce = config.nonce,
+                    expected_save_path = expected, clock = udp.monotonic, guard = available, own_actor = actor,
+                }))
+            end
+            return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, nil, nil, hold_trial)
         end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
         local readers, trial, pilot_roster

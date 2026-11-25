@@ -41,7 +41,8 @@ local function valid_sample(row)
     return true
 end
 
-function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster)
+function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial)
+    assert(not hold_trial or not playback_trial)
     local slot_names = {'cockpit'}
     local playback_slots = {cockpit = true}
     for _, extra in ipairs({'cockpit2', 'cockpit3'}) do
@@ -138,6 +139,9 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster)
         local receipt = {'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
                          binding.actor, binding.code, unpack(row, 9, 16)}
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
+        if hold_trial and confirmed == true and row[2] == 'cockpit' then
+            hold_trial:sample(binding, counter(row[7]))
+        end
         if received_at and confirmed == true then
             local velocity
             if row[12] ~= '-' then
@@ -178,10 +182,12 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster)
             if packet == nil then break end
             if running then observe(packet, now) end
         end
+        if hold_trial then hold_trial:tick(running) end
         if playback_trial and running then playback_trial:tick(now) end
     end
 
     function api:close()
+        if hold_trial then hold_trial:close() end
         if playback_trial then playback_trial:close() end
         for _, name in ipairs(slot_names) do slots[name].reader:close() end
     end

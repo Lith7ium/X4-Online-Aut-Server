@@ -39,3 +39,7 @@ class NpcPilotObservationTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_registered_radar_and_map_require_current_native_visibility(self):
         subprocess.run(['luajit', 'tests/authority_npc_map_interest.lua'], cwd=ROOT, check=True)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
+    def test_explicit_hold_trial_requires_radar_and_confirms_safe_release(self):
+        subprocess.run(['luajit', 'tests/authority_registered_npc_hold_trial.lua'], cwd=ROOT, check=True)
