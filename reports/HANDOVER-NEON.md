@@ -20,8 +20,22 @@ Two regular pilots also flew concurrently in different sectors. HVC-420
 remained in Black Hole Sun V and KHI-630 in Black Hole Sun IV. The
 provider confirmed both movements and saved both ships within 0.4 mm of
 its paused readbacks. Both pilots started in their respective sectors.
-The optional map trigger stopped before opening the stock map.
+That run ended before the optional map opened.
 [Independent flight in two sectors](AUTHORITY-TWO-PILOT-SECTORS-20261125.md)
+
+A subsequent two-pilot Linux run selected KHI-630 on HVC-420's stock
+map across those sectors. The rendered actor, selected actor and movement
+receipt matched. At sequence 40 the sender and observer agreed on a
+nonzero velocity. Closing the map withdrew the subscription while nine
+later pilot samples were acknowledged. No icon displacement was measured.
+The provider's position writer was disabled in this observation run.
+[Native map selection and withdrawal](AUTHORITY-NATIVE-CROSS-SECTOR-MAP-20261125.md)
+
+The normal player result now retains the actual samples acknowledged by
+the movement service under `company_motion.last_acknowledged_sample` and
+`company_motion.last_nonzero_velocity_acknowledged`. Compare epoch,
+ship index, generation and sequence with the observer result. The Windows
+archive shared at the 09:00 check-in predates these sender fields.
 
 A Linux pilot flew HVC-420 through the stock superhighway from Black Hole
 Sun V to IV. X4 briefly returned no sector in the corridor. The motion
