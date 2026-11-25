@@ -7,19 +7,16 @@ import time
 
 from .company_command_window import CompanyCommandWindow
 from .company_fleet_orders import fleet_order, fleet_receipt
+from .company_trade_messages import PURCHASE_FIELDS, purchase_receipt, purchase_value
 from .company_trade_view import view_page, view_request
 from .company_undock_messages import UndockWindow
 from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from .load_messages import MAX_INTEGER, MAX_MESSAGE
 
 
-_PURCHASE = {'purchase_id', 'sector', 'station_code', 'ware', 'quantity', 'price_cents'}
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _EPOCH = re.compile(r'[A-Za-z0-9_-]{1,64}')
-_CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
-_SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 _WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
-_REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
 _POLL = 'company_purchase_poll'
 _RESULT = 'company_purchase_result'
 _STATEMENT = 'company_purchase_statement'
@@ -44,50 +41,6 @@ def _int(value, *, minimum=1, maximum=MAX_INTEGER):
 
 def _matches(value, pattern):
     return type(value) is str and pattern.fullmatch(value) is not None
-
-
-def purchase_value(value):
-    if (type(value) is not dict or set(value) != _PURCHASE
-            or not _matches(value['purchase_id'], _TOKEN)
-            or not _matches(value['sector'], _SECTOR)
-            or not _matches(value['station_code'], _CODE)
-            or not _matches(value['ware'], _WARE)
-            or not _int(value['quantity'], maximum=2147483647)
-            or not _int(value['price_cents'])):
-        raise ValueError('invalid company purchase')
-    return dict(value)
-
-
-def purchase_receipt(value):
-    if type(value) is not dict or not _PURCHASE <= value.keys():
-        raise ValueError('invalid company purchase receipt')
-    purchase_value({name: value[name] for name in _PURCHASE})
-    outcome = value.get('outcome')
-    keys = _PURCHASE | {'outcome'}
-    if outcome == 'confirmed':
-        keys |= {'settled_total_cents', 'company_balance_cents', 'cargo_units', 'ship_code'}
-        if (not _int(value.get('settled_total_cents'))
-                or not _int(value.get('company_balance_cents'), minimum=0)
-                or not _int(value.get('cargo_units'), minimum=0)
-                or not _matches(value.get('ship_code'), _CODE)):
-            raise ValueError('invalid confirmed company purchase receipt')
-    elif outcome == 'refused':
-        keys.add('reason')
-        if not _matches(value.get('reason'), _REASON):
-            raise ValueError('invalid company purchase refusal reason')
-        if value['reason'] == 'price_changed':
-            keys.add('current_price_cents')
-            if not _int(value.get('current_price_cents')) or value['current_price_cents'] == value['price_cents']:
-                raise ValueError('invalid changed company purchase quote')
-    elif outcome == 'pilot_reported':
-        keys.add('settled_total_cents')
-        if not _int(value.get('settled_total_cents')):
-            raise ValueError('invalid pilot-reported total')
-    elif outcome not in ('unknown', 'accepted_pending_statement'):
-        raise ValueError('unknown company purchase outcome')
-    if set(value) != keys:
-        raise ValueError('unexpected company purchase receipt fields')
-    return dict(value)
 
 
 def _statement_value(value, purchase_id):
@@ -172,7 +125,7 @@ class _PurchaseWindow:
             return None
         result = purchase_receipt(value)
         if (result['outcome'] == 'pilot_reported' or self.pending is None
-                or any(result[key] != self.pending[key] for key in _PURCHASE)):
+                or any(result[key] != self.pending[key] for key in PURCHASE_FIELDS)):
             raise ValueError('company purchase receipt does not match the outstanding request')
         return result
 
