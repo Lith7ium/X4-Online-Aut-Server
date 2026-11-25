@@ -125,6 +125,11 @@ def _file_digest(path):
 
 
 def _sync_dir(path):
+    if os.name == 'nt':
+        # Windows has no directory fsync, and os.open cannot open a directory
+        # there. The files are fsynced before each rename; the rename itself is
+        # left to the NTFS metadata journal.
+        return
     fd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
         os.fsync(fd)

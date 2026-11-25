@@ -271,7 +271,12 @@ with tempfile.TemporaryDirectory() as directory:
         self.write_save()
         checkpoint = self.store.publish(self.source)
         link = self.root / 'link.gz'
-        link.symlink_to(self.source)
+        try:
+            link.symlink_to(self.source)
+        except OSError as error:
+            if getattr(error, 'winerror', None) != 1314:
+                raise
+            self.skipTest('creating symlinks needs Developer Mode or admin rights on Windows')
         with self.assertRaises(CheckpointError):
             self.store.publish(link)
         with self.assertRaises(CheckpointError):

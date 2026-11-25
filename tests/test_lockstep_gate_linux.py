@@ -21,6 +21,9 @@ spec.loader.exec_module(sites)
 # The read-only executables of the x4-re workspace next to this checkout (or X4_LINUX_EXE / X4_WINDOWS_EXE).
 LINUX_EXE = Path(os.environ.get('X4_LINUX_EXE', ROOT.parent / 'x4-re/bin-linux/X4'))
 WINDOWS_EXE = Path(os.environ.get('X4_WINDOWS_EXE', ROOT.parent / 'x4-re/bin/X4.exe'))
+# tools/dev/linux_gate_live.py imports fcntl, so it loads only on POSIX hosts.
+HAS_FCNTL = importlib.util.find_spec('fcntl') is not None
+HAS_LUPA = importlib.util.find_spec('lupa') is not None
 
 
 class SiteTable(unittest.TestCase):
@@ -161,6 +164,7 @@ class WorldClassNames(unittest.TestCase):
         self.assertIsNone(generator.itanium('.?AV?$Other@H@U@@'))
 
 
+@unittest.skipUnless(HAS_FCNTL, 'linux_gate_live needs fcntl (POSIX)')
 class LiveRunner(unittest.TestCase):
     """tools/dev/linux_gate_live.py: the extension composition follows the lane tool's overlay rules."""
     def test_overlay_composition(self):
@@ -357,6 +361,7 @@ class LiveRunner(unittest.TestCase):
             self.assertFalse(live.steam_shared_memory(shm / 'missing', uid))
 
 
+@unittest.skipUnless(HAS_LUPA, 'needs lupa (LuaJIT)')
 class ProbeLibrary(unittest.TestCase):
     """The probe loads the platform's gate module and names a refused verification stage."""
     def run_probe(self, separator, stage):
@@ -432,6 +437,7 @@ class Overlay(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=extra):
                 self.build(*extra)
 
+    @unittest.skipUnless(HAS_FCNTL, 'linux_gate_live needs fcntl (POSIX)')
     def test_live_launch_order(self):
         live = load_tool('linux_gate_live')
         self.assertEqual(live.launch_order(None, 3), [1, 2, 3])
