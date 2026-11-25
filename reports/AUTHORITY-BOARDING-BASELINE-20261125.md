@@ -83,6 +83,48 @@ The corrected adapter checks the conversion back to the original runtime
 ID before each reference is used. Neither run saved the in-memory
 enrollment. The original 5,048 entries remain the last sealed registry.
 
+## Disposable stock start trials
+
+Run01 at `3b5f00d4` loaded the confirmed eight-marine ARU-541 copy.
+Cold inspection verified the sealed 5,048-entry registry and the existing
+ZNG-430/index 1666 target. The ordinary in-memory Enroll and Resolve
+returned ARU-541/index 5049, runtime reference `0x4204c`. The stock
+read-only preflight still reported Board selectable, ZNG capturable,
+eight available marines and an allocation limit of eight. The stock
+boarding witness armed on the sealed ZNG-430 reference `0x41f83`.
+
+The private driver passed the nested boarding payload directly to
+`OpenMenu`. The engine reported a ScriptValue conversion error at
+parameter 7 and the map received an empty target. The private driver
+repaused and exited. The recorded sequence ends before a stock click,
+operation start or marine assignment. The output checkpoint directory
+stayed empty. The confirmed original and staged source retained save
+SHA-256 `b80e43e31242758bdd1b422d157c87b46a3c327399fcc58d810957763feb1bd4`.
+
+The corrected private driver opens the ordinary MapMenu and uses its
+local `onInteractMenuCallback("boardingcontext", ...)` path. A LuaJIT
+test executed the original 08 catalog callback with renderer and
+native getter doubles. Both precise IDs reached context creation.
+A fresh wrapper for the same attacker retained the proper stock map
+key. The eight marine assignments triggered one mounted callback in
+the double. The wrong-actor case triggered zero callbacks.
+
+Run02 at `bdec1390` again loaded the sealed target, resolved ARU-541 at
+temporary index 5049 and armed the observer. Its fresh runtime ship
+references were `0x4204a` and `0x41f81`. The plain MapMenu became visible
+with a native holomap. The private assertion before the boarding callback
+failed. That assertion checked for both an empty context menu and a Lua
+callback function, so the trace leaves the failing subcondition open.
+The first run's ScriptValue error did not recur. Both attempts recorded
+zero Start clicks and zero native operation starts. No allocated marine
+readback, launch of boarding pods or takeover was observed.
+
+Both provider processes exited with no owned game process remaining.
+Both checkpoint output directories stayed empty, and the original and
+each staged source retained the exact confirmed hash above. Private
+evidence is in `.local/native-boarding-crew-seed/stock-start-01/` and
+`stock-start-02/`. The runtime index 5049 did not enter a saved registry.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
