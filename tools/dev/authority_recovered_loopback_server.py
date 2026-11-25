@@ -9,6 +9,7 @@ loopback. An explicit TLS configuration can expose one pinned TLS listener.
 Actual client loading, gameplay and cross-platform operation are not proven.
 """
 import argparse
+from functools import partial
 import json
 import math
 import os
@@ -902,6 +903,9 @@ def run(args):
     company_purchases = getattr(args, 'company_purchases', False)
     if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
         raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
+    company_undock = getattr(args, 'company_undock_test', False)
+    if type(company_undock) is not bool or (company_undock and not company_purchases):
+        raise ValueError('company undock test requires Company purchases')
     parking = getattr(args, 'park_server_avatar', None)
     trade_mode = getattr(args, 'company_trade_trial', None)
     cockpit_capture = getattr(args, 'company_cockpit_purchase', None)
@@ -943,7 +947,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
-    purchase_provider = purchases = purchase_ledger = None
+    purchase_provider = undock_provider = purchases = purchase_ledger = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1163,6 +1167,10 @@ def run(args):
                 from authority_native_purchase import NativePurchaseProvider
                 purchase_provider = NativePurchaseProvider()
                 protected.extend(purchase_provider.install(case))
+            if company_undock:
+                from authority_native_undock import NativeUndockProvider
+                undock_provider = NativeUndockProvider()
+                protected.extend(undock_provider.install(case))
             if trade_mode:
                 protected.extend(trade_probe.install(case, trade_mode, saved_evidence['epoch'], trade_nonce,
                                                      cockpit_purchase=cockpit_purchase))
@@ -1366,10 +1374,14 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
-        if pose_channel is not None:
+        if pose_channel is not None or undock_provider is not None:
             game_stat = (game/'X4').stat()
-            pose_channel.bind({'pid': identity[0], 'start_ticks': identity[1],
-                               'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}, check)
+            process_identity = {'pid': identity[0], 'start_ticks': identity[1],
+                                'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}
+        if undock_provider is not None:
+            undock_provider.bind(process_identity, check)
+        if pose_channel is not None:
+            pose_channel.bind(process_identity, check)
             if pose_cold:
                 result['company_pose_reload'] = company_pose.verify_reloaded(pose_channel, prior_pose, checkpoint)
                 result.update(success=True, final_world_state='paused')
@@ -1506,9 +1518,15 @@ def run(args):
             raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
         world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
+        company_ship_reader = None
+        if pose_live:
+            company_ship_reader = pose_channel.read_company_catalogue
+        elif company_undock:
+            from authority.company_ships import read_company_ship_catalogue
+            company_ship_reader = partial(read_company_ship_catalogue, include_captains=True)
         session = TrustedMarkerLoadSession(world, enabled=True, marker_script=marker_script,
                                          require_company_ship=require_company_ship,
-                                         company_ship_reader=pose_channel.read_company_catalogue if pose_live else None)
+                                         company_ship_reader=company_ship_reader)
         if company_motion:
             from authority.company_motion_service import CompanyMotionService
             application_drops = None
@@ -1516,8 +1534,10 @@ def run(args):
                 application_drops = {}
                 pose_trial.report['application_drops'] = application_drops
             motion_service = CompanyMotionService(application_drops=application_drops)
+        undock_capability = {'company_undock': True} if company_undock else {}
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
-                                         motion_service=motion_service, company_purchases=company_purchases)
+                                         motion_service=motion_service, company_purchases=company_purchases,
+                                         **undock_capability)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
         def verify_process():
@@ -1527,8 +1547,9 @@ def run(args):
                                                           guard_process=verify_process)
         if purchase_provider is not None:
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
+            undock_options = {'undock': undock_provider} if undock_provider is not None else {}
             purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
-                                                 guard=world._participants.check_process)
+                                                 guard=world._participants.check_process, **undock_options)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -2109,6 +2130,11 @@ def run(args):
                 purchase_provider.close()
             except OSError as error:
                 errors.append('purchase provider cleanup: ' + type(error).__name__)
+        if undock_provider is not None:
+            try:
+                undock_provider.close()
+            except OSError as error:
+                errors.append('undock provider cleanup: ' + type(error).__name__)
         if pose_channel is not None:
             pose_channel.close()
         services_stopped = True
@@ -2252,6 +2278,8 @@ def main(argv=None, *, display_hostname=None):
                         help='enable the separate participant-bound TLS movement channel')
     parser.add_argument('--company-purchases', action='store_true',
                         help='enable Company purchases for a verified company ship over pinned TLS')
+    parser.add_argument('--company-undock-test', action='store_true',
+                        help='allow one witnessed Company departure after an admitted purchase')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every joining player to reserve a free shared-company ship')
     parser.add_argument('--registry-status',action='store_true',help='check saved registry status before activation and each save')

@@ -76,11 +76,11 @@ class ProviderParkingTest(unittest.TestCase):
                 flags, = run.call_args.args
                 self.assertEqual(flags[:flags.index('--game')], expected)
 
-    def test_company_purchase_opt_in_reaches_the_raw_supervisor_parser(self):
+    def test_company_purchase_and_undock_opt_ins_reach_the_raw_supervisor_parser(self):
         tls = ['--tls-port', '0']
-        for enabled in (False, True):
+        for enabled, undock in ((False, False), (True, False), (True, True)):
             with (
-                self.subTest(enabled=enabled),
+                self.subTest(enabled=enabled, undock=undock),
                 patch.object(provider.os, 'geteuid', return_value=1000),
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
@@ -90,12 +90,30 @@ class ProviderParkingTest(unittest.TestCase):
                 redirect_stdout(StringIO()),
             ):
                 options = ['--company-purchases'] if enabled else []
+                if undock:
+                    options.append('--company-undock-test')
                 self.assertEqual(provider.main([*ARGS, *tls, *options]), 0)
                 args, = run.call_args.args
                 self.assertIs(args.company_purchases, enabled)
+                self.assertIs(args.company_undock_test, undock)
                 self.assertIs(args.require_company_ship, enabled)
                 self.assertIs(args.require_registry_snapshot, enabled)
                 self.assertFalse(args.company_motion)
+
+    def test_undock_test_requires_purchase_and_tls_before_display(self):
+        for options in (['--tls-port', '0'], ['--company-purchases']):
+            with (
+                self.subTest(options=options),
+                redirect_stderr(StringIO()) as reported,
+                patch.object(provider, 'private_display') as display,
+                patch.object(provider.supervisor, 'main') as run,
+            ):
+                with self.assertRaises(SystemExit) as refused:
+                    provider.main([*ARGS, '--company-undock-test', *options])
+                self.assertEqual(refused.exception.code, 2)
+                self.assertIn('requires --company-purchases and pinned TLS', reported.getvalue())
+                display.assert_not_called()
+                run.assert_not_called()
 
     def test_conflicting_company_pose_modes_and_verify_hosting_flags_fail_before_display(self):
         cases = (

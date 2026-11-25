@@ -87,6 +87,8 @@ def main(argv=None):
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--company-purchases', action='store_true',
                         help='enable Company purchases and require company ship selection and pinned TLS')
+    parser.add_argument('--company-undock-test', action='store_true',
+                        help='allow one witnessed Company departure after an admitted purchase')
     parser.add_argument('--require-company-ship', action='store_true',
                         help='require every player to select an available company ship; enables full registry checks')
     parser.add_argument('--base-game-only', action='store_true',
@@ -124,6 +126,8 @@ def main(argv=None):
         value = getattr(args, 'tls_' + flag.replace('-', '_'))
         if value is not None:
             server_flags.extend(('--tls-' + flag, str(value)))
+    if args.company_undock_test and (not args.company_purchases or not server_flags):
+        parser.error('--company-undock-test requires --company-purchases and pinned TLS')
     if server_flags or args.require_company_ship or args.company_motion or args.company_purchases:
         if args.company_shuttle_pair:
             parser.error('--company-shuttle-pair uses an isolated fixture with no TLS or Company hosting options')
@@ -165,6 +169,8 @@ def main(argv=None):
         server_flags.append('--company-motion')
     if args.company_purchases:
         server_flags.append('--company-purchases')
+    if args.company_undock_test:
+        server_flags.append('--company-undock-test')
     if args.company_pose_trial:
         server_flags.append('--company-pose-trial')
     if args.verify_company_pose:
