@@ -130,12 +130,18 @@ source.new = function(options) native_options = options; return {} end
 source.new_x4({port = 1, lease = 'test', generation = generation, nonce = nonce, index = index},
               '/private/save', {epoch = epoch, issued_count = index}, {open = function() return {} end})
 local config = native_options.make_sampler(actor, function() return true end)
-assert(config.diagnostics and config.recover_expired_pending and config.allow_superhighway_gap)
+assert(config.diagnostics and config.recover_expired_pending and config.allow_superhighway_gap
+    and config.recheck_superhighway_boundary)
+native_options.superhighway_gap('superhighway_boundary_recheck')
+assert(lines[#lines] == '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP superhighway_boundary_recheck')
 local prefix = '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED '
 for _, reason in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending',
                          'sample_dock_values', 'register_actor_key', 'reset_id_roundtrip',
                          'tick_external_binding', 'tick_id_convert', 'tick_guard_rejected',
-                         'tick_reader_start_dispatch', 'tick_reader_tick_clock_timeout'}) do
+                         'tick_reader_start_dispatch', 'tick_reader_tick_clock_timeout',
+                         'sample_reader_response_snapshot_callback', 'sample_reader_response_descriptor_unavailable',
+                         'sample_reader_response_descriptor_invalid', 'sample_reader_response_transit_rejected',
+                         'sample_boundary_recheck_exhausted'}) do
     config.fault(reason)
     assert(lines[#lines] == prefix .. reason)
 end

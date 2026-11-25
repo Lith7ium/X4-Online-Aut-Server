@@ -151,8 +151,14 @@ An earlier two-pilot run ended on an unconfirmed provider position request
 before entry. In a subsequent one-pilot flight at `f20dc23a`, the GPU-free
 provider transferred HVC-420 to Black Hole Sun IV at sample 161 and saved it
 there after departure. A fresh provider found it in Black Hole Sun IV
-within 0.47 mm of the recorded position. A second pilot staying online through that passage
-still needs testing. [Native flight and authority transfer](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
+within 0.47 mm of the recorded position. At `68fd061f` HVC's sender recovered
+from a deliberately delayed sector read and the provider saved the destination
+within 0.61 mm. In a separate natural passage, KHI remained connected and
+both pilots' motion streams continued after HVC exited. The provider stopped
+on its 2 s readback deadline for an earlier origin-sector write. The
+matching response prefix arrived at 2.01597 s. Final authoritative
+persistence in that two-pilot scenario remains open.
+[Native flight and authority transfer](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot

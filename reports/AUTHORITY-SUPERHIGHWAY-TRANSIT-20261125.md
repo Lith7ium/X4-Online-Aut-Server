@@ -1,5 +1,72 @@
 # Company superhighway passage and authoritative sector transfer
 
+## Interrupted sender with two admitted pilots
+
+At `7ae7a5a0` two ordinary Linux cockpits joined the GPU-free Bazzite
+provider. HVC-420 entered SuperHighway002 at game age 497.627 s and
+exited in Black Hole Sun IV at 500.769 s. The stock game kept the pilot
+at the helm. Its motion sampler failed at entry with the generic reason
+`sample`. HVC's last acknowledged position was origin-sector sample 267.
+KHI-630 stayed admitted in Black Hole Sun IV and the provider kept
+acknowledging its stationary samples after HVC's exit.
+
+The provider received no destination sample from HVC. Its marked departure
+save kept HVC in Black Hole Sun V within 0.29 mm of its last verified
+origin write, and KHI in Black Hole Sun IV within 0.40 mm of the paused
+target. The save SHA-256 was
+`8351bf9934b4d2f161aa706ab249b2bc5337ad47c0b4247ce5caef5ea123260e`.
+The sampler log does not identify which validation failed in this run.
+
+## Native recovery of a delayed sector reply
+
+At `68fd061f` one regular Linux pilot flew the same stock route. A private
+fixture held one genuine origin-sector Mission Director reply and delivered
+it unchanged when X4 reported that the controlled ship had entered the
+highway and had no sector. The reply reached the ordinary reader 91.5 ms
+after the original request, inside its existing timeout.
+
+The reader discarded the stale coordinates and requested a fresh sample.
+The provider acknowledged the first destination position at sequence 143,
+with velocity absent, and velocity at 145. It transferred HVC-420 once,
+at sequence 143. On final departure it saved HVC in Black Hole Sun IV
+within 0.61 mm of the paused readback. Both processes exited cleanly.
+This run reproduced the timing condition deliberately with a single pilot.
+
+| Private evidence | SHA-256 |
+| --- | --- |
+| Two-pilot save inspection, `.local/native-authority-transit-pair-calibrated/native-01/saved-position-verification.json` | `1fc8cc6fa6c8bc7ff7aa3b1f4539763f8730b28cd4a9b61b6b44710cf011071e` |
+| Delayed reply and flight samples, `.local/native-authority-transit-sender-race/native-01/transition-source.json` | `08d507bbc7cf0c5da9556bf0b72e3281c19c2d9af6a85f618fffbd177d3f5bff` |
+| Independently verified destination save in the same directory, `verified.json` | `2a472707db001eb7893202633ad49a4556ee66e336a8da0d454ce7a97edbb36f` |
+
+## Two pilots through a natural crossing on the repaired sender
+
+Both regular players joined the same private Bazzite provider on
+`68fd061f`. HVC took stock autopilot and crossed naturally. KHI
+remained stationary and connected in Black Hole Sun IV. The passive
+observer added no delay. HVC's last acknowledged origin sample was
+331. The first destination sample was 332 with a fresh position, and
+334 included velocity. KHI's sequence 243 was captured after HVC's
+first destination sample and acknowledged under KHI's existing grant.
+
+The provider received HVC's motion in the destination sector. Its
+position writer was still verifying an earlier write for origin sample
+328. A reply carrying the matching request prefix reached the game
+bridge after 2.01597 s and crossed its 2 s deadline. The bridge rejected
+it before validating the payload. The last independently verified HVC
+write was origin sample 287. The provider stopped with zero verified
+sector transfers and no new departure checkpoint. Both store pointers
+retained the second join offer. The authority's final ship position
+after the unverified write remains unknown.
+During this run sampled available memory stayed above 9 GiB and sampled
+full memory pressure remained zero.
+
+Private evidence is in `.local/native-authority-transit-pair-sender-repair/native-01`.
+The SHA-256 of `transition-source.json` is
+`1d84e452a95441a3818394e5b47f13a9474a35d522cd0d9287dc6084dd2503cc`.
+The provider's `server/result.json` has SHA-256
+`3d7f8445c5698810393e6ca944f2efd65dcaa59f82d1ff61c202643192ddadc1`.
+The timeout diagnostic is in its private `engine-output.log` at line 769.
+
 ## Pilot flight with a native provider position writer
 
 At `f20dc23a`, one Linux pilot flew HVC-420 (registry index 1073) from
