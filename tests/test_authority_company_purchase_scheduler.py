@@ -56,7 +56,7 @@ def world_fixture(test, *, pilot_count=2, **options):
     ledger = CompanyPurchaseLedger(epoch)
     test.addCleanup(ledger.close)
     native = Mock()
-    native.begin.return_value = native.poll.return_value = None
+    native.begin.return_value = native.begin_sale.return_value = native.poll.return_value = None
     schedule = scheduler.CompanyPurchaseScheduler(participants, native, ledger, clock=lambda: now[0],
                                                    verify_timeout=5, **options)
 
@@ -67,6 +67,100 @@ def world_fixture(test, *, pilot_count=2, **options):
     return Ns(step=step, schedule=schedule, outcomes=outcomes, received=received,
               native=native, now=now, peers=peers, reservations=reservations, host=host,
               ledger=ledger, request_statement=request_statement)
+
+
+def sale_order(number=1):
+    return dict(sale_id=f'{number:032x}', sector='sector_1', station_code='CTD-093',
+                ware='water', quantity=2, price_cents=3473)
+
+
+def credited(sale):
+    return dict(sale, outcome='confirmed', credited_cents=6900,
+                company_balance_cents=937000, cargo_units=0, ship_code='WRN-302')
+
+
+class SaleSchedulerTests(unittest.TestCase):
+    def test_sale_uses_regular_market_poll_and_serializes_with_purchase(self):
+        with self.assertRaisesRegex(ValueError, 'market'):
+            world_fixture(self, sales=True)
+        world = world_fixture(self, sales=True, market=Mock(), undock=Mock())
+        world.peers[1].update(trade_view_version=1, sale_version=1)
+        world.peers[2].update(trade_view_version=1)
+        sale, purchase = sale_order(), order(2)
+
+        def trade(_participants, handle, _attempt, _index, _receipt, **options):
+            if handle == 1:
+                self.assertIs(options['include_sale'], True)
+                return dict(purchase=None, view=None, sale=sale if world.now[0] == 0 else None)
+            self.assertNotIn('include_sale', options)
+            return dict(purchase=purchase if world.now[0] == .5 else None, view=None)
+
+        with patch.object(scheduler, 'poll_company_purchase', side_effect=trade) as poll, \
+             patch.object(scheduler, 'poll_company_sale', return_value=None) as deliver:
+            world.step(0)
+            world.step(.5)
+            self.assertEqual(poll.call_count, 2)
+            deliver.assert_not_called()
+            world.native.begin_sale.assert_called_once_with(
+                dict(registry_epoch='a'*32, ship_index=7354, ship_code='WRN-302'), sale)
+            world.native.begin.assert_not_called()
+            self.assertFalse(world.schedule.before_world_transition())
+            world.native.poll.return_value = credited(sale)
+            self.assertTrue(world.schedule.before_world_transition())
+            world.native.confirm_sale_persisted.assert_called_once_with(credited(sale))
+            self.assertEqual(list(world.schedule._purchased_docks.values()), [(sale['sector'], sale['station_code'])])
+            world.step(1)
+            world.native.begin.assert_called_once()
+            self.assertEqual(deliver.call_args.args[4], credited(sale))
+
+    def test_four_idle_sale_pilots_use_only_existing_market_round_trips(self):
+        world = world_fixture(self, pilot_count=4, sales=True, market=Mock())
+        for peer in world.peers.values():
+            peer.update(trade_view_version=1, sale_version=1)
+        with patch.object(scheduler, 'poll_company_purchase',
+                          return_value=dict(purchase=None, view=None, sale=None)) as poll, \
+             patch.object(scheduler, 'poll_company_sale') as deliver:
+            for tick in range(17):
+                world.step(tick / 4)
+        self.assertEqual([call.args[1] for call in poll.call_args_list], list(range(1, 5)) * 2 + [1])
+        self.assertTrue(all(call.kwargs['include_sale'] is True for call in poll.call_args_list))
+        deliver.assert_not_called()
+
+    def test_lost_peer_keeps_sale_result_and_repeat_never_dispatches(self):
+        world = world_fixture(self, pilot_count=1, sales=True, market=Mock(), undock=Mock())
+        world.peers[1].update(trade_view_version=1, sale_version=1)
+        sale = sale_order()
+        with patch.object(scheduler, 'poll_company_purchase', return_value=dict(purchase=None, view=None, sale=sale)), \
+             patch.object(scheduler, 'poll_company_sale', return_value=None) as deliver:
+            world.step(0)
+            world.step(.1)
+            peer = world.peers.pop(1)
+            world.native.poll.return_value = credited(sale)
+            world.step(.5)
+            deliver.assert_not_called()
+            self.assertEqual(world.ledger.reserve_sale(7354, 'WRN-302', sale), credited(sale))
+
+            world.peers[1] = dict(peer, attempt_id='e'*32)
+            world.step(1)
+            world.step(1.5)
+            self.assertEqual(deliver.call_args.args[4], credited(sale))
+            world.native.begin_sale.assert_called_once()
+            self.assertEqual(world.schedule._purchased_docks, {})
+
+    def test_wrong_native_binding_is_durable_unknown_and_never_unlocks_undock(self):
+        world = world_fixture(self, pilot_count=1, sales=True, market=Mock(), undock=Mock())
+        world.peers[1].update(trade_view_version=1, sale_version=1)
+        sale = sale_order()
+        world.native.begin_sale.return_value = dict(credited(sale), ship_code='ABC-123')
+        with patch.object(scheduler, 'poll_company_purchase', return_value=dict(purchase=None, view=None, sale=sale)), \
+             patch.object(scheduler, 'poll_company_sale', return_value=None) as deliver:
+            world.step(0)
+            world.step(.5)
+        unknown = dict(sale, outcome='unknown')
+        self.assertEqual(deliver.call_args.args[4], unknown)
+        self.assertEqual(world.ledger.reserve_sale(7354, 'WRN-302', sale), unknown)
+        self.assertEqual(world.schedule._purchased_docks, {})
+        world.native.confirm_sale_persisted.assert_not_called()
 
 
 class SchedulerTests(unittest.TestCase):

@@ -184,11 +184,19 @@ class ClientPurchaseControl:
         if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
             return self._reply_statement_delivery(command, envelope, check)
         market_poll = type(command) is dict and command.get('kind') == 'company_trade_poll'
+        include_sale = False
         if market_poll:
             if self.trade_view_exchange is None or not _bound(command, envelope, 'company_trade_poll', 'trade'):
                 raise ValueError('unexpected or stale Company trade poll')
             trade = command['trade']
-            if type(trade) is not dict or set(trade) != {'receipt', 'page'}:
+            if type(trade) is not dict:
+                raise ValueError('invalid Company trade poll')
+            include_sale = set(trade) == {'receipt', 'page', 'include_sale'}
+            if include_sale:
+                if trade['include_sale'] is not True or self.sale_exchange is None:
+                    raise ValueError('Company sale collection was not negotiated')
+                self.window.sale.receipt(None)
+            elif set(trade) != {'receipt', 'page'}:
                 raise ValueError('invalid Company trade poll')
             page = None if trade['page'] is None else view_page(trade['page'])
             receipt = self.window.receipt(trade['receipt'])
@@ -206,11 +214,19 @@ class ClientPurchaseControl:
             if request is not None:
                 request = view_request(request)
             check()
-            reply = _frame(dict(envelope, kind='company_trade_result',
-                                trade={'purchase': purchase, 'view': request}))
+            trade_reply = {'purchase': purchase, 'view': request}
+            if include_sale:
+                sale = self.window.sale.next_request(self.sale_exchange(None))
+                check()
+                if purchase is not None and sale is not None:
+                    raise ValueError('Company trade poll returned both a purchase and a sale')
+                trade_reply['sale'] = sale
+            reply = _frame(dict(envelope, kind='company_trade_result', trade=trade_reply))
         else:
             reply = _frame(dict(envelope, kind=_RESULT, purchase=purchase))
         self.window.advance(purchase)
+        if include_sale:
+            self.window.sale.advance(sale)
         return reply
 
 
@@ -258,8 +274,13 @@ def supports_trade_view(peer):
     return type(version) is int and version == 1
 
 
+def supports_sales(peer):
+    version = peer.get('sale_version')
+    return type(version) is int and version == 1
+
+
 def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=None, *,
-                          guard=None, market=False, page=None):
+                          guard=None, market=False, page=None, include_sale=False):
     """Poll one admitted participant; send one exact terminal receipt if pending.
 
     The caller explicitly enables this path after capability negotiation. The
@@ -267,6 +288,9 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
     Local preflight errors leave the connection idle. Transport failure retires
     only this peer. Loss of host or world ownership faults the adapter and host.
     """
+    if type(include_sale) is not bool or (include_sale and not market):
+        raise ValueError('Company sale collection requires a market poll')
+
     def prepare(peer, window, reservation, envelope):
         result = window.receipt(receipt)
         if (result is not None and result['outcome'] == 'accepted_pending_statement'
@@ -276,16 +300,31 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
             raise ValueError('company purchase receipt names a different ship')
         if market:
             checked_page = None if page is None else view_page(page)
-            command = dict(envelope, kind='company_trade_poll', trade={'receipt': result, 'page': checked_page})
+            trade = {'receipt': result, 'page': checked_page}
+            response_fields = {'purchase', 'view'}
+            if include_sale:
+                window.sale.receipt(None)
+                trade['include_sale'] = True
+                response_fields.add('sale')
+            command = dict(envelope, kind='company_trade_poll', trade=trade)
 
             def parse_trade(value):
-                if type(value) is not dict or set(value) != {'purchase', 'view'}:
+                if type(value) is not dict or set(value) != response_fields:
                     raise ValueError('invalid Company trade poll response')
                 request = None if value['view'] is None else view_request(value['view'])
-                return {'purchase': window.next(value['purchase']), 'view': request}
+                purchase = window.next(value['purchase'])
+                parsed = {'purchase': purchase, 'view': request}
+                if include_sale:
+                    sale = window.sale.next_request(value['sale'])
+                    if purchase is not None and sale is not None:
+                        raise ValueError('Company trade poll returned both a purchase and a sale')
+                    parsed['sale'] = sale
+                return parsed
 
             def advance_trade(value):
                 window.advance(value['purchase'])
+                if include_sale:
+                    window.sale.advance(value['sale'])
 
             return _frame(command), envelope, 'company_trade_result', 'trade', parse_trade, advance_trade
         if page is not None:
@@ -293,8 +332,11 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
         return (_frame(dict(envelope, kind=_POLL, receipt=result)), envelope,
                 _RESULT, 'purchase', window.next, window.advance)
 
+    def supports_market(peer):
+        return supports_trade_view(peer) and (not include_sale or supports_sales(peer))
+
     return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
-                              peer_supports=supports_trade_view if market else None)
+                              peer_supports=supports_market if market else None)
 
 
 def poll_company_undock(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):

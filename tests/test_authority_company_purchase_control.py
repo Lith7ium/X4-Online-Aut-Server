@@ -33,6 +33,23 @@ DEPARTURE = dict(request_id='0' * 31 + '1', sector=PURCHASE['sector'], station_c
                  dockarea_macro='dockarea_arg_m_station_02_lowtech_macro')
 
 
+class CombinedTradePollTests(unittest.TestCase):
+    def test_rejects_simultaneous_orders_without_advancing_either_window(self):
+        attempt = 'c' * 32
+        sale = dict(sale_id='d' * 32, sector='sector', station_code='CTD-093',
+                    ware='water', quantity=2, price_cents=3473)
+        client = ClientPurchaseControl('world', 1, attempt, 7, lambda _: PURCHASE,
+                                       trade_view_exchange=lambda _: None, sale_exchange=lambda _: sale)
+        command = dict(version=1, session_epoch='world', connection_handle=1, attempt_id=attempt,
+                       ship_index=7, request_id=1, kind='company_trade_poll',
+                       trade={'receipt': None, 'page': None, 'include_sale': True})
+        with self.assertRaisesRegex(ValueError, 'both'):
+            client.reply(command, lambda: None)
+        self.assertEqual(client.window.sequence, 0)
+        self.assertIsNone(client.window.pending)
+        self.assertIsNone(client.window.sale.pending)
+
+
 class Controller:
     def resume(self, handles):
         return handles in ((1,), (2,))
@@ -331,7 +348,13 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poll_company_fleet(*args, accepted)
         self.assertEqual(order_receipts, [None, accepted])
-        self.assertEqual(poll_company_sale(*args, guard=guard), sale)
+        self.assertEqual(poll_company_purchase(*args, guard=guard, market=True, include_sale=True),
+                         {'purchase': None, 'view': view, 'sale': sale})
+        with self.assertRaises(ValueError):
+            poll_company_purchase(*args, market=True, include_sale=True)
+        with self.assertRaises(ValueError):
+            poll_company_purchase(case.participants, other_offer.connection_handle, other_offer.attempt_id,
+                                  8, market=True, include_sale=True)
         credited = dict(sale, outcome='confirmed', ship_code='WRN-302', credited_cents=6900,
                         company_balance_cents=937000, cargo_units=10)
         for change in ({'ship_code': 'WRN-303'}, {'price_cents': 3472}, {'sale_id': '6' * 32}):
@@ -343,6 +366,9 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poll_company_sale(*args, credited)
         self.assertEqual(sale_receipts, [None, credited])
+        self.assertEqual(poll_company_purchase(*args, market=True, include_sale=True),
+                         {'purchase': None, 'view': view, 'sale': None})
+        self.assertEqual(sale_receipts, [None, credited, None])
         self.assertEqual(deliveries, [REPORTED])
         with self.assertRaises(ValueError):
             deliver_company_purchase_statement_result(*args, CONFIRMED)

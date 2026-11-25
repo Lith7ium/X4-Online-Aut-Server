@@ -1,4 +1,4 @@
-"""Schedule purchases on admitted control peers and a serial native provider."""
+"""Schedule Company trades on admitted control peers and a serial native provider."""
 
 from collections import deque
 from dataclasses import dataclass, field
@@ -7,9 +7,10 @@ import time
 
 from .company_purchase_control import (
     CompanyPurchasePeerLost, deliver_company_purchase_statement_result, poll_company_purchase,
-    purchase_receipt, request_company_purchase_statement, supports_trade_view,
+    poll_company_sale, purchase_receipt, request_company_purchase_statement, supports_sales, supports_trade_view,
 )
 
+from .company_trade_messages import sale_receipt
 from .company_trade_view import CompanyTradeViews
 from .company_fleet_dispatch import CompanyFleetDispatch
 
@@ -44,9 +45,10 @@ class _QueuedCommand:
 
 
 @dataclass
-class _ActivePurchase:
+class _ActiveTrade:
     binding: _Binding
-    purchase: dict
+    kind: str
+    request: dict
     deadline: float
 
 
@@ -65,9 +67,12 @@ class CompanyPurchaseScheduler:
     """Serialize native bookings and departures for admitted pilots."""
 
     def __init__(self, participants, native, ledger, *, guard=None, clock=time.monotonic,
-                 verify_timeout=50, undock=None, market=None, fleet=None):
+                 verify_timeout=50, undock=None, market=None, fleet=None, sales=False):
         if not 0 < verify_timeout <= 60:
             raise ValueError('company purchase verify timeout must be in (0, 60]')
+        if type(sales) is not bool or (sales and market is None):
+            raise ValueError('Company sales require a market provider')
+        self._sales = sales
         self._participants = participants
         self._native = native
         self._ledger = ledger
@@ -77,6 +82,7 @@ class CompanyPurchaseScheduler:
         self._active = None
         self._queue = deque()
         self._receipts = {}
+        self._sale_receipts = {}
         self._report_search = {}
         self._last_handle = 0
         self._next_poll = float('-inf')
@@ -127,31 +133,42 @@ class CompanyPurchaseScheduler:
 
     def _finish(self, receipt):
         active = self._active
-        durable_receipt = self._ledger.finish(active.purchase['purchase_id'], receipt)
-        if durable_receipt['outcome'] == 'confirmed':
-            self._native.confirm_persisted(durable_receipt)
-            if self._undock is not None:
-                self._purchased_docks[active.binding] = (active.purchase['sector'], active.purchase['station_code'])
-        self._receipts[active.binding.handle] = (active.binding, durable_receipt)
+        binding, request = active.binding, active.request
+        if active.kind == 'sale':
+            durable = self._ledger.record_sale_result(binding.ship_index, binding.ship_code, receipt)
+            if durable['outcome'] == 'confirmed':
+                self._native.confirm_sale_persisted(durable)
+            self._sale_receipts[binding] = durable
+        else:
+            durable = self._ledger.finish(request['purchase_id'], receipt)
+            if durable['outcome'] == 'confirmed':
+                self._native.confirm_persisted(durable)
+            self._receipts[binding.handle] = (binding, durable)
+        if durable['outcome'] == 'confirmed' and self._undock is not None:
+            self._purchased_docks[binding] = (request['sector'], request['station_code'])
         self._active = None
 
     def _advance_native(self, *, begin=False):
         active = self._active
         self._check()
         try:
-            receipt = (self._native.begin(active.binding.native_value(), dict(active.purchase))
-                       if begin else self._native.poll())
+            if begin:
+                start = self._native.begin_sale if active.kind == 'sale' else self._native.begin
+                receipt = start(active.binding.native_value(), dict(active.request))
+            else:
+                receipt = self._native.poll()
             if receipt is not None:
-                receipt = purchase_receipt(receipt)
+                validate = sale_receipt if active.kind == 'sale' else purchase_receipt
+                receipt = validate(receipt)
                 if (receipt['outcome'] not in ('confirmed', 'refused', 'unknown')
-                        or any(receipt[field] != value for field, value in active.purchase.items())
+                        or any(receipt[field] != value for field, value in active.request.items())
                         or (receipt['outcome'] == 'confirmed'
                             and receipt['ship_code'] != active.binding.ship_code)):
-                    raise ValueError('native purchase receipt binding changed')
+                    raise ValueError('native Company trade receipt binding changed')
             if receipt is None and self._clock() >= active.deadline:
-                receipt = dict(active.purchase, outcome='unknown')
+                receipt = dict(active.request, outcome='unknown')
         except Exception:
-            receipt = dict(active.purchase, outcome='unknown')
+            receipt = dict(active.request, outcome='unknown')
         if receipt is not None:
             self._finish(receipt)
         self._check()
@@ -172,12 +189,17 @@ class CompanyPurchaseScheduler:
             if command.kind == 'fleet':
                 self._fleet.start(binding, command.request)
                 return
-            purchase = command.request
-            if not self._ledger.begin(binding.ship_index, binding.ship_code, purchase):
+            request = command.request
+            if command.kind == 'sale':
+                existing = self._ledger.reserve_sale(binding.ship_index, binding.ship_code, request)
+                if existing is not None:
+                    self._sale_receipts[binding] = existing
+                    continue
+            elif not self._ledger.begin(binding.ship_index, binding.ship_code, request):
                 self._receipts[binding.handle] = (
-                    binding, dict(purchase, outcome='refused', reason='request_replayed'))
+                    binding, dict(request, outcome='refused', reason='request_replayed'))
                 continue
-            self._active = _ActivePurchase(binding, purchase, self._clock() + self._verify_timeout)
+            self._active = _ActiveTrade(binding, command.kind, request, self._clock() + self._verify_timeout)
             self._advance_native(begin=True)
             return
 
@@ -300,6 +322,8 @@ class CompanyPurchaseScheduler:
         self._receipts = {handle: item for handle, item in self._receipts.items()
                           if bindings.get(handle) == item[0]}
         current = set(bindings.values())
+        self._sale_receipts = {binding: receipt for binding, receipt in self._sale_receipts.items()
+                               if binding in current}
         if self._fleet is not None:
             self._fleet.advance()
             self._fleet.retain(current)
@@ -334,7 +358,7 @@ class CompanyPurchaseScheduler:
             # Spend at most one extra turn between regular turns. This cursor
             # never changes which pilot gets the next purchase or undock turn.
             eligible = [handle for handle in eligible
-                        if handle not in self._receipts
+                        if handle not in self._receipts and bindings[handle] not in self._sale_receipts
                         and now >= self._market_backoff.get(bindings[handle], float('-inf'))
                         and self._market.has_unsent_page(bindings[handle])
                         and supports_trade_view(self._participants._host._control._peers[bindings[handle].conn])]
@@ -352,6 +376,9 @@ class CompanyPurchaseScheduler:
         self._next_market_poll = now + _EXTRA_PAGE_DELAY
         binding = bindings[handle]
         _, receipt = self._receipts.get(handle, (None, None))
+        if binding in self._sale_receipts:
+            self._deliver_sale(binding)
+            return
         if self._undock is not None:
             peer = self._participants._host._control._peers[binding.conn]
             version = peer.get('company_undock_version')
@@ -370,16 +397,29 @@ class CompanyPurchaseScheduler:
                 return
         self._poll_purchase(binding, receipt, recover_at=now)
 
+    def _deliver_sale(self, binding):
+        receipt = self._sale_receipts.pop(binding)
+        try:
+            next_sale = poll_company_sale(self._participants, binding.handle, binding.attempt_id,
+                                          binding.ship_index, receipt, guard=self._guard)
+        except CompanyPurchasePeerLost:
+            return  # The native receipt was already recorded before delivery.
+        if next_sale is not None:
+            self._queue.append(_QueuedCommand(binding, 'sale', next_sale))
+
     def _poll_purchase(self, binding, receipt, *, recover_at=None):
         handle = binding.handle
+        sale = None
         try:
             if receipt is None and recover_at is not None and self._recover_one(binding, recover_at):
                 return
             endpoint = (self._participants, handle, binding.attempt_id, binding.ship_index, receipt)
-            if self._market is not None and supports_trade_view(self._participants._host._control._peers[binding.conn]):
+            peer = self._participants._host._control._peers[binding.conn]
+            if self._market is not None and supports_trade_view(peer):
                 page = self._market.page(binding)
                 started = self._clock()
-                response = poll_company_purchase(*endpoint, guard=self._guard, market=True, page=page)
+                sale_options = {'include_sale': True} if self._sales and supports_sales(peer) else {}
+                response = poll_company_purchase(*endpoint, guard=self._guard, market=True, page=page, **sale_options)
                 finished = self._clock()
                 # A synchronous exchange can overrun a spare slot. Let this
                 # binding use its regular turns while the cooldown elapses.
@@ -387,8 +427,12 @@ class CompanyPurchaseScheduler:
                     self._market_backoff[binding] = finished + _SLOW_MARKET_COOLDOWN
                 if page is not None:
                     self._market.mark_page_sent(binding)
-                self._market.request(binding, response['view'])
                 purchase = response['purchase']
+                if sale_options:
+                    sale = response['sale']
+                    if sale is not None and purchase is not None:
+                        raise ValueError('Company trade poll returned both a purchase and a sale')
+                self._market.request(binding, response['view'])
             else:
                 purchase = poll_company_purchase(*endpoint, guard=self._guard)
         except CompanyPurchasePeerLost:
@@ -397,12 +441,14 @@ class CompanyPurchaseScheduler:
         self._receipts.pop(handle, None)
         if purchase is not None:
             self._queue.append(_QueuedCommand(binding, 'purchase', purchase))
+        elif sale is not None:
+            self._queue.append(_QueuedCommand(binding, 'sale', sale))
 
     def before_world_transition(self):
         """Allow a transition once the current native decision has been recorded.
 
         While deferred, call this again on a later running tick. It only verifies
-        an already-dispatched purchase or departure. It never requests more work.
+        an already-dispatched trade or departure. It never requests more work.
         """
         self._check()
         if self._market is not None:
