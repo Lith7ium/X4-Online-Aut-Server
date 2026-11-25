@@ -6,6 +6,36 @@ from lupa.luajit21 import LuaRuntime
 
 
 class TradeLedgerTest(unittest.TestCase):
+    def test_station_buying_water_from_the_ship(self):
+        source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_trade_ledger.lua'
+        lua = LuaRuntime()
+        module = lua.execute(source.read_text())
+        lua.execute(r"""
+local ledger = ...
+local ffi = require('ffi')
+-- Buyer, seller, quantity, entry, trade, price and credit from water-sale-native-04.
+local ship, station = ffi.new('uint64_t', 226239), ffi.new('uint64_t', 9971)
+local request = {ship='0x373bf', station='0x26f3', start_time=489, end_time=491,
+                 side='sell', ware='water', quantity=2}
+local function read(source, ship_log, station_log)
+    assert(ship_log == ship and station_log == station)
+    if source ~= 'ship' then return {} end
+    return {{buyer=station, seller=ship, partner=station, time=490, ware='water', amount=2,
+             eventtype='trade', trade_eventtype='completed', complete=true,
+             entry_id=ffi.new('int64_t', 14), trade_id=ffi.new('int64_t', 5),
+             price=ffi.new('int64_t', 3473), money=ffi.new('int64_t', 6900)}}
+end
+local sale = ledger.collect(request, read)
+assert(sale.status == 'observed' and sale.trade_id == '5' and #sale.rows == 1)
+local entry = sale.rows[1]
+assert(entry.buyer_matches and entry.seller_matches and entry.linked)
+assert(entry.source == 'ship' and entry.money_cents == '6900' and entry.price_cents == '3473')
+request.side = 'buy'
+assert(ledger.collect(request, read).reason == 'no_completed_trade')
+request.side = 'unexpected'
+assert(ledger.collect(request, read).reason == 'invalid_request')
+""", module)
+
     def test_exact_completed_purchase_and_ambiguous_windows(self):
         source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_trade_ledger.lua'
         lua = LuaRuntime()

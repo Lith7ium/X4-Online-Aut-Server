@@ -1,4 +1,4 @@
--- Read-only view of the stock X4 transaction ledger for a bounded native purchase.
+-- Read stock X4 transaction entries for one Company ship and station.
 local ffi = require('ffi')
 local M = {}
 local MAX_ROWS = 64
@@ -36,6 +36,8 @@ local function unknown(reason, rows)
 end
 
 local function select_rows(input, ship, station, read)
+    local buyer, seller = ship, station
+    if input.side == 'sell' then buyer, seller = station, ship end
     local candidates, matches = {}, {}
     local linkage
     local unavailable
@@ -46,7 +48,7 @@ local function select_rows(input, ship, station, read)
         else
             for _, record in ipairs(records) do
                 if finite(record.time) and record.time > input.start_time and record.time <= input.end_time then
-                    local buyer_matches, seller_matches = record.buyer == ship, record.seller == station
+                    local buyer_matches, seller_matches = record.buyer == buyer, record.seller == seller
                     local identity = buyer_matches and seller_matches
                         and record.ware == input.ware and record.amount == input.quantity
                     local compatible = (buyer_matches or record.buyer == 0) and (seller_matches or record.seller == 0)
@@ -161,6 +163,7 @@ end
 
 function M.collect(input, read)
     if type(input) ~= 'table' or type(input.ware) ~= 'string' or #input.ware > 128
+        or (input.side ~= nil and input.side ~= 'buy' and input.side ~= 'sell')
         or not input.ware:match('^[a-z][a-z0-9_]*$') or type(input.quantity) ~= 'number'
         or input.quantity < 1 or input.quantity > 65535 or input.quantity % 1 ~= 0
         or not finite(input.start_time) or not finite(input.end_time)
