@@ -77,6 +77,13 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(provider.begin(BINDING, purchase)['reason'], 'unsupported_purchase')
             self.assertIsNone(provider.poll())
 
+    def test_sale_cannot_be_dispatched_as_a_purchase(self):
+        provider = self.provider()
+        with self.assertRaisesRegex(ValueError, 'invalid company purchase'):
+            provider.begin(BINDING, dict(PURCHASE, side='sell'))
+        self.assertIsNone(provider.poll())
+        self.assertIsNone(provider.begin(BINDING, PURCHASE))
+
     def test_second_company_ship_can_request_other_stock_and_id_binds_the_basket(self):
         provider = self.provider()
         binding = dict(BINDING, ship_index=1074, ship_code='KHI-630')

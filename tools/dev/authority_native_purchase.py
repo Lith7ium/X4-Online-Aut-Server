@@ -144,11 +144,11 @@ class NativePurchaseProvider:
     def begin(self, binding, purchase):
         try:
             binding = {name: binding[name] for name in _BINDING_FIELDS}
-            purchase = purchase_value({name: purchase[name] for name in _PURCHASE_FIELDS})
         except (TypeError, KeyError):
             raise ValueError('incomplete native purchase binding') from None
         if not _valid_binding(binding):
             raise ValueError('invalid native purchase binding')
+        purchase = purchase_value(purchase)
         attempt = _Attempt(binding, purchase, self._clock() + self._timeout)
         prior = self._history.get(attempt.id)
         if prior is not None:
