@@ -561,6 +561,35 @@ revisions. Eleven need the original X4 UI or FFI references and one needs
 the original released lane tool. These twelve cases remain unverified.
 [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
+### Native checkpoint after the last pilot disconnects during a join pause
+
+Previously, the recovered provider could confirm its own pause for a new
+join, then abandon the save when the last admitted peer disconnected
+during that pause exchange. The recovered Company path now retires the
+definitively disconnected peer and continues the guarded save. Ambiguous
+I/O and unresolved delegated writes still fence the operation.
+
+At `7aa5b6e82c7eaf88aa0d2b7078ea699e386899ae`, one GPU-free X4 provider
+and two headless TLS participants exercised the regular control path. A
+acknowledged Resume. B requested admission 3.048 seconds later. A
+received and validated Pause, then closed its TLS socket without a Pause
+receipt 0.760 seconds after B's request. B received its only ordinary
+offer 85.168 seconds after A closed and downloaded the confirmed save.
+
+Independent reads of the downloaded files matched each offer's size and
+SHA-256 and found distinct native checkpoint markers. Saved game time
+advanced from 568.114 s in A's `checkpoint-ba292e37f912483b9edeee520e95c3c2`
+to 571.813 s in B's `checkpoint-ffaa13cd47fd4a49ad198eb2ec89310f`.
+B's digest was `844ac63126c610aad580aab9572c05652b96a2eec87e1e77a67ed1c6c29382ab`.
+The provider ended paused at B's checkpoint with no owned processes
+or held native slot. The original and staged source hashes were unchanged.
+
+X4 produced both saves and their markers. A's game-side confirmations
+were simulated by the harness. B verified its transfer and stopped
+before game load or admission. Private verification evidence is under
+`.local/native-pause-last-eof/run-01/`.
+
+
 ## Archived handover from 24 November, 18:00 Berlin time
 
 ### Assignments on 24 November
