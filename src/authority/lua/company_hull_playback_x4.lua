@@ -88,8 +88,6 @@ function M.new(options, engine)
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
             if dx * dx + dy * dy + dz * dz > MAX_STEP * MAX_STEP then return false end
             if not engine.same_zone(original_target, target) or not eligible() then return false end
-            -- Follow the stock map editor: modify XYZ on the returned sector pose.
-            -- The caller independently reads back on a later update.
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
@@ -210,7 +208,11 @@ function M.new_x4(options)
             return zone_at(hull.sector, offset) == hull.zone
         end,
         write = function(actor, sector, target_pose)
-            set(actor, sector, ffi.new('UIPosRot', target_pose))
+            -- GetObjectPositionInSector returns radians. SetObjectSectorPos takes degrees.
+            set(actor, sector, ffi.new('UIPosRot', {
+                x = target_pose.x, y = target_pose.y, z = target_pose.z,
+                yaw = math.deg(target_pose.yaw), pitch = math.deg(target_pose.pitch), roll = math.deg(target_pose.roll),
+            }))
             return true
         end,
     })

@@ -553,7 +553,8 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                     GetZoneAt = function() return zone_a end,
                     SetObjectSectorPos = function(id, sec, pose)
                         assert(id == remote_actor and sec == sector_a, 'NEVER write own cockpit ship!')
-                        assert(pose.yaw == 0.4 and pose.pitch == 0.5 and pose.roll == 0.6)
+                        assert(math.abs(math.rad(pose.yaw) - 0.4) < 1e-6 and math.abs(math.rad(pose.pitch) - 0.5) < 1e-6
+                            and math.abs(math.rad(pose.roll) - 0.6) < 1e-6)
                         st.pending_write = {actor = id, pose = pose, at = st.now}
                         st.writes[#st.writes + 1] = st.pending_write
                     end,
@@ -603,11 +604,12 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 send = function(_, msg) st.sent[#st.sent + 1] = msg; return true end,
             }, prefix, playback_clock, ctrl)
 
+            local native_readback = dofile(_ROOT .. '/tests/authority_native_pose_readback.lua')
             local function step(dt)
                 st.now = st.now + dt
                 if not st.paused then st.gt = st.gt + dt end
                 if st.pending_write then
-                    st.poses[st.pending_write.actor] = st.pending_write.pose
+                    st.poses[st.pending_write.actor] = native_readback(st.pending_write.pose)
                     st.pending_write = nil
                 end
                 while #st.md_queue > 0 do
@@ -934,10 +936,11 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 send = function(_, msg) st.sent[#st.sent + 1] = msg; return true end,
             }, prefix, function() return st.now end, ctrl)
 
+            local native_readback = dofile(_ROOT .. '/tests/authority_native_pose_readback.lua')
             local function step(dt)
                 st.now = st.now + dt
                 st.gt = st.gt + dt
-                for id, pose in pairs(st.pending_writes) do st.poses[id] = pose end
+                for id, pose in pairs(st.pending_writes) do st.poses[id] = native_readback(pose) end
                 st.pending_writes = {}
                 while #st.md_queue > 0 do
                     st.md_handlers['X4AuthorityCompanyCockpitObserver.Result'](nil, table.remove(st.md_queue, 1))

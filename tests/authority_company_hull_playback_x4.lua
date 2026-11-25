@@ -79,16 +79,35 @@ local function reset()
 end
 local destination = {x=23, y=5, z=-7, yaw=99, pitch=99, roll=99}
 
+local native_readback = dofile('tests/authority_native_pose_readback.lua')
+
+local function check_attitude(pose, original)
+    for _, axis in ipairs({'yaw', 'pitch', 'roll'}) do
+        assert(math.abs(pose[axis] - original[axis]) < 1e-6, axis .. ' changed during position correction')
+    end
+end
+
 reset()
 local session = assert(adapter:bind(binding))
 local before = assert(session:read())
 assert(before.x == 20 and session:write(destination, before))
-assert(writes == 1 and requested.x == 23 and requested.yaw == .5 and requested.pitch == .1 and requested.roll == -.2)
+assert(writes == 1 and requested.x == 23)
 assert(session:read().x == 20, 'native readback must never use the requested destination')
-actual = requested
+actual = native_readback(requested)
 assert(session:read().x == 23)
+check_attitude(session:read(), before)
 session:close()
 assert(not session:guard() and session:read() == nil and not session:write(destination, before) and writes == 1)
+
+reset()
+actual.x = -100
+session = assert(adapter:bind(binding))
+local alignment_origin = assert(session:read())
+assert(session:align(destination) and writes == 1)
+actual = native_readback(requested)
+assert(session:read().x == 23)
+check_attitude(session:read(), alignment_origin)
+session:close()
 
 for _, change in ipairs({
     function() controlled = target end, function() occupied = target end, function() contained = target end,

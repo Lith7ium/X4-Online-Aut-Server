@@ -37,7 +37,8 @@ local api = {
     end,
     SetObjectSectorPos = function(id, space, pose)
         assert(id == remote_actor and space == sector, 'must never write the local or other hull')
-        assert(pose.yaw == .1 and pose.pitch == .2 and pose.roll == .3)
+        assert(math.abs(math.rad(pose.yaw) - .1) < 1e-6 and math.abs(math.rad(pose.pitch) - .2) < 1e-6
+            and math.abs(math.rad(pose.roll) - .3) < 1e-6)
         assert(not state.pending and not state.paused)
         local write = {actor=id, pose=pose, when=state.local_time}
         state.writes[#state.writes+1] = write
@@ -112,12 +113,13 @@ local function wait_for_hull_then_lose_it(loss)
         send=function(_, wire) state.sent[#state.sent+1] = wire; return true end,
     }, prefix, clock, trial)
 
+    local native_readback = dofile('tests/authority_native_pose_readback.lua')
     local function frame(elapsed)
         state.local_time = state.local_time + elapsed
         if not paused() then state.game_time = state.game_time + elapsed end
         if state.pending then
             -- Movement becomes visible through the stock getter on a later UI update.
-            state.pose[state.pending.actor] = state.pending.pose
+            state.pose[state.pending.actor] = native_readback(state.pending.pose)
             state.pending = nil
         end
         if state.md then
