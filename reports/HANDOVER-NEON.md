@@ -188,6 +188,19 @@ and the empty queue. A split-host run still needs both pilots to reach
 the helm together before either issues an order.
 [Two-pilot stock fleet attempts](AUTHORITY-STOCK-FLEET-TWO-PILOTS-20261125.md)
 
+Cobalt tested the `9c558603` cockpit code on Windows 11 with CPython
+3.11.9. Of 94 cases across seven modules, 67 passed, 13 skipped, two
+failed and 12 errored. The Windows session and CLI modules passed all
+43 cases. One failed expectation patched the Linux clock only, one
+generated two indistinguishable timestamps, and 12 tests attempted
+Linux provider process inspection on Windows. Cobalt owns the targeted
+Windows follow-up. Separately, the NPC sender used the transport clock
+for its second freshness check. The fix uses the native capture clock
+at both points. A loopback test with independent coarse and fine clocks
+reached the receiver with the fresh sample and rejected stale and
+future samples. Windows gameplay on the corrected build remains open.
+[23:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795644032861319)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
