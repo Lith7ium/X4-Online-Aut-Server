@@ -1,15 +1,23 @@
 """Read the docked ship's live market from the supervisor's owned X4 process."""
 from dataclasses import dataclass, field
 import math
+import os
+from pathlib import Path
 import re
 import secrets
 import socket
 import time
 
+from authority_recovery_bridge_live import replace_once
 from authority_native_purchase import _COMPONENT, _valid_binding
 from authority_tcp_job_client_live import socket_owner
 
 
+_DRIVER = 'authority_native_market_survey.lua'
+_CUE = 'authority_native_market_survey.xml'
+_RESOLVER = 'authority_registry_resolve_string.lua'
+_BRIDGE_ENTRY = '    <file name="ui/authority_world_bridge_probe.lua" />\n'
+_TICK = ' local ok,reason=bridge:update();assert(ok,reason)\n'
 _FIELDS = ('registry_epoch', 'ship_index', 'ship_code', 'sector', 'station_code')
 _ACTOR = {'pid', 'start_ticks', 'exe_dev', 'exe_ino'}
 _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
@@ -65,6 +73,7 @@ class NativeMarketSurveyProvider:
         self._lease = secrets.token_hex(16)
         self._process = self._guard = self._peer = self._active = None
         self._serial = 0
+        self._staged_cue = None
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self._socket.bind(('127.0.0.1', 0))
@@ -77,6 +86,75 @@ class NativeMarketSurveyProvider:
     def lua_settings(self):
         """Lease and provider-local UDP port for the protected native overlay."""
         return self._lease, self._socket.getsockname()[1]
+
+    def install(self, case):
+        """Stage matching scripts in the registry-aware private provider overlay."""
+        extension = Path(case).absolute() / 'extensions/x4_lan_lab'
+        if (self._staged_cue is not None or extension.resolve(strict=True) != extension
+                or extension.stat().st_uid != os.geteuid()):
+            raise ValueError('new owned market overlay required')
+        ui, md = extension / 'ui', extension / 'md'
+        bridge, manifest, config = ui / 'authority_world_bridge_probe.lua', extension / 'ui.xml', ui / 'config.lua'
+        if any(path.is_symlink() for path in (ui, md, bridge, manifest, config)):
+            raise ValueError('ordinary market overlay files required')
+        bridge_text = bridge.read_text(encoding='ascii')
+        manifest_text = manifest.read_text(encoding='ascii')
+        settings = config.read_text(encoding='ascii')
+        if ('local registry_checkpoint' not in bridge_text or not settings.endswith('}\n')
+                or 'authority_market_survey_' in settings):
+            raise ValueError('market observation requires the recovered registry overlay')
+        driver, resolver, cue = ui / _DRIVER, ui / _RESOLVER, md / _CUE
+        source = Path(__file__).resolve().parent
+        contents = {path: (source / path.name).read_bytes() for path in (driver, resolver, cue)}
+        entries = []
+        for path in (resolver, driver):
+            entry = f'    <file name="ui/{path.name}" />\n'
+            if path.is_symlink():
+                raise ValueError('market overlay scripts must be ordinary files')
+            if path.exists():
+                if path != resolver or path.read_bytes() != contents[path] or manifest_text.count(entry) != 1:
+                    raise ValueError('incompatible existing market dependency')
+                del contents[path]
+            elif entry in manifest_text:
+                raise ValueError('missing existing market dependency')
+            else:
+                entries.append(entry)
+        manifest_text = replace_once(manifest_text, _BRIDGE_ENTRY, ''.join(entries) + _BRIDGE_ENTRY)
+        hook = ''' if registry_checkpoint:ready() then
+  if not native_market_tick then
+   local lib = assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
+   native_market_tick = X4LAN_AUTHORITY_NATIVE_MARKET_SURVEY.new(cfg.authority_market_survey_lease,
+    assert(lib.open('127.0.0.1',cfg.authority_market_survey_port)), lib.monotonic)
+  end
+  native_market_tick(C.IsGamePaused())
+ end
+'''
+        bridge_text = 'local native_market_tick\n' + replace_once(bridge_text, _TICK, _TICK + hook)
+        lease, port = self.lua_settings
+        settings = (settings[:-2] + f',authority_market_survey_lease="{lease}",'
+                    f'authority_market_survey_port={port}}}\n')
+        if cue.exists() or cue.is_symlink():
+            raise FileExistsError('market survey cue already present')
+        for path, data in contents.items():
+            with path.open('xb') as output:
+                output.write(data)
+        bridge.write_text(bridge_text, encoding='ascii')
+        manifest.write_text(manifest_text, encoding='ascii')
+        config.write_text(settings, encoding='ascii')
+        self._staged_cue = cue
+        return [resolver, driver, cue, bridge, manifest, config]
+
+    def archive_cue(self, case, out):
+        """Remove the survey from the source overlay after owned X4 exits."""
+        case, out = Path(case).absolute(), Path(out).absolute()
+        cue = case / 'extensions/x4_lan_lab/md' / _CUE
+        if (case != out / 'case' or cue != self._staged_cue
+                or cue.resolve(strict=True) != cue or not cue.is_file()):
+            raise ValueError('missing owned market survey cue')
+        archive = out / _CUE
+        os.link(cue, archive, follow_symlinks=False)
+        cue.unlink()
+        return archive
 
     def bind(self, process, guard):
         if self._process is not None or not callable(guard) or not _ACTOR <= process.keys():

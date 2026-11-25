@@ -5,12 +5,14 @@ import shutil
 import socket
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
 from authority_native_market_survey import NativeMarketSurveyProvider
+from authority_recovered_loopback_server import redact_recovery_config
 from linux_gate_live import start_ticks
 
 BINDING = dict(registry_epoch='e' * 32, ship_index=7354, ship_code='WRN-302',
@@ -110,6 +112,42 @@ class NativeMarketSurveyTests(unittest.TestCase):
 
 
 class MarketSurveyCueTests(unittest.TestCase):
+    def test_overlay_stages_reused_resolver_and_archives_cue_for_cold_restore(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            case = root / 'case'
+            extension = case / 'extensions/x4_lan_lab'
+            ui, md = extension / 'ui', extension / 'md'
+            ui.mkdir(parents=True)
+            md.mkdir()
+            bridge = ui / 'authority_world_bridge_probe.lua'
+            bridge.write_text('local registry_checkpoint\n local ok,reason=bridge:update();assert(ok,reason)\n')
+            config = ui / 'config.lua'
+            config.write_text('return {authority_control_lease="' + 'e' * 32 + '"}\n')
+            manifest = extension / 'ui.xml'
+            resolver = ui / 'authority_registry_resolve_string.lua'
+            resolver.write_bytes((ROOT / 'tools/dev' / resolver.name).read_bytes())
+            resolver_entry = '    <file name="ui/authority_registry_resolve_string.lua" />\n'
+            manifest.write_text(resolver_entry + '    <file name="ui/authority_world_bridge_probe.lua" />\n')
+            provider = NativeMarketSurveyProvider()
+            self.addCleanup(provider.close)
+            protected = provider.install(case)
+            driver, cue = ui / 'authority_native_market_survey.lua', md / 'authority_native_market_survey.xml'
+            self.assertCountEqual(protected, [resolver, driver, cue, bridge, manifest, config])
+            entries = manifest.read_text()
+            self.assertEqual(entries.count(resolver_entry), 1)
+            self.assertLess(entries.index(resolver.name), entries.index(driver.name))
+            self.assertLess(entries.index(driver.name), entries.index(bridge.name))
+            self.assertIn('native_market_tick(C.IsGamePaused())', bridge.read_text())
+            redacted = redact_recovery_config(config.read_text())
+            self.assertIn('authority_market_survey_lease="redacted"', redacted)
+            self.assertNotIn(provider.lua_settings[0], redacted)
+            with self.assertRaisesRegex(ValueError, 'new owned market overlay'):
+                provider.install(case)
+            archive = provider.archive_cue(case, root)
+            self.assertFalse(cue.exists())
+            self.assertEqual(archive.read_bytes(), (ROOT / 'tools/dev' / cue.name).read_bytes())
+
     def test_cue_only_reads_registry_berth_and_account(self):
         cue = ElementTree.parse(ROOT / 'tools/dev/authority_native_market_survey.xml').find('.//cue')
         allowed = {'cue', 'conditions', 'event_ui_triggered', 'actions', 'set_value',
