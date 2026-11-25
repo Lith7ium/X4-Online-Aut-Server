@@ -39,7 +39,7 @@ class ParticipantTCPFixture(unittest.TestCase):
         self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
         self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
         options = {}
-        if self.retire_disconnected_on_resume:
+        if getattr(self, 'retire_disconnected_on_resume', False):
             options['retire_disconnected_on_resume'] = True
         self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3, **options)
         self.world._participants = self.participants
@@ -85,13 +85,14 @@ class ParticipantTCPFixture(unittest.TestCase):
                     if mode == 'wrong_epoch': answer['epoch'] = 'b'*32
                     payload = json.dumps(answer, separators=(',', ':')).encode()+b'\n'
                     if mode == 'duplicate': payload += payload
+                    if mode == 'malformed_fin': payload = b'{"version":}\n'
                     try:
                         client.sendall(payload[:8])
                         if mode == 'incomplete_fin':
                             client.shutdown(socket.SHUT_WR)
                             return
                         client.sendall(payload[8:])
-                        if mode == 'fin_after': client.shutdown(socket.SHUT_WR)
+                        if mode in ('fin_after', 'malformed_fin'): client.shutdown(socket.SHUT_WR)
                         self.receipt_sent.set()
                     except OSError: return
         thread = threading.Thread(target=run); thread.start()
@@ -241,6 +242,34 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
         self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
         self.assertNotEqual(initial.checkpoint_id, self.store.latest_marked_confirmed().checkpoint_id)
 
+    def test_four_pilots_keep_two_survivors_when_two_connections_close_during_resume(self):
+        pilots = [self.connect() for _ in range(4)]
+        for pilot in pilots:
+            self.offer_and_claim(pilot)
+        handles = [handle for handle, _ in self.world.session.ready_players]
+        initial = self.store.latest_marked_confirmed()
+        first = self.responder(pilots[0], 'disconnect')
+        second = self.responder(pilots[1], on_command=lambda _: pilots[3].shutdown(socket.SHUT_WR))
+        third = self.responder(pilots[2])
+
+        self.host.tick(.1)
+        remaining = [handle for handle, _ in self.world.session.ready_players]
+        self.assertEqual(remaining, handles[1:3])
+        self.assertEqual(self.world.session.state, 'running')
+        for handle, commands in zip(handles[:3], (first, second, third), strict=True):
+            self.assertEqual([(cmd['connection_handle'], cmd['operation']) for cmd in commands],
+                             [(handle, 'resume')])
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume'])
+        self.assertEqual(self.store.latest_marked_confirmed(), initial)
+
+        for pilot in pilots[1:3]:
+            pilot.shutdown(socket.SHUT_WR)
+        self.host.tick(.1)
+        self.host.tick()
+        self.assertEqual(self.world.session.state, 'paused')
+        self.assertNotEqual(self.store.latest_marked_confirmed(), initial)
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save'])
+
     def test_last_pilot_closes_after_valid_resume_receipt(self):
         pilot = self.connect()
         self.offer_and_claim(pilot)
@@ -276,8 +305,8 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
         self.assertEqual(self.world.session.state, 'faulted')
         self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
 
-    def test_opt_in_keeps_non_eof_and_truncated_receipts_fatal(self):
-        for mode in ('wrong_id', 'wrong_epoch', 'duplicate', 'timeout', 'incomplete_fin'):
+    def test_opt_in_keeps_non_eof_and_invalid_receipts_fatal(self):
+        for mode in ('wrong_id', 'wrong_epoch', 'duplicate', 'timeout', 'malformed_fin'):
             with self.subTest(mode=mode):
                 with ParticipantCase(mode, retire_disconnected_on_resume=True) as case:
                     case.exercise()
@@ -300,13 +329,30 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
         self.assertEqual(self.world.session.state, 'faulted')
         self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
 
-    def test_failed_partial_resume_write_still_fences(self):
+    def test_last_pilot_closes_after_partial_expected_resume_receipt(self):
         pilot = self.connect()
         self.offer_and_claim(pilot)
+        initial = self.store.latest_marked_confirmed()
+        handle = self.world.session.ready_players[0][0]
+        motion = Mock()
+        self.control._motion_service = motion
+        records = self.responder(pilot, 'incomplete_fin')
+        self.host.tick(.1)
+        self.assert_departure_saved(initial)
+        motion.transport_lost.assert_called_once_with(handle)
+        self.assertEqual([record['operation'] for record in records], ['resume'])
+
+    def interrupt_partial_resume_write(self, *, disconnect):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        initial = self.store.latest_marked_confirmed()
         peer = next(iter(self.control._peers))
+        handle = self.control._peers[peer]['handle']
+        motion = Mock()
+        self.control._motion_service = motion
         write = socket.socket.send
         resume_started = False
-        partial_write = False
+        writes = []
         resume = self.engine.resume
 
         def begin_resume():
@@ -315,21 +361,36 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
             resume_started = True
 
         def fail_resume_write(sock, data, *args):
-            nonlocal partial_write
             if sock is not peer or not resume_started:
                 return write(sock, data, *args)
-            if partial_write:
-                raise BrokenPipeError('indeterminate resume command write')
-            partial_write = True
+            writes.append(data)
+            if len(writes) == 2:
+                if disconnect:
+                    pilot.close()
+                    raise BrokenPipeError('resume control socket closed')
+                raise OSError('indeterminate resume command write')
             return write(sock, data[:8], *args)
 
         with patch.object(self.engine, 'resume', side_effect=begin_resume), \
                 patch.object(socket.socket, 'send', fail_resume_write):
-            with self.assertRaises((OSError, RuntimeError)):
+            if disconnect:
                 self.host.tick(.1)
-        self.assertTrue(partial_write)
-        self.assertEqual(self.world.session.state, 'faulted')
-        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+                self.assert_departure_saved(initial)
+                motion.transport_lost.assert_called_once_with(handle)
+            else:
+                with self.assertRaisesRegex(OSError, 'indeterminate resume command write'):
+                    self.host.tick(.1)
+                self.assertEqual(self.world.session.state, 'faulted')
+                self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+                motion.transport_lost.assert_not_called()
+        self.assertEqual(len(writes), 2)
+        self.assertEqual(writes[1], writes[0][8:])
+
+    def test_last_pilot_closes_after_partial_resume_command(self):
+        self.interrupt_partial_resume_write(disconnect=True)
+
+    def test_ambiguous_partial_resume_write_still_fences(self):
+        self.interrupt_partial_resume_write(disconnect=False)
 
     def test_unsolicited_sibling_bytes_followed_by_fin_are_fatal(self):
         replying = self.connect()
@@ -360,9 +421,9 @@ class ParticipantCase:
         c = self.case; client = c.connect(); c.offer_and_claim(client)
         records = c.responder(client, self.mode)
         original = c.participants._quiet
-        def after_fin(peers, deadline):
+        def after_fin(peers, deadline, *, retire=None):
             c.assertTrue(c.receipt_sent.wait(.2))
-            return original(peers, deadline)
+            return original(peers, deadline, retire=retire)
         if self.mode == 'fin_after':
             with patch.object(c.participants, '_quiet', side_effect=after_fin):
                 with c.assertRaises((ValueError, TimeoutError, RuntimeError)): c.host.tick(.1)

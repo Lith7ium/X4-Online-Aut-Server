@@ -16,6 +16,20 @@ from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 _MAX_ID = 9007199254740991
 
 
+def _check_idle_sockets(readable, exceptional, retire):
+    """Only a definitive end of input is a departure. Queued bytes remain a protocol fault."""
+    if exceptional or (readable and retire is None):
+        raise RuntimeError('unexpected input or disconnect during participant operation')
+    for idle in readable:
+        try:
+            data = idle.recv(1, socket.MSG_PEEK)
+        except ConnectionResetError:
+            data = b''
+        if data != b'':
+            raise RuntimeError('unexpected participant input during operation')
+        retire(idle)
+
+
 class ParticipantGuardFailure(RuntimeError):
     """The owner or world changed during an exchange, independently of a peer's input."""
 
@@ -106,20 +120,6 @@ class ExperimentalTCPParticipants:
         finally:
             self._busy = False
 
-    @staticmethod
-    def _check_idle_sockets(readable, exceptional, retire):
-        """Only a definitive end of input is a departure. Queued bytes remain a protocol fault."""
-        if exceptional or (readable and retire is None):
-            raise RuntimeError('unexpected input or disconnect during participant operation')
-        for idle in readable:
-            try:
-                data = idle.recv(1, socket.MSG_PEEK)
-            except ConnectionResetError:
-                data = b''
-            if data != b'':
-                raise RuntimeError('unexpected participant input during operation')
-            retire(idle)
-
     def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None,
                   *, retire=None):
         control = self._host._control
@@ -138,7 +138,7 @@ class ExperimentalTCPParticipants:
             if time.monotonic() >= deadline:
                 raise TimeoutError('participant operation indeterminate')
             idle_readable = [sock for sock in readable if sock is not conn]
-            self._check_idle_sockets(idle_readable, exceptional, retire)
+            _check_idle_sockets(idle_readable, exceptional, retire)
             for departed in idle_readable:
                 waiting.remove(departed)
             if conn in readable:
@@ -151,8 +151,10 @@ class ExperimentalTCPParticipants:
                         raise
                     chunk = b''
                 if chunk == b'':
-                    if retire is None or data or sent not in (0, len(raw)):
+                    if retire is None:
                         raise RuntimeError('participant disconnected during operation')
+                    # The departing pilot no longer has authority. Discard any
+                    # unfinished resume receipt without acknowledging or replaying it.
                     retire(conn)
                     return None
                 if chunk and sent != len(raw):
@@ -185,7 +187,7 @@ class ExperimentalTCPParticipants:
                         if time.monotonic() >= deadline:
                             raise TimeoutError('participant receipt arrived after deadline')
                         readable, _, exceptional = select.select(waiting, [], waiting, 0)
-                        self._check_idle_sockets(readable, exceptional, retire)
+                        _check_idle_sockets(readable, exceptional, retire)
                         return answer
                     if len(data) > MAX_MESSAGE: raise ValueError('participant frame too large')
             if conn in writable:
@@ -194,7 +196,7 @@ class ExperimentalTCPParticipants:
                 except BlockingIOError:
                     continue
                 except (BrokenPipeError, ConnectionResetError):
-                    if retire is None or sent:
+                    if retire is None:
                         raise
                     retire(conn)
                     return None
@@ -212,7 +214,7 @@ class ExperimentalTCPParticipants:
             sockets.append(conn)
         if sockets:
             readable, _, exceptional = select.select(sockets, [], sockets, 0)
-            self._check_idle_sockets(readable, exceptional, retire)
+            _check_idle_sockets(readable, exceptional, retire)
         if time.monotonic() >= deadline:
             raise TimeoutError('participant operation indeterminate')
 
