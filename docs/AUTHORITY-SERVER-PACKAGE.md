@@ -423,6 +423,30 @@ to your own world if using another test save. The ordinary map observer
 continues to cover the selected remote sector. Both the trial receiver and
 the provider must support the opt-in loss notifications.
 
+## Try a Company fleet order
+
+In matching internal packages from `3f109634`, enable `--company-purchases` and
+`--company-fleet-orders` on the Linux provider and pilot. On the Windows
+launcher use `-CompanyPurchases -CompanyFleetOrders`. The fleet option
+uses the pilot's existing authenticated control connection.
+
+While at the helm, select **one** idle, undocked Company ship with an NPC
+captain on the map. Right-click a point in **that ship's sector** and
+choose **Fly and Wait** without a keyboard modifier. The pilot may be
+in another sector. The target must be registered in the server's current
+Company catalogue and free of all pilot reservations. The first version
+handles this single map action and leaves queue editing and group orders
+for later work.
+
+An **accepted** notice means X4 created the order on the server and
+reported its target. X4 chooses the ship's flight path and stopping
+position. In the stock single-instance trial the ship stopped 2.23 km
+from the requested point. If the server cannot determine the result,
+the pilot sees **unknown**. The server retains the ship reservation
+until its next process restart to protect a later pilot from a delayed
+order. This build's saved duplicate check has a 4,096-order limit per world.
+[Stock flight measurements](../reports/AUTHORITY-STOCK-FLEET-ORDER-LINUX-20261125.md)
+
 ## Try an opt-in Company purchase
 
 Use matching trade-capable server and player packages with the private

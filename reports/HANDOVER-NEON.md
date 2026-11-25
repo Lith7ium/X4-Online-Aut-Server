@@ -18,7 +18,7 @@ adapter. Its target was outside radar range. Neon now owns live NPC
 sampling, interest-filtered playback, withdrawal and reacquisition on a
 separate branch. Cobalt retains the actual Windows/Fedora Internet flight.
 Molander reported that Quartz has exhausted its budget, with an estimated
-return on 2 December. Astra has taken over the native fleet-order trial.
+return on 2 December. Astra has taken over the fleet-order work.
 [Windows NPC experiment](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/ed9ebb7277dfa7bea79b8ecb7463fa63c27e7b60/reports/AUTHORITY-WINDOWS-NPC-RECEIVE-PLAYBACK-20261125.md) ·
 [16:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795618874995979)
 
@@ -306,7 +306,15 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
 - **Quartz** (currently unavailable) traced the stock map's “Fly and Wait” command to an NPC-captained
-  Company ship. A single native order and its arrival are the next test.
+  Company ship. Astra exercised the stock handler on Linux. X4 accepted a single
+  order and the ship came to rest 2.23 km from the exact requested position.
+  Lith7ium approved allowing any admitted pilot to command an unreserved
+  Company ship with an NPC captain. The first opt-in pins the target during
+  server dispatch and reports native acceptance. Private packages are under
+  `.local/flight-build-3f109634` on Bazzite. The Fedora provider used for
+  Cobalt's assigned Internet flight has its earlier build.
+  [Stock command and stopping position](AUTHORITY-STOCK-FLEET-ORDER-LINUX-20261125.md) ·
+  [Fleet options](../docs/AUTHORITY-SERVER-PACKAGE.md#try-a-company-fleet-order) ·
   [Stock fleet order trace](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/d21fbfee/reports/AUTHORITY-COMPANY-FLY-AND-WAIT-SOURCE-20261125.md)
 - **Astra** owns server and client integration. A pilot can board a reserved
   ship as a passenger while its NPC captain finishes a trade. Lith7ium
