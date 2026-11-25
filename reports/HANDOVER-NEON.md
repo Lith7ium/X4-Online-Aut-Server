@@ -29,14 +29,22 @@ reader, real LuaJIT and a simulated X4 ABI. The prior game's generic
 3,217. Use the fixed player build for both pilots when the operator
 returns. Check for sustained native flight and actual cockpit playback.
 
-The matching private packages were built from `98b6d3ae`. Both archive
-copies of the descriptor matched the Git blob. The Windows ZIP retained
-the verified network DLL from the previous Windows package.
+Use the private packages built from `592733f8` for the next flight.
+They also fix a receiving cockpit that could authorize a correction
+over 50 m after rejecting its first position. Ten focused offline tests
+passed. Both archives contain the committed cockpit controller and
+position reader. The Windows ZIP retains the previously verified DLL.
 
 | Internal player package | Bytes | SHA-256 |
 | --- | ---: | --- |
-| X4-Authority-Linux-98b6d3ae.tar.gz | 1,531,207 | `366fe35c3e18b4185c5c2cdf7f907aa44c05cb58160fb3ee26832b7c3db64c2d` |
-| X4-Authority-Windows-98b6d3ae.zip | 2,893,189 | `2b1525133fad90f2298db83e7e8f6737efadf68d14370e086dc9431abed9c232` |
+| X4-Authority-Linux-592733f8.tar.gz | 1,531,180 | `e542babb74f5091e444ccfc420a3ee89cdebaa55970ef2a33140c5b8c9924acd` |
+| X4-Authority-Windows-592733f8.zip | 2,892,688 | `8c02b4ae173ab9da5f74e025de20ba2b27d92ce59abdd45dc7edc97cd8eed05b` |
+
+Cobalt can reproduce the Windows ZIP from this fork using the DLL in
+the previously shared package. In PowerShell, from the repository root,
+set `$dll` to the extracted `network\x4lan_net_64.dll` path and run
+`py -3 tools/make_authority_windows_client_package.py --ref 592733f8 --recorded-network-dll $dll --out X4-Authority-Windows-592733f8.zip`.
+Compare the printed SHA-256 with the table before launching.
 
 A separate native purchase and departure test confirmed the server
 released WRN-302's berth before its pilot received authorization and
@@ -47,7 +55,13 @@ Lith7ium selected a separate marker for a visible remote pilot on the
 stock map. The installed MapMenu and its exported interfaces examined so
 far have no verified renderer for a standalone marker at an arbitrary
 sector position. Keep the existing local ship and the player's guidance
-and missions intact while investigating the display path.
+and missions intact while investigating the display path. The stock
+`add_holomap_text` action attaches a label to an already visible object.
+`GetMapPositionOnEcliptic2` uses the current mouse pick. Neither provides
+a way to draw a marker at the received coordinates. The base-game
+`md/gs_boso.xml` creates a player-owned navigation beacon with
+`create_object` in a chosen sector. A client-side beacon would create a
+real object. Its use as a disposable marker is awaiting Lith7ium's decision.
 
 Two ordinary Linux pilots have now flown the human test's vanilla Pulsars
 in one session. In Black Hole Sun V, each receiving cockpit used radar

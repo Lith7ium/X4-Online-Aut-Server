@@ -22,6 +22,14 @@ confirm every dock field after the maneuver. Physical mouse and keyboard
 input, a busy captain at first check, a second bay and Windows remain
 outside this run.
 
+The client log identifies the missing reading. At game age 339.53 s the
+instantiated measurement cue signalled itself and X4 reported no listener.
+It never sampled again. The private trial now attaches a physical berth
+check to the stock undocked event and checks every 500 ms until the ship,
+old bay and assignment show separation. This client cue passed the X4
+9.00 MD schema. A subsequent in-game reading is still required. The
+provider's optional berth sampler now resets its delayed cue each second.
+
 On last-pilot removal the provider paused and saved checkpoint
 `checkpoint-fa46fdede9ef45248bd2db27a39e3ce5`.
 An independent parse found WRN-302 undocked in Grand Exchange I with
