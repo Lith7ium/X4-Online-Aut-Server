@@ -492,3 +492,40 @@ indeterminate. The supervisor recorded no repeat submission, no verified
 save and no remaining owned processes. The source checksum was unchanged.
 Evidence is local under `.local/water-sale-native-02/result.json` and the
 private engine log. A remote player's trade menu was outside this run.
+
+A fresh copy was prepared for a distinct two-water offer in run 03. X4
+confirmed the same WRN/PYN assignment and complete release of the BIM berth.
+CTD-093 had one eligible offer at 3,473 cents and a free external candidate
+berth `0x2719`. The fixture dispatched its stock relocation at game age
+413.27 seconds. The dock cue evaluated in that same game tick and refused
+before its destination berth recheck. Run 03 issued zero `DockAt` or
+trade orders, kept the source checksum unchanged, wrote no verified save,
+and cleaned up all test processes. See
+`.local/water-sale-native-03/result.json` and its engine log.
+
+The final run (04) loaded another fresh copy. After the stock relocation,
+the server waited for a separate position readback before dispatching
+`DockAt`. At age 415.28 seconds, the ship was in the target sector with
+the same captain, no residual dock binding, and zero reported error from
+the selected safe point, 11,060 m from the center of CTD-093. The selected
+external berth `0x2702` was still free and compatible.
+
+The native berth quote and immediate recheck both returned 3,473 cents
+per water. The diagnostic submitted one two-water sale at age 482.94
+seconds, request `4b90f8c985cf0c23a14b9c8b795d3002`, order `0x9a6d`,
+deal `0x9a6c`. The pre-armed observer matched that deal in the stock
+completion event at age 489.95 seconds. A separate readback observed
+two units transferred and zero destroyed. At game ages 492.99 and
+495.28 seconds, WRN still occupied that berth with PYN assigned, both
+queues were empty, and the captain was back on `Wait`. WRN held 10 water
+(down from 12), CTD had gained two, and both the player and faction
+accounts had risen from 930,100 to 937,000 cents.
+
+The read-only native journal linked the sale to trade ID `5`, ship
+entry `14`, buyer CTD `0x26f3`, and seller WRN `0x373bf`. It reported
+two water at 3,473 cents per unit and an actual positive credit of
+6,900 cents, matching the independently measured account increase.
+The 6,946-cent quoted total and 6,900-cent credited amount were
+recorded separately. See `.local/water-sale-native-04/result.json`
+and its engine log. This was a one-shot local Linux diagnostic. It did
+not exercise a remote player's stock trade menu or checkpoint persistence.
