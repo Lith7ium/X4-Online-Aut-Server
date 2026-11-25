@@ -8,6 +8,14 @@ limit is four pilots. Compare findings and assign work at the top of the
 hour, Berlin time, in `#x4-authorative-server`. The 07:00 team check-in
 records the Windows sender, WAN flight and Windows test assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795586425233399)
 
+Two ordinary Linux pilots have now flown the human test's vanilla Pulsars
+in one session. In Black Hole Sun V, each receiving cockpit used radar
+and measured the other pilot's short strafe, 1.365 m and 1.305 m respectively.
+Both directions carried velocity. The provider applied and saved both
+positions. All three native processes ran on Bazzite over loopback.
+The outstanding live comparison is Windows over the Internet.
+[Two pilots, both cockpit readbacks and final checkpoint](AUTHORITY-TWO-PILOT-FLIGHT-20261125.md)
+
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
   with `-FreshCompanyProfile`. Run it directly with the existing private
