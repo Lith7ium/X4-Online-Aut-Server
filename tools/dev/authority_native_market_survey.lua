@@ -26,8 +26,6 @@ local function free_units(C, ship, ship_lua, ware, ammo)
     if not ammo then return GetFreeCargoAfterTradeOrders(ship_lua, ware) end
     if ammo == 'missile' then return tonumber(C.GetFreeMissileStorageAfterTradeOrders(ship)) end
     if ammo == 'countermeasure' then return tonumber(C.GetFreeCountermeasureStorageAfterTradeOrders(ship)) end
-    if ammo == 'unit' then return GetFreeUnitStorageAfterTradeOrders(ship_lua) end
-    if ammo == 'deployable' then return tonumber(C.GetFreeDeployableStorageAfterTradeOrders(ship)) end
 end
 
 local function can_trade(ffi, offer, ship, side)
@@ -42,14 +40,55 @@ local function can_trade(ffi, offer, ship, side)
     error('invalid stock trade permission')
 end
 
+local function physical_cargo(ship_lua)
+    -- Stock MapMenu's inventory pane reads this ware-keyed physical table.
+    -- The after-orders table can be empty without a virtual-cargo context.
+    local cargo = GetComponentData(ship_lua, 'cargo')
+    if type(cargo) ~= 'table' then return end
+    for ware, amount in pairs(cargo) do
+        if type(ware) ~= 'string' or not ware:match('^[a-z][a-z0-9_]*$')
+                or not integer(amount, 0, max_integer) then return end
+    end
+    return cargo
+end
+
+local function physical_ammunition(ffi, ship, category)
+    local C = ffi.C
+    local count, items
+    if category == 'missile' then
+        count, items = C.GetNumAllMissiles, C.GetAllMissiles
+    elseif category == 'countermeasure' then
+        count, items = C.GetNumAllCountermeasures, C.GetAllCountermeasures
+    else
+        -- No audited physical per-ware API for the other equipment types.
+        return
+    end
+    local size = tonumber(count(ship))
+    if not integer(size, 0, max_rows) then return end
+    local result = {}
+    if size == 0 then return result end
+    local buffer = ffi.new('AmmoData[?]', size)
+    if tonumber(items(buffer, size, ship)) ~= size then return end
+    for index = 0, size - 1 do
+        local row = buffer[index]
+        if row.ware == nil then return end
+        local ware, amount = ffi.string(row.ware), tonumber(row.amount)
+        if not ware:match('^[a-z][a-z0-9_]*$') or not integer(amount, 0, max_integer) then return end
+        local total = (result[ware] or 0) + amount
+        if total > max_integer then return end
+        result[ware] = total
+    end
+    return result
+end
+
 local function stock_rows(ffi, ship, station)
     local C = ffi.C
     local ship_lua = assert(ConvertStringToLuaID(tostring(ship)))
     local station_lua = assert(ConvertStringToLuaID(tostring(station)))
-    local cargo = GetCargoAfterTradeOrders(ship_lua)
+    local cargo = physical_cargo(ship_lua)
     local offers = GetTradeList(station_lua, ship_lua)
     if type(cargo) ~= 'table' or type(offers) ~= 'table' then return nil, 'invalid_observation' end
-    local ammo, rows, space, inspected = nil, {}, {}, 0
+    local ammo, rows, space, inspected = {}, {}, {}, 0
     for _, offer in pairs(offers) do
         inspected = inspected + 1
         if inspected > max_rows then return nil, 'market_limit' end
@@ -69,26 +108,31 @@ local function stock_rows(ffi, ship, station)
             if type(detail) ~= 'table' or not detail.station or ConvertIDTo64Bit(detail.station) ~= station then
                 return nil, 'invalid_observation'
             end
-            local available = cargo[ware]
-            if offer.ammotypename then
-                if not ammo then ammo = GetAmmoCountAfterTradeOrders(ship_lua) end
-                if type(ammo) ~= 'table' then return nil, 'invalid_observation' end
-                available = ammo[ware]
+            local storage = cargo
+            local category = offer.ammotypename
+            if category then
+                if ammo[category] == nil then
+                    local ok, physical = pcall(physical_ammunition, ffi, ship, category)
+                    ammo[category] = ok and physical or false
+                end
+                storage = ammo[category]
             end
-            if available == nil then available = 0 end
-            local space_key = ware .. ':' .. (offer.ammotypename or '')
-            if space[space_key] == nil then
-                space[space_key] = free_units(C, ship, ship_lua, ware, offer.ammotypename)
+            -- Omit equipment with no verified physical stock reading. Zero
+            -- means the ware was absent in a successfully read inventory.
+            if storage then
+                local available = storage[ware] or 0
+                local space_key = ware .. ':' .. (category or '')
+                if space[space_key] == nil then
+                    space[space_key] = free_units(C, ship, ship_lua, ware, category)
+                end
+                local free = space[space_key]
+                if not integer(free, 0, max_integer) then return nil, 'invalid_observation' end
+                local side = offer.isselloffer == true and 'buy' or 'sell'
+                local tradeable = (side == 'buy' or available >= math.max(1, minimum))
+                    and can_trade(ffi, offer, ship_lua, side)
+                rows[#rows + 1] = table.concat({side, ware, price, amount, minimum,
+                    available, free, tradeable and '1' or '0'}, ',')
             end
-            local free = space[space_key]
-            if not integer(available, 0, max_integer) or not integer(free, 0, max_integer) then
-                return nil, 'invalid_observation'
-            end
-            local side = offer.isselloffer == true and 'buy' or 'sell'
-            local tradeable = (side == 'buy' or available >= math.max(1, minimum))
-                and can_trade(ffi, offer, ship_lua, side)
-            rows[#rows + 1] = table.concat({side, ware, price, amount, minimum,
-                available, free, tradeable and '1' or '0'}, ',')
         end
     end
     -- Keep all same-ware offers. Order is stable within the cached observation.
@@ -100,10 +144,23 @@ function M.new(lease, net, monotonic)
     local ffi = require('ffi')
     local resolve = assert(X4LAN_RESOLVE_STRING)
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
+    if not pcall(ffi.typeof, 'AmmoData') then
+        ffi.cdef[[
+            typedef struct {
+                const char* macro;
+                const char* ware;
+                uint32_t amount;
+                uint32_t capacity;
+            } AmmoData;
+        ]]
+    end
     ffi.cdef[[
+        uint32_t GetNumAllMissiles(UniverseID);
+        uint32_t GetAllMissiles(AmmoData*, uint32_t, UniverseID);
+        uint32_t GetNumAllCountermeasures(UniverseID);
+        uint32_t GetAllCountermeasures(AmmoData*, uint32_t, UniverseID);
         uint32_t GetFreeMissileStorageAfterTradeOrders(UniverseID);
         uint32_t GetFreeCountermeasureStorageAfterTradeOrders(UniverseID);
-        uint32_t GetFreeDeployableStorageAfterTradeOrders(UniverseID);
     ]]
     local active, next_hello, serial = nil, nil, 0
 

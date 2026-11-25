@@ -14,6 +14,7 @@ local net = {
 }
 local ship = X4LAN_RESOLVE_STRING.parse_hex('0x1')
 local station = X4LAN_RESOLVE_STRING.parse_hex('0x2')
+local physical = {water = 2}
 local calls = {market = 0, cargo = 0, free = 0, sell = 0, buy = 0}
 local ware = string.rep('w', 128)
 local offers = {
@@ -59,10 +60,14 @@ function GetTradeList(station_lua, ship_lua)
     return offers
 end
 
-function GetCargoAfterTradeOrders(ship_lua)
-    assert(ship_lua == 'ship')
+function GetComponentData(ship_lua, property)
+    assert(ship_lua == 'ship' and property == 'cargo')
     calls.cargo = calls.cargo + 1
-    return {water = 4}
+    return physical
+end
+
+function GetCargoAfterTradeOrders()
+    error('virtual cargo may be empty without a stock trade context')
 end
 
 function GetFreeCargoAfterTradeOrders(ship_lua, name)
@@ -71,14 +76,12 @@ function GetFreeCargoAfterTradeOrders(ship_lua, name)
     return name == 'water' and 21 or 13
 end
 
-function GetAmmoCountAfterTradeOrders(ship_lua)
-    assert(ship_lua == 'ship')
-    return {defencedrone = 2}
+function GetAmmoCountAfterTradeOrders()
+    error('unverified equipment must be omitted without reading virtual stock')
 end
 
-function GetFreeUnitStorageAfterTradeOrders(ship_lua)
-    assert(ship_lua == 'ship')
-    return 3
+function GetFreeUnitStorageAfterTradeOrders()
+    error('equipment with unavailable physical stock must not reach the free-space read')
 end
 
 function CanTradeWith(id, ship_lua, minimum, buying)
@@ -118,11 +121,11 @@ assert(#requests == 1 and requests[1] == first)
 observe(second)
 assert(calls.market == 0)
 observe(first)
-assert(sent[#sent] == 'MARKET_HEADER|' .. lease .. '|' .. first .. '|976800|18')
+assert(sent[#sent] == 'MARKET_HEADER|' .. lease .. '|' .. first .. '|976800|17')
 open(first, 1)
 assert(#requests == 1 and calls.market == 1 and calls.cargo == 1)
 local offset, pages, seen = 0, 0, {}
-while offset < 18 do
+while offset < 17 do
     send('READ', first, tostring(offset))
     local prefix = 'MARKET_PAGE|' .. lease .. '|' .. first .. '|' .. offset .. '|'
     local page = sent[#sent]
@@ -134,11 +137,12 @@ while offset < 18 do
     pages = pages + 1
 end
 assert(pages > 1)
-assert(seen['buy,water,5848,80,1,4,21,1'] and seen['sell,water,5325,31,2,4,21,1'])
-assert(seen['buy,water,5851,22,1,4,21,0'] and seen['buy,defencedrone,15300,18,1,2,3,1'])
+assert(seen['buy,water,5848,80,1,2,21,1'] and seen['sell,water,5325,31,2,2,21,1'])
+assert(seen['buy,water,5851,22,1,2,21,0'])
+for row in pairs(seen) do assert(not row:find(',defencedrone,', 1, true)) end
 assert(seen['buy,' .. ware .. ',3200,120,1,0,13,1'])
-assert(seen['sell,energycells,1300,120,1,0,13,0'] and seen['sell,water,5100,120,1,4,21,0'])
-assert(calls.market == 1 and calls.cargo == 1 and calls.free == 3 and calls.buy == 15 and calls.sell == 2)
+assert(seen['sell,energycells,1300,120,1,0,13,0'] and seen['sell,water,5100,120,1,2,21,0'])
+assert(calls.market == 1 and calls.cargo == 1 and calls.free == 3 and calls.buy == 14 and calls.sell == 2)
 
 open(second, 2)
 open(first, 1)
@@ -158,3 +162,19 @@ offers = {}
 for i = 1, 513 do offers[i] = {ismissionoffer = true} end
 observe(fourth)
 assert(sent[#sent] == 'MARKET_FAIL|' .. lease .. '|' .. fourth .. '|market_limit')
+
+-- An unfamiliar list-shaped inventory is an invalid observation, not an empty ship.
+local fifth = string.rep('1', 32)
+physical = {{ware = 'water', amount = 4}}
+open(fifth, 5)
+observe(fifth)
+assert(sent[#sent] == 'MARKET_FAIL|' .. lease .. '|' .. fifth .. '|invalid_observation')
+
+-- A fresh view uses the new absolute physical count after a confirmed delivery.
+local sixth = string.rep('2', 32)
+physical = {water = 4}
+offers = {{id = 1, ware = 'water', price = 58.48, amount = 80, minamount = 1, isselloffer = true}}
+open(sixth, 6)
+observe(sixth)
+send('READ', sixth, '0')
+assert(sent[#sent] == 'MARKET_PAGE|' .. lease .. '|' .. sixth .. '|0|buy,water,5848,80,1,4,21,1')
