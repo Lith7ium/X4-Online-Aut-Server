@@ -298,9 +298,25 @@ Its private result SHA-256 was
 `8f240ee0c8d45ef132a6ea21b150d82e5102910e0dc68ea88e6121868981b252`.
 
 The provider used a descriptor derived from the source save and the client
-measured its own berth independently. Delivery of that descriptor over a
-pilot's live multiplayer connection, and a bay already occupied on the
-provider, remain separate cases.
+measured its own berth independently. Delivery of that descriptor over the
+pilot's live multiplayer connection still requires a separate test.
+
+### Occupied berth at the same station
+
+In a fresh native run, a fixture ship occupied the requested berth on
+BIM-169. X4 rejected an unknown berth identifier without moving either ship.
+For the valid request the provider selected another free, compatible
+external trading berth on BIM-169. X4 then reported the original ship on
+the requested bay and WRN-302 on the other bay. Repeating the request
+returned `already_docked` and preserved both assignments. Account, cargo and
+server avatar measurements stayed unchanged. The development cue reports
+the requested and actual bay to its caller. [Native berth adoption cue](../tools/dev/authority_company_berth_adoption.xml)
+
+X4 formatted the fallback seed as signed decimal `-8269418508059026910`.
+Its unsigned 64-bit representation is `10177325565650524706`. The native
+descriptor retains the exact text. The first launch exposed a missing
+polling interval in a Mission Director cue and reached no placement. The
+corrected run completed successfully. Its fixture world was discarded.
 
 ### Purchase from an unoccupied server ship
 
