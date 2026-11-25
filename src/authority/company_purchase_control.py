@@ -5,6 +5,7 @@ import json
 import re
 import time
 
+from .company_trade_view import view_page, view_request
 from .company_undock_messages import UndockWindow
 from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from .load_messages import MAX_INTEGER, MAX_MESSAGE
@@ -188,15 +189,17 @@ class _PurchaseWindow:
 class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
-    def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *, undock_exchange=None):
+    def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *,
+                 undock_exchange=None, trade_view_exchange=None):
         _envelope(epoch, handle, attempt, ship_index, 1)
-        callbacks = (exchange, statement, statement_result, undock_exchange)
+        callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange)
         if all(value is None for value in callbacks) or any(
                 value is not None and not callable(value) for value in callbacks):
             raise ValueError('invalid company purchase callbacks')
         self.binding = (epoch, handle, attempt, ship_index)
         self.exchange = exchange
         self.undock_exchange = undock_exchange
+        self.trade_view_exchange = trade_view_exchange
         self.statement = statement
         self.statement_result = statement_result
         self.window = _PurchaseWindow()
@@ -219,13 +222,33 @@ class ClientPurchaseControl:
             return self._reply_statement(command, envelope, check)
         if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
             return self._reply_statement_delivery(command, envelope, check)
-        if self.exchange is None or not _bound(command, envelope, _POLL, 'receipt'):
-            raise ValueError('unexpected or stale company purchase poll')
-        receipt = self.window.receipt(command['receipt'])
+        market_poll = type(command) is dict and command.get('kind') == 'company_trade_poll'
+        if market_poll:
+            if self.trade_view_exchange is None or not _bound(command, envelope, 'company_trade_poll', 'trade'):
+                raise ValueError('unexpected or stale Company trade poll')
+            trade = command['trade']
+            if type(trade) is not dict or set(trade) != {'receipt', 'page'}:
+                raise ValueError('invalid Company trade poll')
+            page = None if trade['page'] is None else view_page(trade['page'])
+            receipt = self.window.receipt(trade['receipt'])
+        else:
+            if not _bound(command, envelope, _POLL, 'receipt'):
+                raise ValueError('unexpected or stale company purchase poll')
+            receipt = self.window.receipt(command['receipt'])
+        if self.exchange is None:
+            raise ValueError('Company purchase exchange is unavailable')
         check()
         purchase = self.window.next(self.exchange(receipt))
         check()
-        reply = _frame(dict(envelope, kind=_RESULT, purchase=purchase))
+        if market_poll:
+            request = self.trade_view_exchange(page)
+            if request is not None:
+                request = view_request(request)
+            check()
+            reply = _frame(dict(envelope, kind='company_trade_result',
+                                trade={'purchase': purchase, 'view': request}))
+        else:
+            reply = _frame(dict(envelope, kind=_RESULT, purchase=purchase))
         self.window.advance(purchase)
         return reply
 
@@ -257,7 +280,13 @@ class ClientPurchaseControl:
         return reply
 
 
-def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):
+def supports_trade_view(peer):
+    version = peer.get('trade_view_version')
+    return type(version) is int and version == 1
+
+
+def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=None, *,
+                          guard=None, market=False, page=None):
     """Poll one admitted participant; send one exact terminal receipt if pending.
 
     The caller explicitly enables this path after capability negotiation. The
@@ -272,10 +301,27 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
             raise ValueError('pending statement requires negotiated version 1')
         if result is not None and result['outcome'] == 'confirmed' and result['ship_code'] != reservation.code:
             raise ValueError('company purchase receipt names a different ship')
+        if market:
+            checked_page = None if page is None else view_page(page)
+            command = dict(envelope, kind='company_trade_poll', trade={'receipt': result, 'page': checked_page})
+
+            def parse_trade(value):
+                if type(value) is not dict or set(value) != {'purchase', 'view'}:
+                    raise ValueError('invalid Company trade poll response')
+                request = None if value['view'] is None else view_request(value['view'])
+                return {'purchase': window.next(value['purchase']), 'view': request}
+
+            def advance_trade(value):
+                window.advance(value['purchase'])
+
+            return _frame(command), envelope, 'company_trade_result', 'trade', parse_trade, advance_trade
+        if page is not None:
+            raise ValueError('market page requires a negotiated Company trade view')
         return (_frame(dict(envelope, kind=_POLL, receipt=result)), envelope,
                 _RESULT, 'purchase', window.next, window.advance)
 
-    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard)
+    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
+                              peer_supports=supports_trade_view if market else None)
 
 
 def poll_company_undock(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):

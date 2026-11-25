@@ -14,6 +14,9 @@ _MAX_EXACT = 9007199254740991
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 _WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
+_MARKET_KEYS = ('view_id', 'sector', 'station_code', 'offset')
+_MARKET_PAGE_SIZE = 8
+_MARKET_MAX_OFFERS = 4096
 _UNDOCK_KEYS = ('request_id', 'sector', 'station_code', 'bay_seed', 'bay_macro', 'dockarea_macro')
 
 
@@ -34,10 +37,14 @@ def _amount(value, low, high):
 class CompanyPurchaseSource:
     """Exchange bounded IPC messages on the owner thread without waiting for X4."""
 
-    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None, undock=False):
+    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None, undock=False, trade_view=False):
         if type(undock) is not bool:
             raise ValueError('invalid Company undock test flag')
-        self.undock = undock
+        if type(trade_view) is not bool:
+            raise ValueError('invalid Company trade view flag')
+        self.undock, self.trade_view = undock, trade_view
+        self._market_serial = 0
+        self._market_request = self._market_packets = None
         self._undock_nonce = secrets.token_hex(16) if undock else None
         self._undock_request = secrets.token_hex(16) if undock else None
         self._undock_intent = self._undock_answer = None
@@ -82,6 +89,8 @@ class CompanyPurchaseSource:
                                                           state_dir=self._state_dir)
         self._registry = (epoch, index)
         config = {'epoch': epoch, 'index': index, 'port': self._socket.getsockname()[1], 'lease': self._lease}
+        if self.trade_view:
+            config['trade_view'] = True
         if self.undock:
             config.update(undock_nonce=self._undock_nonce, undock_request=self._undock_request)
         return config
@@ -181,6 +190,84 @@ class CompanyPurchaseSource:
             self._notice = None
             self._next_notice_scan = 0.
 
+    def _send_market(self):
+        if self._market_packets is None or self._validator(self._peer) is not True:
+            return
+        for packet in self._market_packets:
+            try:
+                self._socket.sendto(packet, self._peer)
+            except BlockingIOError:
+                break  # The native receiver repeats requests until each whole page arrives.
+
+    def _receive_market(self, row, peer):
+        if not self.trade_view or len(row) not in (2, 5):
+            return
+        kind, view_id, *data = row
+        if not view_id.startswith(self._lease[:24]) or not re.fullmatch(r'[0-9a-f]{32}', view_id):
+            return
+        serial = int(view_id[24:], 16)
+        if serial == 0 or serial < self._market_serial or self._validator(peer) is not True:
+            return
+        if kind == 'MARKET_CLOSE' and not data:
+            self._market_serial, self._market_request, self._market_packets = serial, None, None
+            return
+        if kind != 'MARKET' or len(data) != 3:
+            return
+        sector, station, raw_offset = data
+        if (not _SECTOR.fullmatch(sector) or not _CODE.fullmatch(station)
+                or not re.fullmatch(r'0|[1-9][0-9]{0,3}', raw_offset)):
+            return
+        offset = int(raw_offset)
+        if offset >= _MARKET_MAX_OFFERS or offset % _MARKET_PAGE_SIZE:
+            return
+        request = dict(zip(_MARKET_KEYS, (view_id, sector, station, offset)))
+        if serial > self._market_serial:
+            if offset:
+                return
+        elif request == self._market_request:
+            self._send_market()
+            return
+        elif (self._market_request is None or self._market_packets is None
+              or any(request[k] != self._market_request[k] for k in _MARKET_KEYS[:-1])
+              or offset != self._market_request['offset'] + _MARKET_PAGE_SIZE):
+            return
+        self._peer = peer
+        self._market_serial, self._market_request, self._market_packets = serial, request, None
+
+    def market_exchange(self, page_or_none):
+        """Bridge a single admitted view page to the owned local trade window."""
+        self._owner()
+        if not self.trade_view or self._validator is None:
+            raise RuntimeError('Company trade view IPC is not enabled and bound')
+        self._receive()
+        request = self._market_request
+        if request is None or self._validator(self._peer) is not True:
+            return None
+        if (self._market_packets is None and type(page_or_none) is dict
+                and all(type(page_or_none.get(key)) is type(value) and page_or_none[key] == value
+                        for key, value in request.items())):
+            from .company_trade_view import view_page
+
+            page = view_page(page_or_none)
+            prefix = [request['view_id'], str(request['offset'])]
+            outcome = page['outcome']
+            if outcome == 'observed':
+                offers = page['offers']
+                header = ['MARKET_PAGE', *prefix, outcome, str(page['company_balance_cents']),
+                          str(page['total_offers']), str(len(offers))]
+                rows = [['MARKET_ROW', *prefix, str(index), *(str(offer[key]) for key in
+                         ('side', 'ware', 'price_cents', 'amount', 'min_amount', 'cargo_units', 'free_units')),
+                         '1' if offer['tradeable'] else '0']
+                        for index, offer in enumerate(offers, 1)]
+                contents = [header, *rows]
+            else:
+                contents = [['MARKET_PAGE', *prefix, outcome, page['reason']]]
+            self._market_packets = tuple(self._prefix + '|'.join(row).encode('ascii') for row in contents)
+            self._send_market()
+        # Keep the authoritative observation alive while this window owns it.
+        # A later offset advances the same view; CLOSE or a new ID retires it.
+        return dict(request)
+
     def _receive(self):
         for _ in range(16):
             try:
@@ -200,6 +287,9 @@ class CompanyPurchaseSource:
                 continue
             if fields[0] in ('NOTICE_POLL', 'NOTICE_ACK'):
                 self._receive_notice(fields, peer)
+                continue
+            if fields[0] in ('MARKET', 'MARKET_CLOSE'):
+                self._receive_market(fields, peer)
                 continue
             if fields[0] == 'UNDOCK':
                 self._receive_undock(fields[1:], peer)
@@ -272,6 +362,9 @@ class CompanyPurchaseSource:
         callbacks = {'company_purchase_exchange': self.exchange}
         if self.undock:
             callbacks['company_undock_exchange'] = self.undock_exchange
+        trade_view_version = getattr(owner, '_company_trade_view_version', None)
+        if self.trade_view and type(trade_view_version) is int and trade_view_version == 1:
+            callbacks['company_trade_view_exchange'] = self.market_exchange
         version = getattr(owner, '_company_purchase_statement_version', None)
         if self._statements is not None and type(version) is int and version == 1:
             callbacks.update(company_purchase_statement=self.statement,

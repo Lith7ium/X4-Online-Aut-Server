@@ -10,12 +10,19 @@ COMPANY_PURCHASE_UI = {
     for name in ('company_trade_capture', 'company_purchase_source')
 }
 
+COMPANY_TRADE_VIEW_UI = {'company_trade_view_ui.lua': 'src/authority/lua/company_trade_view_ui.lua'}
+
 COMPANY_UNDOCK_UI = {'company_undock_hold.lua': 'src/authority/lua/company_undock_hold.lua'}
 COMPANY_UNDOCK_MD = {'company_client_undock.xml': 'src/authority/md/company_client_undock.xml'}
 
 
 def company_purchase_ui(source):
-    return COMPANY_PURCHASE_UI | COMPANY_UNDOCK_UI if source.undock else COMPANY_PURCHASE_UI
+    sources = COMPANY_PURCHASE_UI
+    if source.undock:
+        sources = sources | COMPANY_UNDOCK_UI
+    if source.trade_view:
+        sources = sources | COMPANY_TRADE_VIEW_UI
+    return sources
 
 
 def company_purchase_md(source):

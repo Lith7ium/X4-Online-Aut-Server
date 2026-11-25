@@ -15,12 +15,16 @@ param(
     [switch] $CompanyMotion,
     [switch] $CompanyPurchases,
     [switch] $CompanyUndockTest,
+    [switch] $CompanyTradeView,
     [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CompanyTradeView -and -not $CompanyPurchases) {
+    throw '-CompanyTradeView requires -CompanyPurchases'
+}
 if ($CompanyUndockTest -and -not $CompanyPurchases) {
     throw '-CompanyUndockTest requires -CompanyPurchases'
 }
@@ -142,6 +146,9 @@ if ($CompanyMotion) {
 }
 if ($CompanyPurchases) {
     $clientArgs += '--company-purchases'
+}
+if ($CompanyTradeView) {
+    $clientArgs += '--company-trade-view'
 }
 if ($CompanyUndockTest) {
     $clientArgs += '--company-undock-test'

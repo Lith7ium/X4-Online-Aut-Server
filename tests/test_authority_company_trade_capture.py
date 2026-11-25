@@ -11,3 +11,9 @@ class CompanyTradeCaptureTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         subprocess.run(['luajit', 'tests/authority_company_trade_capture.lua'],
                        cwd=root, timeout=10, check=True)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_server_stock_window_uses_stock_rounded_total_and_disables_stale_offers(self):
+        root = Path(__file__).resolve().parents[1]
+        subprocess.run(['luajit', 'tests/authority_company_trade_view_ui.lua'],
+                       cwd=root, timeout=10, check=True)

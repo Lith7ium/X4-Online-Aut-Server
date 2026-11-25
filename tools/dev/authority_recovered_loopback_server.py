@@ -486,6 +486,11 @@ def redact_recovery_config(text):
                                   'authority_company_pose_lease="redacted"', redacted)
         if count != 1:
             raise ValueError('invalid company pose lease')
+    if 'authority_market_survey_lease=' in redacted:
+        redacted, count = re.subn(r'authority_market_survey_lease="[0-9a-f]{32}"',
+                                  'authority_market_survey_lease="redacted"', redacted)
+        if count != 1:
+            raise ValueError('invalid market survey lease')
     for name in ('lease','attempt','generation','nonce','saved_nonce','candidate_nonce','pair_nonce'):
         key='authority_motion_'+name+'='
         if key in redacted:
@@ -949,7 +954,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
-    purchase_provider = undock_provider = purchases = purchase_ledger = None
+    purchase_provider = undock_provider = market_provider = purchases = purchase_ledger = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1297,6 +1302,10 @@ def run(args):
             clock = authority_overlap_clock.OverlapClock(clock_sock, lease)
         if not fixture_mode:
             protected.append(bridge.install_saved_identity_fixture(case, fixture))
+        if company_purchases:
+            from authority_native_market_survey import NativeMarketSurveyProvider
+            market_provider = NativeMarketSurveyProvider()
+            protected.extend(market_provider.install(case))
         protected = list(dict.fromkeys(protected))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
@@ -1376,12 +1385,14 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
-        if pose_channel is not None or undock_provider is not None:
+        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider)):
             game_stat = (game/'X4').stat()
             process_identity = {'pid': identity[0], 'start_ticks': identity[1],
                                 'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}
         if undock_provider is not None:
             undock_provider.bind(process_identity, check)
+        if market_provider is not None:
+            market_provider.bind(process_identity, check)
         if pose_channel is not None:
             pose_channel.bind(process_identity, check)
             if pose_cold:
@@ -1539,6 +1550,7 @@ def run(args):
         undock_capability = {'company_undock': True} if company_undock else {}
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
                                          motion_service=motion_service, company_purchases=company_purchases,
+                                         company_trade_view=market_provider is not None,
                                          **undock_capability)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
@@ -1552,7 +1564,8 @@ def run(args):
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
             undock_options = {'undock': undock_provider} if undock_provider is not None else {}
             purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
-                                                 guard=world._participants.check_process, **undock_options)
+                                                 guard=world._participants.check_process, market=market_provider,
+                                                 **undock_options)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -2138,6 +2151,11 @@ def run(args):
                 undock_provider.close()
             except OSError as error:
                 errors.append('undock provider cleanup: ' + type(error).__name__)
+        if market_provider is not None:
+            try:
+                market_provider.close()
+            except OSError as error:
+                errors.append('market survey cleanup: ' + type(error).__name__)
         if pose_channel is not None:
             pose_channel.close()
         services_stopped = True
@@ -2206,6 +2224,8 @@ def run(args):
                     pose_overlay.archive_cue(case, out)
                 if purchase_provider is not None:
                     purchase_provider.archive_cues(case, out)
+                if market_provider is not None:
+                    market_provider.archive_cue(case, out)
                 if trade_mode:
                     trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:

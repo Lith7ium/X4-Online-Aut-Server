@@ -124,7 +124,12 @@ function M.install(o)
             o.notice('stale_dock')
             return
         end
-        local ok, intent, why = pcall(stock_order, menu, data, o, station)
+        local ok, intent, why, market_total
+        if o.market_ui then
+            ok, intent, why, market_total = pcall(o.market_ui.order, o.market_ui, data)
+        else
+            ok, intent, why = pcall(stock_order, menu, data, o, station)
+        end
         if not ok or not intent then
             o.notice(ok and why or 'stale_offer')
             return
@@ -142,7 +147,8 @@ function M.install(o)
         local submitted_orders = data.orders
         active_attempt, price_retry, phase = attempt, nil, 'dispatching'
         local answered, early_receipt, awaiting_statement
-        local displayed_total = dynamic_station and cents(data.totalsellcost, max_exact_lua_integer) or nil
+        local displayed_total = market_total
+            or (dynamic_station and cents(data.totalsellcost, max_exact_lua_integer)) or nil
         local function settle(receipt)
             if active_attempt ~= attempt then return end
             if phase == 'dispatching' then
@@ -210,6 +216,7 @@ function M.install(o)
             quantity = intent.quantity, price_cents = intent.price_cents,
         }, settle, displayed_total)
         if sent and accepted == true then
+            if o.market_ui then o.market_ui:consume(data) end
             phase = 'pending'
             if answered then settle(early_receipt) else o.notice('pending') end
         else
@@ -220,6 +227,7 @@ function M.install(o)
 
     menu.buttonConfirmTrade = confirm
     return {
+        market_ui = o.market_ui,
         detach = function()
             if phase == 'dispatching' or phase == 'pending' or phase == 'reporting_price_change'
                     or menu.buttonConfirmTrade ~= confirm then return false end
@@ -348,8 +356,16 @@ function M.install_x4(o)
         end
         if text then C.ShowInfoLine(text, 4) end
     end
+    local market_ui
+    if o.market then
+        market_ui = X4LAN_COMPANY_TRADE_VIEW_UI.install({
+            menu = o.menu, ship = ship, identity = id, read_dock = live_dock, market = o.market,
+        })
+        if not market_ui then return nil, 'unavailable' end
+    end
     return M.install({
         enabled = true, menu = o.menu, ship = ship, station = expected_station, sector = o.sector,
+        market_ui = market_ui,
         dynamic_station = dynamic_station,
         station_code = o.station_code, ship_code = ship_code, request = o.request, notice = o.notice or stock_notice,
         identity = id, read_dock = live_dock, decode_offer_id = ConvertStringToLuaID,

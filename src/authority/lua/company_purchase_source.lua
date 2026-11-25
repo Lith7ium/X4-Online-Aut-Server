@@ -42,6 +42,114 @@ local function decode_notice(row)
     end
 end
 
+local function market_client(options, prefix)
+    local serial = 0
+    local view
+    local api = {}
+    local function send(...)
+        options.net:send(prefix .. table.concat({...}, '|'))
+    end
+
+    function api:close()
+        if view then
+            send('MARKET_CLOSE', view.id)
+            view.status, view.rows, view = 'unavailable', nil, nil
+        end
+    end
+
+    function api:open(dock)
+        self:close()
+        if serial >= 4294967295 or not options.available() then return end
+        if type(dock.sector) ~= 'string' or #dock.sector > 128 or not dock.sector:match('^[A-Za-z0-9_]+$')
+                or type(dock.station_code) ~= 'string' or not dock.station_code:match(ship_code) then return end
+        serial = serial + 1
+        local now = options.clock()
+        view = {id = options.lease:sub(1, 24) .. string.format('%08x', serial),
+            serial = serial, sector = dock.sector, station = dock.station_code, offset = 0, rows = {}, page = {},
+            next_send = 0, deadline = now + 90, page_deadline = now + 20, status = 'pending'}
+        return view
+    end
+
+    local function fail()
+        view.status, view.rows, view.page = 'unavailable', nil, nil
+    end
+
+    function api:receive(row)
+        if not view or view.status ~= 'pending' or row[2] ~= view.id or row[3] ~= tostring(view.offset) then return end
+        if row[1] == 'MARKET_PAGE' then
+            if #row == 5 and (row[4] == 'refused' or row[4] == 'unavailable') then
+                if #row[5] <= 64 and row[5]:match('^[a-z][a-z0-9_]*$') then fail() end
+                return
+            end
+            if #row ~= 7 or row[4] ~= 'observed' then return end
+            local balance = canonical_decimal(row[5], 0, max_exact_integer)
+            local total = canonical_decimal(row[6], view.offset, 4096)
+            local count = canonical_decimal(row[7], 0, 8)
+            if not balance or not total or not count or count ~= math.min(8, total - view.offset)
+                    or (view.total and (view.total ~= total or view.balance ~= balance)) then
+                fail()
+                return
+            end
+            view.total, view.balance, view.count = total, balance, count
+        elseif row[1] == 'MARKET_ROW' and #row == 12 then
+            local index = canonical_decimal(row[4], 1, 8)
+            local side, ware = row[5], row[6]
+            local price = canonical_decimal(row[7], 1, max_exact_integer)
+            local amount = canonical_decimal(row[8], 0, max_order_integer)
+            local minimum = canonical_decimal(row[9], 0, max_order_integer)
+            local cargo = canonical_decimal(row[10], 0, max_order_integer)
+            local free = canonical_decimal(row[11], 0, max_order_integer)
+            if not index or (side ~= 'buy' and side ~= 'sell') or #ware > 128
+                    or not ware:match('^[a-z][a-z0-9_]*$') or not price or not amount
+                    or not minimum or not cargo or not free or (row[12] ~= '0' and row[12] ~= '1') then
+                fail()
+                return
+            end
+            local encoded = table.concat(row, '|')
+            if view.page[index] and view.page[index].encoded ~= encoded then
+                fail()
+                return
+            end
+            view.page[index] = {side = side, ware = ware, price_cents = price, amount = amount,
+                min_amount = minimum, cargo_units = cargo, free_units = free, tradeable = row[12] == '1',
+                encoded = encoded}
+        end
+        if not view.count then return end
+        for index in pairs(view.page) do
+            if index > view.count then fail(); return end
+        end
+        for index = 1, view.count do
+            if not view.page[index] then return end
+        end
+        for index = 1, view.count do
+            local offer = view.page[index]
+            offer.encoded = nil
+            view.rows[#view.rows + 1] = offer
+        end
+        if #view.rows == view.total then
+            view.status, view.page = 'observed', nil
+            return
+        end
+        view.offset, view.count, view.next_send, view.page = view.offset + 8, nil, 0, {}
+        view.page_deadline = options.clock() + 8
+    end
+
+    function api:tick()
+        if not view or view.status ~= 'pending' then return end
+        local now = options.clock()
+        if now >= view.deadline or now >= view.page_deadline or not options.available() then
+            fail()
+            return
+        end
+        if now >= view.next_send then
+            view.next_send = now + 0.35
+            send('MARKET', view.id, view.sector, view.station, view.offset)
+        end
+    end
+    api.clock = options.clock
+    return api
+end
+
 function M.new(options)
     local pending, sequence, next_send = nil, 0, 0
     local running = false
@@ -49,6 +157,8 @@ function M.new(options)
     local next_notice_poll, next_notice_read = 0, 0
     local prefix = 'T|' .. options.lease .. '|'
     local api = {}
+    local market = options.trade_view and market_client(options, prefix)
+    api.market = market
 
     function api:request(intent, settle, displayed_total_cents)
         if not running or pending or sequence >= max_order_integer or not options.available()
@@ -67,6 +177,7 @@ function M.new(options)
 
     function api:set_running(value)
         running = value == true
+        if market and not running then market:close() end
     end
 
 
@@ -84,7 +195,7 @@ function M.new(options)
     end
 
     function api:tick()
-        if not pending and not options.undock_result then
+        if not pending and not options.undock_result and not market then
             if not options.recovered_notice or not running then return end
             local now = options.clock()
             if now < next_notice_read then return end
@@ -95,7 +206,9 @@ function M.new(options)
             if not packet then break end
             if #packet <= 512 and packet:sub(1, #prefix) == prefix then
                 local row = fields(packet:sub(#prefix + 1))
-                if row[1] == 'UNDOCK_RESULT' and options.undock_result then
+                if market and (row[1] == 'MARKET_PAGE' or row[1] == 'MARKET_ROW') then
+                    market:receive(row)
+                elseif row[1] == 'UNDOCK_RESULT' and options.undock_result then
                     options.undock_result(row)
                 elseif row[1] == 'NOTICE' and options.recovered_notice and running and options.available() then
                     handle_notice(packet, row)
@@ -143,6 +256,7 @@ function M.new(options)
             end
         end
         local now = options.clock()
+        if market and running then market:tick() end
         if options.recovered_notice and running and now >= next_notice_poll and options.available() then
             next_notice_poll = now + 4
             options.net:send(prefix .. 'NOTICE_POLL')
@@ -173,7 +287,8 @@ function M.new_x4(config, pinned, udp)
             and C.GetPlayerControlledShipID() == selected
             and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor()) == selected
     end
-    local options = {net = net, lease = config.lease, clock = udp.monotonic, available = available}
+    local options = {net = net, lease = config.lease, clock = udp.monotonic, available = available,
+        trade_view = config.trade_view == true}
     options.recovered_notice = function(notice)
         return X4LAN_COMPANY_TRADE_CAPTURE.show_recovered_purchase(notice)
     end
@@ -183,18 +298,21 @@ function M.new_x4(config, pinned, udp)
         options.undock_result = function(row) undock:result(row) end
     end
     local source = M.new(options)
-    if undock then
+    local market_ui
+    if undock or source.market then
         local set_running, tick = source.set_running, source.tick
         function source:set_running(value)
             set_running(self, value)
-            undock:set_running(value)
+            if undock then undock:set_running(value) end
+            if market_ui and value ~= true then market_ui:stop() end
         end
-        function source:stop_undock()
-            undock:stop()
+        if undock then
+            function source:stop_undock() undock:stop() end
         end
         function source:tick()
             tick(self)
-            undock:tick(seat)
+            if market_ui then market_ui:tick() end
+            if undock then undock:tick(seat) end
         end
     end
     function source:prepare_seat()
@@ -209,12 +327,13 @@ function M.new_x4(config, pinned, udp)
             end
         end
         if not map then return false end
-        assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
-            enabled = true, menu = map, ship = actor, dynamic_station = true,
+        local capture = assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
+            enabled = true, menu = map, ship = actor, dynamic_station = true, market = source.market,
             request = function(intent, settle, displayed_total_cents)
                 return source:request(intent, settle, displayed_total_cents)
             end,
         }))
+        market_ui = capture.market_ui
         selected = actor
         return true
     end
