@@ -90,6 +90,12 @@ WRN-302. The pilot's local engine still counted 9,884 Cr and two water
 after the notice. The test driver invoked the real menu callback on Bazzite.
 [Native buyer and provider](AUTHORITY-STOCK-PURCHASE-NATIVE-PAIR-20261125.md)
 
+The authority then restarted from that departure checkpoint. A fresh
+Linux pilot rejoined WRN-302, retained PYN-740 and read 9,768 Cr and
+four water from the local engine. After this pilot left, all three
+purchase records still matched the opening ledger.
+[Native cold rejoin](AUTHORITY-STOCK-PURCHASE-COLD-REJOIN-20261125.md)
+
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,
 and matched the ship and station inventories to the native transaction
