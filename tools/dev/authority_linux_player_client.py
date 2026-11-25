@@ -31,6 +31,8 @@ def main(argv=None):
                         help='request stock Company fleet order control from the provider')
     parser.add_argument('--company-trade-view', action='store_true',
                         help='load current server offers and funds in the docked Company trade window')
+    parser.add_argument('--company-sales', action='store_true',
+                        help='opt in to authority-confirmed sales in the Company trade window')
     parser.add_argument('--company-undock-test', action='store_true',
                         help='isolated test: require authority confirmation before stock undock')
     playback = parser.add_mutually_exclusive_group()
@@ -52,6 +54,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.company_fleet_orders and not args.company_purchases:
         parser.error('--company-fleet-orders requires --company-purchases')
+    if args.company_sales and not (args.company_purchases and args.company_trade_view):
+        parser.error('--company-sales requires --company-purchases and --company-trade-view')
     if args.company_trade_view and not args.company_purchases:
         parser.error('--company-trade-view requires --company-purchases')
     if args.company_undock_test and not args.company_purchases:
@@ -97,6 +101,8 @@ def main(argv=None):
             motion_options['company_fleet_orders'] = True
         if args.company_trade_view:
             motion_options['company_trade_view'] = True
+        if args.company_sales:
+            motion_options['company_sales'] = True
         if args.company_undock_test:
             motion_options['company_undock_test'] = True
         if observed_npc:

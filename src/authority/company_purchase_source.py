@@ -480,6 +480,8 @@ class CompanyPurchaseSource:
         trade_view_version = getattr(owner, '_company_trade_view_version', None)
         if self.trade_view and type(trade_view_version) is int and trade_view_version == 1:
             callbacks['company_trade_view_exchange'] = self.market_exchange
+        if self.sales and getattr(owner, '_company_sales', False) is True:
+            callbacks['company_sale_exchange'] = self.sale_exchange
         version = getattr(owner, '_company_purchase_statement_version', None)
         if self._statements is not None and type(version) is int and version == 1:
             callbacks.update(company_purchase_statement=self.statement,

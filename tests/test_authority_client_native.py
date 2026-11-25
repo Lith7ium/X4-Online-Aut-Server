@@ -115,15 +115,18 @@ class NativeClientTests(unittest.TestCase):
                 activate=Mock(side_effect=lambda *args, **kwargs: events.append('activate')))
             participant = SimpleNamespace(enroll=Mock(), request=Mock(), poll_load_keepalive=Mock(),
                                           deadline=time.monotonic()+10)
-            consumer = Mock()
+            consumer, sale_exchange = Mock(), Mock()
             native.observe_and_activate(owner, participant,
                 native.download.ReceiptWatch(log, self.ticket()), self.ticket(), 'd'*32,
                 lambda **kwargs: True, lambda: events.append('verified'), {},
-                registry_check=lambda: events.append('registry'), motion_consumer=consumer)
+                registry_check=lambda: events.append('registry'), motion_consumer=consumer,
+                company_sale_exchange=sale_exchange)
             self.assertEqual(events, ['verified', 'registry', 'load', 'marker', 'paused',
                                       'verified', 'registry', 'activate'])
             self.assertIs(owner.activate.call_args.kwargs['apply_motion'], consumer)
+            self.assertIs(owner.activate.call_args.kwargs['company_sale_exchange'], sale_exchange)
             consumer.assert_not_called()
+            sale_exchange.assert_not_called()
             self.assertFalse(participant.loading)
             self.assertTrue(participant.server_control)
 

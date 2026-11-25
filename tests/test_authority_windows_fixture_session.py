@@ -2,10 +2,11 @@
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -260,6 +261,49 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertEqual(result['reserved_company_ship_index'], 2)
         self.assertEqual(result['company_seat_at_admission'], 'aboard')
         self.assertNotIn('controlled_company_ship_index', result)
+
+    def test_company_sales_negotiated_and_bound_to_selected_pilot_source(self):
+        from authority.company_purchase_source import CompanyPurchaseSource
+
+        snapshot = self.prepare_company_seat()
+        negotiation = self.owner.enable_company_purchases = Mock(return_value=snapshot['epoch'])
+        self.owner._company_sales = True
+        self.owner._company_trade_view_version = 1
+        bound_callbacks = {}
+        original_session = self.session
+
+        def session(*args, company_purchase_exchange, company_trade_view_exchange, company_sale_exchange, **kwargs):
+            bound_callbacks['purchase'] = company_purchase_exchange
+            bound_callbacks['market'] = company_trade_view_exchange
+            bound_callbacks['sale'] = company_sale_exchange
+            return original_session(*args, **kwargs)
+
+        self.session = session
+        original_install = self.install
+
+        def install(view, **kwargs):
+            kwargs['company_purchase'].configure(snapshot['epoch'], kwargs['seat_index'])
+            return original_install(view, **kwargs)
+
+        self.install = install
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        def make_source(**kwargs):
+            return CompanyPurchaseSource(**kwargs, state_dir=state.name)
+
+        validator = Mock(return_value=True)
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
+             patch.object(subject, 'WindowsMotionPeer', return_value=validator) as peer, \
+             patch('authority.company_purchase_source.CompanyPurchaseSource', side_effect=make_source) as factory:
+            result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2,
+                                      company_purchases=True, company_trade_view=True, company_sales=True)
+        self.assertTrue(result['client_admitted'])
+        negotiation.assert_called_once_with(trade_view=True, sales=True)
+        self.assertIs(factory.call_args.kwargs['sales'], True)
+        source = bound_callbacks['purchase'].__self__
+        self.assertEqual(bound_callbacks['market'], source.market_exchange)
+        self.assertEqual(bound_callbacks['sale'], source.sale_exchange)
+        self.assertIs(peer.call_args.args[1], source.socket)
 
     def test_company_motion_starts_only_after_admission_and_cleans_up_before_x4(self):
         ship = {'ship_index': 2, 'sector_macro': 'sector_b', 'code': 'ABC-123', 'name': None}

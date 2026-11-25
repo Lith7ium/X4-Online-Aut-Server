@@ -16,6 +16,7 @@ param(
     [switch] $CompanyPurchases,
     [switch] $CompanyUndockTest,
     [switch] $CompanyTradeView,
+    [switch] $CompanySales,
     [switch] $CompanyFleetOrders,
     [ValidateCount(2, 2)] [string[]] $ObserveRegisteredNpc,
     [switch] $CompanyCockpitPlayback,
@@ -26,6 +27,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($CompanyFleetOrders -and -not $CompanyPurchases) {
     throw '-CompanyFleetOrders requires -CompanyPurchases'
+}
+if ($CompanySales -and (-not $CompanyPurchases -or -not $CompanyTradeView)) {
+    throw '-CompanySales requires -CompanyPurchases and -CompanyTradeView'
 }
 if ($CompanyTradeView -and -not $CompanyPurchases) {
     throw '-CompanyTradeView requires -CompanyPurchases'
@@ -163,6 +167,9 @@ if ($CompanyFleetOrders) {
 }
 if ($CompanyTradeView) {
     $clientArgs += '--company-trade-view'
+}
+if ($CompanySales) {
+    $clientArgs += '--company-sales'
 }
 if ($CompanyUndockTest) {
     $clientArgs += '--company-undock-test'

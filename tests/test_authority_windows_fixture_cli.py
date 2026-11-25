@@ -279,6 +279,27 @@ class FixtureCliTests(unittest.TestCase):
         self.assertIs(session.call_args.kwargs['company_purchases'], True)
         self.assertNotIn('company_trade_view', session.call_args.kwargs)
 
+    def test_sales_require_purchase_and_market_view_and_reach_session(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64]
+        parse = cli.parser().parse_args
+        with (patch.object(cli, 'os') as platform,
+              patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as session,
+              patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace') as workspace):
+            platform.name = 'nt'
+            for prerequisite in ([], ['--company-purchases'], ['--company-trade-view']):
+                with self.subTest(prerequisite=prerequisite), self.assertRaisesRegex(ValueError, '--company-sales requires'):
+                    cli.run(parse([*base, '--company-sales', *prerequisite]))
+            session.assert_not_called()
+            workspace.assert_not_called()
+            normal = [*base, '--company-purchases', '--company-trade-view']
+            cli.run(parse(normal))
+            self.assertNotIn('company_sales', session.call_args.kwargs)
+            cli.run(parse([*normal, '--company-sales']))
+            self.assertIs(session.call_args.kwargs['company_sales'], True)
+
 
 if __name__ == '__main__':
     unittest.main()

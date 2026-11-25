@@ -111,6 +111,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
+                        company_sales=False,
                         play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False, observed_npc=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
@@ -154,6 +155,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('open-ended play requires a Company pilot')
     if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
         raise ValueError('Company fleet orders require Company purchases')
+    if type(company_sales) is not bool or (company_sales and not (company_trade_view and company_purchases)):
+        raise ValueError('Company sales require Company purchases and trade view')
     if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
         raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
@@ -205,6 +208,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         capabilities['undock'] = True
                     if company_trade_view:
                         capabilities['trade_view'] = True
+                    if company_sales:
+                        capabilities['sales'] = True
                     if company_fleet_orders:
                         capabilities['fleet_orders'] = True
                         capabilities['fleet_order_version'] = 2
@@ -246,8 +251,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     source_options['company_motion'] = company_source
                 if company_purchases:
                     from .company_purchase_source import CompanyPurchaseSource
+                    sale_options = {'sales': True} if company_sales else {}
                     purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
-                                                            server_fingerprint=server_fingerprint, undock=company_undock_test, trade_view=company_trade_view)
+                                                            server_fingerprint=server_fingerprint, undock=company_undock_test,
+                                                            trade_view=company_trade_view, **sale_options)
                     source_options['company_purchase'] = purchase_source
                 if company_fleet_orders:
                     from .company_fleet_source import CompanyFleetSource

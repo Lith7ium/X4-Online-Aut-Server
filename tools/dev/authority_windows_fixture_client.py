@@ -65,6 +65,8 @@ def parser():
                         help='request stock Company fleet order control from the provider')
     result.add_argument('--company-trade-view', action='store_true',
                         help='load current server offers and funds in the docked Company trade window')
+    result.add_argument('--company-sales', action='store_true',
+                        help='opt in to authority-confirmed sales in the Company trade window')
     result.add_argument('--company-undock-test', action='store_true',
                         help='isolated test: require authority confirmation before stock undock')
     playback = result.add_mutually_exclusive_group()
@@ -105,6 +107,9 @@ def run(args, *, on_stage=None):
     if fleet_orders and not args.company_purchases:
         raise ValueError('--company-fleet-orders requires --company-purchases')
     trade_view = getattr(args, 'company_trade_view', False)
+    sales = getattr(args, 'company_sales', False)
+    if sales and not (args.company_purchases and trade_view):
+        raise ValueError('--company-sales requires --company-purchases and --company-trade-view')
     if trade_view and not args.company_purchases:
         raise ValueError('--company-trade-view requires --company-purchases')
     undock_test = getattr(args, 'company_undock_test', False)
@@ -163,6 +168,8 @@ def run(args, *, on_stage=None):
         motion_options['company_purchases'] = True
     if trade_view:
         motion_options['company_trade_view'] = True
+    if sales:
+        motion_options['company_sales'] = True
     if fleet_orders:
         motion_options['company_fleet_orders'] = True
     if undock_test:

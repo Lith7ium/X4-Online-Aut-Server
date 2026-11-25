@@ -131,7 +131,7 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
                          registry_check=None, motion_consumer=None, company_purchase_exchange=None,
                          company_purchase_statement=None, company_purchase_statement_result=None,
                          company_undock_exchange=None, company_trade_view_exchange=None, company_fleet_exchange=None,
-                         play_until_exit=False):
+                         company_sale_exchange=None, play_until_exit=False):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -167,6 +167,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
         motion_options['company_purchase_exchange'] = company_purchase_exchange
     if company_fleet_exchange is not None:
         motion_options['company_fleet_exchange'] = company_fleet_exchange
+    if company_sale_exchange is not None:
+        motion_options['company_sale_exchange'] = company_sale_exchange
     if company_trade_view_exchange is not None:
         motion_options['company_trade_view_exchange'] = company_trade_view_exchange
     if company_undock_exchange is not None:
@@ -258,6 +260,7 @@ def error_code(error):
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
         cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
+        company_sales=False,
         observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
@@ -266,6 +269,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         raise ValueError('Company purchases require player mode')
     if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
         raise ValueError('Company fleet orders require Company purchases')
+    if type(company_sales) is not bool or (company_sales and not (company_trade_view and company_purchases)):
+        raise ValueError('Company sales require Company purchases and trade view')
     if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
         raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
@@ -357,6 +362,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             capabilities['undock'] = True
                         if company_trade_view:
                             capabilities['trade_view'] = True
+                        if company_sales:
+                            capabilities['sales'] = True
                         if company_fleet_orders:
                             capabilities['fleet_orders'] = True
                             capabilities['fleet_order_version'] = 2
@@ -431,8 +438,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             registered_npc_alignment_trial=registered_npc_alignment_trial)
                         source_options['company_motion'] = company_source
                     if company_purchases:
+                        sale_options = {'sales': True} if company_sales else {}
                         purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
-                            server_fingerprint=connection_settings['server_fingerprint'], undock=company_undock_test, trade_view=company_trade_view)
+                            server_fingerprint=connection_settings['server_fingerprint'], undock=company_undock_test,
+                            trade_view=company_trade_view, **sale_options)
                         source_options['company_purchase'] = purchase_source
                     if company_fleet_orders:
                         from authority.company_fleet_source import CompanyFleetSource
