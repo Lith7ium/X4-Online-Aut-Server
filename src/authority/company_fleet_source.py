@@ -15,7 +15,10 @@ _DECIMAL = re.compile(r'-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[+-][0-9]+)?')
 class CompanyFleetSource:
     """Correlate bounded local datagrams and authenticated control receipts."""
 
-    def __init__(self):
+    def __init__(self, *, version=1):
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError('unsupported Company fleet IPC version')
+        self._version = version
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -47,7 +50,10 @@ class CompanyFleetSource:
                 or not re.fullmatch(r'[0-9a-f]{32}', epoch)):
             raise ValueError('invalid Company fleet IPC epoch')
         self._epoch = epoch
-        return {'epoch': epoch, 'port': self._socket.getsockname()[1], 'lease': self._lease}
+        settings = {'epoch': epoch, 'port': self._socket.getsockname()[1], 'lease': self._lease}
+        if self._version == 2:
+            settings['version'] = 2
+        return settings
 
     def bind_validator(self, validate_peer):
         self._owner()
@@ -66,7 +72,7 @@ class CompanyFleetSource:
         if not self._offered or self._answer is not None:
             return
         try:
-            receipt = fleet_receipt(result)
+            receipt = fleet_receipt(result, version=self._version)
         except ValueError:
             return
         if any(receipt[key] != value for key, value in self._order.items()):
@@ -79,16 +85,19 @@ class CompanyFleetSource:
 
     def _decode_order(self, packet):
         fields = packet[len(self._prefix):].decode('ascii').split('|')
-        if len(fields) != 8 or fields[0] != 'ORDER':
+        expected_fields = 9 if self._version == 2 else 8
+        if len(fields) != expected_fields or fields[0] != 'ORDER':
             raise ValueError('invalid Company fleet IPC frame')
-        _, order_id, ship_index, ship_code, sector, x, y, z = fields
+        _, order_id, ship_index, ship_code, sector, x, y, z = fields[:8]
         if (not order_id.startswith(self._lease[:24]) or len(order_id) != 32
                 or not re.fullmatch(r'[1-9][0-9]{0,5}', ship_index)
                 or any(len(value) > 32 or not _DECIMAL.fullmatch(value) for value in (x, y, z))):
             raise ValueError('invalid Company fleet IPC fields')
-        order = fleet_order(dict(order_id=order_id, ship_index=int(ship_index), ship_code=ship_code,
-                                 sector=sector, x=float(x), y=float(y), z=float(z)))
-        return int(order_id[24:], 16), order
+        order = dict(order_id=order_id, ship_index=int(ship_index), ship_code=ship_code,
+                     sector=sector, x=float(x), y=float(y), z=float(z))
+        if self._version == 2:
+            order['queue_mode'] = fields[8]
+        return int(order_id[24:], 16), fleet_order(order, version=self._version)
 
     def _receive(self):
         for _ in range(16):

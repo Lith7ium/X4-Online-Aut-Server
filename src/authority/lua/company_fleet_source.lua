@@ -8,6 +8,8 @@ local function lease(value)
 end
 
 function M.new(o)
+    local version = o.version or 1
+    assert(version == 1 or version == 2, 'invalid Company fleet IPC version')
     local pending, serial, running = nil, 0, false
     local prefix = 'F|' .. o.lease .. '|'
     local api = {}
@@ -19,6 +21,11 @@ function M.new(o)
         end
         if pending then
             o.notice('busy')
+            return
+        end
+        if (version == 1 and intent.queue_mode ~= nil)
+                or (version == 2 and intent.queue_mode ~= 'append' and intent.queue_mode ~= 'replace') then
+            o.notice('unsupported')
             return
         end
         serial = serial + 1
@@ -44,8 +51,10 @@ function M.new(o)
             o.notice('binding_unavailable', id)
             return
         end
-        pending.packet = prefix .. table.concat({'ORDER', id, value, intent.ship_code, intent.sector,
-            ('%.17g'):format(intent.x), ('%.17g'):format(intent.y), ('%.17g'):format(intent.z)}, '|')
+        local fields = {'ORDER', id, value, intent.ship_code, intent.sector,
+            ('%.17g'):format(intent.x), ('%.17g'):format(intent.y), ('%.17g'):format(intent.z)}
+        if version == 2 then fields[#fields + 1] = intent.queue_mode end
+        pending.packet = prefix .. table.concat(fields, '|')
         pending.next_send, pending.deadline = 0, o.clock() + 30
     end
 
@@ -133,6 +142,8 @@ end
 function M.new_x4(config, pinned, udp)
     assert(type(config) == 'table' and config.epoch == pinned.epoch and lease(config.epoch) and lease(config.lease)
         and type(config.port) == 'number' and config.port % 1 == 0 and config.port >= 1 and config.port <= 65535)
+    assert(config.version == nil or config.version == 1 or config.version == 2, 'invalid Company fleet IPC version')
+    local version = config.version or 1
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
     ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); UniverseID GetPlayerControlledShipID(void);]]
@@ -146,7 +157,8 @@ function M.new_x4(config, pinned, udp)
         return actor ~= nil and C.GetPlayerControlledShipID() == actor
     end
     local api = M.new({
-        lease = config.lease, epoch = config.epoch, net = assert(udp.open('127.0.0.1', config.port)),
+        lease = config.lease, epoch = config.epoch, version = version,
+        net = assert(udp.open('127.0.0.1', config.port)),
         clock = udp.monotonic, available = available, notice = capture.notice_x4,
         operational_index = function(index) return pinned.operational_bits:sub(index, index) == '1' end,
         actor = X4LAN_RESOLVE_STRING.parse_hex,
@@ -174,7 +186,8 @@ function M.new_x4(config, pinned, udp)
             end
         end
         if not map or not interact then return false end
-        installed = assert(capture.install_x4(map, interact, function(intent) api:submit(intent) end, available))
+        installed = assert(capture.install_x4(map, interact, function(intent) api:submit(intent) end, available,
+            version))
         return true
     end
     return api

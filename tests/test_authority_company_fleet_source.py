@@ -29,9 +29,10 @@ class CompanyFleetSourceTests(unittest.TestCase):
         sock.settimeout(0.5)
         return sock
 
-    def packet(self, count=1, x='-1200.25', *, index='2', lease=None):
+    def packet(self, count=1, x='-1200.25', *, index='2', lease=None, mode=None):
         order_id = f'{self.lease[:24]}{count:08x}'
-        return f'F|{lease or self.lease}|ORDER|{order_id}|{index}|WRN-302|cluster_01_sector001_macro|{x}|44.5|1e-05'.encode()
+        order = f'F|{lease or self.lease}|ORDER|{order_id}|{index}|WRN-302|cluster_01_sector001_macro|{x}|44.5|1e-05'
+        return (order if mode is None else f'{order}|{mode}').encode()
 
     def send(self, packet, sock=None):
         (sock or self.sender).sendto(packet, self.source.socket.getsockname())
@@ -73,12 +74,41 @@ class CompanyFleetSourceTests(unittest.TestCase):
                         self.packet(x='nan'), self.packet(x='inf'), self.packet(x='10000000.1'),
                         self.packet(index='1234567'), self.packet(x='2' * 600)):
             self.send(invalid)
+        self.send(self.packet(mode='replace'))
         self.send(self.packet(), stranger)
         self.assertIsNone(self.source.exchange(None))
         self.send(self.packet())
         self.assertEqual(self.source.exchange(None)['ship_code'], 'WRN-302')
 
+    def test_v2_requires_and_binds_the_exact_queue_mode(self):
+        with self.assertRaises(ValueError):
+            CompanyFleetSource(version=True)
+        source = CompanyFleetSource(version=2)
+        self.addCleanup(source.close)
+        self.config = source.configure('0' * 32)
+        self.assertEqual(self.config['version'], 2)
+        self.lease = self.config['lease']
+        self.source = source
+        source.bind_validator(lambda peer: peer == self.validator)
+        self.send(self.packet())
+        self.send(self.packet(mode='priority'))
+        self.assertIsNone(source.exchange(None))
+        self.send(self.packet(mode='replace'))
+        request = source.exchange(None)
+        self.assertEqual(request['queue_mode'], 'replace')
+        self.send(self.packet(mode='append'))
+        self.assertIsNone(source.exchange(dict(request, outcome='accepted', queue_mode='append')))
+        legacy_receipt = {key: value for key, value in request.items() if key != 'queue_mode'}
+        self.assertIsNone(source.exchange(dict(legacy_receipt, outcome='accepted')))
+        self.assertIsNone(source.exchange(dict(request, outcome='accepted')))
+        self.assertEqual(self.receive(), ['RESULT', request['order_id'], 'accepted'])
+        self.send(self.packet(count=2, mode='append'))
+        request = source.exchange(None)
+        self.assertEqual(request['queue_mode'], 'append')
+
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_regular_stock_context_capture_and_bound_results(self):
-        subprocess.run(['luajit', 'tests/authority_company_fleet_capture.lua'],
-                       cwd=ROOT, timeout=10, check=True)
+        for version in ('1', '2'):
+            with self.subTest(version=version):
+                subprocess.run(['luajit', 'tests/authority_company_fleet_capture.lua', version],
+                               cwd=ROOT, timeout=10, check=True)

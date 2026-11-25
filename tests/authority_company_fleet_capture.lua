@@ -2,11 +2,12 @@ local capture = dofile('src/authority/lua/company_fleet_capture.lua')
 local source = dofile('src/authority/lua/company_fleet_source.lua')
 local epoch, lease = string.rep('0', 32), string.rep('b', 32)
 local prefix = 'F|' .. lease .. '|'
+local version = tonumber(arg[1]) or 1
 local ship, sector, other_sector, occupied, npc = 905123, 223476, 223477, 906150, 975123
 local actual_sector = sector
 local controlled = true
 local num_orders = 0
-local modifier = false
+local control_pressed, shift_pressed = false, false
 local stock, closed, time = 0, 0, 1
 local events, messages, sent, incoming = {}, {}, {}, {}
 
@@ -60,8 +61,8 @@ package.loaded.ffi = {cdef = function() end, typeof = function() end, C = {
     GetContextByClass = function() return actual_sector end,
     GetNumOrders = function() return num_orders end,
     IsOrderSelectableFor = function(kind, id) return kind == 'MoveWait' and id == ship end,
-    IsControlPressed = function() return modifier end,
-    IsShiftPressed = function() return false end,
+    IsControlPressed = function() return control_pressed end,
+    IsShiftPressed = function() return shift_pressed end,
     ShowInfoLine = function(text) assert(type(text) == 'string') end,
 }}
 local event_handler
@@ -78,7 +79,7 @@ Menus = {map, interact}
 X4LAN_RESOLVE_STRING = {parse_hex = function(value) return tonumber(value) end}
 local seat = {controlled_actor = function() return tostring(occupied) end}
 X4LAN_AUTHORITY_SELECTED_SEAT = seat
-local ipc = source.new_x4({epoch = epoch, lease = lease, port = 12345}, {epoch = epoch, operational_bits = '01'}, {
+local ipc = source.new_x4({epoch = epoch, lease = lease, port = 12345, version = version == 2 and 2 or nil}, {epoch = epoch, operational_bits = '01'}, {
     monotonic = function() return time end,
     open = function(host, port)
         assert(host == '127.0.0.1' and port == 12345)
@@ -104,6 +105,51 @@ status('unavailable')
 assert(ipc:prepare(seat))
 ipc:set_running(true)
 
+if version == 2 then
+    map.orderMoveWait(ship, sector)
+    status('unsupported')
+    interact.priorityOrderMode = true
+    interact.buttonMoveWait(false)
+    status('unsupported')
+    interact.priorityOrderMode = false
+    interact.numorderloops = 1
+    interact.buttonMoveWait(false)
+    status('unsupported')
+    interact.numorderloops = 0
+    interact.buttonMoveWait(nil)
+    status('unsupported')
+
+    -- Exercise a busy target, stock default flags, each possible queue toggle,
+    -- and the explicit clear argument without forwarding any local order calls.
+    num_orders = 7
+    local cases = {
+        {clear = false, queue_clear = false, default_clear = false, mode = 'append'},
+        {clear = false, queue_clear = true, default_clear = true, mode = 'replace'},
+        {clear = false, queue_clear = false, default_clear = true, shift = true, mode = 'append'},
+        {clear = false, queue_clear = true, default_clear = false, control = true, mode = 'replace'},
+        {clear = true, queue_clear = false, default_clear = false, mode = 'replace'},
+    }
+    for index, case in ipairs(cases) do
+        interact.clearOtherOrders = case.queue_clear
+        interact.clearOrderQueueByDefault = case.default_clear
+        shift_pressed, control_pressed = case.shift == true, case.control == true
+        interact.buttonMoveWait(case.clear)
+        assert(#events == index)
+        local id = events[index].order_id
+        interact.clearOtherOrders = not case.queue_clear
+        binding(id, 2, ship)
+        ipc:tick()
+        status('pending')
+        assert(#sent == index and sent[index]:find('|ORDER|' .. id .. '|2|WRN-302|', 1, true)
+            and sent[index]:match('|([a-z]+)$') == case.mode)
+        incoming[1] = prefix .. 'RESULT|' .. id .. '|accepted'
+        ipc:tick()
+        status('accepted')
+    end
+    assert(stock == 0)
+    return
+end
+
 map.orderMoveWait(ship, sector)
 interact.orderMoveWait(ship, sector)
 status('unsupported')
@@ -112,12 +158,12 @@ interact.selectedplayerships[2] = 8
 interact.buttonMoveWait(false)
 status('unsupported')
 interact.selectedplayerships[2] = nil
-modifier = true
+control_pressed = true
 interact.buttonMoveWait(false)
-status('unsupported')
-modifier = false
+status('legacy_queue_override')
+control_pressed = false
 interact.buttonMoveWait(true)
-status('unsupported')
+status('legacy_queue_override')
 interact.componentSlot.component = 88
 interact.buttonMoveWait(false)
 status('unsupported')
@@ -132,7 +178,7 @@ status('ship_unavailable')
 actual_sector = sector
 num_orders = 1
 interact.buttonMoveWait(false)
-status('ship_unavailable')
+status('legacy_ship_busy')
 num_orders = 0
 assert(#events == 0 and #sent == 0 and stock == 0)
 

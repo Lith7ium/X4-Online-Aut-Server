@@ -1,10 +1,12 @@
--- Take ownership of the stock map's first Company fleet command before it can write the queue.
+-- Capture the Company fleet order before the stock map can write the queue.
 local M = {}
 
 local notices = {
     unavailable = 'Company fleet orders are unavailable from this cockpit.',
-    unsupported = 'Company Fly and Wait requires one ship and a plain map point in its sector. Priority, clear-queue overrides and shortcuts are unavailable.',
-    ship_unavailable = 'Company Fly and Wait requires an idle, undocked Company ship with an NPC captain.',
+    unsupported = 'Company Fly and Wait requires one ship and a plain map point in its sector. Priority, looped queues and shortcuts are unavailable.',
+    ship_unavailable = 'Company Fly and Wait requires an operational, undocked Company ship with an NPC captain.',
+    legacy_ship_busy = 'This Company session requires a ship with an empty order queue.',
+    legacy_queue_override = 'This Company session supports the standard Fly and Wait action for an idle ship.',
     binding_unavailable = 'The selected ship could not be verified in the Company registry.',
     busy = 'A Company fleet order is already awaiting its result.',
     pending = 'Company Fly and Wait sent. Awaiting the server result.',
@@ -48,7 +50,8 @@ local function finite_coordinate(value)
     if number and number == number and math.abs(number) <= 10000000 then return number end
 end
 
-function M.install_x4(map, interact, submit, available)
+function M.install_x4(map, interact, submit, available, version)
+    local legacy = version ~= 2
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
     ffi.cdef[[
@@ -70,7 +73,7 @@ function M.install_x4(map, interact, submit, available)
     local function matches(ship, sector, code)
         if ship == 0 or ship == C.GetPlayerOccupiedShipID() or not C.IsComponentClass(ship, 'ship')
                 or not C.IsComponentOperational(ship) or C.GetContextByClass(ship, 'sector', false) ~= sector
-                or C.GetNumOrders(ship) ~= 0 or not C.IsOrderSelectableFor('MoveWait', ship) then return false end
+                or not C.IsOrderSelectableFor('MoveWait', ship) then return false end
         local owned, pilot, docked, docking, stored, current_code = GetComponentData(ship,
             'isplayerowned', 'assignedpilot', 'isdocked', 'isdocking', 'isinternallystored', 'idcode')
         return owned == true and pilot and C.IsComponentClass(ConvertIDTo64Bit(pilot), 'npc')
@@ -79,11 +82,13 @@ function M.install_x4(map, interact, submit, available)
     local function read(map_menu, menu, clear)
         if not available() then return nil, 'unavailable' end
         local selected = menu.selectedplayerships
-        if clear ~= false or map_menu.mode ~= nil or menu.shown == true or menu.priorityOrderMode
-                or C.IsControlPressed() or C.IsShiftPressed()
-                or (menu.clearOtherOrders and menu.clearOrderQueueByDefault ~= true)
+        if type(clear) ~= 'boolean' or map_menu.mode ~= nil or menu.shown == true or menu.priorityOrderMode
                 or type(selected) ~= 'table' or #selected ~= 1 or menu.numorderloops ~= 0
                 or not menu.componentSlot or not menu.offset then return nil, 'unsupported' end
+        if legacy and (clear or C.IsControlPressed() or C.IsShiftPressed()
+                or (menu.clearOtherOrders and menu.clearOrderQueueByDefault ~= true)) then
+            return nil, 'legacy_queue_override'
+        end
 
         local map_selected = map_menu.selectedcomponents
         if type(map_selected) ~= 'table' then return nil, 'unsupported' end
@@ -104,10 +109,18 @@ function M.install_x4(map, interact, submit, available)
                 or type(code) ~= 'string' or not code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$')
                 or not matches(ship, sector, code) then return nil, 'ship_unavailable' end
 
+        if legacy and C.GetNumOrders(ship) ~= 0 then return nil, 'legacy_ship_busy' end
         local component = component_ref(ship)
         if not component then return nil, 'binding_unavailable' end
+
+        -- The stock interaction handler reads these effective flags. The queue
+        -- toggle key may change clearOtherOrders without enabling priority.
+        local queue_mode
+        if not legacy then queue_mode = (clear or menu.clearOtherOrders) and 'replace' or 'append' end
         return {ship = ship, component = component, ship_code = code, sector = sector_macro, x = x, y = y, z = z,
-            current = function() return matches(ship, sector, code) end}
+            queue_mode = queue_mode, current = function()
+                return matches(ship, sector, code) and (not legacy or C.GetNumOrders(ship) == 0)
+            end}
     end
 
     return M.install({enabled = true, map = map, interact = interact, read = read, submit = submit,
