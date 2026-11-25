@@ -35,6 +35,10 @@ records the current Windows assignments. [Development check-in](https://x4multip
   selection the cockpit fills three slots from the HUD and nearby eligible
   Company ships. Idle ships can take all three slots while another pilot is
   still within radar range. [Cockpit selection](../src/authority/md/company_cockpit_observer.xml)
+  Use the uncrewed fighters for this flight. Current playback on the observing
+  client excludes ships with an assigned NPC captain, even after another
+  player's client has taken the helm. The earlier human test used uncrewed
+  ships. [Retained-captain flight audit](AUTHORITY-COMPANY-FLIGHT-RETAINED-CAPTAIN-20261125.md)
 - **Neon** owns one Windows GPU receiver run with the indexed cockpit
   observer while an unrelated ship is targeted. Use the existing private
   fixture. Compare the actual positions of the observed ship, the local
