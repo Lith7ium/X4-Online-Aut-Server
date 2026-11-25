@@ -191,6 +191,35 @@ index 5049 stayed in memory. Raw logs, the provider result and
 `independent-follow.json` are in
 `.local/native-boarding-crew-seed/stock-follow-01/`.
 
+## Native map trial with the first-use queue prompt
+
+Run03 at `f444e5f0` used one disposable software-rendered Linux provider
+with the same confirmed source. The live registry resolved ARU-541 as
+`0x4204b` at temporary index 5049, and the witness armed on ZNG-430
+`0x41f82` at sealed index 1666. The first rendered map reported
+`orderqueuesetting` and a callable stock boarding callback. The private
+driver invoked the mounted Keep action once (frame 74, cell 82).
+The dialog closed and the stock setting read back as `keep`.
+
+The driver then passed raw FFI actor values into the stock map callback.
+The engine rejected the target in `GetComponentData` and the attacker
+in `GetSubordinates`, both with `got cdata, expected component ID`.
+The rejected hull read at `menu_map.lua:25268` left the hull percentage
+missing, and the stock risk calculation failed at line 25354. The stock
+InteractMenu converts the target with `ConvertStringTo64Bit` before
+returning to the map. Its attacker list comes from the map's stock
+selection code, which uses that converter too. No Start widget mounted.
+The trace records zero Start clicks and zero native operation starts.
+
+Five offline LuaJIT cases exercised the stock callback, Keep widget and
+Start handler with renderer and engine doubles. The native run exposed
+the component type mismatch those doubles missed. The provider repaused
+and exited with a failed start receipt and no surviving X4 process. The
+output checkpoint store stayed empty. Independent SHA-256 checks matched
+the confirmed original and staged source bytes above. The raw engine
+log and `independent-ui.json` are in
+`.local/native-boarding-crew-seed/stock-start-03/`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
