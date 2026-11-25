@@ -5,10 +5,10 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 05:00 team check-in
-records the current Windows assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795579250466649)
+hour, Berlin time, in `#x4-authorative-server`. The 06:00 team check-in
+records the current Windows assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795582842624059)
 
-- **Cobalt** owns the Windows-to-Fedora flight check. If profile 45841 is
+- **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
   with `-FreshCompanyProfile`. Run it directly with the existing private
   connection file and assigned seat. A Windows-Python filesystem check under
@@ -39,10 +39,14 @@ records the current Windows assignments. [Development check-in](https://x4multip
   client excludes ships with an assigned NPC captain, even after another
   player's client has taken the helm. The earlier human test used uncrewed
   ships. [Retained-captain flight audit](AUTHORITY-COMPANY-FLIGHT-RETAINED-CAPTAIN-20261125.md)
-- **Neon** owns one Windows GPU receiver run with the indexed cockpit
-  observer while an unrelated ship is targeted. Use the existing private
-  fixture. Compare the actual positions of the observed ship, the local
-  ship and the HUD target. Cobalt owns the Internet sender check.
+- **Neon** completed the Windows GPU receiver run. OGE-507 moved 88.71 m
+  on the recorded trajectory. The local ship and MHK-947, which remained
+  selected in the HUD, stayed at their original positions. The private
+  fixture used X4's real-time clock aligned to the Windows performance
+  counter. Next, inspect the DLL and clock the packaged Windows sender
+  actually selects, and exercise its real controlled-ship sample path
+  when the Windows system is available. Cobalt owns the Internet flight.
+  [Windows GPU report and harness revision](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/7d575ef1cd904acfc3d30e6cccd5d7ca1e4c8257/reports/AUTHORITY-COMPANY-INDEXED-HUD-WINDOWS-20261125.md)
   Neon previously delivered Windows observations of shield and hull damage from
   weapons. Shared damage across machines and boarding remain open.
   Before implementing damage replication, ask Lith7ium which simulation
