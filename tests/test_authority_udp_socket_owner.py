@@ -145,7 +145,7 @@ class UDPSocketOwnerTest(unittest.TestCase):
                                       self.identity, diagnostic=reasons.append))
         self.assertEqual(reasons, ['connected IPv4 flow count differs from one (matches=0)'])
 
-    def test_duplicate_connected_flow_reports_match_count(self):
+    def test_duplicate_connected_flow_reports_match_and_distinct_inode_counts(self):
         original = ownership._udp_table
         peer_endpoint = ownership._proc_ipv4_endpoint(self.peer.getsockname())
         destination_endpoint = ownership._proc_ipv4_endpoint(self.receiver.getsockname())
@@ -157,12 +157,19 @@ class UDPSocketOwnerTest(unittest.TestCase):
             matches = [row for row in rows
                        if row[1] == peer_endpoint and row[2] == destination_endpoint]
             self.assertEqual(len(matches), 1)
-            return rows + matches
+            duplicate = matches[0].copy()
+            if distinct_inodes == 2:
+                duplicate[9] = str(int(duplicate[9]) + 1)
+            return rows + [duplicate]
 
-        reasons = []
-        with patch.object(ownership, '_udp_table', side_effect=duplicate_match):
-            self.assertFalse(self.owner(diagnostic=reasons.append))
-        self.assertEqual(reasons, ['connected IPv4 flow count differs from one (matches=2)'])
+        for distinct_inodes in (1, 2):
+            with self.subTest(distinct_inodes=distinct_inodes):
+                reasons = []
+                with patch.object(ownership, '_udp_table', side_effect=duplicate_match):
+                    self.assertFalse(self.owner(diagnostic=reasons.append))
+                self.assertEqual(reasons, [
+                    f'connected IPv4 flow count differs from one (matches=2, distinct_inodes={distinct_inodes})',
+                ])
 
     def test_duplicate_owned_descriptor_has_a_static_diagnostic(self):
         duplicate = os.dup(self.peer.fileno())

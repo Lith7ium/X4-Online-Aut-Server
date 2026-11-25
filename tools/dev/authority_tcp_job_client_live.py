@@ -95,7 +95,10 @@ def socket_owner(peer, destination, process, *, diagnostic=None):
     peer_rows = [row for row in rows
                  if row[1] == peer_endpoint and row[2] == destination_endpoint]
     if len(peer_rows) != 1:
-        return reject(f'connected IPv4 flow count differs from one (matches={len(peer_rows)})')
+        summary = f'matches={len(peer_rows)}'
+        if peer_rows:
+            summary += f', distinct_inodes={len({row[9] for row in peer_rows})}'
+        return reject(f'connected IPv4 flow count differs from one ({summary})')
     inode = peer_rows[0][9]
     source_port = f'{peer[1]:04X}'
     if any(row[1].rsplit(':', 1)[1] == source_port and row[9] != inode for row in rows):
