@@ -40,9 +40,9 @@ class ParticipantTCPFixture(unittest.TestCase):
         self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
         self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
         options = {}
-        if self.retire_disconnected_on_resume:
+        if getattr(self, 'retire_disconnected_on_resume', False):
             options['retire_disconnected_on_resume'] = True
-        if self.retire_disconnected_on_pause:
+        if getattr(self, 'retire_disconnected_on_pause', False):
             options['retire_disconnected_on_pause'] = True
         self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3, **options)
         self.world._participants = self.participants
