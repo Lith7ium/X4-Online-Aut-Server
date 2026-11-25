@@ -6,9 +6,10 @@ import unittest
 
 import test_authority_experimental_tcp_participants as fixtures
 from authority.company_purchase_control import (
-    ClientPurchaseControl, CompanyPurchasePeerLost, poll_company_purchase, purchase_receipt,
+    ClientPurchaseControl, CompanyPurchasePeerLost, poll_company_purchase, poll_company_undock, purchase_receipt,
     deliver_company_purchase_statement_result, request_company_purchase_statement,
 )
+from authority.company_undock_messages import UndockWindow, undock_receipt, undock_request
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
 from authority.experimental_tcp_control import offer_request
 from authority.experimental_tcp_participant_client import ExperimentalTCPParticipantClient
@@ -27,6 +28,11 @@ STATEMENT = {'purchase_id': PURCHASE['purchase_id'], 'ware': 'water', 'quantity'
              'settled_total_cents': 35200}
 
 
+DEPARTURE = dict(request_id='0' * 31 + '1', sector=PURCHASE['sector'], station_code='BIM-169',
+                 bay_seed='507326418098681806', bay_macro='dockingbay_arg_s_01_lowtech_macro',
+                 dockarea_macro='dockarea_arg_m_station_02_lowtech_macro')
+
+
 class Controller:
     def resume(self, handles):
         return handles in ((1,), (2,))
@@ -36,6 +42,29 @@ class Controller:
 
 
 class CompanyPurchaseTests(unittest.TestCase):
+    def test_departure_requires_exact_native_seed_and_one_unmodified_request(self):
+        for seed in ('-9223372036854775808', '18446744073709551615'):
+            self.assertEqual(undock_request(dict(DEPARTURE, bay_seed=seed))['bay_seed'], seed)
+        for seed in (-1, '0', '01', '-0', '18446744073709551616', '-9223372036854775809'):
+            with self.subTest(seed=seed), self.assertRaises(ValueError):
+                undock_request(dict(DEPARTURE, bay_seed=seed))
+
+        window = UndockWindow()
+        sent = window.next_request(DEPARTURE)
+        window.advance(sent)
+        sent['bay_seed'] = '1'
+        with self.assertRaises(ValueError):
+            window.receipt(dict(sent, outcome='confirmed'))
+        with self.assertRaises(ValueError):
+            window.next_request(DEPARTURE)
+        for outcome in (dict(outcome='unknown'), dict(outcome='refused', reason='busy')):
+            receipt = dict(DEPARTURE, **outcome)
+            self.assertEqual(window.receipt(receipt), receipt)
+        for extra in (dict(outcome='confirmed', reason='busy'), dict(outcome='refused'),
+                      dict(outcome='undocked'), dict(outcome=True)):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                undock_receipt(dict(DEPARTURE, **extra))
+
     def test_receipt_schemas(self):
         self.assertEqual(purchase_receipt(CONFIRMED), CONFIRMED)
         changed = dict(PURCHASE, outcome='refused', reason='price_changed', current_price_cents=5848)
@@ -112,6 +141,8 @@ class CompanyPurchaseTests(unittest.TestCase):
         case = fixtures.ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
         self.addCleanup(case.doCleanups)
         case.setUp()
+        case.control._company_purchases = True
+        case.control._company_undock = True
         session = case.control._session
         session._company_ship_reader = lambda _checkpoint: CompanyShipCatalogue('d' * 32, (
             CompanyShip(7, '[0x123]', PURCHASE['sector'], 'Company ship', 'WRN-302'),
@@ -139,18 +170,25 @@ class CompanyPurchaseTests(unittest.TestCase):
             choose = dict(version=1, kind='choose_company_ship', attempt_id=offer.attempt_id, ship_index=ship_index)
             self.assertEqual(json.loads(exchange(client, json.dumps(choose).encode()))['ship']['ship_index'],
                              ship_index)
+            if ship_index == 7:
+                enable = dict(choose, kind='enable_company_purchases', statement_version=1, undock_version=1)
+                self.assertEqual(json.loads(exchange(client, json.dumps(enable).encode())), dict(
+                    enable, kind='company_purchases_enabled', registry_epoch='d' * 32))
             self.assertEqual(json.loads(exchange(client, encode_load_claim(claim_for(offer))))['kind'], 'accepted')
             peer = next(peer for peer in case.control._peers.values() if peer['handle'] == offer.connection_handle)
-            # The capability layer owns these flags, independently of reservation.
-            peer['company_purchase_ship'], peer['company_purchase_epoch'] = ship_index, 'd' * 32
-            if ship_index == 7:
-                peer['company_purchase_statement_version'] = 1
+            if ship_index == 8:
+                # Retain the second pilot's legacy purchase-only capability fixture.
+                peer['company_purchase_ship'], peer['company_purchase_epoch'] = ship_index, 'd' * 32
             return offer
 
         offer, other_offer = admit(client, 7), admit(second, 8)
         guard_calls, callback_receipts, other_receipts, errors = [], [], [], []
         disconnect = threading.Event()
-        statements, deliveries = [], []
+        statements, deliveries, departure_receipts = [], [], []
+
+        def undock_exchange(receipt):
+            departure_receipts.append(receipt)
+            return DEPARTURE if len(departure_receipts) == 1 else None
 
         def statement_result(receipt):
             deliveries.append(receipt)
@@ -176,7 +214,8 @@ class CompanyPurchaseTests(unittest.TestCase):
                         handle=bound.connection_handle, timeout=1, company_purchase_exchange=callback,
                         company_purchase_attempt=bound.attempt_id, company_purchase_ship_index=index,
                         company_purchase_statement=statement if index == 7 else None,
-                        company_purchase_statement_result=statement_result if index == 7 else None)
+                        company_purchase_statement_result=statement_result if index == 7 else None,
+                        company_undock_exchange=undock_exchange if index == 7 else None)
                     started.set()
                     while not stop.is_set():
                         owner.poll(.02)
@@ -234,7 +273,18 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poll_company_purchase(*args, CONFIRMED)
         self.assertEqual(callback_receipts, [None, CONFIRMED])
+        self.assertEqual(poll_company_undock(*args, guard=guard), DEPARTURE)
+        departure_confirmed = dict(DEPARTURE, outcome='confirmed')
+        for changes in ({'bay_seed': '1'}, {'station_code': 'ABC-123'}, {'request_id': 'c' * 32}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                poll_company_undock(*args, dict(departure_confirmed, **changes))
+        with self.assertRaises(ValueError):
+            poll_company_undock(case.participants, other_offer.connection_handle, other_offer.attempt_id, 8)
         self.assertIsNone(deliver_company_purchase_statement_result(*args, REPORTED))
+        self.assertIsNone(poll_company_undock(*args, departure_confirmed))
+        with self.assertRaises(ValueError):
+            poll_company_undock(*args, departure_confirmed)
+        self.assertEqual(departure_receipts, [None, departure_confirmed])
         self.assertEqual(deliveries, [REPORTED])
         with self.assertRaises(ValueError):
             deliver_company_purchase_statement_result(*args, CONFIRMED)

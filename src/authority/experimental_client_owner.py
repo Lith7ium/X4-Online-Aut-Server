@@ -48,6 +48,7 @@ class ExperimentalClientOwner:
         self._ship_motion_credential = None
         self._company_purchases_enabled = False
         self._company_purchase_statement_version = None
+        self._company_undock_enabled = False
         self._thread = threading.current_thread()
         self._phase = 'loading'
         self._motion_port = motion_port
@@ -110,6 +111,7 @@ class ExperimentalClientOwner:
             self._offer = self._load.request_offer()
             self._company_purchases_enabled = False
             self._company_purchase_statement_version = None
+            self._company_undock_enabled = False
             return self._offer
 
     def list_company_ships(self) -> tuple[dict, ...]:
@@ -128,10 +130,11 @@ class ExperimentalClientOwner:
             raise CompanyShipChoiceDenied(result)
         return result
 
-    def enable_company_purchases(self):
+    def enable_company_purchases(self, *, undock=False):
         """Enable authenticated purchase polls for the ship chosen on this offer."""
         with self._operation('loading'):
-            epoch = self._load.enable_company_purchases()
+            epoch = self._load.enable_company_purchases(undock=undock)
+            self._company_undock_enabled = undock
             self._company_purchases_enabled = True
             self._company_purchase_statement_version = 1
             return epoch
@@ -179,7 +182,7 @@ class ExperimentalClientOwner:
     def activate(self, attempt, controller, *, participant_timeout=30,
                  authority_grant=None, authority_guard=None, pull_authority_motion=None,
                  apply_motion=None, on_stage=None, company_purchase_exchange=None,
-                 company_purchase_statement=None, company_purchase_statement_result=None):
+                 company_purchase_statement=None, company_purchase_statement_result=None, company_undock_exchange=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
@@ -220,6 +223,12 @@ class ExperimentalClientOwner:
                     'company_purchase_attempt': self._offer.offer.attempt_id,
                     'company_purchase_ship_index': self._load._chosen_ship_index,
                 }
+            if getattr(self, '_company_undock_enabled', False):
+                if not purchase_options or not callable(company_undock_exchange):
+                    raise ValueError('negotiated company undock requires a departure callback')
+                purchase_options['company_undock_exchange'] = company_undock_exchange
+            elif company_undock_exchange is not None:
+                raise ValueError('company undock callback requires negotiated control')
             checked_grant = None
             if any(value is not None for value in
                    (authority_grant, authority_guard, pull_authority_motion)):

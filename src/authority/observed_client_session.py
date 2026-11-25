@@ -69,7 +69,7 @@ class ObservedClientSession:
                  apply_motion=None, registry_status=None, registry_nonce=None,
                  motion_control=None, require_full_inspection=False, seat_index=None, on_stage=None,
                  company_purchase_exchange=None, company_purchase_statement=None,
-                 company_purchase_statement_result=None):
+                 company_purchase_statement_result=None, company_undock_exchange=None):
         if not isinstance(owner, ExperimentalClientOwner) or not isinstance(controller, LocalParticipantControl):
             raise ValueError('client owner and local controller required')
         if owner._thread is not threading.current_thread():
@@ -120,6 +120,10 @@ class ObservedClientSession:
                     raise ValueError('Company purchase statement callbacks require a purchase exchange')
                 self._purchase_callbacks.update(company_purchase_statement=company_purchase_statement,
                     company_purchase_statement_result=company_purchase_statement_result)
+            if company_undock_exchange is not None:
+                if company_purchase_exchange is None or not callable(company_undock_exchange):
+                    raise ValueError('Company undock requires an admitted purchase exchange')
+                self._purchase_callbacks['company_undock_exchange'] = company_undock_exchange
             self._apply_motion = apply_motion
             self._on_stage = on_stage
             self._motion_control = motion_control

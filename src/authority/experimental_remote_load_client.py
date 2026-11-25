@@ -296,15 +296,21 @@ class ExperimentalRemoteLoadClient:
             self._chosen_ship_index = ship_index
             return ship
 
-    def enable_company_purchases(self):
+    def enable_company_purchases(self, *, undock=False):
         """Negotiate the server-poll extension on this pilot's existing control socket."""
         with self._operation('offered'):
             if self._chosen_ship_index is None:
                 raise ValueError('purchase control requires a chosen company ship')
+            if type(undock) is not bool:
+                raise ValueError('invalid company undock negotiation')
+            versions = {'statement_version': 1}
+            if undock:
+                versions['undock_version'] = 1
             reply = self._company_ship_exchange('enable_company_purchases', ship_index=self._chosen_ship_index,
-                                                statement_version=1)
-            if (type(reply) is not dict or set(reply) != _COMPANY_REPLY_FIELDS | {'ship_index', 'registry_epoch', 'statement_version'}
-                    or type(reply['statement_version']) is not int or reply['statement_version'] != 1
+                                                **versions)
+            expected_fields = _COMPANY_REPLY_FIELDS | {'ship_index', 'registry_epoch'} | versions.keys()
+            if (type(reply) is not dict or set(reply) != expected_fields
+                    or any(type(reply[key]) is not int or reply[key] != version for key, version in versions.items())
                     or reply['kind'] != 'company_purchases_enabled' or not _company_ship_index(reply['ship_index'])
                     or reply['ship_index'] != self._chosen_ship_index or type(reply['registry_epoch']) is not str
                     or not re.fullmatch(r'[0-9a-f]{32}', reply['registry_epoch'])):

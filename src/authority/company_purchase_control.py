@@ -5,6 +5,7 @@ import json
 import re
 import time
 
+from .company_undock_messages import UndockWindow
 from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
 from .load_messages import MAX_INTEGER, MAX_MESSAGE
 
@@ -146,6 +147,7 @@ class _PurchaseWindow:
         self.pending = None
         self.seen = set()
         self.challenges = OrderedDict()
+        self.undock = UndockWindow()
 
     def check_challenge(self, challenge):
         if challenge in self.challenges:
@@ -186,20 +188,33 @@ class _PurchaseWindow:
 class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
-    def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None):
+    def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *, undock_exchange=None):
         _envelope(epoch, handle, attempt, ship_index, 1)
-        callbacks = (exchange, statement, statement_result)
+        callbacks = (exchange, statement, statement_result, undock_exchange)
         if all(value is None for value in callbacks) or any(
                 value is not None and not callable(value) for value in callbacks):
             raise ValueError('invalid company purchase callbacks')
         self.binding = (epoch, handle, attempt, ship_index)
         self.exchange = exchange
+        self.undock_exchange = undock_exchange
         self.statement = statement
         self.statement_result = statement_result
         self.window = _PurchaseWindow()
 
     def reply(self, command, check):
         envelope = _envelope(*self.binding, self.window.sequence + 1)
+        if type(command) is dict and command.get('kind') == 'company_undock_poll':
+            if self.undock_exchange is None or not _bound(command, envelope, 'company_undock_poll', 'receipt'):
+                raise ValueError('unexpected or stale company undock poll')
+            undock = self.window.undock
+            receipt = undock.receipt(command['receipt'])
+            check()
+            departure = undock.next_request(self.undock_exchange(receipt))
+            check()
+            reply = _frame(dict(envelope, kind='company_undock_result', departure=departure))
+            undock.advance(departure)
+            self.window.sequence += 1
+            return reply
         if type(command) is dict and command.get('kind') == _STATEMENT:
             return self._reply_statement(command, envelope, check)
         if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
@@ -261,6 +276,26 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
                 _RESULT, 'purchase', window.next, window.advance)
 
     return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard)
+
+
+def poll_company_undock(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):
+    """Exchange one departure on the same admitted, negotiated control socket."""
+    def prepare(peer, window, reservation, envelope):
+        checked_receipt = window.undock.receipt(receipt)
+
+        def advance(departure):
+            window.undock.advance(departure)
+            window.sequence += 1
+
+        return (_frame(dict(envelope, kind='company_undock_poll', receipt=checked_receipt)), envelope,
+                'company_undock_result', 'departure', window.undock.next_request, advance)
+
+    def negotiated(peer):
+        version = peer.get('company_undock_version')
+        return type(version) is int and version == 1
+
+    return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
+                              peer_supports=negotiated)
 
 
 def request_company_purchase_statement(participants, handle, attempt_id, ship_index,
