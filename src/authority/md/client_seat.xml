@@ -86,10 +86,13 @@
    <actions>
     <set_value name="$args" exact="event.param3"/>
     <set_value name="$receipt" exact="'UNAVAILABLE'"/>
+    <!-- This live read refers to the pilot's original seat even after the
+         registry appends another ship. Keep the index inside the offered save. -->
     <do_if value="@md.X4AuthorityShipRegistry.State.$epoch == @$args.$epoch
-        and @md.X4AuthorityShipRegistry.State.$last == @$args.$count
+        and $args.$count == ($args.$count)i
+        and @md.X4AuthorityShipRegistry.State.$last ge $args.$count
         and @md.X4AuthorityShipRegistry.State.$faulted == false
-        and @$args.$index ge 1 and $args.$index le md.X4AuthorityShipRegistry.State.$last
+        and @$args.$index ge 1 and $args.$index le $args.$count
         and ($args.$index)i == $args.$index">
      <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$index}"/>
      <do_if value="@$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player

@@ -141,6 +141,16 @@ class FixtureOverlayTest(unittest.TestCase):
         manifest = self.install(**options, registry_snapshot=snapshot, seat_index=8, company_purchase=source)
         target = self.view / 'extensions/x4_lan_lab'
         self.assertIn('md/client_seat.xml', manifest)
+        # The running session can discover new ships after this seat was chosen.
+        # The issued index and actor still have to match the original cockpit.
+        seat = ET.parse(target / 'md/client_seat.xml')
+        berth = seat.find(".//cue[@name='OccupiedBerth']/actions/do_if")
+        self.assertIn('$last ge $args.$count', berth.get('value'))
+        self.assertIn('$args.$index le $args.$count', berth.get('value'))
+        ship_checks = berth.find('do_if').get('value')
+        self.assertIn('$byship.{$ship} == $args.$index', ship_checks)
+        self.assertIn("'%s'.[$ship] == @$args.$actor", ship_checks)
+        self.assertIn('$ship == player.controlled', ship_checks)
         self.assertIn('md/authority_checkpoint_marker.xml', manifest)
         self.assertNotIn('md/authority_identity_fixture.xml', manifest)
         self.assertNotIn('ui/authority_identity_probe.lua', manifest)
