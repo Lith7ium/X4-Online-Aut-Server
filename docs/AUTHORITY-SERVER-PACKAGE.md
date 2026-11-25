@@ -124,15 +124,18 @@ plays. A dedicated server avatar uses no pilot slot. A fifth pilot sees
 `Session Full` before admission can pause the world. A pilot who leaves
 releases their slot and ship.
 
-The intended seat selection includes ships with an assigned Company captain.
-When a human takes the helm, the same NPC should remain aboard and assigned
-to the ship. On the server that NPC can execute confirmed station purchases.
-An uncrewed ship should still be available for flight. The current seat
-handover and flight-position writer require an empty helm. An isolated X4
-client took the helm with the original captain aboard while simulation was
-running. In a paused copy the player could board on foot. Taking control
-of a crewed ship during normal admission still requires verification.
-[Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
+A pilot can reserve a Company ship with an assigned NPC captain. If the
+captain is still completing a trade, the client can verify the player's
+arrival aboard the reserved ship as a passenger while the world is paused.
+After the session resumes, the client waits for X4 to allow the captain to
+leave the pilot's chair. Local flight updates and purchases require X4 to
+report that the human controls the ship. The existing captain remains aboard.
+An empty ship can still be flown. Server flight-position writes currently
+require an empty NPC helm.
+
+The running native experiment verified the original captain aboard during
+the handover. Verification of the full passenger admission path is in
+progress. [Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
 
 ## Server positions for reserved Company ships
 

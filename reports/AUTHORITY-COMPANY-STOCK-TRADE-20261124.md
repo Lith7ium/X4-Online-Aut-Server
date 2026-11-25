@@ -354,3 +354,23 @@ Checkpoint `checkpoint-1dac0e4056eb41739aeecd30dbb1f1ca` has SHA-256
 It retains PYN-740 as the assigned AI pilot on WRN, at the same trading
 berth. A purchase initiated in a real player's cockpit and settled in a
 second running X4 instance remains to be verified.
+
+### Missing receipt on a saved world with a previous completed purchase
+
+The next native run reloaded the saved two-water world above. The original
+captain stayed aboard. The previous stock order left the queue between
+game ages 322.044 and 323.605 s. A simulated pilot then submitted a new
+purchase for one unit of water. X4 accepted the order. The experimental
+receipt monitor failed to activate on the reloaded world, and the client
+received `accepted_pending_statement`. The provider saved on disconnect.
+
+The source and confirmed final save show exactly one additional unit of
+water on WRN (two to three) and a 58 Cr debit (9,884 to 9,826 Cr).
+The ship remained docked at BIM-169. The live transaction still has an
+unresolved receipt. No one resubmitted it or placed the planned second
+order. Final checkpoint `checkpoint-2738d4d619db40fa8486479494793925`
+has SHA-256 `f5f0adf0279a6b54ea8503aedd4d738dd88ada75f0fce4d89411b7dfee333b26`.
+
+The corrected bridge requires the monitor to acknowledge the current
+request before X4 can receive a trade order. A native run with two
+confirmed orders in one session remains open.
