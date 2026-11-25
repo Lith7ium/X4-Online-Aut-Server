@@ -3,8 +3,7 @@
 ## 25 November 2026
 
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
-`test/base-game-two-pilots-20261124`. The latest trade evidence is in
-`4abcc9b9`. Lith7ium approves major architecture decisions. The session
+`test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
 hour, Berlin time, in `#x4-authorative-server`. The 05:00 team check-in
 records the current Windows assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795579250466649)
@@ -62,6 +61,18 @@ records the current Windows assignments. [Development check-in](https://x4multip
   request handler before the Docked menu builds its row. A real click under
   the stock lock and the keyboard shortcut still need checking.
   [Stock Undock callback](AUTHORITY-COMPANY-STOCK-UNDOCK-CLICK-20261125.md)
+
+In a private native server trial X4 refused to place WRN-302 while its
+trade was active. Once its captain had undocked, X4 accepted the exact
+requested berth. A separate query found the original captain PYN-740
+at the helm and WRN-302 alone in the bay. The alternate-bay trial used
+an uncrewed ship. Transmitting a newly observed landing from a pilot
+remains open. [Crewed berth trial](AUTHORITY-COMPANY-BERTH-RETAINED-CAPTAIN-20261125.md)
+
+A pre-booking refusal for a busy provider, a missing captain or an
+unconfirmed trading berth now reaches the cockpit. The pilot can open a
+fresh offer after resolving the cause. The old Confirm button cannot
+submit the same basket again. [Cockpit adapter](../src/authority/lua/company_trade_capture.lua)
 
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,

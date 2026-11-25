@@ -5,7 +5,7 @@ local max_exact_lua_integer = 9007199254740991
 -- Each of these replies identifies a booking the provider declined before execution.
 local refusal_notices = {
     captain_required = 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
-    dock_mismatch = 'The server could not confirm this ship at the selected trading berth. Reopen the offer after docking.',
+    dock_mismatch = 'The server could not confirm this ship at a trading berth on the selected station. Reopen the offer after docking.',
     provider_busy = 'The server is busy with another purchase. Reopen the offer to try again.',
 }
 
