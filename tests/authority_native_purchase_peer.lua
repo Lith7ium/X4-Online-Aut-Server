@@ -10,7 +10,9 @@ local module = dofile('tools/dev/authority_native_purchase.lua')
 package.loaded.ffi = ffi
 
 local callbacks, dispatched = {}, {}
-local completion
+local completion, ledger_read_at, entry
+local previous, previous_deal, previous_observed
+local balance, order_checks = 1000000, 0
 local screen = 'X4AuthorityCompanyStockTrade'
 local epoch = string.rep('e', 32)
 
@@ -26,10 +28,10 @@ local function event(name, row) callbacks[screen .. '.' .. name](nil, row) end
 
 function AddUITriggeredEvent(name, action, request)
     assert(name == screen and action == 'Buy')
-    assert(request.live_request and request.fixed_request)
+    assert(request.live_request and request.fixed_request and request.provider_lease == lease)
     assert(request.ship_index == 7354 and request.ship_code == 'WRN-302')
     assert(request.sector == 'cluster_01_sector001_macro' and request.station_code == 'BIM-169')
-    assert(request.trial == 'live_purchase' and request.ware == 'water' and request.quantity == 6)
+    assert(request.trial == 'live_purchase' and request.previous_confirmed == (previous or '-'))
     local id = request.request_id
     assert(not dispatched[id])
     dispatched[id] = true
@@ -37,38 +39,70 @@ function AddUITriggeredEvent(name, action, request)
         event('Result', id .. '|invalid_registry|0')
         return true
     end
-    game_time = 11
-    event('Bound', id .. '|READY|0x10|0x20|0x30|11.000')
-    event('Result', id .. '|quote|5819')
-    if request.price_cents ~= 5819 then
-        assert(request.price_cents == 5848)
+    local before, unit, debit, trade_id
+    if previous then
+        assert(order_checks == 3)
+        assert(request.ware == 'energycells' and request.quantity == 3)
+        before, unit, debit, trade_id = 5, 2719, 8100, '76'
+    else
+        assert(request.ware == 'water' and request.quantity == 6)
+        before, unit, debit, trade_id = 12, 5819, 34800, '75'
+    end
+    game_time = game_time + 1
+    local bound_at = ('%.3f'):format(game_time)
+    event('Bound', id .. '|READY|0x10|0x20|0x30|' .. bound_at)
+    event('Result', id .. '|quote|' .. unit)
+    if request.price_cents ~= unit then
+        assert(not previous and request.price_cents == 5848)
         event('Refused', id .. '|price_changed|5848|5819|12|12|1000000|1000000')
         event('Result', id .. '|price_changed|5819')
         return true
     end
-    event('Before', id .. '|' .. epoch
-        .. '|0x10|0x20|0x30|water|6|5819|12|1000000|1000000|11.000')
-    event('Result', id .. '|submitted|5819')
+    if previous then
+        -- An old native event and an old wire receipt both arrive during the
+        -- new request. Neither belongs to the active purchase.
+        event('Deal', previous_deal)
+        event('Observed', previous_observed)
+        net:send('RECEIPT|' .. lease .. '|' .. previous .. '|9|DONE')
+        net:send('RECEIPT|' .. lease .. '|' .. previous .. '|9|DONE')
+    end
+    local ware, quantity = request.ware, request.quantity
+    local function join(...) return table.concat({...}, '|') end
+    event('Before', join(id, epoch, '0x10', '0x20', '0x30', ware, quantity, unit,
+        before, balance, balance, bound_at))
+    event('Result', id .. '|submitted|' .. unit)
     completion = function()
-        game_time = 12
-        event('Deal', id .. '|' .. epoch .. '|live_purchase|6|5819|11.000|12.000'
-            .. '|0x10|0x20|water|6|0|5819|34914|1000000|965200|1|1|1000000|965200|12|18')
-        event('Observed', id .. '|5819|6|0|0|0|-34800|1|1')
+        game_time = game_time + 1
+        local after_balance = balance - debit
+        local deal = join(id, epoch, 'live_purchase', quantity, unit, bound_at,
+            ('%.3f'):format(game_time), '0x10', '0x20', ware, quantity, 0, unit, unit * quantity,
+            balance, after_balance, 1, 1, balance, after_balance, before, before + quantity)
+        local observed = join(id, unit, quantity, 0, 0, 0, -debit, 1, 1)
+        previous, previous_deal, previous_observed = id, deal, observed
+        balance = after_balance
+        entry = {source='ship', time=game_time, buyer_id='16', seller_id='32', partner_id='32',
+            ware=ware, quantity=quantity, complete=true, entry_id=trade_id, trade_id=trade_id,
+            eventtype='trade', trade_eventtype='complete', role='completed_trade',
+            buyer_matches=true, seller_matches=true, money_cents=tostring(-debit),
+            price_cents=tostring(unit), linked=true}
+        ledger_read_at = game_time + 1
+        event('Deal', deal)
+        event('Observed', observed)
     end
     return true
 end
 
 X4LAN_AUTHORITY_TRADE_LEDGER = {
+    ship_orders_idle=function(ship)
+        assert(ship == '0x10')
+        order_checks = order_checks + 1
+        return order_checks >= 3
+    end,
     collect=function(request)
-        assert(request.start_time <= 11 and request.end_time >= 13)
+        assert(request.start_time < entry.time and request.end_time >= ledger_read_at)
         assert(request.ship == '0x10' and request.station == '0x20'
-            and request.ware == 'water' and request.quantity == 6)
-        return {status='observed', trade_id='75', rows={{
-            source='ship', time=12, buyer_id='16', seller_id='32', partner_id='32',
-            ware='water', quantity=6, complete=true, entry_id='73', trade_id='75',
-            eventtype='trade', trade_eventtype='complete', role='completed_trade',
-            buyer_matches=true, seller_matches=true, money_cents='-34800', price_cents='5819', linked=true,
-        }}}
+            and request.ware == entry.ware and request.quantity == entry.quantity)
+        return {status='observed', trade_id=entry.trade_id, rows={entry}}
     end,
 }
 local tick = module.new(lease, net)
@@ -78,8 +112,8 @@ for frame = 1, 3000 do
         local fn = completion
         completion = nil
         fn()
-    elseif game_time == 12 then
-        game_time = 13
+    elseif ledger_read_at then
+        game_time = ledger_read_at
     end
     tick(false)
     ffi.C.usleep(5000)

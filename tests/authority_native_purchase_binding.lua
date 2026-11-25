@@ -16,7 +16,7 @@ local function event(name, row) callbacks[screen .. '.' .. name](nil, row) end
 function AddUITriggeredEvent(name, action, request)
     assert(name == screen and action == 'Buy')
     assert(request.trial == 'live_purchase' and request.fixed_request and request.live_request)
-    assert(request.epoch == epoch)
+    assert(request.epoch == epoch and request.provider_lease == lease and request.previous_confirmed == '-')
     assert(request.ship_index == 1073 and request.ship_code == 'HVC-42A')
     assert(request.sector == 'cluster_01_sector001_macro' and request.station_code == 'SLL-0X2')
     assert(request.ware == 'energycells' and request.quantity == 13)
@@ -53,7 +53,7 @@ local tick = module.new(lease, {
 
 local function buy(id, quantity, cents)
     pending = table.concat({'PURCHASE', lease, id, epoch, '1073',
-        'HVC-42A', 'cluster_01_sector001_macro', 'SLL-0X2', 'energycells', quantity, cents}, '|')
+        'HVC-42A', 'cluster_01_sector001_macro', 'SLL-0X2', 'energycells', quantity, cents, '-'}, '|')
     tick(false)
 end
 

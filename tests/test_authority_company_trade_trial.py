@@ -37,32 +37,32 @@ class StockTradeReceiptSourceTests(unittest.TestCase):
         document = ET.parse(source)
         request = document.find(".//cue[@name='Request']")
         completed = document.find(".//cue[@name='Completed']")
-        snapshot = request.find(".//set_value[@name='State.$before_player_money']")
+        snapshot = request.find(".//set_value[@name='$before_player_money']")
         self.assertEqual(snapshot.attrib['exact'], 'player.money')
 
         snapshot_names = {
-            node.attrib['name'].removeprefix('State.')
+            node.attrib['name']
             for node in request.iter('set_value')
-            if node.attrib['name'].startswith('State.$before_')
+            if node.attrib['name'].startswith('$before_')
         }
         writes = {
-            node.attrib['name'].removeprefix('State.'): node.attrib['exact']
+            node.attrib['name']: node.attrib['exact']
             for node in completed.iter('set_value')
         }
         self.assertFalse(snapshot_names & writes.keys())
         self.assertEqual(writes['$after_player_money'], '(player.money / 1ct)L')
-        self.assertEqual(writes['$delta_player_money'], '((player.money - State.$before_player_money) / 1ct)L')
+        self.assertEqual(writes['$delta_player_money'], '((player.money - $before_player_money) / 1ct)L')
 
         events = {
             node.attrib['name']: node.attrib['param'].split('.[', 1)[1].rstrip(']').split(',')
             for node in completed.iter('raise_lua_event')
         }
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][14:16],
-                         ['(State.$before_player_money / 1ct)L', '$after_player_money'])
+                         ['($before_player_money / 1ct)L', '$after_player_money'])
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Observed'"][6], '$delta_player_money')
-        self.assertEqual(writes['$after_ship_cargo'], 'State.$ship.cargo.{State.$ware}.count')
+        self.assertEqual(writes['$after_ship_cargo'], '$ship.cargo.{$ware}.count')
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][-2:],
-                         ['State.$before_ship_cargo', '$after_ship_cargo'])
+                         ['$before_ship_cargo', '$after_ship_cargo'])
 
 
 class FixedTradeDriverTests(unittest.TestCase):
@@ -97,10 +97,14 @@ class FixedTradeDriverTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
         cue = ET.parse(source).find(".//cue[@name='Request']")
         fixture = next(node for node in cue.iter('do_if') if node.attrib['value'].startswith('$live_dock or '))
-        duplicate = fixture.find('do_elseif')
-        self.assertIn('@State.$attempted or (not $live and @State.$refused)', duplicate.attrib['value'])
-        self.assertIsNone(duplicate.find('.//find_sell_offer'))
-        self.assertIsNone(duplicate.find('.//raise_lua_event'))
+        branches = fixture.findall('do_elseif')
+        live_gate = next(node for node in branches if '@$v.$previous_confirmed' in node.attrib['value'])
+        self.assertIn('@State.$live_completed != true', live_gate.attrib['value'])
+        diagnostic_gate = next(node for node in branches if '@State.$attempted' in node.attrib['value'])
+        self.assertIn('not $live and (@State.$attempted or @State.$refused)', diagnostic_gate.attrib['value'])
+        for gate in (live_gate, diagnostic_gate):
+            self.assertIsNone(gate.find('.//find_sell_offer'))
+            self.assertIsNone(gate.find('.//raise_lua_event'))
         lookup = fixture.find('do_else')
         self.assertEqual(len(list(lookup.iter('find_sell_offer'))), 1)
         self.assertEqual(len(list(lookup.iter('create_trade_order'))), 1)

@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools/dev')]
+from authority.company_purchase_ledger import CompanyPurchaseLedger
 from authority_native_purchase import NativePurchaseProvider
 from authority_trade_settlement import purchase_settlement
 
@@ -88,7 +89,7 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertIsNone(provider.begin(binding, purchase))
             packet, _ = peer.recvfrom(768)
         self.assertEqual(packet.decode().split('|')[3:], [binding['registry_epoch'], '1074', 'KHI-630',
-                         'cluster_06_sector002_macro', 'ABC-X1Z', 'energycells', '13', '5819'])
+                         'cluster_06_sector002_macro', 'ABC-X1Z', 'energycells', '13', '5819', '-'])
         with self.assertRaisesRegex(ValueError, 'already bound'):
             provider.begin(binding, dict(purchase, quantity=12))
         self.assertIsNone(provider.poll())
@@ -113,6 +114,8 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(result, dict(PURCHASE, outcome='unknown'))
             self.assertEqual(provider.evidence(PURCHASE['purchase_id'])['reason'], 'native_receipt_timeout')
             self.assertEqual(provider.begin(BINDING, PURCHASE), result)
+            with self.assertRaisesRegex(ValueError, 'awaiting ledger commit'):
+                provider.confirm_persisted(result)
             self.assertEqual(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32))['reason'],
                              'provider_limit')
             with self.assertRaises(TimeoutError):
@@ -171,9 +174,11 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertIsNone(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32)))
 
     @unittest.skipUnless(shutil.which('cc') and shutil.which('luajit'), 'LuaJIT and C compiler required')
-    def test_real_udp_luajit_requotes_and_confirms_only_native_ledger_proof(self):
+    def test_real_udp_luajit_requotes_and_confirms_two_serial_purchases(self):
         with TemporaryDirectory() as directory:
             native = Path(directory) / 'x4lan_net.so'
+            ledger = CompanyPurchaseLedger(BINDING['registry_epoch'], Path(directory) / 'ledger.sqlite3')
+            self.addCleanup(ledger.close)
             subprocess.run(['cc', '-std=c11', '-shared', '-fPIC', str(ROOT / 'src/native/net.c'),
                             '-ldl', '-o', str(native)], check=True, timeout=10)
             provider = self.provider(timeout=3)
@@ -197,6 +202,7 @@ class NativePurchaseProviderTests(unittest.TestCase):
                 self.assertEqual(buy(BINDING, stale),
                                  dict(stale, outcome='refused', reason='price_changed', current_price_cents=5819),
                                  provider.evidence(stale['purchase_id']))
+                self.assertTrue(ledger.begin(7354, 'WRN-302', PURCHASE))
                 result = buy(BINDING, PURCHASE)
                 self.assertEqual(result, dict(PURCHASE, outcome='confirmed', ship_code='WRN-302',
                                               settled_total_cents=34800, company_balance_cents=965200,
@@ -204,11 +210,27 @@ class NativePurchaseProviderTests(unittest.TestCase):
                 evidence = provider.evidence(PURCHASE['purchase_id'])
                 self.assertEqual(evidence['settlement']['quoted_total_cents'], 34914)
                 self.assertEqual(provider.begin(BINDING, PURCHASE), result)
-                self.assertEqual(buy(BINDING, dict(PURCHASE, purchase_id='b' * 32))['reason'],
-                                 'provider_limit')
-                stale_rows = tuple(row.replace('ENTRY|ship|12|', 'ENTRY|ship|10.5|')
-                                   .replace('LEDGER|observed|-|75|11|', 'LEDGER|observed|-|75|10|')
-                                   for row in evidence['rows'])
+                early = dict(PURCHASE, purchase_id='f' * 32)
+                self.assertEqual(buy(BINDING, early)['reason'], 'provider_busy')
+                with self.assertRaisesRegex(ValueError, 'awaiting ledger commit'):
+                    provider.confirm_persisted(dict(result, cargo_units=19))
+                provider.confirm_persisted(ledger.finish(PURCHASE['purchase_id'], result))
+                second = dict(PURCHASE, purchase_id='b' * 32, ware='energycells', quantity=3, price_cents=2719)
+                self.assertTrue(ledger.begin(7354, 'WRN-302', second))
+                second_result = buy(BINDING, second)
+                self.assertEqual(second_result, dict(second, outcome='confirmed', ship_code='WRN-302',
+                                                     settled_total_cents=8100, company_balance_cents=957100,
+                                                     cargo_units=8))
+                provider.confirm_persisted(ledger.finish(second['purchase_id'], second_result))
+                self.assertEqual(provider.begin(BINDING, PURCHASE), result)
+                self.assertFalse(ledger.begin(7354, 'WRN-302', PURCHASE))
+                self.assertEqual(provider.evidence(second['purchase_id'])['settlement']['ledger']['trade_id'], 76)
+
+                stale_rows = list(evidence['rows'])
+                stale_rows[6] = 'LEDGER|observed|-|75|10|' + stale_rows[6].rsplit('|', 1)[1]
+                entry = stale_rows[7].split('|')
+                entry[2] = '10.5'
+                stale_rows[7] = '|'.join(entry)
                 self.assertEqual(purchase_settlement(stale_rows, PURCHASE['purchase_id'],
                                  BINDING['registry_epoch'], 'live_purchase', ware=PURCHASE['ware'],
                                  quantity=PURCHASE['quantity'])['reason'], 'ledger_entry_predates_native_binding')
@@ -237,6 +259,13 @@ class NativePurchaseProviderTests(unittest.TestCase):
                            if node.attrib.get('name') == "'X4AuthorityCompanyStockTrade.Before'")
         self.assertLess(ordered.index(observation), ordered.index(buys[0]))
         self.assertEqual(buys[0].attrib['immediate'], 'true')
+        self.assertEqual(request.attrib['namespace'], 'this')
+        completed = request.find("./cues/cue[@name='Monitor']/cues/cue[@name='Completed']")
+        self.assertIsNone(completed.get('instantiate'))
+        completion_guard = completed.find('./conditions/check_value').attrib['value']
+        self.assertIn('event.param == $deal or event.param2 == $deal', completion_guard)
+        self.assertIn('$provider_lease == @State.$live_lease', completion_guard)
+        self.assertIn('$request == @State.$live_request', completion_guard)
         for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
             self.assertEqual(list(root.iter(action)), [])
 

@@ -80,13 +80,37 @@ class SchedulerTests(unittest.TestCase):
             dict(registry_epoch='a' * 32, ship_index=7354, ship_code='WRN-302'), first)
         assert world.schedule.before_world_transition() is False
         world.native.poll.return_value = confirmed(first)
+
+        def attest_after_commit(receipt):
+            row = world.ledger._db.execute('SELECT status FROM purchases WHERE id=?',
+                                           (receipt['purchase_id'],)).fetchone()
+            self.assertEqual(row, ('confirmed',))
+            self.assertEqual(world.native.begin.call_count, 1)
+
+        world.native.confirm_persisted.side_effect = attest_after_commit
         world.native.begin.side_effect = [dict(second, outcome='refused', reason='unsupported_purchase')]
         world.step(1)
         assert world.native.begin.call_count == 2
+        world.native.confirm_persisted.assert_called_once_with(confirmed(first))
         assert world.received[-1] == (1, confirmed(first))
         world.step(1.5)
         assert world.received[-1] == (2, dict(second, outcome='refused', reason='unsupported_purchase'))
         assert world.schedule.before_world_transition() is True
+
+
+    def test_ledger_write_failure_does_not_release_native_provider(self):
+        world = world_fixture(self)
+        first, second = order(1), order(2)
+        world.outcomes[1].append(first)
+        world.outcomes[2].append(second)
+        world.step(0)
+        world.step(.5)
+        world.native.poll.return_value = confirmed(first)
+        with patch.object(world.ledger, 'finish', side_effect=OSError('unavailable ledger')):
+            with self.assertRaisesRegex(OSError, 'unavailable ledger'):
+                world.step(1)
+        world.native.confirm_persisted.assert_not_called()
+        self.assertEqual(world.native.begin.call_count, 1)
 
 
     def test_disconnected_unrelated_peer_cannot_drop_active_and_replay_cannot_apply(self):

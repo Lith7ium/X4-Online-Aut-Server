@@ -1,4 +1,4 @@
-"""Opt-in, Linux provider-side IPC for one stock native Company booking."""
+"""Opt-in, Linux provider-side IPC for serial stock native Company bookings."""
 from dataclasses import dataclass, field
 import hashlib
 import math
@@ -18,7 +18,7 @@ _COMPONENT = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _PURCHASE_FIELDS = ('purchase_id', 'sector', 'station_code', 'ware', 'quantity', 'price_cents')
 _BINDING_FIELDS = ('registry_epoch', 'ship_index', 'ship_code')
 _REFUSALS = {'captain_required', 'dock_mismatch', 'invalid_registry', 'no_unique_offer',
-             'request_binding_invalid', 'provider_limit'}
+             'request_binding_invalid', 'provider_busy', 'provider_limit'}
 _MAX_IDS = 1024
 _MAX_RECEIPTS = 201
 _MAX_PACKET = 768
@@ -76,6 +76,8 @@ class NativePurchaseProvider:
         self._attempt = None
         self._history = {}
         self._exhausted = False
+        self._awaiting_commit = None
+        self._previous_confirmed = '-'
         self._staged_md = None
 
     def install(self, case):
@@ -163,7 +165,7 @@ class NativePurchaseProvider:
             return self._record(attempt, 'refused', reason='unsupported_purchase')
         if self._exhausted:
             return self._record(attempt, 'refused', reason='provider_limit')
-        if self._attempt is not None:
+        if self._attempt is not None or self._awaiting_commit is not None:
             return self._record(attempt, 'refused', reason='provider_busy')
         self._attempt = attempt
         return self.poll()
@@ -202,9 +204,20 @@ class NativePurchaseProvider:
         self._history[attempt.id] = (attempt, receipt, self._observations(attempt, reason, audit))
         if self._attempt is attempt:
             self._attempt = None
-            if outcome == 'confirmed' or (outcome == 'unknown' and attempt.sent):
+            if outcome == 'confirmed':
+                self._awaiting_commit = attempt.id
+            elif outcome == 'unknown' and attempt.sent:
                 self._exhausted = True
         return dict(receipt)
+
+    def confirm_persisted(self, receipt):
+        """Release the exact native confirmation after the host commits its ledger."""
+        purchase_id = receipt['purchase_id']
+        if (self._exhausted or self._awaiting_commit != purchase_id
+                or self._history[purchase_id][1] != receipt or receipt['outcome'] != 'confirmed'):
+            raise ValueError('no matching native purchase confirmation awaiting ledger commit')
+        self._previous_confirmed = purchase_id
+        self._awaiting_commit = None
 
     def _settle(self, attempt):
         parts = [row.split('|') for row in attempt.rows]
@@ -292,7 +305,7 @@ class NativePurchaseProvider:
         if self._peer and not attempt.sent:
             fields = [attempt.binding[key] for key in _BINDING_FIELDS]
             fields.extend(attempt.purchase[key] for key in _PURCHASE_FIELDS[1:])
-            packet = '|'.join(map(str, ('PURCHASE', self._lease, attempt.id, *fields))).encode('ascii')
+            packet = '|'.join(map(str, ('PURCHASE', self._lease, attempt.id, *fields, self._previous_confirmed))).encode('ascii')
             attempt.sent = True
             try:
                 if self._socket.sendto(packet, self._peer) != len(packet):

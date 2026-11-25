@@ -101,6 +101,8 @@ class CompanyPurchaseScheduler:
     def _finish(self, receipt):
         active = self._active
         durable_receipt = self._ledger.finish(active.purchase['purchase_id'], receipt)
+        if durable_receipt['outcome'] == 'confirmed':
+            self._native.confirm_persisted(durable_receipt)
         self._receipts[active.binding.handle] = (active.binding, durable_receipt)
         self._active = None
 

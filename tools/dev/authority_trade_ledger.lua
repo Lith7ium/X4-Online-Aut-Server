@@ -12,6 +12,16 @@ local function component(text)
     if value ~= 0 then return value end
 end
 
+ffi.cdef[[
+    bool IsComponentClass(uint64_t componentid, const char *class);
+    uint32_t GetNumOrders(uint64_t componentid);
+]]
+
+function M.ship_orders_idle(handle)
+    local ship = component(handle)
+    return ship ~= nil and ffi.C.IsComponentClass(ship, 'ship') and ffi.C.GetNumOrders(ship) == 0
+end
+
 local function exact(value, ctype, suffix)
     if type(value) ~= 'cdata' or not ffi.istype(ctype, value) then error('invalid_ledger_integer', 0) end
     return (tostring(value):gsub(suffix .. '$', ''))
