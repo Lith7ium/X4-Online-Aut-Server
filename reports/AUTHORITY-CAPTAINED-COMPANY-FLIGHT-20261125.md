@@ -110,3 +110,24 @@ is `ea0fb97aa5dec27ad6b2e04b108999d3d3600f44444aa9377954e4747e8c5eec`.
 
 This run verifies provider-side movement and crew persistence.
 An actual cockpit gate flight with the retained captain path remains open.
+
+### Read-only cold restore of the BBS-493 departure save
+
+At `6d4062fde039b78807593fd0f9147b5023510065`, one GPU-free native X4
+process on Bazzite opened a disposable copy of
+`checkpoint-15e7b01029a94d1f8a7f84ceeeb65361`. The existing
+`--verify-company-pose` path resolved registry index 1077 afresh.
+Its native inspection checked the saved captain seed
+`-97168325741795052` against the live captain and verified that the
+captain still piloted BBS-493. Mission Director and the native UI both
+returned exactly (30000, 100000, 55000) m in
+`cluster_06_sector001_macro`, with zero measured error.
+
+The provider exposed no participant endpoint and recorded no engine
+operations. It exited paused with no remaining owned processes or locks.
+The original and copied save retained SHA-256
+`53419833e3122ebf7421d1857dc0c0eea3e718d2bcd5c6c8c29219710e591a5d`.
+Their checkpoint pointers and prior supervisor reports also remained
+unchanged. The private readback record in
+`.local/headless-captain-sector/cold-01/verified.json` has SHA-256
+`72ca6816bab5d39002f32a5da4b9eeef2d7a03cfaa693259ab5b8de4e9eccd1b`.
