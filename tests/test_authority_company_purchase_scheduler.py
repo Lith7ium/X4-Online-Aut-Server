@@ -70,6 +70,43 @@ def world_fixture(test, *, pilot_count=2, **options):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_fleet_dispatch_polls_once_then_preserves_target_on_wrong_native_receipt(self):
+        from authority import company_fleet_dispatch
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt):
+                fleet = Mock()
+                fleet.begin.return_value = fleet.poll.return_value = None
+                world = world_fixture(self, pilot_count=1, fleet=fleet)
+                world.peers[1]['fleet_order_version'] = 1
+                sessions = world.host._control._session
+                sessions.hold_fleet_target = Mock(return_value=None)
+                sessions.release_fleet_target = Mock()
+                order = dict(order_id='c' * 32, ship_index=20, ship_code='NPC-200',
+                             sector='cluster_01_sector001_macro', x=1000, y=-105.5, z=0)
+                response = dict(order, outcome='accepted')
+                received = []
+
+                def poll(owner, handle, attempt, index, receipt, *, guard):
+                    received.append(receipt)
+                    return order if len(received) == 1 else None
+
+                with patch.object(company_fleet_dispatch, 'poll_company_fleet', poll):
+                    world.step(0)
+                    world.step(.5)
+                    self.assertFalse(world.schedule.before_world_transition())
+                    fleet.poll.return_value = dict(response, z=1) if corrupt else response
+                    self.assertTrue(world.schedule.before_world_transition())
+                    world.step(1)
+                    world.step(1.5)
+                fleet.begin.assert_called_once_with({'registry_epoch': 'a' * 32}, order)
+                sessions.hold_fleet_target.assert_called_once_with(1, world.reservations[1], 'a' * 32, order)
+                if corrupt:
+                    sessions.release_fleet_target.assert_not_called()
+                    self.assertEqual(received, [None, dict(order, outcome='unknown')])
+                else:
+                    sessions.release_fleet_target.assert_called_once_with(order)
+                    self.assertEqual(received, [None, response])
+
     def test_four_pilot_paging_reserves_regular_purchase_and_undock_turns(self):
         market = Mock()
         offer = dict(side='buy', ware='water', price_cents=100, amount=10, min_amount=1,

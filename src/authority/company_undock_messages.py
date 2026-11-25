@@ -1,6 +1,8 @@
 """Portable berthing identity and request correlation for Company departure."""
 import re
 
+from .company_command_window import CompanyCommandWindow
+
 
 _REQUEST_FIELDS = {'request_id', 'sector', 'station_code', 'bay_seed', 'bay_macro', 'dockarea_macro'}
 _IDENTIFIERS = {
@@ -42,30 +44,6 @@ def undock_receipt(value):
     return dict(value)
 
 
-class UndockWindow:
-    """Correlate every terminal response with the request from this admission."""
-
+class UndockWindow(CompanyCommandWindow):
     def __init__(self):
-        self.pending = None
-        self._seen = set()
-
-    def receipt(self, value):
-        if self.pending is None and value is None:
-            return None
-        receipt = undock_receipt(value)
-        if self.pending is None or any(receipt[key] != expected for key, expected in self.pending.items()):
-            raise ValueError('company undock receipt differs from pending departure')
-        return receipt
-
-    def next_request(self, value):
-        if value is None:
-            return None
-        request = undock_request(value)
-        if request['request_id'] in self._seen or len(self._seen) >= 4096:
-            raise ValueError('duplicate or exhausted company undock request')
-        return request
-
-    def advance(self, request):
-        self.pending = dict(request) if request is not None else None
-        if request is not None:
-            self._seen.add(request['request_id'])
+        super().__init__(undock_request, undock_receipt, 'request_id')

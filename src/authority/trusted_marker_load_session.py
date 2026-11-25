@@ -6,7 +6,7 @@ offer service, and bind each opaque connection object to the intended live
 transport. A claim is an assertion by that trusted client, not independent
 proof of bytes read, a continuous pause, or a consistent game world.
 """
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from itertools import islice
 import re
@@ -89,6 +89,7 @@ class TrustedMarkerLoadSession:
         self._ship_catalog = None
         self._pending_ships = {}
         self._admitted_ships = {}
+        self._fleet_targets = {}
 
     def _live(self):
         if self._failed or self._inner._failed:
@@ -206,14 +207,7 @@ class TrustedMarkerLoadSession:
             except (ValueError, OSError):
                 raise CompanyShipCatalogUnavailable('company ship catalogue unavailable') from None
 
-        occupied = [ship for holder, ship in self._admitted_ships.items() if holder != peer]
-        for holder, ship in self._pending_ships.items():
-            if holder != peer and self._markers.get(holder, (None, None))[1] == checkpoint:
-                try:
-                    self._current_offer(holder)
-                except (KeyError, ValueError):
-                    continue
-                occupied.append(ship)
+        occupied = self._reserved_ships(checkpoint, except_peer=peer)
         occupied_indices = {ship.ship_index for ship in occupied}
         occupied_components = {ship.component_ref for ship in occupied}
         _, ships, indices, _ = self._ship_catalog
@@ -225,6 +219,49 @@ class TrustedMarkerLoadSession:
                 continue
             if ship.ship_index not in occupied_indices and ship.component_ref not in occupied_components:
                 yield ship
+
+    def _reserved_ships(self, checkpoint, *, except_peer=None):
+        occupied = [ship for holder, ship in self._admitted_ships.items() if holder != except_peer]
+        for holder, ship in self._pending_ships.items():
+            if holder != except_peer and self._markers.get(holder, (None, None))[1] == checkpoint:
+                try:
+                    self._current_offer(holder)
+                except (KeyError, ValueError):
+                    continue
+                occupied.append(ship)
+        occupied.extend(ship for _, ship in self._fleet_targets.values())
+        return occupied
+
+    def hold_fleet_target(self, connection, pilot_ship, registry_epoch, order):
+        """Exclude the target from pilot selection until native dispatch has settled."""
+        with self._lock:
+            self._live()
+            pilot = self._peer(connection)
+            if self._admitted_ships.get(pilot) is not pilot_ship or pilot_ship is None:
+                return 'pilot_unavailable'
+            catalogue = self._ship_catalog
+            if catalogue is None or catalogue[3] != registry_epoch or registry_epoch is None:
+                return 'invalid_registry'
+            checkpoint, ships, indices, _ = catalogue
+            index = order['ship_index']
+            offset = bisect_left(indices, index)
+            if offset == len(indices) or indices[offset] != index or ships[offset].code != order['ship_code']:
+                return 'identity_mismatch'
+            target = ships[offset]
+            if any(ship.ship_index == index or ship.component_ref == target.component_ref
+                   for ship in self._reserved_ships(checkpoint)):
+                return 'ship_reserved'
+            self._fleet_targets[index] = (order['order_id'], target)
+            return None
+
+    def release_fleet_target(self, order):
+        with self._lock:
+            self._live()
+            index = order['ship_index']
+            held = self._fleet_targets.get(index)
+            if held is None or held[0] != order['order_id'] or held[1].code != order['ship_code']:
+                raise ValueError('fleet target does not belong to this order')
+            del self._fleet_targets[index]
 
     def list_company_ships(self, connection, attempt_id, *, after_index=0, limit=None):
         """List verified company ships available to this still-offered connection."""

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from authority.checkpoints import CheckpointStore
+from authority.company_ships import CompanyShip, CompanyShipCatalogue
 from authority.experimental_client_load import ExperimentalClientLoad, HonestClientLoadClaim
 from authority.load_messages import Receipt
 from authority.save_transfer import SaveOffers
@@ -98,6 +99,36 @@ class TrustedMarkerSessionTest(unittest.TestCase):
             adapter.accept(client, claim_for(offer))
         adapter.choose_company_ship(client, offer.attempt_id, 1)
         self.assertEqual(adapter.accept(client, claim_for(offer)).attempt_id, offer.attempt_id)
+
+    def test_fleet_order_excludes_admitted_and_joining_ships_and_holds_target_across_pilot_loss(self):
+        epoch = 'c' * 32
+        ships = tuple(CompanyShip(index, f'[0x{index}]', 'sector', None, code)
+                      for index, code in enumerate(('AAA-001', 'BBB-002', 'CCC-003'), 1))
+        self.adapter._company_ship_reader = lambda _: CompanyShipCatalogue(epoch, ships)
+        pilot_offer = self.adapter.begin(self.a).offer
+        joining_offer = self.adapter.begin(self.b).offer
+        seat = self.adapter.choose_company_ship(self.a, pilot_offer.attempt_id, 1)
+        self.adapter.accept(self.a, claim_for(pilot_offer))
+        self.adapter.choose_company_ship(self.b, joining_offer.attempt_id, 2)
+        order = dict(order_id='e' * 32, ship_index=3, ship_code='CCC-003')
+        hold = self.adapter.hold_fleet_target
+
+        for ship in ships[:2]:
+            self.assertEqual(hold(self.a, seat, epoch, dict(order, ship_index=ship.ship_index,
+                                                            ship_code=ship.code)), 'ship_reserved')
+        self.assertEqual(hold(self.b, seat, epoch, order), 'pilot_unavailable')
+        self.assertEqual(hold(self.a, seat, 'a' * 32, order), 'invalid_registry')
+        self.assertEqual(hold(self.a, seat, epoch, dict(order, ship_code='AAA-001')), 'identity_mismatch')
+        self.assertIsNone(hold(self.a, seat, epoch, order))
+        with self.assertRaises(CompanyShipUnavailable):
+            self.adapter.choose_company_ship(self.b, joining_offer.attempt_id, 3)
+        self.adapter.disconnect(self.a)
+        with self.assertRaises(ValueError):
+            self.adapter.release_fleet_target(dict(order, order_id='f' * 32))
+        with self.assertRaises(CompanyShipUnavailable):
+            self.adapter.choose_company_ship(self.b, joining_offer.attempt_id, 3)
+        self.adapter.release_fleet_target(order)
+        self.assertEqual(self.adapter.choose_company_ship(self.b, joining_offer.attempt_id, 3), ships[2])
 
     def test_shared_ship_reservations_retry_switch_and_reoffer(self):
         attempt_a = self.adapter.begin(self.a).offer.attempt_id

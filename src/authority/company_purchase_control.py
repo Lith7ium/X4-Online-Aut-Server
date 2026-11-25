@@ -5,6 +5,8 @@ import json
 import re
 import time
 
+from .company_command_window import CompanyCommandWindow
+from .company_fleet_orders import fleet_order, fleet_receipt
 from .company_trade_view import view_page, view_request
 from .company_undock_messages import UndockWindow
 from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
@@ -149,6 +151,7 @@ class _PurchaseWindow:
         self.seen = set()
         self.challenges = OrderedDict()
         self.undock = UndockWindow()
+        self.fleet = CompanyCommandWindow(fleet_order, fleet_receipt, 'order_id')
 
     def check_challenge(self, challenge):
         if challenge in self.challenges:
@@ -190,15 +193,16 @@ class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
     def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *,
-                 undock_exchange=None, trade_view_exchange=None):
+                 undock_exchange=None, trade_view_exchange=None, fleet_exchange=None):
         _envelope(epoch, handle, attempt, ship_index, 1)
-        callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange)
+        callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange, fleet_exchange)
         if all(value is None for value in callbacks) or any(
                 value is not None and not callable(value) for value in callbacks):
             raise ValueError('invalid company purchase callbacks')
         self.binding = (epoch, handle, attempt, ship_index)
         self.exchange = exchange
         self.undock_exchange = undock_exchange
+        self.fleet_exchange = fleet_exchange
         self.trade_view_exchange = trade_view_exchange
         self.statement = statement
         self.statement_result = statement_result
@@ -206,18 +210,13 @@ class ClientPurchaseControl:
 
     def reply(self, command, check):
         envelope = _envelope(*self.binding, self.window.sequence + 1)
-        if type(command) is dict and command.get('kind') == 'company_undock_poll':
-            if self.undock_exchange is None or not _bound(command, envelope, 'company_undock_poll', 'receipt'):
-                raise ValueError('unexpected or stale company undock poll')
-            undock = self.window.undock
-            receipt = undock.receipt(command['receipt'])
-            check()
-            departure = undock.next_request(self.undock_exchange(receipt))
-            check()
-            reply = _frame(dict(envelope, kind='company_undock_result', departure=departure))
-            undock.advance(departure)
-            self.window.sequence += 1
-            return reply
+        kind = command.get('kind') if type(command) is dict else None
+        if kind == 'company_undock_poll':
+            return self._reply_order(command, envelope, check, self.window.undock, self.undock_exchange,
+                                     'company_undock_result', 'departure')
+        if kind == 'company_fleet_poll':
+            return self._reply_order(command, envelope, check, self.window.fleet, self.fleet_exchange,
+                                     'company_fleet_result', 'order')
         if type(command) is dict and command.get('kind') == _STATEMENT:
             return self._reply_statement(command, envelope, check)
         if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
@@ -252,6 +251,18 @@ class ClientPurchaseControl:
         self.window.advance(purchase)
         return reply
 
+
+    def _reply_order(self, command, envelope, check, window, exchange, response_kind, payload):
+        if exchange is None or not _bound(command, envelope, command['kind'], 'receipt'):
+            raise ValueError('unexpected or stale Company command poll')
+        receipt = window.receipt(command['receipt'])
+        check()
+        request = window.next_request(exchange(receipt))
+        check()
+        reply = _frame(dict(envelope, kind=response_kind, **{payload: request}))
+        window.advance(request)
+        self.window.sequence += 1
+        return reply
 
     def _reply_statement(self, command, envelope, check):
         purchase_id, challenge = command.get('purchase_id'), command.get('challenge')
@@ -326,18 +337,32 @@ def poll_company_purchase(participants, handle, attempt_id, ship_index, receipt=
 
 def poll_company_undock(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):
     """Exchange one departure on the same admitted, negotiated control socket."""
-    def prepare(peer, window, reservation, envelope):
-        checked_receipt = window.undock.receipt(receipt)
+    return _poll_company_order(participants, handle, attempt_id, ship_index, receipt, guard,
+                               'undock', 'departure', 'company_undock_version')
 
-        def advance(departure):
-            window.undock.advance(departure)
+
+def poll_company_fleet(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):
+    """Exchange one MoveWait request and an outstanding receipt with the admitted pilot."""
+    return _poll_company_order(participants, handle, attempt_id, ship_index, receipt, guard,
+                               'fleet', 'order', 'fleet_order_version')
+
+
+def _poll_company_order(participants, handle, attempt_id, ship_index, receipt, guard,
+                        service, payload, version_field):
+    def prepare(peer, window, reservation, envelope):
+        commands = getattr(window, service)
+        checked = commands.receipt(receipt)
+
+        def advance(request):
+            commands.advance(request)
             window.sequence += 1
 
-        return (_frame(dict(envelope, kind='company_undock_poll', receipt=checked_receipt)), envelope,
-                'company_undock_result', 'departure', window.undock.next_request, advance)
+        command = dict(envelope, kind=f'company_{service}_poll', receipt=checked)
+        return (_frame(command), envelope, f'company_{service}_result', payload,
+                commands.next_request, advance)
 
     def negotiated(peer):
-        version = peer.get('company_undock_version')
+        version = peer.get(version_field)
         return type(version) is int and version == 1
 
     return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,

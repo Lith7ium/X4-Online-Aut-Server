@@ -11,6 +11,7 @@ from .company_purchase_control import (
 )
 
 from .company_trade_view import CompanyTradeViews
+from .company_fleet_dispatch import CompanyFleetDispatch
 
 _PEER_POLL_INTERVAL = 0.5
 _EXTRA_PAGE_DELAY = 0.25
@@ -57,7 +58,7 @@ class CompanyPurchaseScheduler:
     """Serialize native bookings and departures for admitted pilots."""
 
     def __init__(self, participants, native, ledger, *, guard=None, clock=time.monotonic,
-                 verify_timeout=50, undock=None, market=None):
+                 verify_timeout=50, undock=None, market=None, fleet=None):
         if not 0 < verify_timeout <= 60:
             raise ValueError('company purchase verify timeout must be in (0, 60]')
         self._participants = participants
@@ -76,6 +77,8 @@ class CompanyPurchaseScheduler:
         self._last_market_handle = 0
         self._market_backoff = {}
         self._market = None if market is None else CompanyTradeViews(market)
+        self._fleet = (CompanyFleetDispatch(participants, fleet, guard, clock, verify_timeout)
+                      if fleet is not None else None)
         self._undock = undock
         self._active_undock = None
         self._undock_uncertain = False
@@ -146,8 +149,12 @@ class CompanyPurchaseScheduler:
             self._finish(receipt)
         self._check()
 
+    def _native_busy(self):
+        return (self._active is not None or self._active_undock is not None
+                or (self._fleet is not None and self._fleet.active_pilot is not None))
+
     def _begin_one(self, bindings):
-        if self._active is not None or self._active_undock is not None:
+        if self._native_busy():
             return
         while self._queue:
             binding, purchase = self._queue.popleft()
@@ -255,7 +262,7 @@ class CompanyPurchaseScheduler:
             reason = 'provider_limit'
         elif purchased != (request['sector'], request['station_code']):
             reason = 'purchase_required'
-        elif self._active is not None or self._active_undock is not None or self._queue:
+        elif self._native_busy() or self._queue:
             reason = 'provider_busy'
         captain = getattr(binding.reservation, 'captain_seed', None)
         if reason is None and captain is None:
@@ -281,6 +288,9 @@ class CompanyPurchaseScheduler:
         self._receipts = {handle: item for handle, item in self._receipts.items()
                           if bindings.get(handle) == item[0]}
         current = set(bindings.values())
+        if self._fleet is not None:
+            self._fleet.advance()
+            self._fleet.retain(current)
         if self._undock is not None:
             self._purchased_docks = {binding: dock for binding, dock in self._purchased_docks.items()
                                      if binding in current}
@@ -293,7 +303,7 @@ class CompanyPurchaseScheduler:
         if self._market is not None:
             self._market_backoff = {binding: until for binding, until in self._market_backoff.items()
                                     if binding in current}
-            self._market.step(bindings, can_start=self._active is None and self._active_undock is None)
+            self._market.step(bindings, can_start=not self._native_busy())
 
         now = self._clock()
         regular_turn = now >= self._next_poll
@@ -305,6 +315,8 @@ class CompanyPurchaseScheduler:
             busy.add(self._active.binding)
         if self._active_undock is not None:
             busy.add(self._active_undock[0])
+        if self._fleet is not None and self._fleet.active_pilot is not None:
+            busy.add(self._fleet.active_pilot)
         eligible = [handle for handle, binding in bindings.items() if binding not in busy]
         if not regular_turn:
             # Spend at most one extra turn between regular turns. This cursor
@@ -337,6 +349,11 @@ class CompanyPurchaseScheduler:
                     self._poll_undock(binding)
                     return
                 self._undock_turn.add(binding)
+        if self._fleet is not None and receipt is None:
+            peer = self._participants._host._control._peers[binding.conn]
+            if self._fleet.take_turn(binding, peer):
+                self._fleet.poll_pilot(binding, provider_busy=self._native_busy() or bool(self._queue))
+                return
         self._poll_purchase(binding, receipt, recover_at=now)
 
     def _poll_purchase(self, binding, receipt, *, recover_at=None):
@@ -380,4 +397,6 @@ class CompanyPurchaseScheduler:
             self._advance_native()
         if self._active_undock is not None:
             self._advance_undock()
-        return self._active is None and self._active_undock is None
+        if self._fleet is not None:
+            self._fleet.advance()
+        return not self._native_busy()
