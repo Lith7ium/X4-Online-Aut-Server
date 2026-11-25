@@ -3,7 +3,7 @@ local cfg=X4LAN_CONFIG
 if not cfg or not cfg.authority_participant_port then return end
 local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);]]
 local net,state,engine,next_hello,failed=nil,nil,nil,0,false
-local company_motion, company_purchase
+local company_motion, company_purchase, company_fleet
 local admitted_seat
 local running, sources_running=false,false
 local function set_sources_running(value)
@@ -11,6 +11,7 @@ local function set_sources_running(value)
  sources_running=value
  if company_motion then company_motion:set_running(value) end
  if company_purchase then company_purchase:set_running(value) end
+ if company_fleet then company_fleet:set_running(value) end
 end
 
 local function stop_undock()
@@ -41,6 +42,10 @@ local function frame()
   if cfg.authority_company_purchase then
    company_purchase=assert(X4LAN_COMPANY_PURCHASE_SOURCE.new_x4(
      cfg.authority_company_purchase,cfg.authority_registry_snapshot,lib))
+  end
+  if cfg.authority_company_fleet then
+   company_fleet=assert(X4LAN_COMPANY_FLEET_SOURCE.new_x4(
+     cfg.authority_company_fleet,cfg.authority_registry_snapshot,lib))
   end
   state=assert(X4LAN_AUTHORITY_CONTROL_STATE.new({enabled=true,owner='isolated-client',
     world_epoch=cfg.authority_ticket.world_epoch,timeout_seconds=120},engine,function(row)
@@ -76,6 +81,10 @@ local function frame()
  if admitted_seat and X4LAN_AUTHORITY_SELECTED_SEAT~=admitted_seat then stop_undock() end
  if running and sources_running and not helm_running then stop_undock() end
  set_sources_running(helm_running)
+ if company_fleet then
+  company_fleet:prepare(admitted_seat)
+  company_fleet:tick()
+ end
  if company_motion then company_motion:tick() end
  if company_purchase then
   if helm_running then company_purchase:prepare_seat() end
@@ -90,6 +99,7 @@ SetScript('onUpdate',function()
   pcall(stop_undock)
   if company_motion then pcall(company_motion.set_running,company_motion,false) end
   if company_purchase then pcall(company_purchase.set_running,company_purchase,false) end
+  if company_fleet then pcall(company_fleet.set_running,company_fleet,false) end
   DebugError('[X4LAN] AUTH_PARTICIPANT ERROR '..tostring(err))
  end
 end)
