@@ -59,10 +59,12 @@ source:tick()
 assert(#receipts == 4 and receipts[4].outcome == 'pilot_reported'
     and receipts[4].settled_total_cents == 34914 and receipts[4].company_balance_cents == nil)
 
-assert(source:request(intent, settle))
-incoming = {prefix .. 'RECEIPT|4|refused|captain_required'}
-source:tick()
-assert(#receipts == 5 and receipts[5].outcome == 'refused' and receipts[5].reason == 'captain_required')
+for offset, reason in ipairs({'captain_required', 'dock_mismatch', 'provider_busy'}) do
+    assert(source:request(intent, settle))
+    incoming = {prefix .. 'RECEIPT|' .. (3 + offset) .. '|refused|' .. reason}
+    source:tick()
+    assert(#receipts == 4 + offset and receipts[#receipts].outcome == 'refused' and receipts[#receipts].reason == reason)
+end
 
 assert(source:request(intent, settle))
 local last_sent = #outgoing

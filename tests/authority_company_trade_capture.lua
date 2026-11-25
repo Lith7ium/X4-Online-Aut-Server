@@ -352,6 +352,35 @@ menu.buttonConfirmTrade()
 assert(#live_attempts == 3 and native_calls == originals)
 assert(live_capture.detach())
 
+-- After a conclusive pre-booking refusal only a fresh menu and basket may submit again.
+local retry_attempts = {}
+local retry_capture = assert(module.install_x4({
+    enabled = true, dynamic_station = true, menu = menu, ship = ship_id,
+    notice = function(status) notices[#notices + 1] = status end,
+    request = function(intent, settle)
+        retry_attempts[#retry_attempts + 1] = {intent = intent, settle = settle}
+        return true
+    end,
+}))
+for attempt_index, reason in ipairs({'captain_required', 'dock_mismatch', 'provider_busy'}) do
+    menu.contextMenuData = fresh_context()
+    menu.buttonConfirmTrade()
+    assert(#retry_attempts == attempt_index)
+    local refused_basket = menu.contextMenuData.orders
+    reply(retry_attempts[attempt_index], 'refused', {reason = reason})
+    assert(notices[#notices] == reason)
+    menu.buttonConfirmTrade()
+    menu.contextMenuData = fresh_context(refused_basket)
+    menu.buttonConfirmTrade()
+    assert(#retry_attempts == attempt_index and notices[#notices] == 'already_attempted')
+end
+menu.contextMenuData = fresh_context()
+menu.buttonConfirmTrade()
+reply(retry_attempts[4], 'unknown', {})
+menu.contextMenuData = fresh_context()
+menu.buttonConfirmTrade()
+assert(#retry_attempts == 4 and native_calls == originals and retry_capture.detach())
+
 -- The stale fixture's native basket is observed as displayed, rather than
 -- derived from the quoted unit price or from a later native debit.
 local pilot_result

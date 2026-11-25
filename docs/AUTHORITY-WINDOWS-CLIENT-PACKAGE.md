@@ -111,7 +111,9 @@ at BIM-169. The provider processes purchases serially and waits for native
 confirmation and a committed ledger entry before a following order. The
 Windows cockpit flow and consecutive orders still need live verification.
 Reopen and review the stock offer before confirming again after any price
-change, including a lower price.
+change, including a lower price. If the server refuses the booking because
+it cannot verify the berth, needs a captain, or is busy, resolve the issue
+and reopen Trade before submitting a fresh basket.
 
 If the game says it is awaiting reconciliation, leave the request pending.
 With the original local basket record, the same Windows account and device

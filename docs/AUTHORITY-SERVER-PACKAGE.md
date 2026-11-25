@@ -417,8 +417,10 @@ add `-CompanyPurchases` and select the same index you reserved for that pilot.
 Open the stock Docked menu, choose Trade, select a single ware and quantity,
 review the price, and confirm. The provider checks the reserved ship's
 identity, external berth, assigned Company NPC pilot, empty order queue,
-free cargo space, funds and current station offer. The pilot must be aboard
-the ship in the server's world. The bridge processes orders serially. A
+free cargo space, funds and current station offer. The human flies the ship
+on their client. Its assigned NPC captain operates it in the server's world.
+After a berth, captain or busy-provider refusal, resolve the condition and
+reopen the offer to submit a fresh purchase. The bridge processes orders serially. A
 completed order releases the next only after native verification and a
 committed purchase ledger entry. A following order for the same ship waits
 briefly for the previous stock order to leave its queue. An inconclusive receipt after dispatch

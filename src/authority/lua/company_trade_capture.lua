@@ -2,6 +2,12 @@
 local M = {}
 local max_integer = 2147483647
 local max_exact_lua_integer = 9007199254740991
+-- Each of these replies identifies a booking the provider declined before execution.
+local refusal_notices = {
+    captain_required = 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
+    dock_mismatch = 'The server could not confirm this ship at the selected trading berth. Reopen the offer after docking.',
+    provider_busy = 'The server is busy with another purchase. Reopen the offer to try again.',
+}
 
 local function positive_integer(n)
     return type(n) == 'number' and n >= 1 and n <= max_integer and n % 1 == 0
@@ -185,8 +191,12 @@ function M.install(o)
                         completed_contexts[data], completed_orders[submitted_orders] = true, true
                     end
                     show_price_change(intent.price_cents, price, true)
-                elseif receipt.reason == 'captain_required' then
-                    o.notice('captain_required')
+                elseif refusal_notices[receipt.reason] then
+                    if dynamic_station then
+                        completed_contexts[data], completed_orders[submitted_orders] = true, true
+                    end
+                    o.notice(receipt.reason)
+                    if dynamic_station then phase = 'ready' end
                 else
                     o.notice('refused')
                 end
@@ -223,7 +233,6 @@ local trade_notices = {
     pending = 'Company purchase awaiting confirmation.',
     accepted_pending_statement = 'Company purchase accepted. Awaiting reconciliation with your purchase record.',
     refused = 'Company purchase refused.',
-    captain_required = 'Company purchase refused. Assign a Company NPC pilot to this ship on the server.',
     uncertain = 'Company purchase status uncertain. Check the authoritative receipt.',
     already_attempted = 'Company purchase already submitted.',
     stale_identity = 'Company purchase refused: ship or station changed.',
@@ -311,7 +320,7 @@ function M.install_x4(o)
         end
     end
     local function stock_notice(status, settled_total_cents, details)
-        local text = trade_notices[status]
+        local text = trade_notices[status] or refusal_notices[status]
         if status == 'confirmed' then
             text = 'Company purchase confirmed. Paid ' .. format_credits(settled_total_cents) .. '.'
             if details then

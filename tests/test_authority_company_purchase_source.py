@@ -78,11 +78,13 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.assertIsNone(self.source.exchange(dict(intent, outcome='unknown')))
         self.assertEqual(self.receive(), ['RECEIPT', '1', 'unknown'])
 
-    def test_captain_required_survives_cockpit_ipc(self):
-        self.send(1)
-        intent = self.source.exchange(None)
-        self.assertIsNone(self.source.exchange(dict(intent, outcome='refused', reason='captain_required')))
-        self.assertEqual(self.receive(), ['RECEIPT', '1', 'refused', 'captain_required'])
+    def test_clean_booking_refusals_survive_cockpit_ipc(self):
+        for sequence, reason in enumerate(('captain_required', 'dock_mismatch', 'provider_busy'), 1):
+            with self.subTest(reason=reason):
+                self.send(sequence)
+                intent = self.source.exchange(None)
+                self.assertIsNone(self.source.exchange(dict(intent, outcome='refused', reason=reason)))
+                self.assertEqual(self.receive(), ['RECEIPT', str(sequence), 'refused', reason])
 
     def test_statement_survives_a_fresh_session_without_resubmitting(self):
         self.send(1, total=34914)
