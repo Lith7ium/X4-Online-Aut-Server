@@ -51,3 +51,26 @@ At `6c6cc852` ambiguous matches also report the number of distinct socket
 inodes. Two focused fixtures distinguish two socket rows for the same inode
 from two different inodes, and both still fail the ownership check. All ten
 UDP ownership tests passed. The original failure predates this diagnostic.
+
+## Integrated market, fleet and undock recovery at `494b470b`
+
+The official Bazzite run at `494b470b4f5170d4cc5d121ce2ee654819722817`
+discovered 5,809 tests under Python 3.13.18. It passed 5,783, recorded
+one error and skipped 25 in 1,042.482 seconds. The exit code was 1.
+The skip IDs and reasons exactly matched `11f10348`. The run began after the
+native fleet provider and pilot had stopped, used the same verified inputs
+and census witness, and ran with fresh Zig caches on CPUs 8–15 at nice +10.
+
+The error was
+`test_authority_client_to_server_apply_worker.Worker.test_operation_failure_survives_cleanup_failure`.
+Before the test reached its simulated operation and cleanup failures, the
+UDP ownership check rejected the participant handshake with
+`connected IPv4 flow count differs from one (matches=2, distinct_inodes=1)`.
+The sample contained two matching rows for a single socket inode. The
+reason for the duplicate rows is undetermined. The earlier saved-motion
+worker error did not recur. The fleet source and negotiation tests and the
+strict legacy-undock recovery regression passed. The suite was run once.
+
+The private run directory keeps the full log, exact skip list and traceback.
+Full log SHA-256 was
+`08119a7b596057e6cf563d3c6e0285c30b11339c8c8f8ecee07cc42d0e88d2ab`.
