@@ -7,7 +7,7 @@ local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f
 -- Lexically normalize separators only; this does not establish filesystem provenance or resolve filesystem case.
 function M.normalize_profile_save_path(value, windows_company_profile)
  if windows_company_profile~=nil and
-  (type(windows_company_profile)~='string' or not windows_company_profile:match('^4585[0-8]$')) then
+  (type(windows_company_profile)~='string' or not windows_company_profile:match('^4585[01345678]$')) then
   return nil
  end
  if type(value)~='string' or #value==0 then
