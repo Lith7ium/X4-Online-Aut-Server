@@ -134,11 +134,12 @@ assert(config.diagnostics and config.recover_expired_pending and config.allow_su
 local prefix = '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED '
 for _, reason in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending',
                          'sample_dock_values', 'register_actor_key', 'reset_id_roundtrip',
-                         'tick_external_binding', 'tick_id_convert'}) do
+                         'tick_external_binding', 'tick_id_convert', 'tick_guard_rejected',
+                         'tick_reader_start_dispatch', 'tick_reader_tick_clock_timeout'}) do
     config.fault(reason)
     assert(lines[#lines] == prefix .. reason)
 end
-for _, reason in ipairs({'event_dock_values|payload', 'sample_private_error', 17, {}}) do
+for _, reason in ipairs({'event_dock_values|payload', 'sample_private_error', 'tick_reader_start_raw error or payload', 17, {}}) do
     config.fault(reason)
     assert(lines[#lines] == prefix .. 'unknown')
 end

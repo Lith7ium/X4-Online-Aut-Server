@@ -34,32 +34,36 @@ function M.new(o)
  local function check()
   if state=='failed' or state=='closed' or state=='done' then return false,'unavailable' end
   local ok,t=call(o.clock);if not ok then return false,'clock_failed' end
-  if not finite(t) or (last and t<last) or (deadline and t>=deadline) then return fail('clock_or_timeout') end
+  if not finite(t) or (last and t<last) then return fail('clock_invalid') end
+  if deadline and t>=deadline then return fail('clock_timeout') end
   last=t
   local good,valid=call(o.guard);if not good then return false,'guard_failed' end
   if valid~=true then return fail('context_lost') end
   local checked,after=call(o.clock);if not checked then return false,'clock_failed' end
-  if not finite(after) or after<last or (deadline and after>=deadline) then return fail('clock_or_timeout') end
+  if not finite(after) or after<last then return fail('clock_invalid') end
+  if deadline and after>=deadline then return fail('clock_timeout') end
   last=after
   return true
  end
  function api:start()
   if state~='idle' then return fail('not_idle') end
-  if not check() then return false end
+  local checked,reason=check()
+  if not checked then return false,reason end
   local ok,key=call(o.actor_key,o.actor)
-  if not ok then return false end
+  if not ok then return false,key end
   if type(key)~='string' or not key:match('^[1-9]%d*$') then return fail('actor_id') end
   actor_key=key
   local good,game=call(o.game_time)
-  if not good then return false end
+  if not good then return false,game end
   if not finite(game) then return fail('game_time') end
   query_game=game;state='waiting';generation={};deadline=last+o.timeout
   if not finite(deadline) then return fail('deadline') end
-  if not check() then return false end
+  checked,reason=check()
+  if not checked then return false,reason end
   local args={epoch=o.epoch,index=o.row.index,request_id=o.request_id}
   if o.allow_superhighway_gap then args.allow_superhighway_gap=true end
   local sent,accepted=call(o.issue,SCREEN,'Read',args)
-  if not sent then return false end
+  if not sent then return false,accepted end
   if accepted~=true then return fail('dispatch') end
   return check()
  end

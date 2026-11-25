@@ -13,6 +13,20 @@ for _, operation in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'clo
     end
 end
 
+for _, check in ipairs({'clock_invalid', 'clock_regressed', 'deadline', 'guard_error',
+                         'guard_rejected', 'request_counter', 'request_format', 'reader_factory'}) do
+    fault_labels['tick_' .. check] = true
+end
+for _, operation in ipairs({'tick_reader_start', 'tick_reader_tick'}) do
+    fault_labels[operation] = true
+    for _, check in ipairs({'clock_failed', 'clock_invalid', 'clock_timeout', 'context_lost',
+                             'guard_failed', 'dispatch', 'reentrant', 'state_changed',
+                             'callback_failed', 'unavailable', 'not_waiting', 'not_idle',
+                             'actor_id', 'game_time', 'deadline'}) do
+        fault_labels[operation .. '_' .. check] = true
+    end
+end
+
 function M.arm(verified_seat)
     assert(seat == nil or seat == verified_seat)
     seat = verified_seat

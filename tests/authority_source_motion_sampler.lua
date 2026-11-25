@@ -4,7 +4,7 @@ local function rig(options)
  options=options or {};local clock=0;local values={};local outputs={};local faults={};local healthy=true
  local x
  x=assert(mod.new({enabled=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
-  recover_expired_pending=options.recover_expired_pending,
+  recover_expired_pending=options.recover_expired_pending,diagnostics=options.diagnostics,
   interval=.1,timeout=2,min_dt=.02,max_dt=1,include_orientation=options.include_orientation,real_time_motion=options.real_time_motion,clock=function()return clock end,
   guard=function()return healthy end,actor_key=function(a)return tostring(a)end,
   binding_guard=function(row,actor)return actor==row.index+40 end,
@@ -114,6 +114,10 @@ do local x,add,_,_,_,_,health=rig();assert(add(1));health(false);assert(not x:ti
 do
  local x,add=rig({recover_expired_pending=true,reader_tick=function()return false end})
  assert(add(1) and x:tick() and not x:tick() and x:state()=='failed')
+end
+do
+ local x,add,_,_,faults=rig({diagnostics=true,reader_tick=function()return false,'private payload' end})
+ assert(add(1) and x:tick() and not x:tick() and x:state()=='failed' and faults[1]=='tick_reader_tick')
 end
 do
  local x,add,_,_,faults,clock=rig({recover_expired_pending=true,reader_close=function()return false end})

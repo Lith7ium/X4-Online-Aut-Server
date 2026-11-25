@@ -35,6 +35,7 @@ function M.new(o)
  local entries,order,actors={}, {}, {}
  local cursor,request_number,last_clock,last_game,pending=1,0,nil,nil,nil
  local last_capture_after=nil
+ local tick_detail
  local api={}
  local function fail(reason)
   if state~='failed' then state='failed';pcall(c.fault,reason)end
@@ -60,12 +61,17 @@ function M.new(o)
   if state=='failed' or state=='closed' then return false end
   local before=state
   local ok,t=pcall(c.clock)
-  if not ok or state~=before or not finite(t) or t<0 or (last_clock and t<last_clock) or not before_deadline(t)then return false end
+  if not ok or state~=before or not finite(t) or t<0 then tick_detail='clock_invalid';return false end
+  if last_clock and t<last_clock then tick_detail='clock_regressed';return false end
+  if not before_deadline(t) then tick_detail='deadline';return false end
   last_clock=t
   local g,v=pcall(c.guard)
-  if not g or v~=true or state~=before then return false end
+  if not g then tick_detail='guard_error';return false end
+  if v~=true or state~=before then tick_detail='guard_rejected';return false end
   local yes,u=pcall(c.clock)
-  if not yes or state~=before or not finite(u) or u<t or not before_deadline(u)then return false end
+  if not yes or state~=before or not finite(u) then tick_detail='clock_invalid';return false end
+  if u<t then tick_detail='clock_regressed';return false end
+  if not before_deadline(u) then tick_detail='deadline';return false end
   last_clock=u;return true
  end
  local function row_ok(e)
@@ -94,29 +100,51 @@ function M.new(o)
   end)
   busy=false;if not ok then return fail('register')end;return true
  end
+ -- The descriptor returns fixed failure codes. Drop anything outside that set
+ -- before it reaches the fault callback, including a custom reader's errors.
+ local descriptor_faults={clock_failed=true,clock_invalid=true,clock_timeout=true,context_lost=true,
+  guard_failed=true,dispatch=true,reentrant=true,state_changed=true,callback_failed=true,
+  unavailable=true,not_waiting=true,not_idle=true,actor_id=true,game_time=true,deadline=true}
+ local function reader_ok(reader,operation)
+  tick_detail='reader_'..operation
+  local ok,reason=reader[operation](reader)
+  if ok==true then tick_detail=nil;return true end
+  if c.diagnostics and descriptor_faults[reason] then tick_detail=tick_detail..'_'..reason end
+  return false
+ end
  function api:tick()
   if busy or state=='failed' or state=='closed' then return fail('tick')end
-  busy=true
+  busy=true;tick_detail=nil
   local ok,err=pcall(function()
    assert(check())
-   if state=='pending' then assert(pending.reader:tick()==true and check());return end
+   if state=='pending' then assert(reader_ok(pending.reader,'tick') and check());return end
    assert(state=='ready')
    local n=#order
    for _=1,math.min(c.scan_budget,n)do
     if cursor>n then cursor=1 end
     local entry=entries[order[cursor]];cursor=cursor+1
     if entry and last_clock>=entry.next_due then
-     assert(checked_binding(entry) and request_number<MAX)
+     assert(checked_binding(entry))
+     tick_detail='request_counter'
+     assert(request_number<MAX)
      request_number=request_number+1
+     tick_detail='request_format'
      local request=c.nonce:sub(1,16)..string.format('%016x',request_number)
+     tick_detail='reader_factory'
      local reader=assert(c.reader_factory(entry.row,entry.actor,request))
+     tick_detail=nil
      assert(checked_binding(entry))
      pending={entry=entry,reader=reader,request=request,deadline=last_clock+c.timeout}
-     state='pending';assert(reader:start()==true and check());break
+     state='pending';assert(reader_ok(reader,'start') and check());break
     end
    end
   end)
-  busy=false;if not ok then return finish_failure('tick',err)end;return true
+  busy=false
+  if not ok then
+   local label=c.diagnostics and tick_detail and 'tick_'..tick_detail or 'tick'
+   return finish_failure(label,err)
+  end
+  return true
  end
  function api:expected_request()return state=='pending' and pending.request or nil end
  function api:event(value)

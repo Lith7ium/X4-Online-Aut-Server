@@ -89,12 +89,12 @@ end
 
 -- Opt-in fault stages identify a failed conversion or docking read without
 -- emitting actor IDs or raw property values; the failure still fences sampling.
-local function diagnostic()
+local function diagnostic(guard)
  local reasons={}
  local z=assert(sampler.new_x4({enabled=true,diagnostics=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
   interval=.1,timeout=5,min_dt=.02,max_dt=1,descriptor=descriptor,resolve=X4LAN_RESOLVE_STRING,
-  expected_save_path='/private/45841/save',guard=function()return true end,binding_guard=function()return true end,
-  fault=function(v)reasons[#reasons+1]=v end}))
+  expected_save_path='/private/45841/save',guard=guard or function()return true end,
+  binding_guard=function()return true end,fault=function(v)reasons[#reasons+1]=v end}))
  return z,reasons
 end
 conversion='wrong_id';local invalid,why=diagnostic()
@@ -103,6 +103,42 @@ assert(why[1]=='register_id_roundtrip')
 conversion='good';docked=true;local unavailable,why2=diagnostic()
 assert(not unavailable:register({epoch=epoch,index=1,sequence=1,classification='new_registry_entry'},41))
 assert(why2[1]=='register_dock_values')
+
+-- Fixed failure stages distinguish a lost outer guard, a refused native
+-- dispatch, and an inner guard lost between the sampler and reader checks.
+docked=false
+local allowed=true
+local guarded,guard_errors=diagnostic(function()return allowed end)
+local row={epoch=epoch,index=1,sequence=1,classification='new_registry_entry'}
+assert(guarded:register(row,41))
+allowed=false
+assert(not guarded:tick() and guarded:state()=='failed' and guard_errors[1]=='tick_guard_rejected')
+assert(not guarded:tick() and #guard_errors==1)
+
+local dispatch=AddUITriggeredEvent
+AddUITriggeredEvent=function()return false end
+local refused,dispatch_errors=diagnostic()
+assert(refused:register(row,41))
+assert(not refused:tick() and refused:state()=='failed' and dispatch_errors[1]=='tick_reader_start_dispatch')
+
+AddUITriggeredEvent=function(...)
+ now=now+5
+ return dispatch(...)
+end
+local expired,timeout_errors=diagnostic()
+assert(expired:register(row,41))
+assert(not expired:tick() and expired:state()=='failed' and timeout_errors[1]=='tick_reader_start_clock_timeout')
+
+AddUITriggeredEvent=dispatch
+local pending_guard,checks=false,0
+local waiting,wait_errors=diagnostic(function()
+ if not pending_guard then return true end
+ checks=checks+1
+ return checks==1
+end)
+assert(waiting:register(row,41) and waiting:tick())
+pending_guard=true
+assert(not waiting:tick() and waiting:state()=='failed' and wait_errors[1]=='tick_reader_tick_context_lost')
 
 -- Existing saved entries have no fabricated job sequence or job receipt.
 -- Their separate caller guard must remain true on every local read.
