@@ -13,9 +13,16 @@ local function set_sources_running(value)
  if company_purchase then company_purchase:set_running(value) end
 end
 
+local function stop_undock()
+ if company_purchase and company_purchase.stop_undock then company_purchase:stop_undock() end
+end
+
 local function frame()
- if not ffi.C.IsPlayerValid() then set_sources_running(false) end
- if not ffi.C.IsPlayerValid() then return end
+ if not ffi.C.IsPlayerValid() then
+  if admitted_seat then stop_undock() end
+  set_sources_running(false)
+  return
+ end
  if not state then
   local control_config={enabled=true,test_profile='45841'}
   if cfg.authority_windows_company_profile==true then
@@ -41,6 +48,7 @@ local function frame()
       string.format('%.0f',row.request_id)..'|'..row.operation..'|'..row.status))
     if row.operation=='resume' and row.status=='confirmed' then
      local selected=X4LAN_AUTHORITY_SELECTED_SEAT
+     if admitted_seat and selected~=admitted_seat then stop_undock() end
      if selected and not admitted_seat then
       assert(selected:admit(), 'Company seat resume unconfirmed')
       admitted_seat=selected
@@ -65,6 +73,8 @@ local function frame()
  assert(state:on_update())
  if running and admitted_seat then assert(admitted_seat:tick(), 'Company seat update failed') end
  local helm_running=running and admitted_seat~=nil and admitted_seat:ready()
+ if admitted_seat and X4LAN_AUTHORITY_SELECTED_SEAT~=admitted_seat then stop_undock() end
+ if running and sources_running and not helm_running then stop_undock() end
  set_sources_running(helm_running)
  if company_motion then company_motion:tick() end
  if company_purchase then
@@ -77,6 +87,7 @@ SetScript('onUpdate',function()
  local ok,err=pcall(frame)
  if not ok then
   failed=true
+  pcall(stop_undock)
   if company_motion then pcall(company_motion.set_running,company_motion,false) end
   if company_purchase then pcall(company_purchase.set_running,company_purchase,false) end
   DebugError('[X4LAN] AUTH_PARTICIPANT ERROR '..tostring(err))

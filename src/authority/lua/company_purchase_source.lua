@@ -141,6 +141,9 @@ function M.new_x4(config, pinned, udp)
             set_running(self, value)
             undock:set_running(value)
         end
+        function source:stop_undock()
+            undock:stop()
+        end
         function source:tick()
             tick(self)
             undock:tick(seat)

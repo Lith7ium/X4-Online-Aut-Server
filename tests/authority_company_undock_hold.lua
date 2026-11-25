@@ -185,6 +185,12 @@ menu.buttonUndock()
 assert(#packets == 0 and replayed == 0)
 permit = false
 answer(nil, nonce .. '|set|ok')
+ipc:set_running(false)
+ipc:tick(seat)
+menu.buttonUndock()
+assert(#packets == 0 and #native == 1 and replayed == 0)
+ipc:set_running(true)
+ipc:tick(seat)
 menu.buttonUndock()
 menu.buttonUndock()
 ipc:tick(seat)
@@ -198,9 +204,61 @@ local receipt = {'UNDOCK_RESULT', 'confirmed', rid, 'sector_a', 'BIM-169', '2', 
 ipc:result(receipt)
 assert(#native == 1)
 receipt[6] = berth.bay_seed
+ipc:set_running(false)
 ipc:result(receipt)
+ipc:tick(seat)
+assert(#native == 1 and #packets == 2 and replayed == 0)
+ipc:set_running(true)
+ipc:tick(seat)
 assert(native[2] == 'release' and replayed == 0)
 permit = true
 answer(nil, nonce .. '|release|ok')
 answer(nil, nonce .. '|release|ok')
 assert(replayed == 1 and #native == 2)
+
+-- A receipt retained during pause must pass fresh physical and menu checks.
+for _, fence in ipairs({'berth', 'menu', 'admission', 'terminal', 'inflight'}) do
+    f = setup()
+    grant = f:pending()
+    if fence == 'inflight' then
+        assert(f.api:confirm(grant))
+        f:read()
+        assert(f.api:state() == 'releasing')
+    end
+    f.api:pause()
+    if fence == 'terminal' then
+        f.api:stop()
+    elseif fence == 'berth' then
+        f.berth.bay_seed = '42'
+    elseif fence == 'menu' then
+        f.menu_changed = true
+    elseif fence == 'admission' then
+        f.admission = 'different'
+    end
+    f.api:resume()
+    if fence == 'berth' then f:read() end
+    if fence == 'inflight' then f.commands[2][2](true) end
+    assert(f.api:state() == ((fence == 'terminal' or fence == 'inflight') and 'stopped' or 'failed'))
+    assert(not f.api:confirm(grant) and #f.stock == 0)
+end
+
+-- A seat rebind after the provider authorized release fences the old MD reply.
+native, packets, replayed, permit = {}, {}, 0, true
+menu.buttonUndock = stock_row
+ipc = hold.new_ipc({lease = 'lease', undock_nonce = nonce, undock_request = rid,
+    epoch = epoch, index = 7354}, {send = function(_, packet) packets[#packets + 1] = packet end},
+    function() return application_clock end, function() return true end)
+ipc:set_running(true)
+ipc:tick(seat)
+answer = events['X4AuthorityClientUndock.Result']
+answer(nil, nonce .. '|set|ok')
+menu.buttonUndock()
+ipc:tick(seat)
+ipc:result(receipt)
+ipc:tick(seat)
+assert(native[2] == 'release')
+ipc:tick({})
+answer(nil, nonce .. '|release|ok')
+ipc:set_running(true)
+ipc:tick(seat)
+assert(replayed == 0 and #native == 2)

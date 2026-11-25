@@ -48,10 +48,11 @@ function M.install(options)
         assert(type(options[name]) == 'function', name .. ' required')
     end
     local stock, epoch, ship_index = menu.buttonUndock, options.epoch, options.ship_index
-    local api, active, stopped = {}, nil, false
+    local api, active, stopped, paused = {}, nil, false, false
+    local read_serial = 0
 
     local function current(operation)
-        return not stopped and active == operation and options.admission() == operation.admission
+        return not stopped and not paused and active == operation and options.admission() == operation.admission
             and seat:controlled_actor() == operation.actor
     end
 
@@ -62,8 +63,10 @@ function M.install(options)
 
     local function read_berth(operation, phase, callback)
         operation.phase = phase
+        read_serial = read_serial + 1
+        local serial = read_serial
         local ok, issued = pcall(seat.read_occupied_berth, seat, function(snapshot)
-            if not current(operation) or operation.phase ~= phase then return end
+            if serial ~= read_serial or not current(operation) or operation.phase ~= phase then return end
             local berth = berth_from_seat(snapshot)
             if not berth or (operation.berth and not same_berth(operation.berth, berth)) then
                 if phase == 'arming' then active = nil else operation.phase = 'failed' end
@@ -117,7 +120,7 @@ function M.install(options)
         -- This must run before the supported Docked row is usable. The stock
         -- permission check establishes a granted baseline before claiming MD's
         -- paired global player lock. This is a one-departure controller.
-        if stopped or active then return false end
+        if stopped or paused or active then return false end
         local admission, actor = options.admission(), seat:controlled_actor()
         if not admission or not actor or options.permission() ~= true then return false end
         local operation = {admission = admission, actor = actor}
@@ -155,13 +158,54 @@ function M.install(options)
     end
 
     function api:tick()
-        if stopped or not active then return end
+        if stopped or paused or not active then return end
         local phase = active.phase
         if phase ~= 'consumed' and (not current(active)
                 or ((phase == 'capturing' or phase == 'pending' or phase == 'authorizing'
                     or phase == 'releasing') and not matches_menu(active))) then
             active.phase, active.arguments = 'failed', nil
         end
+    end
+
+    function api:pause()
+        if stopped or paused then return end
+        paused = true
+        if not active then return end
+        read_serial = read_serial + 1
+        local phase = active.phase
+        if phase == 'arming' then
+            active = nil -- No lock mutation has been dispatched.
+        elseif phase == 'capturing' then
+            active.phase = 'held' -- No click request has been sent.
+        elseif phase == 'revalidating' then
+            active.phase = active.resume_phase
+        elseif phase == 'authorizing' then
+            active.phase = 'pending' -- A fresh read must precede release.
+        elseif phase == 'setting' or phase == 'releasing' then
+            -- A stock mutation may have been dispatched before the pause.
+            -- Never act on its delayed reply; the private owner must clean up.
+            self:stop()
+        end
+    end
+
+    function api:resume()
+        if stopped or not paused then return end
+        paused = false
+        if not active then return end
+        local operation, phase = active, active.phase
+        if phase ~= 'held' and phase ~= 'pending' then return end
+        if not current(operation) or (phase == 'pending' and not matches_menu(operation)) then
+            operation.phase, operation.arguments = 'failed', nil
+            return
+        end
+        operation.resume_phase = phase
+        read_berth(operation, 'revalidating', function()
+            if phase == 'pending' and not matches_menu(operation) then
+                operation.phase, operation.arguments = 'failed', nil
+                return
+            end
+            operation.phase = phase
+        end)
     end
 
     function api:state()
@@ -221,7 +265,8 @@ function M.new_ipc(config, net, clock, available)
     assert(token(config.undock_nonce) and token(config.undock_request))
     local screen = 'X4AuthorityClientUndock'
     local prefix = 'T|' .. config.lease .. '|'
-    local running, controller, pending, change = false, nil, nil, nil
+    local running, stopped, resume_needed = false, false, false
+    local controller, pending, change, receipt
     local next_send, selected_seat = 0, nil
     local api = {}
     local seat_proxy = {
@@ -232,7 +277,7 @@ function M.new_ipc(config, net, clock, available)
     }
 
     local function live()
-        return running and available()
+        return not stopped and running and available()
     end
 
     assert(RegisterEvent(screen .. '.Result', function(_, row)
@@ -250,30 +295,37 @@ function M.new_ipc(config, net, clock, available)
         end
     end) ~= false)
 
+    function api:stop()
+        stopped, running = true, false
+        pending, change, receipt = nil, nil, nil
+        if controller then controller:stop() end
+    end
+
     function api:set_running(value)
+        if stopped or running == (value == true) then return end
         running = value == true
-        if not running and controller and controller:state() ~= 'idle' then
-            controller:stop()
-            pending, change = nil, nil
+        if not running and controller then
+            controller:pause()
+            if controller:state() == 'stopped' then self:stop(); return end
+            resume_needed = true
         end
     end
 
     function api:result(row)
-        if not pending or not live() or #row ~= 8 or row[3] ~= pending.request_id then return end
+        if stopped or not pending or receipt or #row ~= 8 or row[3] ~= pending.request_id then return end
         local result = {outcome = row[2], request_id = row[3]}
         for i, key in ipairs(berth_keys) do
             if row[3 + i] ~= pending[key] then return end
             result[key] = row[3 + i]
         end
-        if result.outcome == 'confirmed' then
-            controller:confirm(result)
-        elseif result.outcome ~= 'refused' and result.outcome ~= 'unknown' then
-            return
+        if result.outcome == 'confirmed' or result.outcome == 'refused' or result.outcome == 'unknown' then
+            receipt = result
         end
-        pending = nil
     end
 
     function api:tick(seat)
+        if stopped then return end
+        if selected_seat and seat ~= selected_seat then self:stop(); return end
         selected_seat = seat
         if not controller then
             controller = M.install_x4({
@@ -297,10 +349,25 @@ function M.new_ipc(config, net, clock, available)
             })
         end
         if not controller or not live() then return end
+        if resume_needed then
+            resume_needed = false
+            controller:resume()
+        end
         controller:tick()
-        if controller:state() == 'idle' then controller:arm() end
+        local phase = controller:state()
+        if phase == 'idle' then controller:arm() end
+        if phase == 'releasing' or phase == 'consumed' or phase == 'failed' then
+            pending, receipt = nil, nil
+        elseif phase == 'pending' and receipt then
+            if receipt.outcome == 'confirmed' then
+                controller:confirm(receipt)
+            else
+                pending, receipt = nil, nil
+            end
+            return
+        end
         local now = clock()
-        if pending and controller:state() == 'pending' and now >= next_send then
+        if pending and phase == 'pending' and now >= next_send then
             next_send = now + 0.25
             local parts = {'UNDOCK', pending.request_id}
             for _, key in ipairs(berth_keys) do parts[#parts + 1] = pending[key] end
