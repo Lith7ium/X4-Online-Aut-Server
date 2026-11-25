@@ -400,6 +400,48 @@ for _, reason in ipairs({'tick_deadline', 'matching_prefix_after_deadline'}) do
     assert(not issued)
     expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', fenced)
 end
+-- The read's exact, completed callback is a barrier. Nothing else is
+-- issued between the ordinary deadline and the terminal drain receipt.
+bridge = new_bridge()
+local late_inspect = request('inspect', source, '0')
+now = now + 2.25
+bridge:tick()
+assert(reply == 'P|' .. lease .. '|HELLO' and issued.request_id == late_inspect)
+callback(nil, ('f'):rep(32) .. '|unrelated')
+assert(reply == 'P|' .. lease .. '|HELLO')
+answer('INSPECTED', source)
+expect_refusal('inspect', source, 'BRIDGE_INSPECT_DRAINED', '0', late_inspect)
+local no_binding = request('apply', source)
+assert(not issued)
+expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', no_binding)
+inspect('apply')
+request('apply', source)
+assert(issued)
+
+bridge = new_bridge()
+local undrained = request('inspect', source, '0')
+now = now + 3
+bridge:tick()
+expect_refusal('inspect', source, 'BRIDGE_MD_TIMEOUT', '0', undrained)
+answer('INSPECTED', source)
+expect_refusal('inspect', source, 'BRIDGE_MD_TIMEOUT', '0', undrained)
+inspect('apply')
+local fenced = request('apply', source)
+assert(not issued)
+expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', fenced)
+
+bridge = new_bridge()
+local malformed = request('inspect', source, '0')
+now = now + 2.5
+callback(nil, malformed .. '|invalid')
+expect_refusal('inspect', source, 'BRIDGE_MD_INVALID', '0', malformed)
+
+bridge = new_bridge()
+request('verify', source)
+now = now + 2.25
+answer('OBSERVED', source)
+assert(reply:find('|verify|BRIDGE_MD_TIMEOUT|', 1, true))
+
 '''
         subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
 

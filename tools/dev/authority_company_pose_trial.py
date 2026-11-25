@@ -21,6 +21,10 @@ class ShipUnavailable(ValueError):
     """The native bridge confirmed the ship unavailable before writing."""
 
 
+class DrainedInspection(ValueError):
+    """A late origin inspection completed with no authorization to write."""
+
+
 class TransferNotVisible(ValueError):
     """The verifier still sees the ship outside the expected destination sector."""
 
@@ -156,6 +160,14 @@ class GamePoseChannel:
                 raise ValueError('pose receipt does not match the pending command')
             status, actual_actor, frame = fields[5:8]
             if status != _SUCCESS[action]:
+                if status == 'BRIDGE_INSPECT_DRAINED':
+                    if action != 'inspect' or actual_actor != '0' or frame != sector or fields[8:] != ['0'] * 6 + ['-']:
+                        raise ValueError('invalid drained inspection receipt')
+                    self.guard()
+                    if not socket_owner(peer, self.socket.getsockname(), self.process):
+                        raise RuntimeError('owned X4 pose socket changed during inspection drain')
+                    self.pending = None
+                    raise DrainedInspection(f'X4 refused inspect for ship {identity[2]}: BRIDGE_INSPECT_DRAINED')
                 if action == 'verify' and status == 'FRAME_INVALID':
                     self.pending = None
                     raise TransferNotVisible('X4 has not verified the destination sector')
@@ -208,7 +220,7 @@ class CompanyPoseTrial:
         self.window_moves = {}
         self.baselines = {}
         report.update(unavailable_before_write=0, unavailable_reasons={}, unavailable_at_pause={},
-                      sector_transfers_verified=0)
+                      sector_transfers_verified=0, drained_obsolete_inspections=0)
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
                       max_source_speed_mps=None, last_verified={}, paused={})
@@ -323,6 +335,14 @@ class CompanyPoseTrial:
     def _receive(self, service, read_reply):
         try:
             reply = read_reply()
+        except DrainedInspection:
+            if (self.active['stage'] != 'inspect'
+                    or service.is_application_current(self.active['record'], after_inspect=True)):
+                raise
+            self.report['expired_before_write'] += 1
+            self.report['drained_obsolete_inspections'] += 1
+            self.active = None
+            return
         except TransferNotVisible:
             if 'source_sector_macro' not in self.active or time.monotonic() >= self.active['verify_deadline']:
                 raise

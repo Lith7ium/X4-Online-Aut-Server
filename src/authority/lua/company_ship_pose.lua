@@ -3,6 +3,11 @@ local M = {}
 local SCREEN = 'X4AuthorityCompanyShipPose'
 local HELLO_INTERVAL = 0.5
 local MD_TIMEOUT = 2
+local INSPECT_DRAIN_TIME = 1
+local inspect_unavailable = {
+    SHIP_NOT_COMPANY_OPERATIONAL = true, PLAYER_CONTEXT = true, PILOT_PRESENT = true,
+    DOCKING_OR_STORED = true, FRAME_INVALID = true,
+}
 local success_status = {inspect = 'INSPECTED', apply = 'DISPATCHED', verify = 'OBSERVED',
                         locate = 'LOCATED', transfer = 'DISPATCHED'}
 local resolves_actor = {inspect = true, locate = true}
@@ -81,8 +86,9 @@ function M.new(config, engine, net)
 
     local function fail_pending(status)
         local args = pending.args
+        if writes_pose[args.action] or (args.action == 'inspect' and pending.draining
+                and status ~= 'BRIDGE_INSPECT_DRAINED') then write_fault = true end
         pending = nil
-        if writes_pose[args.action] then write_fault = true end
         refuse(args, status)
     end
 
@@ -100,11 +106,13 @@ function M.new(config, engine, net)
         if closed or not pending or type(value) ~= 'string'
                 or value:sub(1, 33) ~= pending.args.request_id .. '|' then return end
         local now = engine.clock()
-        if now >= pending.deadline then
+        local args = pending.args
+        local late = now >= pending.deadline
+        if late and args.action == 'inspect' then pending.draining = true end
+        if late and (args.action ~= 'inspect' or now >= pending.drain_deadline) then
             timeout_pending('matching_prefix_after_deadline', now)
             return
         end
-        local args = pending.args
         local row = fields(value, 11)
         if not row or row[2] ~= args.epoch or row[3] ~= tostring(args.index) or row[4] ~= args.generation
                 or row[5] ~= args.action or not row[6]:match('^[A-Z_]+$')
@@ -143,7 +151,9 @@ function M.new(config, engine, net)
                 end
                 located = {key = binding(args, row[7]), source = row[8], request = args}
             end
-            if resolves_actor[args.action] and row[8] == args.frame then inspected = binding(args, row[7]) end
+            if not late and resolves_actor[args.action] and row[8] == args.frame then
+                inspected = binding(args, row[7])
+            end
         else
             local unavailable_before_write = writes_pose[args.action]
                 and (row[6] == DOCKING_OR_STORED or row[6] == 'PILOT_PRESENT')
@@ -153,6 +163,21 @@ function M.new(config, engine, net)
                 return
             end
             if unavailable_before_write then inspected = nil end
+        end
+        if late then
+            -- A valid reply proves the one MD cue finished even when it
+            -- touched the transient crew/locate authorization. Discard the
+            -- inspection rather than granting a write from its coordinates.
+            local finished = engine.clock()
+            if finished >= pending.drain_deadline then
+                timeout_pending('inspect_drain_deadline', finished)
+            elseif not engine.ready() or (row[6] ~= 'INSPECTED' and not inspect_unavailable[row[6]]) then
+                fail_pending('BRIDGE_MD_TIMEOUT')
+            else
+                inspected, located = nil, nil
+                fail_pending('BRIDGE_INSPECT_DRAINED')
+            end
+            return
         end
         pending = nil
         net:send(prefix .. 'RESULT|' .. value .. suffix)
@@ -171,8 +196,10 @@ function M.new(config, engine, net)
             next_hello = now + HELLO_INTERVAL
         end
         if pending then
-            if now >= pending.deadline then
-                timeout_pending('tick_deadline', now)
+            if pending.args.action == 'inspect' and now >= pending.deadline then pending.draining = true end
+            if now >= pending.drain_deadline then
+                local reason = pending.args.action == 'inspect' and 'inspect_drain_deadline' or 'tick_deadline'
+                timeout_pending(reason, now)
             end
             return
         end
@@ -207,7 +234,11 @@ function M.new(config, engine, net)
                 return
             end
         end
-        pending = {args = args, started = now, deadline = now + MD_TIMEOUT}
+        local deadline = now + MD_TIMEOUT
+        -- Only inspect may drain late. Keep its original request in flight
+        -- until the drain ends, without issuing a second MD query.
+        local drain_deadline = args.action == 'inspect' and deadline + INSPECT_DRAIN_TIME or deadline
+        pending = {args = args, started = now, deadline = deadline, drain_deadline = drain_deadline}
         if not engine.issue(args) and pending then
             pending = nil
             refuse(args, 'BRIDGE_ISSUE_FAILED')

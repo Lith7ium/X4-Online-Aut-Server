@@ -398,6 +398,40 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     channel.wait()
 
+    def test_only_completed_obsolete_origin_inspection_can_be_discarded(self):
+        trial, report, service = self.trial()
+        trial.poll(service)
+        inspection = self.command('inspect')
+        service.current = None
+        drained = dict(status='BRIDGE_INSPECT_DRAINED', actor='0', md=(0, 0, 0), ui=(0, 0, 0), code='-')
+        self.reply(inspection, **drained)
+        trial.poll(service)
+        self.assertIsNone(self.channel.pending)
+        self.assertEqual(report['drained_obsolete_inspections'], 1)
+        self.assertEqual(report['writes_verified'], 0)
+        self.assert_no_command()
+        current = SimpleNamespace(sample=dict(self.sample, sequence=9), sector_revision=0)
+        service.queue.append(current)
+        service.current = current
+        trial.poll(service)
+        next_inspection = self.command('inspect')
+        self.assertNotEqual(next_inspection[3], inspection[3])
+        self.reply(next_inspection, **drained)
+        with self.assertRaisesRegex(ValueError, 'BRIDGE_INSPECT_DRAINED'):
+            trial.poll(service)
+        self.assert_no_command()
+
+    def test_drain_status_never_applies_to_a_write_or_malformed_receipt(self):
+        for action, actor, actual_actor in (('inspect', '0', ACTOR), ('apply', ACTOR, '0'), ('verify', ACTOR, '0')):
+            with self.subTest(action=action):
+                channel, peer = self.open_channel()
+                channel.begin(action, self.sample, actor)
+                self.reply(self.command(action, peer=peer, channel=channel), peer=peer, actor=actual_actor,
+                           status='BRIDGE_INSPECT_DRAINED', md=(0, 0, 0), ui=(0, 0, 0), code='-')
+                with self.assertRaisesRegex(ValueError, 'invalid drained inspection receipt'):
+                    channel.poll()
+                self.assertIsNotNone(channel.pending)
+
     def test_delayed_readback_retries_verify_without_replaying_apply(self):
         trial, report, service = self.trial()
         trial.poll(service)
