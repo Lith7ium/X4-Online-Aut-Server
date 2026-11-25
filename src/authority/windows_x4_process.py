@@ -15,7 +15,7 @@ import threading
 import time
 import warnings
 
-from lockstep.launcher import game, steam
+from lockstep.launcher import game, profile, steam
 
 
 def _record_cleanup_issue(error, message):
@@ -302,7 +302,8 @@ class WindowsX4Process:
         has independently established that the created process has stopped.
         """
         self._check_thread()
-        if self._phase != 'new' or type(profile_id) is not int or profile_id != 45841 or not callable(guard):
+        if (self._phase != 'new' or type(profile_id) is not int or
+                profile_id not in (profile.CAPTURE_PROFILE, *profile.PROFILES) or not callable(guard)):
             raise ValueError('new owner, fixture profile and guard required')
         view = Path(view)
         if not view.is_absolute() or not view.is_dir() or guard() is not True:

@@ -9,6 +9,7 @@ param(
     [ValidateRange(1, 3600)] [int] $TimeoutSeconds = 1800,
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
     [switch] $BaseGameOnly,
+    [switch] $FreshCompanyProfile,
     [switch] $ChooseCompanyShip,
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
@@ -45,6 +46,9 @@ if ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
     }
 }
 $companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
+if ($FreshCompanyProfile -and -not $companyPilot) {
+    throw 'FreshCompanyProfile requires a Company ship selection or Company play option.'
+}
 $playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
 if ($companyPilot -and -not $playUntilExit -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
@@ -113,6 +117,9 @@ if ($playUntilExit) {
 }
 if ($BaseGameOnly) {
     $clientArgs += '--base-game-only'
+}
+if ($FreshCompanyProfile) {
+    $clientArgs += '--fresh-company-profile'
 }
 if ($PSBoundParameters.ContainsKey('CompanyShipIndex')) {
     $clientArgs += @('--company-ship-index', [string]$CompanyShipIndex)

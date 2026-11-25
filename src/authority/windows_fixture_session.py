@@ -10,6 +10,8 @@ import secrets
 import socket
 import time
 
+from lockstep.launcher import profile
+
 from .checkpoints import Checkpoint
 from .company_motion_source import validate_playback_index
 from .company_ship_selection import reserve_company_ship
@@ -143,6 +145,9 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('invalid enabled fixture session configuration')
     if select_ship is not None and (not callable(select_ship) or not require_registry_snapshot):
         raise ValueError('company ship choice requires full registry inspection and a selector')
+    fresh_company_profile = getattr(workspace, 'fresh_company_profile', False)
+    if fresh_company_profile and (select_ship is None or motion_request is not None):
+        raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
     if type(company_motion) is not bool or (company_motion and (select_ship is None or motion_request is not None)):
         raise ValueError('company motion requires a seat selection and its own transport')
     if type(play_until_exit) is not bool or (play_until_exit and (select_ship is None or motion_request is not None)):
@@ -156,6 +161,12 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
     outer_error = None
     try:
         workspace.prepare()
+        profile_id = getattr(workspace, 'profile_id', profile.CAPTURE_PROFILE)
+        profile_ids = (profile.CAPTURE_PROFILE,)
+        if fresh_company_profile:
+            profile_ids += profile.PROFILES
+        if type(profile_id) is not int or profile_id not in profile_ids:
+            raise ValueError('invalid Windows fixture workspace profile')
         motion_options = {'motion_enabled': True} if company_motion else {}
         with client_connection(server_host=server_host, server_port=server_port,
                 server_fingerprint=server_fingerprint, shared_key=shared_key, file_token=file_token,
@@ -226,7 +237,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
                     registry_status=registry_status, registry_nonce=registry_nonce, registry_snapshot=registry_snapshot,
-                    motion_settings=motion_settings, seat_index=seat_index, **source_options)
+                    motion_settings=motion_settings, seat_index=seat_index,
+                    profile_id=profile_id, **source_options)
                 workspace.register_overlay(hashes)
                 overlay_registered = True
                 def launch_guard():
@@ -236,7 +248,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     raise RuntimeError('fixture workspace changed before launch')
                 process = WindowsX4Process(enabled=True)
                 launch_attempted = True
-                process.start(workspace.view, profile_id=45841, guard=launch_guard)
+                process.start(workspace.view, profile_id=profile_id, guard=launch_guard)
 
                 # The initial deadline covers the entire join, including the claim.
                 # An admitted player still has finite participant and socket timeouts.
@@ -319,7 +331,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     pass
                 if motion is not None and motion.confirmed_samples == 0:
                     raise RuntimeError('client motion diagnostic consumed no source sample')
-                result = {'client_admitted': True, 'participant_receipts': commands}
+                result = {'client_admitted': True, 'participant_receipts': commands,
+                          'profile_id': profile_id}
                 if seat_index is not None:
                     result['reserved_company_ship_index'] = seat_index
                     result['company_seat_at_admission'] = session.company_seat_at_admission

@@ -225,12 +225,19 @@ class WindowsX4ProcessTests(unittest.TestCase):
 
     def test_unavailable_steam_and_unsafe_profile_do_not_start_job(self):
         owner = subject.WindowsX4Process(enabled=True)
-        with self.assertRaises(ValueError):
-            owner.start(self.view, profile_id=45841.0, guard=lambda: True)
+        for invalid in (45841.0, 45852, 99999):
+            with self.subTest(profile_id=invalid), self.assertRaises(ValueError):
+                owner.start(self.view, profile_id=invalid, guard=lambda: True)
         with patch.object(subject.steam, 'status', return_value=(False, 'not ready')):
             with self.assertRaisesRegex(RuntimeError, 'Steam'):
                 owner.start(self.view, profile_id=45841, guard=lambda: True)
         self.assertEqual(self.job.calls, [])
+
+    def test_direct_start_uses_reserved_company_profile_id(self):
+        owner = subject.WindowsX4Process(enabled=True)
+        self.assertEqual(owner.start(self.view, profile_id=45850, guard=lambda: True), 123)
+        self.assertEqual(self.job.calls[0][1][1:3], ['-personalfolderid', '45850'])
+        self.assertTrue(owner.close())
 
     def test_context_closes_owned_job_on_normal_exit_and_exception(self):
         for error in (False, True):

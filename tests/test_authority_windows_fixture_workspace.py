@@ -231,6 +231,128 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         self.assertFalse(self.run_directory.exists())
         self.assertEqual(self.acl_targets, [])
 
+    def test_fresh_company_profile_skips_existing_directory_file_and_dangling_link(self):
+        capture = self.documents / str(subject.profile.CAPTURE_PROFILE)
+        (capture / 'save').mkdir(parents=True)
+        save = capture / 'save' / 'old.xml.gz'
+        save.write_bytes(b'old save')
+        first, second, third, *_ = [self.documents / str(number) for number in subject.profile.PROFILES]
+        first.write_bytes(b'occupied')
+        target = self.documents / 'missing'
+        try:
+            second.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            second.mkdir()
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+
+        workspace.prepare()
+        self.assertEqual(workspace.profile_id, int(third.name))
+        self.assertEqual(workspace.profile_directory, third)
+        self.assertEqual(workspace.log_path, third / 'x4authority.log')
+        self.assertEqual(workspace.save_dir, third / 'save')
+        self.assertEqual(self.acl_targets, [
+            self.view_container, self.run_directory, third, workspace.save_dir,
+            third / 'config.xml', third / 'content.xml'])
+        self.assertTrue(workspace.guard())
+        self.assertEqual(save.read_bytes(), b'old save')
+        self.assertEqual(first.read_bytes(), b'occupied')
+        if second.is_symlink():
+            self.assertEqual(second.readlink(), target)
+        self.assertFalse(target.exists())
+
+    def test_fresh_company_profile_uses_capture_slot_when_absent(self):
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+        workspace.prepare()
+        self.assertEqual(workspace.profile_id, subject.profile.CAPTURE_PROFILE)
+
+    def test_fresh_company_profile_skips_a_race_for_an_absent_slot(self):
+        capture = self.documents / str(subject.profile.CAPTURE_PROFILE)
+        prepare_fresh = subject.profile.prepare_fresh
+
+        def race(profile_id, *args, **kwargs):
+            if profile_id == subject.profile.CAPTURE_PROFILE:
+                capture.mkdir()
+                (capture / 'keep').write_bytes(b'racing owner')
+            return prepare_fresh(profile_id, *args, **kwargs)
+
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+        with patch.object(subject.profile, 'prepare_fresh', side_effect=race):
+            workspace.prepare()
+        self.assertEqual(workspace.profile_id, subject.profile.PROFILES[0])
+        self.assertEqual((capture / 'keep').read_bytes(), b'racing owner')
+        self.assertEqual(list(capture.iterdir()), [capture / 'keep'])
+        self.assertNotIn(capture, self.acl_targets)
+
+    def test_fresh_company_profile_skips_a_link_created_during_selection(self):
+        target = self.root / 'other-profile'
+        target.mkdir()
+        keep = target / 'keep'
+        keep.write_text('unchanged')
+        link = self.documents / str(subject.profile.CAPTURE_PROFILE)
+        try:
+            probe = self.root / 'symlink-probe'
+            probe.symlink_to(target, target_is_directory=True)
+            probe.unlink()
+        except (OSError, NotImplementedError):
+            return  # Windows may forbid symlink creation.
+        prepare_fresh = subject.profile.prepare_fresh
+
+        def race(profile_id, *args, **kwargs):
+            if profile_id == subject.profile.CAPTURE_PROFILE:
+                link.symlink_to(target, target_is_directory=True)
+            return prepare_fresh(profile_id, *args, **kwargs)
+
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+        with patch.object(subject.profile, 'prepare_fresh', side_effect=race):
+            workspace.prepare()
+        self.assertEqual(workspace.profile_id, subject.profile.PROFILES[0])
+        self.assertEqual(link.readlink(), target)
+        self.assertEqual(keep.read_text(), 'unchanged')
+        self.assertEqual(list(target.iterdir()), [keep])
+        self.assertNotIn(link, self.acl_targets)
+
+    def test_fresh_company_profile_stops_after_partial_preparation(self):
+        capture = self.documents / str(subject.profile.CAPTURE_PROFILE)
+        open_path = Path.open
+
+        def race(path, *args, **kwargs):
+            if path == capture / 'config.xml':
+                with open_path(path, 'x') as sentinel:
+                    sentinel.write('keep competing contents')
+            return open_path(path, *args, **kwargs)
+
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+        with patch.object(Path, 'open', race), self.assertRaises(FileExistsError):
+            workspace.prepare()
+        self.assertEqual((capture / 'config.xml').read_text(), 'keep competing contents')
+        self.assertEqual(list(self.documents.iterdir()), [capture])
+        self.assertFalse(self.view_container.exists())
+        self.assertFalse(self.run_directory.exists())
+        self.assertEqual(self.acl_targets, [])
+
+    def test_all_reserved_company_profiles_occupied_leave_no_new_artifacts(self):
+        occupied = {}
+        for number in (subject.profile.CAPTURE_PROFILE, *subject.profile.PROFILES):
+            directory = self.documents / str(number)
+            directory.mkdir()
+            sentinel = directory / 'keep'
+            sentinel.write_text(str(number))
+            occupied[sentinel] = str(number)
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory, fresh_company_profile=True)
+        with self.assertRaisesRegex(FileExistsError, 'all reserved'):
+            workspace.prepare()
+        self.assertIsNone(workspace.profile_id)
+        self.assertFalse(self.view_container.exists())
+        self.assertFalse(self.run_directory.exists())
+        self.assertEqual(self.acl_targets, [])
+        self.assertEqual({path: path.read_text() for path in self.documents.glob('*/*')}, occupied)
+
     def test_prepare_requires_windows_before_mutating(self):
         with patch.object(subject, '_is_windows', return_value=False):
             with self.assertRaisesRegex(RuntimeError, 'requires Windows'):

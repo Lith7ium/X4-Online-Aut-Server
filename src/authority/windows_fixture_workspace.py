@@ -27,7 +27,7 @@ from authority.file_fingerprints import fingerprint
 from lockstep.launcher import game, profile
 
 
-PROFILE_ID = 45841
+PROFILE_ID = profile.CAPTURE_PROFILE
 MAX_LOG_BYTES = 8 << 20
 _EXTENSION_ID = 'x4_lan_lab'
 _SAVE_NAME = 'save_009.xml.gz'
@@ -177,13 +177,16 @@ def _entry_observation(path):
 class WindowsFixtureWorkspace:
     """Own only the paths and log handle created for one private fixture run."""
 
-    def __init__(self, game_directory, view_directory, run_directory, *, base_game_only=False):
+    def __init__(self, game_directory, view_directory, run_directory, *,
+                 base_game_only=False, fresh_company_profile=False):
         self.base_game_only = base_game_only
+        self.fresh_company_profile = fresh_company_profile
         self.game_directory = Path(game_directory)
         self.view_directory = Path(view_directory)
         self.run_directory = Path(run_directory)
         self.profile_root = None
         self.profile_directory = None
+        self.profile_id = None
         self.view = self.view_directory / 'game'
         self.save_dir = None
         self.download_dir = self.run_directory / 'download'
@@ -210,15 +213,14 @@ class WindowsFixtureWorkspace:
         _directory_chain(self.view_directory.parent)
         _directory_chain(self.run_directory.parent)
         documents_root = _directory_chain(profile.documents())
-        profile_directory = documents_root / str(PROFILE_ID)
-
         # The owned container paths must be absent before any filesystem change.
         if _exists(self.view_directory):
             raise FileExistsError(str(self.view_directory))
         if _exists(self.run_directory):
             raise FileExistsError(str(self.run_directory))
-        if _exists(profile_directory):
-            raise FileExistsError(str(profile_directory))
+        capture_directory = documents_root / str(PROFILE_ID)
+        if not self.fresh_company_profile and _exists(capture_directory):
+            raise FileExistsError(str(capture_directory))
         _check_disjoint((game_root, documents_root, self.view_directory, self.run_directory))
         game.verify_exe(game_root)
         game_drive = os.path.splitdrive(str(game_root))[0].casefold()
@@ -230,17 +232,25 @@ class WindowsFixtureWorkspace:
 
         # From here onward, failures intentionally leave owned partial artifacts.
         self._state = 'preparing'
-        self.view_directory.mkdir()
-        _restrict_directory(self.view_directory, sid)
-        self.run_directory.mkdir()
-        _restrict_directory(self.run_directory, sid)
         extension_ids = {_EXTENSION_ID}
         if not self.base_game_only:
             extension_ids.update(game.dlc_ids(game_root))
         extension_ids = sorted(extension_ids)
-        self.profile_directory = profile.prepare_fresh(PROFILE_ID, extension_ids,
-                                                       root=documents_root)
+        if self.fresh_company_profile:
+            self._prepare_fresh_profile(documents_root, extension_ids)
+        self.view_directory.mkdir()
+        _restrict_directory(self.view_directory, sid)
+        self.run_directory.mkdir()
+        _restrict_directory(self.run_directory, sid)
+        if not self.fresh_company_profile:
+            self.profile_directory = profile.prepare_fresh(PROFILE_ID, extension_ids,
+                                                           root=documents_root)
+            self.profile_id = PROFILE_ID
         self.save_dir = self.profile_directory / 'save'
+        _ordinary(self.profile_directory, directory=True)
+        _ordinary(self.save_dir, directory=True)
+        for name in ('config.xml', 'content.xml'):
+            _ordinary(self.profile_directory / name, directory=False)
         _restrict_directory(self.profile_directory, sid)
         _restrict_directory(self.save_dir, sid)
         for name in ('config.xml', 'content.xml'):
@@ -262,6 +272,28 @@ class WindowsFixtureWorkspace:
         self._view_entries = self._capture_view_entries(game_root, allow_fixture=False)
         self._state = 'prepared'
         return self
+
+    def _prepare_fresh_profile(self, documents_root, extension_ids):
+        for profile_id in (PROFILE_ID, *profile.PROFILES):
+            candidate = documents_root / str(profile_id)
+            if _exists(candidate):
+                continue
+            try:
+                self.profile_directory = profile.prepare_fresh(profile_id, extension_ids,
+                                                               root=documents_root)
+            except FileExistsError as error:
+                # Retry only if the exclusive profile mkdir lost a race.
+                if error.filename != str(candidate):
+                    raise
+                continue
+            except SystemExit:
+                # prepare_fresh rejects a link appearing before its mkdir.
+                if not game.is_link_or_reparse(candidate):
+                    raise
+                continue
+            self.profile_id = profile_id
+            return
+        raise FileExistsError('all reserved Windows Company profiles are occupied')
 
     def _capture_view_entries(self, game_root, *, allow_fixture):
         expected = {entry.name for entry in game_root.iterdir() if entry.name != 'extensions'}

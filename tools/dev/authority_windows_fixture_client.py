@@ -70,6 +70,8 @@ def parser():
                           help='isolated test only: follow another company ship in the same cockpit sector')
     result.add_argument('--base-game-only', action='store_true',
                         help='exclude official DLC from the private game view and profile')
+    result.add_argument('--fresh-company-profile', action='store_true',
+                        help='use the first unused reserved profile for an explicit Company seat join')
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
@@ -91,6 +93,11 @@ def parser():
 def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
+    company_pilot = (args.choose_company_ship or args.company_motion or args.company_purchases or
+                     args.company_ship_index is not None)
+    fresh_company_profile = getattr(args, 'fresh_company_profile', False)
+    if fresh_company_profile and (not company_pilot or args.motion_config is not None):
+        raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
     from authority.company_motion_source import validate_playback_index
     cockpit_radar_playback = getattr(args, 'company_cockpit_playback', False) or args.company_cockpit_playback_index is not None
     playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
@@ -128,6 +135,8 @@ def run(args, *, on_stage=None):
         select_ship = select_requested_index
 
     view_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+    if fresh_company_profile:
+        view_options['fresh_company_profile'] = True
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
     motion_options = {'company_motion': True} if args.company_motion else {}
     if args.company_purchases:

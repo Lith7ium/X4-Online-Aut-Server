@@ -199,6 +199,33 @@ class FixtureCliTests(unittest.TestCase):
             cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback',
                                      '--company-cockpit-playback-index', '1074'])
 
+    def test_fresh_company_profile_requires_explicit_seat_join_and_no_legacy_motion(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64]
+        parse = cli.parser().parse_args
+        with (patch.object(cli, 'os') as platform,
+              patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as session,
+              patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace') as workspace,
+              patch.object(cli, 'read_connection_settings', wraps=cli.read_connection_settings) as read_settings):
+            platform.name = 'nt'
+            for flags in ([], ['--play-until-exit'],
+                          ['--choose-company-ship', '--motion-config', str(self.root / 'motion.json')]):
+                with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, 'Company seat join'):
+                    cli.run(parse([*base, '--fresh-company-profile', *flags]))
+            read_settings.assert_not_called()
+            workspace.assert_not_called()
+            session.assert_not_called()
+            for flags in (['--choose-company-ship'], ['--company-ship-index', '2'],
+                          ['--company-motion'], ['--company-purchases']):
+                with self.subTest(flags=flags):
+                    cli.run(parse([*base, '--fresh-company-profile', *flags]))
+                    self.assertTrue(workspace.call_args.kwargs['fresh_company_profile'])
+                    self.assertTrue(session.call_args.kwargs['require_registry_snapshot'])
+            cli.run(parse([*base, '--company-ship-index', '2']))
+            self.assertNotIn('fresh_company_profile', workspace.call_args.kwargs)
+
 
 if __name__ == '__main__':
     unittest.main()

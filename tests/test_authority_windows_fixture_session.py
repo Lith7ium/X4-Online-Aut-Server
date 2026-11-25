@@ -148,6 +148,8 @@ class FixtureSessionTests(unittest.TestCase):
             test.assertEqual(options['registry_nonce'], test.registry_nonce)
             test.installed_company_source = options.get('company_motion')
             test.installed_seat = options.get('seat_index')
+            test.installed_profile_id = options['profile_id']
+            test.installed_save_path = options['save_path']
             test.installed_registry_snapshot = options.get('registry_snapshot')
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
                                options['participant_port'], options['participant_lease']))
@@ -196,6 +198,31 @@ class FixtureSessionTests(unittest.TestCase):
         self.owner.list_company_ships = lambda: (ship,)
         self.owner.choose_company_ship = lambda index: ship
         return snapshot
+
+    def test_company_join_passes_selected_profile_to_overlay_process_and_result(self):
+        snapshot = self.prepare_company_seat()
+        self.workspace.fresh_company_profile = True
+        self.workspace.profile_id = 45850
+        self.workspace.save_dir = Path('/private/45850/save')
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
+            result = self.run_session(require_registry_snapshot=True,
+                                      select_ship=lambda ships, keepalive: 2)
+        self.assertEqual(self.installed_profile_id, 45850)
+        self.assertEqual(self.installed_save_path, str(self.workspace.save_dir))
+        self.assertIn(('process_start', self.workspace.view, 45850, True), self.calls)
+        self.assertEqual(result['profile_id'], 45850)
+
+    def test_alternate_profile_requires_fresh_company_opt_in(self):
+        self.workspace.profile_id = 45850
+        with self.assertRaisesRegex(ValueError, 'invalid Windows fixture workspace profile'):
+            self.run_session()
+        self.assertNotIn('tls_enter', self.calls)
+
+    def test_fresh_company_profile_requires_a_seat_before_workspace_preparation(self):
+        self.workspace.fresh_company_profile = True
+        with self.assertRaisesRegex(ValueError, 'Company seat join'):
+            self.run_session()
+        self.assertNotIn('workspace_prepare', self.calls)
 
     def test_open_ended_pilot_stays_after_join_deadline_until_clean_x4_exit(self):
         snapshot = self.prepare_company_seat()
@@ -335,6 +362,7 @@ class FixtureSessionTests(unittest.TestCase):
     def test_stages_starts_polls_then_stops_before_tls_and_redaction(self):
         result = self.run_session()
         self.assertEqual(result, {'client_admitted':True, 'participant_receipts':1,
+                                  'profile_id': 45841,
                                   'owned_cleanup_confirmed':True, 'configuration_redacted':True})
         self.assertIn(('stage', Path('/private/download/input'), Path('/private/45841/save/save_009.xml.gz')), self.calls)
         self.assertIn(('controller_create', True, 30), self.calls)

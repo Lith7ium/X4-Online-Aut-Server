@@ -395,6 +395,7 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                     result = fixture_session.run_fixture_session(**options)
             if not bad_stop and not invalid_motion:
                 expected = {'client_admitted': True, 'participant_receipts': 2+len(source_samples) if motion_enabled else 1,
+                            'profile_id': 45841,
                             'owned_cleanup_confirmed': True, 'configuration_redacted': True}
                 if motion_enabled:
                     expected.update(motion_receipts=len(source_samples), motion_stop_confirmed=True)
