@@ -11,7 +11,10 @@ class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
     def test_native_initial_alignment_and_later_limit(self):
         source = (ROOT/'tests/fixtures/saved_motion_apply_abi.c').read_text()
         source = source.replace('static bool paused=false;', 'static int alignment_mode=0; void TestAlignmentMode(int mode){alignment_mode=mode;}\nstatic bool paused=false;')
-        source = source.replace('UniverseID GetPlayerControlledShipID(void){return 0;}', 'UniverseID GetPlayerControlledShipID(void){return alignment_mode==4?41:0;}')
+        source = source.replace('UniverseID GetPlayerControlledShipID(void){return 0;}',
+                                'UniverseID GetPlayerControlledShipID(void){return (alignment_mode==4||alignment_mode==7)?41:0;}')
+        source = source.replace('"ENH-870":"WRG-830"',
+                                '((alignment_mode==6||alignment_mode==7)?"MFQ-419":"ENH-870"):"WRG-830"')
         source = source.replace('return pose;}', 'if(alignment_mode==5){UIPosRot invalid=pose;invalid.x=NAN;return invalid;}return pose;}')
         source = source.replace('pose=v;pose.yaw', 'pose=v;if(alignment_mode==2)pose.x+=10;if(alignment_mode==3)actor_zone=46;pose.yaw')
         with tempfile.TemporaryDirectory() as directory:
@@ -26,7 +29,9 @@ class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
                          'v3_mutate_version','v3_mutate_rate','v3_mutate_rate_reference',
                          'v3_mutate_game','v3_mutate_pose','v3_mutate_pose_reference',
                          'v3_mutate_snapshot_reference','v3_mutate_arrival','v3_mutate_key',
-                         'v3_postwrite_mutation'):
+                         'v3_postwrite_mutation', 'mfq_success', 'mfq_wrong_epoch', 'mfq_wrong_index',
+                         'mfq_wrong_code', 'mfq_wrong_macro', 'mfq_player', 'mfq_guard', 'mfq_unprepared',
+                         'mfq_stale', 'mfq_no_alignment'):
                 with self.subTest(case=case):
                     result = subprocess.run(['luajit','tests/authority_saved_initial_alignment_native.lua'],
                         cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(library),ALIGNMENT_CASE=case),

@@ -1,12 +1,16 @@
 -- Disposable, explicitly enabled one-shot diagnostic. No clearance claim.
 -- All actor/sector/zone identities remain local to this process.
 local M={}
--- These are two isolated test fixtures, not a general ship-selection API.
+-- Isolated test fixtures, not a general ship-selection API.
 local DEFAULT_FIXTURE={index=1318,sector='cluster_115_sector001_macro',code='WRG-830',
  macro='ship_ter_m_corvette_01_a_macro',owner='pioneers'}
 local RECOVERY_FIXTURE={name='recovery_enh_870',epoch='4ba7be438ebb04ec5bb85fdb95b5a488',
  index=1318,sector='cluster_06_sector001_macro',code='ENH-870',
  macro='ship_arg_m_trans_container_02_b_macro',owner='antigone'}
+-- MFQ is reserved for explicitly aligned playback. It is not a one-shot fixture.
+local MFQ_PLAYBACK_FIXTURE={name='recovery_mfq_419',epoch='26a1a365c66788aa06f0aeb9e18ff62e',
+ index=943,sector=RECOVERY_FIXTURE.sector,code='MFQ-419',
+ macro=RECOVERY_FIXTURE.macro,owner=RECOVERY_FIXTURE.owner}
 local function fixture(name)
  if name==nil then return DEFAULT_FIXTURE end
  if name==RECOVERY_FIXTURE.name then return RECOVERY_FIXTURE end
@@ -220,9 +224,9 @@ function M.new(options)
  return api
 end
 
-local function native_callbacks(o)
+local function native_callbacks(o, playback_fixture)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
- local selected=fixture(o.fixture)
+ local selected=playback_fixture or fixture(o.fixture)
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(type(X4LAN_REPLICA_MOTION_BINDING)=='table' and
   type(X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path)=='function')
@@ -321,15 +325,15 @@ end
 -- Three metres is the existing bounded native playback endpoint proof tolerance.
 -- This exception never changes the later playback correction limit (50 metres).
 local INITIAL_ALIGNMENT_READBACK_TOLERANCE = 3
-local function align_initial_fixture(options, callbacks, binding)
+local function align_initial_fixture(options, callbacks, binding, selected)
  local mutation_requested = false
  local alignment_state = options.initial_alignment_state
  local ok = pcall(function()
   assert(type(alignment_state) == 'table' and alignment_state.used == false and alignment_state.uncertain == false)
   alignment_state.used = true
-  assert(options.initial_alignment_fixture == 'recovery_enh_870' and
-   options.fixture == options.initial_alignment_fixture and type(options.prepared) == 'function')
-  assert(binding.epoch == '4ba7be438ebb04ec5bb85fdb95b5a488' and binding.index == 1318)
+  assert((selected == RECOVERY_FIXTURE or selected == MFQ_PLAYBACK_FIXTURE) and
+   options.initial_alignment_fixture == selected.name and type(options.prepared) == 'function')
+  assert(binding.epoch == selected.epoch and binding.index == selected.index)
   local sample = options.initial_sample
   assert(type(sample) == 'table' and getmetatable(sample) == nil and type(sample.snapshot) == 'table')
   local snapshot, arrival = sample.snapshot, sample.arrival
@@ -451,16 +455,25 @@ function M.new_playback_x4(options)
  options.sample_version = sample_version
  assert(type(options.playback) == 'table' and type(options.playback.new) == 'function')
  assert(finite(options.max_step) and options.max_step > 0 and options.max_step <= 50)
- local selected = fixture(options.fixture)
+ local selected
+ if options.fixture == MFQ_PLAYBACK_FIXTURE.name then
+  -- The caller must supply the confirmed local binding and enforce the required
+  -- hold and critical-section checks through prepared() and guard().
+  assert(options.initial_alignment_fixture == MFQ_PLAYBACK_FIXTURE.name,
+   'MFQ playback requires explicit initial alignment')
+  selected = MFQ_PLAYBACK_FIXTURE
+ else
+  selected = fixture(options.fixture)
+ end
  assert(type(options.binding) == 'table')
  local binding = {}
  for key, value in pairs(options.binding) do binding[key] = value end
  assert(token(binding.epoch,32) and binding.index == selected.index and binding.sector_macro == selected.sector and
   (not selected.epoch or binding.epoch == selected.epoch) and natural(binding.actor_key) and
   natural(binding.sector_key) and natural(binding.zone_key))
- local callbacks = assert(native_callbacks(options))
+ local callbacks = assert(native_callbacks(options, selected))
  if options.initial_alignment_fixture ~= nil then
-  if not align_initial_fixture(options, callbacks, binding) then return nil, 'initial_alignment_failed' end
+  if not align_initial_fixture(options, callbacks, binding, selected) then return nil, 'initial_alignment_failed' end
  end
  local ffi = require('ffi')
  return options.playback.new({enabled=true, buffer=options.buffer, frame=binding.sector_macro,

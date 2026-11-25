@@ -17,7 +17,7 @@ function GetComponentData(reference, ...)
  if field == 'isdocked' then return mode == 'docked', false, false end
  if field == 'macro' and tonumber(reference) == 41 then
   if mode == 'stale_during_inspection' then now = 3 end
-  return mode == 'fixture' and 'wrong' or 'ship_arg_m_trans_container_02_b_macro', 'antigone'
+  return (mode == 'fixture' or mode == 'mfq_wrong_macro') and 'wrong' or 'ship_arg_m_trans_container_02_b_macro', 'antigone'
  end
  if field == 'macro' and tonumber(reference) == 43 then return 'cluster_06_sector001_macro' end
  error('unexpected component field')
@@ -57,7 +57,27 @@ if mode == 'identity_after_write' then ffi.C.TestAlignmentMode(3) end
 if mode == 'player' then ffi.C.TestAlignmentMode(4) end
 if mode == 'invalid_prewrite_pose' then ffi.C.TestAlignmentMode(5) end
 if mode == 'default_off' then options.initial_alignment_fixture = nil end
-local real_time_case = mode:match('^v3_') ~= nil
+local mfq_case = mode:match('^mfq_') ~= nil
+if mfq_case then
+ options.fixture = 'recovery_mfq_419'
+ options.initial_alignment_fixture = options.fixture
+ options.binding.epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
+ options.binding.index = 943
+ ffi.C.TestAlignmentMode(6)
+ if mode == 'mfq_wrong_epoch' then options.binding.epoch = '4ba7be438ebb04ec5bb85fdb95b5a488' end
+ if mode == 'mfq_wrong_index' then options.binding.index = 1318 end
+ if mode == 'mfq_wrong_code' then ffi.C.TestAlignmentMode(0) end
+ if mode == 'mfq_player' then ffi.C.TestAlignmentMode(7) end
+ if mode == 'mfq_guard' then options.guard = function() return false end end
+ if mode == 'mfq_unprepared' then prepared = false end
+ if mode == 'mfq_stale' then options.initial_sample.arrival = 0 end
+ if mode == 'mfq_no_alignment' then options.initial_alignment_fixture = nil end
+ if mode == 'mfq_wrong_epoch' or mode == 'mfq_wrong_index' or mode == 'mfq_no_alignment' then
+  assert(not pcall(module.new_playback_x4, options) and ffi.C.TestWrites() == 0)
+  return
+ end
+end
+local real_time_case = mode:match('^v3_') ~= nil or mfq_case
 if real_time_case then
  options.sample_version = 3
  snapshot.version = 3
@@ -102,7 +122,8 @@ if mode == 'default_off' then
  return
 end
 local rejected_before_write = {stale=true, future=true, unprepared=true, profile=true, actor=true,
- frame=true, fixture=true, docked=true, player=true, invalid_prewrite_pose=true, stale_during_inspection=true}
+ frame=true, fixture=true, docked=true, player=true, invalid_prewrite_pose=true, stale_during_inspection=true,
+ mfq_wrong_code=true, mfq_wrong_macro=true, mfq_player=true, mfq_guard=true, mfq_unprepared=true, mfq_stale=true}
 if mutations[mode] or mode:match('^v3_bad_') or mode == 'v3_mixed_fields' then
  rejected_before_write[mode] = true
 end
@@ -129,5 +150,9 @@ if mode == 'running_limit' then
  assert(not result:tick() and ffi.C.TestWrites() == 1)
  return
 end
-assert(mode == 'success' or mode == 'v3_success')
+assert(mode == 'success' or mode == 'v3_success' or mode == 'mfq_success')
+if mfq_case then
+ assert(record.epoch == '26a1a365c66788aa06f0aeb9e18ff62e' and record.index == 943)
+ assert(not pcall(module.new_x4, options)) -- The one-shot factory still excludes MFQ.
+end
 assert(not module.new_playback_x4(options) and ffi.C.TestWrites() == 1) -- Consumed state cannot retry.
