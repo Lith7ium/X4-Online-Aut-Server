@@ -1,0 +1,29 @@
+{
+  "source_report": "AUTHORITY-COMPANY-STOCK-TRADE-20261124.md; water-sale-native-04",
+  "source_result_sha256": "3988ac74b8917c5f2321a4a82a5b174107515d7eaa29239a953026572d2c05d4",
+  "success": true,
+  "native_water_sale": {
+    "status": "CONFIRMED",
+    "rows": [
+      "BERTH_QUOTE|price_ct=3473|bay=0x2702",
+      "ATTEMPTED|ship=0x373bf|station=0x26f3|quantity=2|water=12|station_water=3308|ship_ct=930100|money_ct=930100|price_ct=3473",
+      "ORDER|order=0x9a6d|deal=0x9a6c",
+      "PASSIVE|age_s=483.721|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=12|station_water_delta=0|company_ct=930100|faction_ct=930100|credit_ct=0|ship_credit_ct=-930100|order_exists=1|current=TradePerform|phase=started|queue=1|tradeorders=1|deal=0x9a6c|bound=0|transferred=0|destroyed=0",
+      "PASSIVE|age_s=486.063|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=10|station_water_delta=0|company_ct=930100|faction_ct=930100|credit_ct=0|ship_credit_ct=-930100|order_exists=1|current=TradePerform|phase=critical|queue=1|tradeorders=1|deal=0x9a6c|bound=1|transferred=0|destroyed=0",
+      "PASSIVE|age_s=488.334|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=10|station_water_delta=0|company_ct=930100|faction_ct=930100|credit_ct=0|ship_credit_ct=-930100|order_exists=1|current=TradePerform|phase=critical|queue=1|tradeorders=1|deal=0x9a6c|bound=1|transferred=0|destroyed=0",
+      "EVENT|buyer=0x26f3|seller=0x373bf|param=0x9a6c|param2=null|order=0x9a6d|deal=0x9a6c|matches=1",
+      "LEDGER|observed|nil|5",
+      "JOURNAL|ship|14|5|completed_trade|9971|226239|water|2|3473|6900|true",
+      "PASSIVE|age_s=490.708|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=10|station_water_delta=2|company_ct=930100|faction_ct=930100|credit_ct=0|ship_credit_ct=-923200|order_exists=1|current=TradePerform|phase=critical|queue=1|tradeorders=1|deal=0x9a6c|bound=1|transferred=2|destroyed=0",
+      "LEDGER|observed|nil|5",
+      "JOURNAL|ship|14|5|completed_trade|9971|226239|water|2|3473|6900|true",
+      "PASSIVE|age_s=492.991|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=10|station_water_delta=2|company_ct=937000|faction_ct=937000|credit_ct=6900|ship_credit_ct=6900|order_exists=0|current=Wait|phase=started|queue=0|tradeorders=0|deal=0x9a6c|bound=0|transferred=null|destroyed=null",
+      "LEDGER|observed|nil|5",
+      "JOURNAL|ship|14|5|completed_trade|9971|226239|water|2|3473|6900|true",
+      "PASSIVE|age_s=495.279|ship=0x373bf|station=0x26f3|captain=0x373c5|bay=0x2702|identity=1|berth=1|water=10|station_water_delta=2|company_ct=937000|faction_ct=937000|credit_ct=6900|ship_credit_ct=6900|order_exists=0|current=Wait|phase=started|queue=0|tradeorders=0|deal=0x9a6c|bound=0|transferred=null|destroyed=null",
+      "LEDGER|observed|nil|5",
+      "JOURNAL|ship|14|5|completed_trade|9971|226239|water|2|3473|6900|true",
+      "CONFIRMED|5"
+    ]
+  }
+}
