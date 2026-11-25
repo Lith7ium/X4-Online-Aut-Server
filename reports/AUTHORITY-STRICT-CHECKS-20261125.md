@@ -119,3 +119,26 @@ The run used the same 19 verified prerequisites, fresh Zig caches,
 CPUs 8–15 and nice priority +10. The suite took 1,036.873 seconds.
 Full log SHA-256 was
 `b6c93f52dcf7ff1dad424c4bf6560c656c2d053997c2bd768729d95d6f6e7f4c`.
+
+## Operator build at `04f409f6`
+
+One official Bazzite run of `tools/dev/check.py` at
+`04f409f68eae3078666191a6c0c4221ac7415ec6` discovered 5,878 tests. Of the
+5,853 executed, 5,852 passed and one errored, with zero assertion failures.
+The 25 skip IDs and reasons matched `1f6fb7b6` byte for byte. Thirteen have
+separate Windows results and twelve still need original references. The
+runner exited 1. It used CPython 3.13.18, the same 19 verified references, fresh
+Zig caches, CPUs 8–15 and nice priority +10. Test execution took 1,036.644
+seconds. Full log SHA-256 was
+`06075e54f309753ba90e427871505dd76238416408b48785a2d93da3c1ee2ec3`.
+
+`test_fixed_native_quote_and_order_share_the_post_duplicate_lookup` errored
+with `StopIteration` while looking for the pre-sale XML condition that matched
+only Buy. The follow-up test on `9c558603` verifies that Buy and Sell set the
+submission flag, Quote cannot book an order, and Sell requires the fixed
+live-sale path. It checks that duplicate checks precede the directional
+offer lookup and that the fixed quote and guarded order both use the
+newly read offer and price. The six tests in
+`test_authority_company_trade_trial.py` passed in one targeted run, including
+its LuaJIT checks. The full-suite result above remains the recorded result
+for the packaged revision.

@@ -93,19 +93,67 @@ class FixedTradeDriverTests(unittest.TestCase):
     def test_fixed_native_quote_and_order_share_the_post_duplicate_lookup(self):
         source = Path(__file__).resolve().parents[1] / 'tools/dev/authority_company_stock_trade.xml'
         cue = ET.parse(source).find(".//cue[@name='Request']")
-        fixture = next(node for node in cue.iter('do_if') if node.attrib['value'].startswith('$live_dock or '))
+        actions = cue.find('actions')
+        declarations = {node.attrib['name']: node.attrib['exact'] for node in actions.findall('set_value')}
+        self.assertEqual(declarations['$sell'], "event.param2 == 'Sell'")
+        self.assertEqual(declarations['$submit'], "event.param2 == 'Buy' or $sell")
+        live_valid = declarations['$live_request_valid']
+        self.assertIn('(not $live and not $sell) or ($live and $fixed', live_valid)
+        self.assertIn("($trial == 'live_purchase' and event.param2 == 'Buy')", live_valid)
+        self.assertIn("($trial == 'live_sale' and $sell)", live_valid)
+
+        fixture = cue.find(".//do_if[@value='$live_dock or $fixture_dock']")
         branches = fixture.findall('do_elseif')
         live_gate = next(node for node in branches if '@$v.$previous_confirmed' in node.attrib['value'])
         self.assertIn('@State.$live_completed != true', live_gate.attrib['value'])
+        self.assertIn('$request == @State.$live_request', live_gate.attrib['value'])
         diagnostic_gate = next(node for node in branches if '@State.$attempted' in node.attrib['value'])
-        self.assertIn('not $live and (@State.$attempted or @State.$refused)', diagnostic_gate.attrib['value'])
-        for gate in (live_gate, diagnostic_gate):
-            self.assertIsNone(gate.find('.//find_sell_offer'))
-            self.assertIsNone(gate.find('.//raise_lua_event'))
+        self.assertEqual(diagnostic_gate.attrib['value'],
+                         "event.param2 == 'Buy' and not $live and (@State.$attempted or @State.$refused)")
         lookup = fixture.find('do_else')
-        self.assertEqual(len(list(lookup.iter('find_sell_offer'))), 1)
-        self.assertEqual(len(list(lookup.iter('create_trade_order'))), 1)
-        fixed_quote = next(node for node in lookup.iter('do_if')
-                           if node.attrib['value'] == "event.param2 == 'Buy' and $fixed and $quote gt 0")
+        for gate in (live_gate, diagnostic_gate):
+            self.assertLess(list(fixture).index(gate), list(fixture).index(lookup))
+            for tag in ('find_sell_offer', 'find_buy_offer', 'raise_lua_event', 'create_trade_order'):
+                self.assertIsNone(gate.find(f'.//{tag}'))
+
+        bid, = cue.iter('find_buy_offer')
+        ask, = cue.iter('find_sell_offer')
+        self.assertIs(bid, lookup.find("./do_if[@value='$sell']/find_buy_offer"))
+        self.assertIs(ask, lookup.find('./do_else/find_sell_offer'))
+        for offer in (bid, ask):
+            self.assertEqual(offer.attrib['result'], '$offers')
+            self.assertEqual(offer.attrib['tradepartner'], '$ship')
+            self.assertEqual(offer.attrib['wares'], '$ware')
+        self.assertEqual(bid.attrib['buyer'], '$station')
+        self.assertEqual(ask.attrib['seller'], '$station')
+
+        post_lookup = next(node for node in lookup.findall('do_if')
+                           if node.attrib['value'].startswith('$offers.count == 1 and '))
+        self.assertLess(list(lookup).index(lookup.find('./do_else')), list(lookup).index(post_lookup))
+        self.assertIn('$offers.{1}.isbuyoffer', post_lookup.attrib['value'])
+        read_offer = post_lookup.find("./set_value[@name='$offer']")
+        read_price = post_lookup.find("./set_value[@name='$price']")
+        self.assertEqual(read_offer.attrib['exact'], '$offers.{1}')
+        self.assertEqual(read_price.attrib['exact'], '$offer.unitprice')
+        fixed_quote = post_lookup.find("./do_if[@value='$submit and $fixed and $quote gt 0']")
         self.assertEqual(fixed_quote.find('raise_lua_event').attrib['param'],
                          "'%s|quote|%s'.[$request,$quote]")
+
+        price_recheck = post_lookup.find('do_else')
+        self.assertLess(list(post_lookup).index(read_offer), list(post_lookup).index(read_price))
+        self.assertLess(list(post_lookup).index(read_price), list(post_lookup).index(fixed_quote))
+        self.assertLess(list(post_lookup).index(fixed_quote), list(post_lookup).index(price_recheck))
+        quote_only = next(node for node in price_recheck.findall('do_if')
+                          if node.attrib['value'] == "event.param2 == 'Quote' and not $fixed and $tradeable")
+        self.assertEqual(quote_only.find("./set_value[@name='State.$quoted_price']").attrib['exact'], '$price')
+        self.assertIsNone(quote_only.find('.//create_trade_order'))
+        submit = price_recheck.find("./do_elseif[@value='$submit and $tradeable']")
+        changed = submit.find('do_if')
+        self.assertIn('$v.$price_cents * 1ct != $price', changed.attrib['value'])
+        self.assertIsNone(changed.find('.//create_trade_order'))
+        accepted = submit.find('do_else')
+        self.assertLess(list(submit).index(changed), list(submit).index(accepted))
+        order, = cue.iter('create_trade_order')
+        self.assertIs(order, accepted.find("./do_if[@value='@State.$monitor_ready == $request']/create_trade_order"))
+        self.assertEqual(order.attrib['tradeoffer'], '$offer')
+        self.assertEqual(order.attrib['price'], '$price')
