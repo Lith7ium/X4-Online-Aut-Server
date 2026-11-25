@@ -648,11 +648,11 @@ def finish_recovery_lock(lockbox, remaining, services_stopped, errors):
 class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
     """Fence every recovered-server participant exchange with its owner guard."""
 
-    def __init__(self, host, *, enabled, timeout, guard_process, retire_disconnected_on_resume=False):
+    def __init__(self, host, *, enabled, timeout, guard_process, retire_disconnected=False):
         if not callable(guard_process):
             raise ValueError('participant process guard required')
         super().__init__(host, enabled=enabled, timeout=timeout,
-                         retire_disconnected_on_resume=retire_disconnected_on_resume)
+                         retire_disconnected=retire_disconnected)
         self._guard_process = guard_process
 
     def check_process(self):
@@ -663,13 +663,14 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
         return True
 
     def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None,
-                  *, retire=None):
+                  *, retire=None, retire_on_broken_pipe=False):
         def check_exchange():
             self.check_process()
             if check is not None:
                 check()
         return super()._exchange(conn, peer, others, raw, expected, deadline,
-                                 check=check_exchange, validate_answer=validate_answer, retire=retire)
+                                 check=check_exchange, validate_answer=validate_answer, retire=retire,
+                                 retire_on_broken_pipe=retire_on_broken_pipe)
 
     def _quiet(self, peers, deadline, *, retire=None):
         self.check_process()
@@ -1623,7 +1624,7 @@ def run(args):
             return overlap_guard[0]()
         world._participants = RecoveredGuardedParticipants(
             host, enabled=True, timeout=120, guard_process=verify_process,
-            retire_disconnected_on_resume=require_company_ship)
+            retire_disconnected=require_company_ship)
         if purchase_provider is not None:
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
             purchase_options = {'undock': undock_provider} if undock_provider is not None else {}

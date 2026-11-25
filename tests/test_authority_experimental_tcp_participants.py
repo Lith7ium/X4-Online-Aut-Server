@@ -25,7 +25,7 @@ from test_authority_trusted_marker_load_session import claim_for
 
 
 class ParticipantTCPFixture(unittest.TestCase):
-    retire_disconnected_on_resume = False
+    retire_disconnected = False
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -39,8 +39,8 @@ class ParticipantTCPFixture(unittest.TestCase):
         self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
         self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
         options = {}
-        if getattr(self, 'retire_disconnected_on_resume', False):
-            options['retire_disconnected_on_resume'] = True
+        if getattr(self, 'retire_disconnected', False):
+            options['retire_disconnected'] = True
         self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3, **options)
         self.world._participants = self.participants
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -58,6 +58,7 @@ class ParticipantTCPFixture(unittest.TestCase):
         client.sendall(offer_request()); self.host.tick(.1); self.host.tick(.1)
         bound = decode_bound_offer(client.recv(8192).rstrip(b'\n'))
         client.sendall(encode_load_claim(claim_for(bound.offer))+b'\n'); self.host.tick(.1)
+        return bound.offer
 
     def responder(self, client, mode='ok', *, on_command=None):
         records = []; stop = threading.Event()
@@ -77,10 +78,15 @@ class ParticipantTCPFixture(unittest.TestCase):
                     records.append(item)
                     if on_command is not None:
                         on_command(item)
-                    if mode == 'timeout': continue
+                    if mode == 'timeout' or (mode == 'pause_timeout' and item['operation'] == 'pause'):
+                        continue
+                    if mode == 'pause_eof' and item['operation'] == 'pause':
+                        client.shutdown(socket.SHUT_WR)
+                        return
                     if mode == 'disconnect': client.shutdown(socket.SHUT_RDWR); return
                     answer = dict(item, kind='participant_receipt', status='confirmed')
-                    if mode == 'wrong_id': answer['request_id'] += 1
+                    if mode == 'wrong_id' or (mode == 'pause_wrong_id' and item['operation'] == 'pause'):
+                        answer['request_id'] += 1
                     if mode == 'bool_id': answer['request_id'] = True
                     if mode == 'wrong_epoch': answer['epoch'] = 'b'*32
                     payload = json.dumps(answer, separators=(',', ':')).encode()+b'\n'
@@ -151,7 +157,7 @@ class ParticipantTCPTest(ParticipantTCPFixture):
 
 
 class ResumeDisconnectTest(ParticipantTCPFixture):
-    retire_disconnected_on_resume = True
+    retire_disconnected = True
 
     def assert_departure_saved(self, initial):
         self.assertEqual(self.world.session.pending.operation, 'pause')
@@ -308,26 +314,8 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
     def test_opt_in_keeps_non_eof_and_invalid_receipts_fatal(self):
         for mode in ('wrong_id', 'wrong_epoch', 'duplicate', 'timeout', 'malformed_fin'):
             with self.subTest(mode=mode):
-                with ParticipantCase(mode, retire_disconnected_on_resume=True) as case:
+                with ParticipantCase(mode, retire_disconnected=True) as case:
                     case.exercise()
-
-    def test_resume_opt_in_keeps_pause_receipts_strict(self):
-        pilot = self.connect()
-        self.offer_and_claim(pilot)
-
-        def close_on_pause(command):
-            if command['operation'] == 'pause':
-                pilot.shutdown(socket.SHUT_WR)
-
-        records = self.responder(pilot, on_command=close_on_pause)
-        self.host.tick(.1)
-        self.assertEqual(self.world.session.state, 'running')
-        self.connect()  # the arrival requests a pause
-        with self.assertRaises(RuntimeError):
-            self.host.tick(.1)
-        self.assertEqual([record['operation'] for record in records], ['resume', 'pause'])
-        self.assertEqual(self.world.session.state, 'faulted')
-        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
 
     def test_last_pilot_closes_after_partial_expected_resume_receipt(self):
         pilot = self.connect()
@@ -409,12 +397,96 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
         self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
 
 
+class PauseDisconnectTest(ParticipantTCPFixture):
+    retire_disconnected = True
+
+    def running_pilot(self, mode='pause_eof'):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        records = self.responder(pilot, mode)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'running')
+        return records
+
+    def test_last_ready_eof_during_join_saves_before_new_pilot_can_resume(self):
+        records = self.running_pilot()
+        initial = self.store.latest_marked_confirmed()
+        joining = self.connect()
+        self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume', 'pause'])
+        self.assertEqual(self.world.session.ready_players, ())
+        self.assertEqual(len(self.control._peers), 1)
+        self.assertEqual(self.world.session.pending.operation, 'save')
+        self.assertEqual(self.store.latest_marked_confirmed(), initial)
+        offer = self.offer_and_claim(joining)
+        saved = self.store.latest_marked_confirmed()
+        self.assertNotEqual(saved.checkpoint_id, initial.checkpoint_id)
+        self.assertEqual((offer.checkpoint_id, offer.sha256), (saved.checkpoint_id, saved.sha256))
+        self.assertEqual(self.world.session.pending.operation, 'resume')
+        join_records = self.responder(joining)
+        self.host.tick(.1)
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause', 'save', 'resume'])
+        self.assertEqual([record['operation'] for record in join_records], ['resume'])
+        self.assertEqual(self.world.session.state, 'running')
+
+    def test_other_ready_pilot_still_confirms_pause(self):
+        departing, survivor = self.connect(), self.connect()
+        self.offer_and_claim(departing)
+        self.offer_and_claim(survivor)
+        departed_records = self.responder(departing, 'pause_eof')
+        survivor_records = self.responder(survivor)
+        self.host.tick(.1)
+        joining = self.connect()
+        self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in departed_records], ['resume', 'pause'])
+        self.assertEqual([record['operation'] for record in survivor_records], ['resume', 'pause'])
+        self.assertEqual(len(self.world.session.ready_players), 1)
+        self.assertEqual(self.world.session.pending.operation, 'save')
+        self.offer_and_claim(joining)
+        join_records = self.responder(joining)
+        self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in survivor_records], ['resume', 'pause', 'resume'])
+        self.assertEqual([record['operation'] for record in join_records], ['resume'])
+
+    def test_eof_during_pause_does_not_release_join_when_save_is_unconfirmed(self):
+        self.running_pilot()
+        initial = self.store.latest_marked_confirmed()
+        joining = self.connect()
+        records = self.responder(joining)
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.pending.operation, 'save')
+        with patch.object(self.engine, 'checkpoint_published', create=True, return_value=False):
+            with self.assertRaisesRegex(ValueError, 'did not confirm checkpoint'):
+                self.host.tick()
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.world.session.ready_players, ())
+        self.assertEqual(self.store.latest_marked_confirmed(), initial)
+        self.assertEqual(records, [])
+
+    def test_pause_timeout_still_fences_joining_pilot(self):
+        self.running_pilot('pause_timeout')
+        self.connect()
+        with self.assertRaises(TimeoutError):
+            self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+
+    def test_invalid_pause_receipt_still_fences_joining_pilot(self):
+        self.running_pilot('pause_wrong_id')
+        self.connect()
+        with self.assertRaisesRegex(ValueError, 'unexpected participant receipt'):
+            self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'faulted')
+        self.assertEqual(self.engine.calls, ['pause', 'save', 'resume', 'pause'])
+
+
 class ParticipantCase:
     """Reuse fixture lifecycle for one deliberate failure without re-running tests."""
-    def __init__(self, mode, *, retire_disconnected_on_resume=False):
+    def __init__(self, mode, *, retire_disconnected=False):
         self.mode = mode
         self.case = ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
-        self.case.retire_disconnected_on_resume = retire_disconnected_on_resume
+        self.case.retire_disconnected = retire_disconnected
     def __enter__(self): self.case.setUp(); return self
     def __exit__(self, *args): self.case.doCleanups()
     def exercise(self):

@@ -1,6 +1,6 @@
 """Synchronous, opt-in participant-control experiment on owned TCP sockets.
 
-The caller serializes the host and all sockets. During an authoritative resume,
+The caller serializes the host and all sockets. During authoritative pause or resume,
 a confirmed transport departure may revoke one pilot through the normal disconnect path.
 Receipts are trusted client assertions, not proof or authentication.
 """
@@ -40,13 +40,13 @@ class ExperimentalTCPParticipants:
     Failure permanently faults this adapter. Caller must fence all clients,
     outstanding transfers and the coordinator before attempting recovery.
     """
-    def __init__(self, host, *, enabled=False, timeout=30, retire_disconnected_on_resume=False):
+    def __init__(self, host, *, enabled=False, timeout=30, retire_disconnected=False):
         if (enabled is not True or type(host) is not ExperimentalLocalHost or
                 type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300):
             raise ValueError('explicitly enabled local host and bounded timeout required')
-        if type(retire_disconnected_on_resume) is not bool:
-            raise ValueError('resume departure policy must be boolean')
-        self._retire_disconnected_on_resume = retire_disconnected_on_resume
+        if type(retire_disconnected) is not bool:
+            raise ValueError('participant departure policy must be boolean')
+        self._retire_disconnected = retire_disconnected
         host._check()
         if host._world.session.players:
             raise ValueError('install participant adapter before clients join')
@@ -95,7 +95,8 @@ class ExperimentalTCPParticipants:
                 host._control._drop(conn, transport_lost=True)
                 del peers[handle]
 
-            retire = retire_disconnected if operation == 'resume' and self._retire_disconnected_on_resume else None
+            # WorldCoordinator confirms the native server pause before calling us.
+            retire = retire_disconnected if self._retire_disconnected else None
             deadline = time.monotonic() + self._timeout
             for handle in handles:
                 if handle not in peers:
@@ -110,7 +111,8 @@ class ExperimentalTCPParticipants:
                 if len(raw) > MAX_MESSAGE + 1: raise ValueError('participant command too large')
                 conn, peer = peers[handle]
                 others = [item[0] for key, item in peers.items() if key != handle]
-                self._exchange(conn, peer, others, raw, expected, deadline, retire=retire)
+                self._exchange(conn, peer, others, raw, expected, deadline, retire=retire,
+                               retire_on_broken_pipe=operation == 'resume')
                 self._quiet(peers, deadline, retire=retire)
             self._quiet(peers, deadline, retire=retire)
             return True
@@ -121,7 +123,7 @@ class ExperimentalTCPParticipants:
             self._busy = False
 
     def _exchange(self, conn, peer, others, raw, expected, deadline, check=None, validate_answer=None,
-                  *, retire=None):
+                  *, retire=None, retire_on_broken_pipe=False):
         control = self._host._control
         waiting = [conn, *others]
         sent = 0
@@ -154,7 +156,7 @@ class ExperimentalTCPParticipants:
                     if retire is None:
                         raise RuntimeError('participant disconnected during operation')
                     # The departing pilot no longer has authority. Discard any
-                    # unfinished resume receipt without acknowledging or replaying it.
+                    # unfinished participant receipt without acknowledging or replaying it.
                     retire(conn)
                     return None
                 if chunk and sent != len(raw):
@@ -195,8 +197,8 @@ class ExperimentalTCPParticipants:
                     count = conn.send(raw[sent:])
                 except BlockingIOError:
                     continue
-                except (BrokenPipeError, ConnectionResetError):
-                    if retire is None:
+                except (BrokenPipeError, ConnectionResetError) as error:
+                    if retire is None or (isinstance(error, BrokenPipeError) and not retire_on_broken_pipe):
                         raise
                     retire(conn)
                     return None
