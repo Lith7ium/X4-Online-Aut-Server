@@ -6,13 +6,18 @@ Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. The latest trade evidence is in
 `4abcc9b9`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 03:00 team check-in
-records the current Windows assignment. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795572055496379)
+hour, Berlin time, in `#x4-authorative-server`. The 04:00 team check-in
+records the current Windows assignment. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795575632489349)
 
-- **Cobalt** owns the Windows-to-Fedora flight check. Use the private
-  connection instructions once the Windows operator has cleared the profile
-  issue. During a real flight, record the Windows ship, its movement-channel
-  binding and acknowledged moving samples. The last human test showed both
+- **Cobalt** owns the Windows-to-Fedora flight check. If profile 45841 is
+  already occupied, the updated packaged launcher can reserve a fresh slot
+  with `-FreshCompanyProfile`. Run it directly with the existing private
+  connection file and assigned seat. A Windows-Python filesystem check under
+  Wine preserved 45841, used 45850 and stopped on an exhausted pool.
+  A native Windows join with an alternate profile is still open.
+  During a real flight, record the Windows ship, its movement-channel binding
+  and acknowledged moving samples. [Windows launch instructions](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#run-on-windows)
+  The last human test showed both
   fighters, but Fedora's 392 samples all matched Bazzite's count. A native
   Windows observer has since played back recorded trajectories locally.
   [Human flight](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md) ·

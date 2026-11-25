@@ -85,10 +85,11 @@ with tempfile.TemporaryDirectory() as directory:
         (private / 'extensions').mkdir(parents=True)
         (private / '.x4ls-view').touch()
         source = CompanyMotionSource(playback_index=playback_index, cockpit_radar_playback=radar)
+        profile_id = 45850 if playback_index is not None and radar else 45841
         try:
             assets = install_fixture_overlay(
                 private, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
-                save_path=r'C:\private\45841\save', participant_port=20123,
+                profile_id=profile_id, save_path=rf'C:\private\{profile_id}\save', participant_port=20123,
                 participant_lease='f' * 32, windows_dll=dll, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
                 registry_status=ready, registry_nonce='3' * 32, registry_snapshot=snapshot,
                 seat_index=1318, company_motion=source,
@@ -97,6 +98,8 @@ with tempfile.TemporaryDirectory() as directory:
             source.close()
         lab = private / 'extensions/x4_lan_lab'
         config = (lab / 'ui/config.lua').read_text()
+        assert f'test_profile="{profile_id}"' in config
+        assert ('authority_windows_company_profile=true' in config) == (profile_id != 45841)
         order = (lab / 'ui.xml').read_text()
         has_playback = playback_index is not None or radar
         for name in COMPANY_PLAYBACK_UI:
@@ -177,6 +180,7 @@ class WindowsClientPackageTest(unittest.TestCase):
                         self.assertIn('--company-hull-playback-index', result.stdout)
                         self.assertIn('--company-cockpit-playback-index', result.stdout)
                         self.assertIn('--company-cockpit-playback', result.stdout)
+                        self.assertIn('--fresh-company-profile', result.stdout)
             subprocess.run([sys.executable, '-c', OVERLAY_SMOKE], cwd=extracted, env=environment,
                            check=True, timeout=10)
 
