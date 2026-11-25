@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import unittest
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
@@ -79,6 +80,47 @@ class CombatObservationContractTests(unittest.TestCase):
     def test_lua_validator_rejects_mutating_calls(self):
         with self.assertRaises(ValueError):
             validate_lua_read_only('local x = 1\nC.SetWeaponLaunchedMacro(w, "x")\n')
+
+    def test_md_requires_current_bidirectional_registry_binding(self):
+        root = ET.parse(MD_PATH)
+        ready = root.find(".//library[@name='ReadRegistryState']/actions/set_value").get('exact')
+        for field in ('epoch', 'last', 'ships', 'byship', 'faulted'):
+            self.assertIn(f'md.X4AuthorityShipRegistry.State.${field}?', ready)
+        self.assertIn("State.$epoch != ''", ready)
+        self.assertIn('md.X4AuthorityShipRegistry.State.$epoch == State.$epoch', ready)
+        self.assertIn('not md.X4AuthorityShipRegistry.State.$faulted', ready)
+
+        lookup = root.find(".//library[@name='ResolveRegistryBinding']/actions")
+        self.assertEqual(lookup.find("set_value[@name='$registered_index']").get('exact'), '0')
+        checked = lookup.find("do_if[@value='$reg_ready']")
+        self.assertEqual(checked.find("do_if[@value='not $lookup_by_index and @$lookup_ship.isclass.ship']"
+                                      "/set_value").get('exact'),
+                         '@md.X4AuthorityShipRegistry.State.$byship.{$lookup_ship}')
+        bounded = checked.find("do_if/set_value[@name='$candidate_ship']/..")
+        for guard in ('(typeof $candidate_index).isnumeric', '$candidate_index ge 1',
+                      '$candidate_index le md.X4AuthorityShipRegistry.State.$last',
+                      '$candidate_index == ($candidate_index)i'):
+            self.assertIn(guard, bounded.get('value'))
+        binding = bounded.find('do_if')
+        self.assertIn('$candidate_ship == $lookup_ship', binding.get('value'))
+        self.assertIn('@md.X4AuthorityShipRegistry.State.$byship.{$candidate_ship} == $candidate_index',
+                      binding.get('value'))
+        self.assertEqual(binding.find("set_value[@name='$registered_index']").get('exact'), '$candidate_index')
+
+        emit = root.find(".//library[@name='Emit']/actions")
+        for actor, output in (('victim', 'v_reg'), ('ev_att', 'ea_reg'), ('last_att', 'la_reg')):
+            role = emit.find(f"do_if[@value='@${actor}.exists']")
+            self.assertEqual(role.find("set_value[@name='$lookup_ship']").get('exact'), f'${actor}')
+            self.assertIsNotNone(role.find("include_actions[@ref='ResolveRegistryBinding']"))
+            self.assertEqual(role.find(f"set_value[@name='${output}']").get('exact'), '$registered_index')
+            self.assertEqual(emit.find(f"set_value[@name='${output}']").get('exact'), '0')
+        self.assertIsNotNone(emit.find("raise_lua_event[@param='$payload']"))
+
+        watch = root.find(".//cue[@name='Watch']/actions/do_if[@value='State.$armed']")
+        self.assertIsNotNone(watch.find("include_actions[@ref='ReadRegistryState']"))
+        self.assertIsNotNone(watch.find("include_actions[@ref='ResolveRegistryBinding']"))
+        self.assertEqual(watch.find("do_if[@value='$lookup_by_index']/set_value[@name='$ship']").get('exact'),
+                         '$registered_ship')
 
 
 class CombatObservationLuaJitTests(unittest.TestCase):

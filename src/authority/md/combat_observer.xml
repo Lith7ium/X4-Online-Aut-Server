@@ -23,6 +23,41 @@
     <create_group groupname="State.$weapons"/>
    </actions>
    <cues>
+    <library name="ReadRegistryState" purpose="include_actions">
+     <actions>
+      <set_value name="$reg_ready" exact="State.$epoch != ''
+          and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
+          and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
+          and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$ships?
+          and md.X4AuthorityShipRegistry.State.$byship?"/>
+     </actions>
+    </library>
+
+    <!-- Read either direction, then require the same live ship and index in both tables. -->
+    <library name="ResolveRegistryBinding" purpose="include_actions">
+     <actions>
+      <set_value name="$registered_ship" exact="null"/>
+      <set_value name="$registered_index" exact="0"/>
+      <do_if value="$reg_ready">
+       <set_value name="$candidate_index" exact="$lookup_index"/>
+       <do_if value="not $lookup_by_index and @$lookup_ship.isclass.ship">
+        <set_value name="$candidate_index" exact="@md.X4AuthorityShipRegistry.State.$byship.{$lookup_ship}"/>
+       </do_if>
+       <do_if value="(typeof $candidate_index).isnumeric and $candidate_index ge 1
+                     and $candidate_index le md.X4AuthorityShipRegistry.State.$last
+                     and $candidate_index == ($candidate_index)i">
+        <set_value name="$candidate_ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$candidate_index}"/>
+        <do_if value="@$candidate_ship.exists and $candidate_ship.isclass.ship
+                      and ($lookup_ship == null or $candidate_ship == $lookup_ship)
+                      and @md.X4AuthorityShipRegistry.State.$byship.{$candidate_ship} == $candidate_index">
+         <set_value name="$registered_ship" exact="$candidate_ship"/>
+         <set_value name="$registered_index" exact="$candidate_index"/>
+        </do_if>
+       </do_if>
+      </do_if>
+     </actions>
+    </library>
+
     <!-- Shared read-only serializer: reads native attacker, registry index, shield/hull, and
          same-age collision flags synchronously inside each callback without modifying game state. -->
     <library name="Emit">
@@ -31,7 +66,9 @@
       <set_value name="$seq" exact="State.$seq"/>
       <set_value name="$age_s" exact="player.age / 1s"/>
 
-      <set_value name="$reg_ready" exact="State.$epoch != '' and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$byship?"/>
+      <include_actions ref="ReadRegistryState"/>
+      <set_value name="$lookup_by_index" exact="false"/>
+      <set_value name="$lookup_index" exact="null"/>
 
       <!-- Victim fields -->
       <set_value name="$v_str" exact="'0'"/>
@@ -54,9 +91,9 @@
        <do_if value="State.$labels.{$victim}?"><set_value name="$v_label" exact="State.$labels.{$victim}"/></do_if>
        <do_if value="@$victim.idcode"><set_value name="$v_code" exact="$victim.idcode"/></do_if>
        <do_if value="@$victim.owner.id"><set_value name="$v_owner" exact="$victim.owner.id"/></do_if>
-       <do_if value="$reg_ready and md.X4AuthorityShipRegistry.State.$byship.{$victim}?">
-        <set_value name="$v_reg" exact="md.X4AuthorityShipRegistry.State.$byship.{$victim}"/>
-       </do_if>
+       <set_value name="$lookup_ship" exact="$victim"/>
+       <include_actions ref="ResolveRegistryBinding"/>
+       <set_value name="$v_reg" exact="$registered_index"/>
        <do_if value="@player.controlled == $victim"><set_value name="$v_ctrl" exact="1"/></do_if>
        <do_if value="@player.occupiedship == $victim"><set_value name="$v_occ" exact="1"/></do_if>
        <set_value name="$shield" exact="@$victim.shield"/>
@@ -85,9 +122,9 @@
        <do_if value="State.$labels.{$ev_att}?"><set_value name="$ea_label" exact="State.$labels.{$ev_att}"/></do_if>
        <do_if value="@$ev_att.idcode"><set_value name="$ea_code" exact="$ev_att.idcode"/></do_if>
        <do_if value="@$ev_att.owner.id"><set_value name="$ea_owner" exact="$ev_att.owner.id"/></do_if>
-       <do_if value="$reg_ready and md.X4AuthorityShipRegistry.State.$byship.{$ev_att}?">
-        <set_value name="$ea_reg" exact="md.X4AuthorityShipRegistry.State.$byship.{$ev_att}"/>
-       </do_if>
+       <set_value name="$lookup_ship" exact="$ev_att"/>
+       <include_actions ref="ResolveRegistryBinding"/>
+       <set_value name="$ea_reg" exact="$registered_index"/>
        <do_if value="@player.controlled == $ev_att"><set_value name="$ea_ctrl" exact="1"/></do_if>
        <do_if value="@$ev_att.isclass.ship"><set_value name="$ea_isship" exact="1"/></do_if>
        <do_if value="@$ev_att.pilot.exists"><set_value name="$ea_pilot" exact="'%s'.[$ev_att.pilot]"/></do_if>
@@ -106,9 +143,9 @@
        <do_if value="State.$labels.{$last_att}?"><set_value name="$la_label" exact="State.$labels.{$last_att}"/></do_if>
        <do_if value="@$last_att.idcode"><set_value name="$la_code" exact="$last_att.idcode"/></do_if>
        <do_if value="@$last_att.owner.id"><set_value name="$la_owner" exact="$last_att.owner.id"/></do_if>
-       <do_if value="$reg_ready and md.X4AuthorityShipRegistry.State.$byship.{$last_att}?">
-        <set_value name="$la_reg" exact="md.X4AuthorityShipRegistry.State.$byship.{$last_att}"/>
-       </do_if>
+       <set_value name="$lookup_ship" exact="$last_att"/>
+       <include_actions ref="ResolveRegistryBinding"/>
+       <set_value name="$la_reg" exact="$registered_index"/>
        <do_if value="@player.controlled == $last_att"><set_value name="$la_ctrl" exact="1"/></do_if>
        <do_if value="@$last_att.isclass.ship"><set_value name="$la_isship" exact="1"/></do_if>
       </do_if>
@@ -168,8 +205,15 @@
      <actions>
       <set_value name="$a" exact="event.param3"/>
       <set_value name="$ship" exact="@$a.$ship"/>
-      <do_if value="not @$ship.exists and $a.$registry_index? and State.$epoch != '' and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$ships.{$a.$registry_index}?">
-       <set_value name="$ship" exact="md.X4AuthorityShipRegistry.State.$ships.{$a.$registry_index}"/>
+      <do_if value="State.$armed">
+       <include_actions ref="ReadRegistryState"/>
+       <set_value name="$lookup_ship" exact="$ship"/>
+       <set_value name="$lookup_by_index" exact="$a.$registry_index?"/>
+       <set_value name="$lookup_index" exact="@$a.$registry_index"/>
+       <include_actions ref="ResolveRegistryBinding"/>
+       <do_if value="$lookup_by_index">
+        <set_value name="$ship" exact="$registered_ship"/>
+       </do_if>
       </do_if>
       <set_value name="$label" exact="if $a.$label? then $a.$label else 'unnamed'"/>
       <do_if value="State.$armed and @$ship.exists and $ship.isclass.ship">
@@ -188,10 +232,7 @@
          <add_to_group groupname="State.$weapons" list="$wlist"/>
         </do_if>
        </do_if>
-       <set_value name="$reg_idx" exact="0"/>
-       <do_if value="State.$epoch != '' and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$byship.{$ship}?">
-        <set_value name="$reg_idx" exact="md.X4AuthorityShipRegistry.State.$byship.{$ship}"/>
-       </do_if>
+       <set_value name="$reg_idx" exact="$registered_index"/>
        <debug_text text="'[X4LAN] AUTH_COMBAT_OBS_CTRL action=Watch label=%s ship=%s code=%s owner=%s reg=%s target=%s source=%s weapons=%s hull=%s/%s shield=%s/%s'.[$label,$ship,@$ship.idcode,@$ship.owner.id,$reg_idx,@$a.$as_target == true,@$a.$as_source == true,$wcount,@$ship.hull,@$ship.maxhull,@$ship.shield,@$ship.maxshield]"/>
        <raise_lua_event name="'X4AuthorityCombatObserver.Status'" param="'%s|Watched|%s|%s|%s|%s|%s|%s'.[@$a.$request_id,$label,$ship,@$ship.idcode,@$ship.owner.id,$reg_idx,$wcount]"/>
       </do_if>
