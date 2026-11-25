@@ -125,8 +125,16 @@ class NativeFleetOrderTests(unittest.TestCase):
             self.assertIn(self.provider._lease, command.find('actions/do_if').get('value'))
             self.assertIsNone(command.find('delay'))
             self.assertIsNone(command.find('cues'))
+            request = xml.find("./cues/library[@name='CheckRequest']/actions")
+            self.assertEqual(request.find("set_value[@name='$attempt_key']").get('exact'),
+                             "'$fleet_%s'.[$args.$order_id]")
+            journal_entry = 'State.$attempted.{$attempt_key}'
+            journal_readback = f'@{journal_entry} == true'
+            duplicate = request.find(f"do_if[@value='{journal_readback}']")
+            self.assertEqual(duplicate.find("set_value[@name='$status']").get('exact'), "'unknown'")
             issue = xml.find("./cues/library[@name='IssueMoveWait']/actions")
-            self.assertEqual(issue[1].get('name'), 'State.$attempted.{$args.$order_id}')
+            self.assertEqual((issue[1].get('name'), issue[1].get('exact')), (journal_entry, 'true'))
+            self.assertEqual(issue.find('do_if').get('value'), journal_readback)
             writes = list(xml.iter('create_order'))
             self.assertEqual(len(writes), 1)
             self.assertEqual(writes[0].attrib, {'object': '$ship', 'id': "'MoveWait'", 'name': '$order'})

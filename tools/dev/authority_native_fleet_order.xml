@@ -35,11 +35,13 @@
 
   <library name="CheckRequest" purpose="include_actions">
    <actions>
+    <!-- X4 tables require all string keys to start with '$'. -->
+    <set_value name="$attempt_key" exact="'$fleet_%s'.[$args.$order_id]"/>
     <do_if value="not State.$attempted?">
      <set_value name="State.$attempted" exact="table[]"/>
      <set_value name="State.$attempted_count" exact="0"/>
     </do_if>
-    <do_if value="@State.$attempted.{$args.$order_id}">
+    <do_if value="@State.$attempted.{$attempt_key} == true">
      <!-- The earlier mutation may already have happened. Do not submit it again. -->
      <set_value name="$status" exact="'unknown'"/>
     </do_if>
@@ -84,9 +86,9 @@
     <set_value name="$status" exact="'unknown'"/>
     <!-- Remember the ID before touching the engine. A subsequent saved world
          keeps this marker. The provider lease is generated for each process. -->
-    <set_value name="State.$attempted.{$args.$order_id}" exact="true"/>
+    <set_value name="State.$attempted.{$attempt_key}" exact="true"/>
     <set_value name="State.$attempted_count" exact="State.$attempted_count + 1"/>
-    <do_if value="@State.$attempted.{$args.$order_id} == true">
+    <do_if value="@State.$attempted.{$attempt_key} == true">
      <create_position name="$destination" x="$args.$x * 1m" y="$args.$y * 1m" z="$args.$z * 1m"/>
      <!-- Stock single-ship map movement uses a sector-relative point and
           playerprecise, which still lets X4 choose a safe flight position. -->
