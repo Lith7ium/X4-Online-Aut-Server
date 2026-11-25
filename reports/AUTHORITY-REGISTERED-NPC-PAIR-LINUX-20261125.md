@@ -18,6 +18,7 @@ copy of the freighter or measure where X4 rendered it.
 | `3e005330` | Captured the second pose 2.199 s after the first. The source had expired 182 ms earlier. | Confirmed sequence 1 with matching actor binding and pose. | `checkpoint-c607719d2dd8470cb7fb984c79af31aa` |
 | `24284592` | Published 25 native positions. No velocity met the rate interval. | 18 exact confirmations, 7 distinct positions, 17.65 km displacement. | `checkpoint-5208c84259934e7fbcb9d6e31abdf62f` |
 | `0a4c4e08` | 48 native poses, 40 with a real-time rate, including two nonzero vectors. | 35 confirmations spanning 18.67 km. One nonzero rate reached the cockpit. | `checkpoint-66b943f469274265b0c9e45028768774` |
+| `5f83cb22` | 48 direct native velocity observations alongside the existing V3 stream. | 53 exact confirmations. Briefly held and then restored the freighter's original order. | `checkpoint-a519b7cc16854fb08ae6e539f823992c` |
 
 In the first run the provider checked the identifier for a pending join
 offer after resume. That identifier expires by design. The corrected
@@ -101,3 +102,37 @@ HVC-420's cockpit stopped acknowledging the freighter after its stock radar
 lost the sector. The provider paused and saved after HVC-420 left, and the
 saved marker and byte hash agreed. Final checkpoint SHA-256 was
 `f27e93322df588eaa27d19ae1f06d2cfc518f603f1a7195c778c6a5318b9e5e4`.
+
+## Stock velocity and restoration of the captain's order
+
+At `5f83cb22` HVC-420 briefly held the local MFQ-419 after receiving its
+first server pose. X4 reported the temporary Wait as started. Once the
+linear hold was checked, the pilot released it and cancelled its own Wait.
+X4 then twice reported the previously captured order running, at separate
+game times. This sequence completed once. The offered save's active order
+was DockAt in a TradeRoutine. The provider kept simulating the freighter
+throughout. No pilot pose setter ran. Its only local save remained
+byte-identical to the original join offer.
+
+The provider also measured the stock MD ship-local `velocity` vector and
+the ship's sector-relative right, up and forward directions. All 48
+native speeds were nonzero at 1,032.9–1,147.6 m/s. Of the corresponding
+transmitted finite-difference rates, 36 were zero and ten were absent.
+The pilot received 53 poses in total and confirmed three nonzero rates.
+The original threshold of four distinct moving positions with nonzero
+velocity remains open.
+
+The three basis vectors had maximum norm error below 0.000001 and
+pairwise absolute dot product below 0.000001. Projecting the native
+velocity onto sector axes gave flight directions within 0.003° of
+seven displacements between successive changes in MD position. Three
+such intervals longer than three seconds had integrated game-time
+distance errors of +82 m, −316 m and +92 m over 3.37–3.81 km. Intervals
+ending between simulation steps could differ by over 3 km. Nine of the
+48 same-sequence UI poses already showed the next position, despite
+game timestamps differing by less than 0.48 ms. A wire implementation
+must specify when it took the velocity and how it relates game time to
+elapsed real seconds. This run recorded it locally.
+
+The last-pilot checkpoint hash was
+`13a262385827f8d26522cb4d3232c904ee36fecd6d660224f29e4b89cd7e7f89`.

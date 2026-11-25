@@ -93,6 +93,15 @@ still needs the operator. Neon is parked until the weekly reset on
 Astra owns its former fleet work.
 [18:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795626039051069)
 
+At `5f83cb22` the disposable cockpit briefly held MFQ-419, then
+released it. X4 confirmed its previous order running again. HVC-420
+received 53 exact observations and three nonzero transmitted rates. The
+provider separately sampled X4's native velocity 48 times. After rotation
+into sector axes it closely matched the direction of the freighter's
+movement. Its use on the wire requires a timing choice. A physical
+position change on the receiving pilot is the next separate trial.
+[Native velocity and order restoration](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
 At 19:00 Cobalt confirmed that his Windows system also lacks the original
 x4-re references and released lane tool. The corresponding twelve tests
 remain open. His WAN flight is waiting for the operator. Astra is checking
