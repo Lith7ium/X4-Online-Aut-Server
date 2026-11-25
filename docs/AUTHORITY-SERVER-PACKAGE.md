@@ -425,27 +425,34 @@ the provider must support the opt-in loss notifications.
 
 ## Try a Company fleet order
 
-In matching internal packages from `3f109634`, enable `--company-purchases` and
-`--company-fleet-orders` on the Linux provider and pilot. On the Windows
-launcher use `-CompanyPurchases -CompanyFleetOrders`. The fleet option
-uses the pilot's existing authenticated control connection.
+Use matching provider and pilot packages from `1ad21866` for the stock map's
+queue choices. Enable `--company-purchases --company-fleet-orders` on both
+Linux launchers. On Windows use `-CompanyPurchases -CompanyFleetOrders`.
+Orders use the pilot's authenticated control connection.
 
-While at the helm, select **one** idle, undocked Company ship with an NPC
-captain on the map. Right-click a point in **that ship's sector** and
-choose **Fly and Wait** without a keyboard modifier. The pilot may be
-in another sector. The target must be registered in the server's current
-Company catalogue and free of all pilot reservations. The first version
-handles this single map action and leaves queue editing and group orders
-for later work.
+1. At the helm, select one registered, undocked Company ship with an NPC
+   captain. All pilots share command of ships available for reservation.
+2. Right-click a point in the selected ship's sector. Your own cockpit may
+   be in another sector.
+3. In the interaction menu, choose whether to keep or clear existing orders,
+   then choose **Fly and Wait**. Keeping orders appends the new destination.
+   Clearing replaces orders X4 allows the player to cancel. Critical orders
+   stay in the queue. Use a plain map point and the context menu. Group orders,
+   priority commands, queue loops and the map shortcut are outside this trial.
 
-An **accepted** notice means X4 created the order on the server and
-reported its target. X4 chooses the ship's flight path and stopping
-position. In the stock single-instance trial the ship stopped 2.23 km
-from the requested point. If the server cannot determine the result,
-the pilot sees **unknown**. The server retains the ship reservation
-until its next process restart to protect a later pilot from a delayed
-order. This build's saved duplicate check has a 4,096-order limit per world.
+The pilot receives **accepted** once the server reads back the new order and
+its destination. The ship can still be en route. X4 chooses a safe stopping
+position. In a single-instance stock flight the ship stopped 2.23 km from
+the requested point. The pilot's map queue is local and can show an older
+state. If a result is **unknown**, the provider keeps the affected ship
+reserved and suspends further fleet orders until its next process start.
+Other pilots can continue playing and the world can save. The saved journal
+currently holds up to 4,096 attempted orders per world.
 [Stock flight measurements](../reports/AUTHORITY-STOCK-FLEET-ORDER-LINUX-20261125.md)
+
+The earlier `494b470b` Linux test used an idle ship and one **Fly and Wait**
+order. The server checkpoint retained the order after the last pilot left.
+[Native pilot and server](../reports/AUTHORITY-STOCK-FLEET-PAIR-LINUX-20261125.md)
 
 ## Try an opt-in Company purchase
 

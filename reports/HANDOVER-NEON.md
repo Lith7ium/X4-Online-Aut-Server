@@ -33,6 +33,23 @@ flight and can run the four outstanding Windows dependency checks separately.
 [Windows NPC report](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/032c69a8b5fe765dda8d67f2c308a8f7b563f74f/reports/AUTHORITY-REGISTERED-NPC-PATH-WINDOWS-20261125.md) ·
 [17:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795622440162299)
 
+A Linux pilot at the helm of WOO-831 used the stock map context menu to
+send WRN-302, a free Company ship with an NPC captain, to a point in its
+own sector. The CPU provider at `494b470b` accepted one MoveWait. Its
+departure checkpoint retained the order. The pilot's local queue stayed
+empty. The matching queue-choice packages at `1ad21866` add **Keep** and
+**Clear** based on the real interaction menu. Their two-pilot control test
+covered receive order with a simulated engine. The earlier native run
+covered one order on an idle ship.
+[Native fleet command and checkpoint](AUTHORITY-STOCK-FLEET-PAIR-LINUX-20261125.md)
+
+The regular Docked trade window at `abf70d48` received current server
+offers. A purchase of two water settled at 116 Cr. On reopening, the
+same pilot saw 9,768 Cr and four water aboard while the underlying local
+game still held its pre-purchase values. The final provider checkpoint
+and ledger recorded the purchase once.
+[Stock trade window and independent provider](AUTHORITY-STOCK-MARKET-VIEW-20261125.md)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
@@ -402,13 +419,17 @@ journal. The sale used a disposable world and did not exercise a remote
 pilot's trade menu or a save. An earlier one-unit sale has an unknown
 outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
-The latest strict Linux run at `11f10348` discovered 5,777 tests. Of these,
-5,751 passed, one errored on an ambiguous UDP ownership lookup and 25
-were skipped. The command exited 1. The same failing case passed on its
-own. At `6c6cc852` ten focused ownership tests passed with new diagnostics
-for duplicate socket rows. Thirteen skipped cases require Windows and
-twelve need local reference files. Cobalt ran the thirteen on Windows:
-nine passed, three need Lupa and the cross-build needs Zig.
+At `494b470b` the official strict Linux run discovered 5,809 tests.
+5,783 passed, one errored and 25 were skipped. Exit code was 1. The
+failure occurred during the UDP ownership check before the tested
+cleanup path. The two kernel-table rows referred to one inode. The
+previous suite's sole failing case passed in this run. The ownership
+check now resamples one ambiguous table snapshot and still requires
+a unique fresh match and the correct process file descriptor. Twelve
+focused cases passed after that change. A new full pass remains open.
+Thirteen skipped cases require Windows and twelve need original local
+reference files. At the last Windows check Cobalt had nine passes, with
+three cases waiting for Lupa and one for Zig.
 [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time
