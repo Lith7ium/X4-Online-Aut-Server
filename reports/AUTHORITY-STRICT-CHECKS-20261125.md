@@ -87,3 +87,13 @@ the two recorded revisions. Twelve Linux checks still lack their original
 reference inputs. The official Linux run at `494b470b` also errored once
 during UDP ownership verification. The Windows results do not change its
 exit code. [Cobalt's results in the development thread](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795622440162299)
+
+Cobalt separately exercised the Windows client test modules at `bcf300cc`
+without launching X4. The contribution replaces an empty Winsock
+`select` sleep and handles a normal Windows disconnect in the test server.
+The fork also exercises its negative IPv4 checks on real connected
+non-IPv4 sockets. The ordinary file-replacement case runs even when
+Windows denies symlink creation. The Company motion Lua check uses
+CLI LuaJIT or Lupa's LuaJIT, and the combat checks use the pinned Lupa
+runtime. The adjusted IPv6 and Lupa paths were exercised on Linux.
+Cobalt's Windows measurements apply to his submitted revision.

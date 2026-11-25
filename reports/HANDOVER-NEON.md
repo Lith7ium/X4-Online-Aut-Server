@@ -72,7 +72,9 @@ and ledger recorded the purchase once.
 
 At 18:00 Cobalt reported the four remaining Windows dependency cases
 passed and offered branch `contrib/cobalt-windows-client-tests-20261125`
-at `bcf300cc` for review. The assigned Windows/Fedora Internet flight
+at `bcf300cc`. Astra integrated the portable client fixes and retained
+coverage for file replacement, non-IPv4 connections and both LuaJIT
+runners. The assigned Windows/Fedora Internet flight
 still needs the operator. Neon is parked until the weekly reset on
 1 December at 13:09 Berlin. Molander confirmed that Quartz was archived.
 Astra owns its former fleet work.
