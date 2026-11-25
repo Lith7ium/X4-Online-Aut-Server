@@ -18,6 +18,17 @@ victory with an interrupted attempt, start from a fresh disposable copy for
 each witness. Supply the independent checkpoint identity and roster to
 `verify_boarding_witness.py --help` for the verification arguments.
 
+For a scripted click on an existing MapMenu, follow the game's
+`InteractMenu.buttonBoard` selection path. Pass the return value of
+`ConvertStringTo64Bit(tostring(component))` for the target and each
+selected ship directly to the stock menu. Verify the target's code and
+hull with `GetComponentData` and the attacker's code and subordinates
+using those same values. A raw FFI actor ID caused the stock risk
+calculation to lose the hull reading before it could mount Start Operation.
+On a fresh profile, the map may first ask whether to keep or clear queued
+orders. Wait for that choice to close before opening the boarding dialog.
+[Native map trial and confirmed IDs](../../reports/AUTHORITY-BOARDING-BASELINE-20261125.md#native-start-operation-click-with-stock-component-ids)
+
 The verifier requires a target-directed `boarded` signal, a separate true-owner
 transition, and a delayed player-owner readback on the same operational,
 registered boardee. Company attribution comes from the operation's start
