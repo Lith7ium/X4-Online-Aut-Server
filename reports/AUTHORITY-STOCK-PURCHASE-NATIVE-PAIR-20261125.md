@@ -17,7 +17,7 @@ binding and booked the stock order.
 ## Purchase and departure
 
 The client and provider quoted 58.48 Cr per unit. The stock basket for
-two water rounded to 116.00 Cr. The provider's native journal recorded
+two water displayed a total of 116.00 Cr. The provider's native journal recorded
 that debit, and the admitted TLS connection returned a confirmed receipt
 for purchase `6a6cc2e65bd0dbf6150108c3c8a80009`. The cockpit showed
 9,768.00 Cr and four water in the confirmation notice. The pilot's

@@ -78,6 +78,14 @@ unconfirmed trading berth now reaches the cockpit. The pilot can open a
 fresh offer after resolving the cause. The old Confirm button cannot
 submit the same basket again. [Cockpit adapter](../src/authority/lua/company_trade_capture.lua)
 
+A regular Linux pilot made a single purchase through the stock Confirm
+callback with a separate native X4 provider over loopback TLS. The server
+debited 116 Cr for two water. The pilot received the receipt. The final
+server checkpoint and its ledger contain 9,768 Cr and four water on
+WRN-302. The pilot's local engine still counted 9,884 Cr and two water
+after the notice. The test driver invoked the real menu callback on Bazzite.
+[Native buyer and provider](AUTHORITY-STOCK-PURCHASE-NATIVE-PAIR-20261125.md)
+
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,
 and matched the ship and station inventories to the native transaction
