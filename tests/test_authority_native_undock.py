@@ -1,11 +1,13 @@
 """Offline checks for the provider's one-shot stock undock evidence."""
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from authority_native_undock import NativeUndockProvider
+from authority_native_undock import NativeUndockProvider, _LUA
 
 
 BINDING = dict(registry_epoch='a' * 32, ship_index=7354, ship_code='WRN-302',
@@ -40,7 +42,7 @@ class NativeUndockTests(unittest.TestCase):
         self.assertIsNone(self.provider.begin(BINDING, REQUEST))
         wire = self.peer.recv(1024).decode().split('|')
         self.assertEqual(wire[:4], ['UNDOCK', self.provider._lease, REQUEST['request_id'], BINDING['registry_epoch']])
-        self.assertEqual(wire[-1], BINDING['captain_seed'])
+        self.assertEqual(wire[-2:], [BINDING['captain_seed'], str(self.now + 60)])
 
     def test_only_correlated_later_readback_confirms(self):
         self.begin()
@@ -96,3 +98,62 @@ class NativeUndockTests(unittest.TestCase):
             self.assertIn("AddUITriggeredEvent(screen, 'Run'", driver.read_text())
             self.assertIn('native_undock_tick(C.IsGamePaused())', bridge.read_text())
             self.assertLess(xml.read_text().index(driver.name), xml.read_text().index(bridge.name))
+
+    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
+    def test_native_busy_prechecks_are_bounded_and_a_lost_dispatch_is_never_retried(self):
+        script = r'''
+local lease, id, epoch = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32)
+local fields = {epoch, '1', 'WRN-302', 'sector_a', 'BIM-169', '42', 'bay', 'dockarea', '51'}
+local function exercise(deadline)
+    local now, callback, issued, results = 0, nil, {}, {}
+    local packet = table.concat({'UNDOCK', lease, id, table.concat(fields, '|'), deadline}, '|')
+    function RegisterEvent(_, event) callback=event end
+    function AddUITriggeredEvent(_, _, args) issued[#issued+1]=args end
+    local tick = X4LAN_AUTHORITY_NATIVE_UNDOCK.new(lease, {
+        send=function(_, row) if row:match('^UNDOCK_RESULT|') then results[#results+1]=row end end,
+        pending=function() return packet~=nil end,
+        receive=function() local out=packet;packet=nil;return out end,
+    }, function() return now end)
+    local function step(time, paused) now=time;tick(paused) end
+    local function reply(attempt, status)
+        callback(nil, table.concat({attempt.nonce,status,table.concat(fields,'|'),
+            '0','Wait','running','0x01','0x02','0x03','0x04'},'|'))
+    end
+    return step, reply, issued, results
+end
+
+local step, reply, issued, results = exercise(60)
+step(0)
+assert(issued[1].check_only)
+reply(issued[1], 'busy')
+step(.125); step(.25, true)
+assert(#issued==1 and #results==0)
+step(.25)
+assert(#issued==2 and issued[2].check_only and issued[2].nonce~=issued[1].nonce)
+reply(issued[1], 'idle')
+step(.375)
+assert(#issued==2)
+reply(issued[2], 'idle')
+step(.375)
+local write=issued[3]
+assert(#issued==3 and not write.check_only and write.nonce~=issued[2].nonce)
+assert(write.checked_ship=='0x01' and write.checked_captain=='0x02'
+       and write.checked_station=='0x03' and write.checked_bay=='0x04')
+-- The engine may have submitted the order. No acknowledgement is observed.
+step(1); step(8); step(60); reply(issued[2], 'busy'); step(61)
+assert(#issued==3 and #results==0)
+
+step, reply, issued, results = exercise(60)
+step(0); reply(issued[1], 'busy')
+step(.25); reply(issued[2], 'busy')
+step(8)
+assert(#issued==2 and #results==1 and results[1]:find('|'..id..'|busy|', 1, true))
+
+step, reply, issued, results = exercise(1)
+step(0); reply(issued[1], 'busy')
+step(.25)
+reply(issued[2], 'idle')
+step(1)
+assert(#issued==2)
+'''
+        subprocess.run(['luajit', '-'], input=_LUA + script, text=True, check=True, timeout=5)

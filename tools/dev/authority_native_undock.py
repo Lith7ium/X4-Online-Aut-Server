@@ -23,41 +23,113 @@ _MAX_REQUESTS = 1024
 
 
 # Kept next to its only installer. The unchanged MD cue owns all engine
-# decisions. This connector forwards at most two local result rows per request.
+# decisions. The connector waits only before dispatch and forwards at most two
+# result rows per request after the read-only checks.
 _LUA = r'''
 local M = {}
 local screen = 'X4AuthorityCompanyUndockTrial'
+local PRECHECK_SECONDS, CHECK_INTERVAL = 8, .25
 
-function M.new(lease, net)
+local function split(value)
+    local fields = {}
+    for item in (value .. '|'):gmatch('(.-)|') do fields[#fields + 1] = item end
+    return fields
+end
+
+local function actor_tuple(fields)
+    for i = 15, 18 do
+        local ref = fields[i]
+        if #ref > 18 or not ref:match('^0[xX][0-9a-fA-F]+$') or ref:match('^0[xX]0+$') then return end
+    end
+    return {fields[15], fields[16], fields[17], fields[18]}
+end
+
+function M.new(lease, net, monotonic)
     local active, attempted, next_hello
-    assert(RegisterEvent(screen .. '.Result', function(_, row)
-        if not active or type(row) ~= 'string' or #row > 940
-                or row:sub(1, 33) ~= active .. '|' then return end
+
+    local function forward(row)
         net:send('UNDOCK_RESULT|' .. lease .. '|' .. row)
-        if row:sub(34, 42) ~= 'awaiting|' then active = nil end
+    end
+
+    local function issue(now)
+        active.sequence = active.sequence + 1
+        active.nonce = active.id .. '-' .. active.sequence
+        local fields, actors = active.fields, active.actors
+        local request = {
+            nonce=active.nonce, epoch=fields[4], index=active.index, ship_code=fields[6],
+            sector=fields[7], station_code=fields[8], bay_seed=fields[9],
+            bay_macro=fields[10], dockarea_macro=fields[11], captain_seed=fields[12],
+            check_only=actors == nil,
+        }
+        if actors then
+            active.sent = true  -- No second dispatch, even if the callback never arrives.
+            request.checked_ship, request.checked_captain, request.checked_station, request.checked_bay =
+                actors[1], actors[2], actors[3], actors[4]
+        else
+            active.due = now + CHECK_INTERVAL
+        end
+        AddUITriggeredEvent(screen, 'Run', request)
+    end
+
+    assert(RegisterEvent(screen .. '.Result', function(_, row)
+        if not active or not active.nonce or type(row) ~= 'string' or #row > 940
+                or row:sub(1, #active.nonce + 1) ~= active.nonce .. '|' then return end
+        local result = active.id .. row:sub(#active.nonce + 1)
+        local fields = split(row)
+        if active.sent then
+            forward(result)
+            if fields[2] ~= 'awaiting' then active = nil end
+            return
+        end
+        active.nonce = nil
+        local matches = #fields == 18 and fields[12] == '0'
+        for i = 3, 11 do
+            matches = matches and fields[i] == active.fields[i + 1]
+        end
+        if matches and fields[2] == 'busy' then
+            active.busy = result
+            return
+        end
+        if matches and fields[2] == 'idle' then
+            active.actors = actor_tuple(fields)
+            if active.actors then return end
+        end
+        forward(result)
+        active = nil
     end) ~= false)
 
+    local function receive(now)
+        if not net:pending() then return end
+        local value = net:receive()
+        if type(value) ~= 'string' or #value > 1024 then return end
+        local fields = split(value)
+        if #fields ~= 13 or fields[1] ~= 'UNDOCK' or fields[2] ~= lease
+                or #fields[3] ~= 32 or attempted == fields[3] then return end
+        local index = tonumber(fields[5])
+        local deadline = tonumber(fields[13])
+        if not index or index < 1 or index > 2147483647 or index % 1 ~= 0
+                or not deadline or not (deadline > now and deadline <= now + 120) then return end
+        attempted = fields[3]
+        active = {id=attempted, fields=fields, index=index, sequence=0, due=now,
+                  deadline=math.min(deadline, now + PRECHECK_SECONDS)}
+    end
+
     return function(paused)
-        local now = GetCurRealTime()
+        local now = monotonic()
+        if type(now) ~= 'number' or not (now >= 0 and now < math.huge) then return end
         if not next_hello or now >= next_hello then
             net:send('UNDOCK_HELLO|' .. lease)
             next_hello = now + .5
         end
-        if paused or active or not net:pending() then return end
-        local value = net:receive()
-        if type(value) ~= 'string' or #value > 1024 then return end
-        local fields = {}
-        for item in (value .. '|'):gmatch('(.-)|') do fields[#fields + 1] = item end
-        if #fields ~= 12 or fields[1] ~= 'UNDOCK' or fields[2] ~= lease
-                or #fields[3] ~= 32 or attempted == fields[3] then return end
-        local index = tonumber(fields[5])
-        if not index or index < 1 or index > 2147483647 or index % 1 ~= 0 then return end
-        active, attempted = fields[3], fields[3]
-        AddUITriggeredEvent(screen, 'Run', {
-            nonce=active, epoch=fields[4], index=index, ship_code=fields[6],
-            sector=fields[7], station_code=fields[8], bay_seed=fields[9],
-            bay_macro=fields[10], dockarea_macro=fields[11], captain_seed=fields[12],
-        })
+        if paused then return end
+        if not active then receive(now) end
+        if not active or active.sent then return end
+        if now >= active.deadline then
+            if active.busy then forward(active.busy) end
+            active = nil
+        elseif not active.nonce and (active.actors or now >= active.due) then
+            issue(now)
+        end
     end
 end
 X4LAN_AUTHORITY_NATIVE_UNDOCK = M
@@ -117,7 +189,8 @@ class NativeUndockProvider:
         hook = f""" if registry_checkpoint:ready() then
   if not native_undock_tick then
    local lib = assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
-   native_undock_tick = X4LAN_AUTHORITY_NATIVE_UNDOCK.new("{self._lease}", assert(lib.open('127.0.0.1',{port})))
+   native_undock_tick = X4LAN_AUTHORITY_NATIVE_UNDOCK.new(
+       "{self._lease}", assert(lib.open('127.0.0.1',{port})), lib.monotonic)
   end
   native_undock_tick(C.IsGamePaused())
  end
@@ -155,8 +228,9 @@ class NativeUndockProvider:
         self.poll()
         if self._peer is None or not self._owns(self._peer):
             return dict(request, outcome='refused', reason='provider_unavailable')
-        self._active = _Attempt(request, identity, self._clock() + self._timeout)
-        packet = '|'.join(('UNDOCK', self._lease, request_id, *identity)).encode('ascii')
+        deadline = self._clock() + self._timeout
+        self._active = _Attempt(request, identity, deadline)
+        packet = '|'.join(('UNDOCK', self._lease, request_id, *identity, format(deadline, '.17g'))).encode('ascii')
         try:
             if self._socket.sendto(packet, self._peer) == len(packet):
                 return None

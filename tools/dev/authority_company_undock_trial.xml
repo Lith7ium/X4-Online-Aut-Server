@@ -40,6 +40,12 @@
                        or (@$Ship.assigneddock.exists and $Ship.assigneddock != $Bay)">
          <set_value name="$Status" exact="'berth_mismatch'"/>
         </do_if>
+        <do_elseif value="$Input.$checked_ship? and ($Input.$checked_ship != '%s'.[$Ship]
+                        or @$Input.$checked_captain != '%s'.[$Captain]
+                        or @$Input.$checked_station != '%s'.[$Station]
+                        or @$Input.$checked_bay != '%s'.[$Bay])">
+         <set_value name="$Status" exact="'identity_mismatch'"/>
+        </do_elseif>
         <do_elseif value="$Ship.orders.count or $Ship.tradeorders.count or @$Ship.tradecomputer.exists
                            or $Captain.isbusy or ($Ship.defaultorder and $Ship.defaultorder.id != 'Wait')">
          <set_value name="$Status" exact="'busy'"/>

@@ -17,6 +17,11 @@ class CompanyUndockTrialTests(unittest.TestCase):
         for refusal in ("'berth_mismatch'", "'identity_mismatch'", "'duplicate_or_attempted'"):
             branch = tree.find(f".//set_value[@exact=\"{refusal}\"]/..")
             self.assertLess(ordered.index(branch), ordered.index(order))
+        prechecked = next(branch for branch in tree.iter('do_elseif') if '$Input.$checked_ship?' in branch.get('value'))
+        for actor in ('ship', 'captain', 'station', 'bay'):
+            self.assertIn(f'$Input.$checked_{actor}', prechecked.get('value'))
+        self.assertEqual(prechecked.find('set_value').get('exact'), "'identity_mismatch'")
+        self.assertLess(ordered.index(prechecked), ordered.index(order))
         guard = next(branch for branch in tree.iter('do_elseif') if '$Ship.tradeorders.count' in branch.get('value'))
         self.assertIn('$Ship.orders.count', guard.get('value'))
         self.assertLess(ordered.index(guard), ordered.index(order))
