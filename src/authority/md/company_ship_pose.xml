@@ -14,6 +14,7 @@
     <do_if value="typeof $args == datatype.table and typeof @$args.$request_id == datatype.string and $args.$request_id and typeof @$args.$epoch == datatype.string and $args.$epoch and typeof @$args.$generation == datatype.string and $args.$generation and typeof @$args.$action == datatype.string and typeof @$args.$frame == datatype.string and $args.$index?">
      <set_value name="$index" exact="$args.$index"/>
      <set_value name="$action" exact="$args.$action"/>
+     <set_value name="$writes" exact="$action == 'apply' or $action == 'transfer'"/>
      <set_value name="$status" exact="'REGISTRY_INVALID'"/>
      <set_value name="$replyframe" exact="$args.$frame"/>
      <set_value name="$located" exact="@State.$located"/>
@@ -43,6 +44,7 @@
     </do_if>
     <do_else>
      <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
+     <set_value name="$docking" exact="@$ship.dock.exists or @$ship.assigneddock.exists or @$ship.parkedat.exists or @$ship.isinternallystored"/>
      <do_if value="not @$ship.isclass.ship or @md.X4AuthorityShipRegistry.State.$byship.{$ship} != $index">
       <set_value name="$status" exact="'BINDING_INVALID'"/>
      </do_if>
@@ -55,10 +57,12 @@
      <do_elseif value="$ship.pilot.exists or $ship.assignedpilot.exists">
       <set_value name="$status" exact="'PILOT_PRESENT'"/>
      </do_elseif>
-     <do_elseif value="$ship.dock.exists or @$ship.assigneddock.exists or @$ship.parkedat.exists or $ship.isinternallystored">
+     <do_elseif value="not $writes and $docking">
       <set_value name="$status" exact="'DOCKING_OR_STORED'"/>
      </do_elseif>
-     <do_elseif value="not @$ship.sector.isclass.sector or (($action != 'locate' and $action != 'transfer') and $ship.sector.macro.id != $args.$frame) or not @$ship.parent.isclass.zone or @$ship.zone.islocalhighway or @$ship.zone.issuperhighway">
+     <do_elseif value="not @$ship.sector.isclass.sector
+                       or (($action != 'locate' and $action != 'transfer') and $ship.sector.macro.id != $args.$frame)
+                       or (not $writes and (not @$ship.parent.isclass.zone or @$ship.zone.islocalhighway or @$ship.zone.issuperhighway))">
       <set_value name="$status" exact="'FRAME_INVALID'"/>
      </do_elseif>
      <do_else>
@@ -122,7 +126,9 @@
    <actions>
     <!-- Numeric input from the bridge, with the motion protocol bounds rechecked here.
          Positive, bounded comparisons also exclude non-finite values. -->
-    <do_if value="$args.$x? and $args.$y? and $args.$z? and $args.$x ge -10000000 and $args.$x le 10000000 and $args.$y ge -10000000 and $args.$y le 10000000 and $args.$z ge -10000000 and $args.$z le 10000000">
+    <set_value name="$coordinatesvalid" exact="$args.$x? and $args.$y? and $args.$z? and $args.$x ge -10000000 and $args.$x le 10000000 and $args.$y ge -10000000 and $args.$y le 10000000 and $args.$z ge -10000000 and $args.$z le 10000000"/>
+    <set_value name="$zonevalid" exact="@$ship.parent.isclass.zone and not @$ship.zone.islocalhighway and not @$ship.zone.issuperhighway"/>
+    <do_if value="$coordinatesvalid and not $docking and $zonevalid">
      <!-- A sector (not a zone or relative object) defines the coordinates. The
           stock engine can create or select a temporary zone at the destination. -->
      <warp object="$ship" sector="$sector">
@@ -130,9 +136,13 @@
      </warp>
      <set_value name="$status" exact="'DISPATCHED'"/>
     </do_if>
+    <do_elseif value="$coordinatesvalid and $docking">
+     <!-- The registry, actor and target were checked. No warp was submitted. -->
+     <set_value name="$status" exact="'DOCKING_OR_STORED'"/>
+    </do_elseif>
     <do_else>
      <set_value name="$actor" exact="'0'"/>
-     <set_value name="$status" exact="'COORDINATES_INVALID'"/>
+     <set_value name="$status" exact="if $coordinatesvalid and not $zonevalid then 'FRAME_INVALID' else 'COORDINATES_INVALID'"/>
     </do_else>
    </actions>
   </library>

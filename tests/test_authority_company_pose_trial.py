@@ -199,6 +199,56 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertEqual({'1970'}, set(report['last_verified']))
         self.assert_no_command()
 
+    def test_docking_between_inspection_and_write_allows_another_pilot_to_move(self):
+        for write, sector in (('apply', SECTOR), ('transfer', 'cluster_06_sector002_macro')):
+            with self.subTest(write=write):
+                sample = dict(self.sample, sector_macro=sector)
+                service = ApplicationQueue(SimpleNamespace(sample=sample, sector_revision=1))
+                report = {}
+                trial = CompanyPoseTrial(self.channel, report)
+                trial.poll(service)
+                read = 'inspect' if write == 'apply' else 'locate'
+                self.reply(self.command(read, sector=sector), ORIGIN, sector=SECTOR)
+                trial.poll(service)
+                self.reply(self.command(write, sector=sector), status='DOCKING_OR_STORED')
+
+                other_actor = '0x20000000000020'
+                other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970)))
+                trial.poll(other)
+                self.reply(self.command('inspect', index=1970), ORIGIN, actor=other_actor, code='WOO-831')
+                trial.poll(other)
+                self.reply(self.command('apply', index=1970, actor=other_actor), actor=other_actor)
+                trial.poll(other)
+                self.reply(self.command('verify', index=1970, actor=other_actor), actor=other_actor, code='WOO-831')
+                trial.poll(other)
+                self.assertEqual(1, report['unavailable_before_write'])
+                self.assertEqual(1, report['writes_verified'])
+                self.assertEqual({'1970'}, set(report['last_verified']))
+                self.assertEqual(SECTOR, self.channel.ship_sectors[INDEX])
+                self.assert_no_command()
+
+    def test_docking_reply_with_wrong_fields_or_after_dispatch_is_fatal(self):
+        variants = (
+            ('apply', {'actor': '0'}),
+            ('apply', {'sector': 'wrong_sector'}),
+            ('transfer', {'generation': 'e' * 32}),
+            ('transfer', {'ui': (0, 1, 0)}),
+            ('apply', {'code': CODE}),
+            ('apply', {'status': 'BRIDGE_LOCAL_REFUSED'}),
+            ('verify', {}),
+        )
+        for action, changes in variants:
+            with self.subTest(action=action, changes=changes):
+                channel, peer = self.open_channel()
+                channel.begin(action, self.sample, ACTOR)
+                command = self.command(action, peer=peer, channel=channel)
+                self.reply(command, peer=peer, **({'status': 'DOCKING_OR_STORED'} | changes))
+                with self.assertRaisesRegex(ValueError, 'invalid pre-write docking|pending command|X4 refused') as error:
+                    channel.poll()
+                self.assertIs(type(error.exception), ValueError)
+                self.assertIsNotNone(channel.pending)
+                self.assert_no_command(peer)
+
     def test_sector_transfer_uses_both_frames_and_stops_transferring_on_arrival(self):
         target_sector = 'cluster_06_sector002_macro'
         sample = dict(self.sample, sector_macro=target_sector)

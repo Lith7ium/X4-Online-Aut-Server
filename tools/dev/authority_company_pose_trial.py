@@ -18,7 +18,7 @@ _INSPECT_UNAVAILABLE = frozenset({
 
 
 class ShipUnavailable(ValueError):
-    """The native pre-write inspection found the ship unavailable."""
+    """The native bridge confirmed the ship unavailable before writing."""
 
 
 class TransferNotVisible(ValueError):
@@ -28,6 +28,7 @@ class TransferNotVisible(ValueError):
 _SUCCESS = {'inspect': 'INSPECTED', 'locate': 'LOCATED', 'apply': 'DISPATCHED',
             'transfer': 'DISPATCHED', 'verify': 'OBSERVED'}
 _READ_ACTIONS = {'inspect', 'locate', 'verify'}
+_WRITE_ACTIONS = {'apply', 'transfer'}
 _MOVEMENT_PROOF_VERSION = 2
 # Compare sector-space metres. Native UI coordinates use single precision.
 READBACK_METRES = 1.0
@@ -152,6 +153,11 @@ class GamePoseChannel:
                     self.pending = None
                     raise TransferNotVisible('X4 has not verified the destination sector')
                 if action in ('inspect', 'locate') and status in _INSPECT_UNAVAILABLE:
+                    self.pending = None
+                    raise ShipUnavailable(status)
+                if action in _WRITE_ACTIONS and status == 'DOCKING_OR_STORED':
+                    if actual_actor != actor or frame != sector or fields[8:] != ['0'] * 6 + ['-']:
+                        raise ValueError('invalid pre-write docking receipt')
                     self.pending = None
                     raise ShipUnavailable(status)
                 detail = status if re.fullmatch(r'[A-Z_]{1,64}', status) else 'INVALID_STATUS'

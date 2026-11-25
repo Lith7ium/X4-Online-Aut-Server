@@ -7,6 +7,7 @@ local success_status = {inspect = 'INSPECTED', apply = 'DISPATCHED', verify = 'O
                         locate = 'LOCATED', transfer = 'DISPATCHED'}
 local resolves_actor = {inspect = true, locate = true}
 local writes_pose = {apply = true, transfer = true}
+local DOCKING_OR_STORED = 'DOCKING_OR_STORED'
 local POSITION_LIMIT = 10000000
 
 local function token(value)
@@ -64,10 +65,10 @@ function M.new(config, engine, net)
     local closed, write_fault = false, false
     local api = {}
 
-    local function refuse(args, status)
+    local function refuse(args, status, actor)
         net:send(prefix .. 'RESULT|' .. table.concat({
             args.request_id, args.epoch, tostring(args.index), args.generation,
-            args.action, status, '0', args.frame, '0', '0', '0', '0', '0', '0', '-',
+            args.action, status, actor or '0', args.frame, '0', '0', '0', '0', '0', '0', '-',
         }, '|'))
     end
 
@@ -125,9 +126,14 @@ function M.new(config, engine, net)
                 located = {key = binding(args, row[7]), source = row[8], request = args}
             end
             if resolves_actor[args.action] and row[8] == args.frame then inspected = binding(args, row[7]) end
-        elseif row[7] ~= '0' or row[9] ~= '0' or row[10] ~= '0' or row[11] ~= '0' then
-            fail_pending('BRIDGE_MD_INVALID')
-            return
+        else
+            local docking_before_write = writes_pose[args.action] and row[6] == DOCKING_OR_STORED
+            local expected_actor = docking_before_write and args.actor or '0'
+            if row[7] ~= expected_actor or row[9] ~= '0' or row[10] ~= '0' or row[11] ~= '0' then
+                fail_pending('BRIDGE_MD_INVALID')
+                return
+            end
+            if docking_before_write then inspected = nil end
         end
         pending = nil
         net:send(prefix .. 'RESULT|' .. value .. suffix)
@@ -166,10 +172,21 @@ function M.new(config, engine, net)
             args.locate_id, args.source_frame = candidate.request.request_id, candidate.source
         end
         if (writes_pose[args.action] and (not allow_apply or write_fault or engine.paused()))
-                or (args.action == 'apply' and inspected ~= binding(args, args.actor))
-                or (not resolves_actor[args.action] and not engine.actor(args, args.actor, false, args.source_frame or args.frame)) then
+                or (args.action == 'apply' and inspected ~= binding(args, args.actor)) then
             refuse(args, 'BRIDGE_LOCAL_REFUSED')
             return
+        end
+        if not resolves_actor[args.action] then
+            local live, reason = engine.actor(args, args.actor, false, args.source_frame or args.frame)
+            if not live then
+                if writes_pose[args.action] and reason == DOCKING_OR_STORED then
+                    inspected = nil
+                    refuse(args, DOCKING_OR_STORED, args.actor)
+                else
+                    refuse(args, 'BRIDGE_LOCAL_REFUSED')
+                end
+                return
+            end
         end
         pending = {args = args, deadline = now + MD_TIMEOUT}
         if not engine.issue(args) and pending then
@@ -245,7 +262,9 @@ function M.new_x4(config, registry_ready, profile_path, udp)
         if not ship_ref or not sector_ref or GetComponentData(sector_ref, 'macro') ~= frame then return nil end
         local owner, docked, docking, stored = GetComponentData(ship_ref,
             'owner', 'isdocked', 'isdocking', 'isinternallystored')
-        if owner ~= 'player' or docked ~= false or docking ~= false or stored ~= false then return nil end
+        if owner ~= 'player' or type(docked) ~= 'boolean' or type(docking) ~= 'boolean'
+                or type(stored) ~= 'boolean' then return nil end
+        if docked == true or docking == true or stored == true then return nil, DOCKING_OR_STORED end
         return sector
     end
 
@@ -255,8 +274,9 @@ function M.new_x4(config, registry_ready, profile_path, udp)
         ready = ready, clock = udp.monotonic, paused = function() return C.IsGamePaused() end,
         actor = function(args, actor, read, frame)
             local id = resolve.parse_hex(actor)
-            local sector = id and live_context(id, frame)
-            if not sector then return false end
+            if not id then return false end
+            local sector, reason = live_context(id, frame)
+            if not sector then return false, reason end
             if not read then return true end
             local value = C.GetObjectPositionInSector(id)
             local ptr = C.GetObjectIDCode(id)

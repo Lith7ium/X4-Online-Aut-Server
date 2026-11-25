@@ -48,6 +48,12 @@ class CompanyShipPoseTests(unittest.TestCase):
         self.assertEqual(unique.find('include_actions').get('ref'), 'ApplyPose')
         self.assertEqual(len(list(doc.iter('warp'))), 1)
 
+        apply = doc.find("./cues/library[@name='ApplyPose']/actions")
+        self.assertIn('not $docking', apply.find('do_if').get('value'))
+        refusal = apply.find("do_elseif[@value='$coordinatesvalid and $docking']")
+        self.assertEqual([(node.get('name'), node.get('exact')) for node in refusal],
+                         [('$status', "'DOCKING_OR_STORED'")])
+
     @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_bridge_preflight_fences_writes_and_keeps_independent_readback(self):
         script = r'''
@@ -200,6 +206,124 @@ local function exercise(writable)
 end
 exercise(true)
 exercise(false)
+'''
+        subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
+    def test_x4_bridge_distinguishes_bound_docking_from_uncertain_or_late_refusals(self):
+        script = r'''
+local pose = dofile(arg[1])
+local lease, epoch, generation = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32)
+local actor, source, dest = '0x19', 'sector_a', 'sector_b'
+local callback, issued, reply, packet
+local actual_frame, owner, docked, docking, stored = source, 'player', false, false, false
+local sequence = 0
+local C = {
+    IsGamePaused=function() return false end, IsPlayerValid=function() return true end,
+    GetSaveFolderPath=function() return '/save' end,
+    IsValidComponent=function(id) return id == 25 or id == 41 or id == 42 end,
+    IsComponentOperational=function(id) return id == 25 end,
+    IsComponentClass=function(id, class) return id == 25 and class == 'ship' or id == 41 and class == 'sector' end,
+    GetContextByClass=function(id, class) return id == 25 and class == 'sector' and 41 or 0 end,
+    GetPlayerOccupiedShipID=function() return 0 end, GetPlayerControlledShipID=function() return 0 end,
+    GetPlayerContainerID=function() return 42 end,
+    GetObjectPositionInSector=function() return {x=0,y=0,z=0} end,
+    GetObjectIDCode=function() return 'WRN-302' end,
+}
+package.loaded.ffi = {C=C, typeof=function() end, cdef=function() end, string=function(value) return value end}
+X4LAN_RESOLVE_STRING = {parse_hex=tonumber}
+X4LAN_REPLICA_MOTION_BINDING = {normalize_profile_save_path=function(value) return value end}
+ConvertStringToLuaID, ConvertIDTo64Bit = tonumber, tonumber
+function GetComponentData(id)
+    if id == 41 then return actual_frame end
+    assert(id == 25)
+    return owner, docked, docking, stored
+end
+function AddUITriggeredEvent(_, _, args) issued=args end
+function RegisterEvent(_, handle) callback=handle end
+local bridge = pose.new_x4({lease=lease, epoch=epoch, port=1, allow_apply=true},
+    function() return true end, '/save', {monotonic=function() return 1 end, open=function()
+        return {
+            send=function(_, value) reply=value end, close=function() error('unexpected bridge close') end,
+            receive=function() local value=packet;packet=nil;return value end,
+        }
+    end})
+local function request(action, frame, requested_actor)
+    sequence=sequence+1
+    issued,reply=nil,nil
+    local id=string.format('%032x', sequence)
+    packet=table.concat({'P',lease,action,id,epoch,'17',generation,frame,requested_actor or actor,1,2,3},'|')
+    bridge:tick()
+    return id
+end
+local function answer(status, frame, resolved_actor, position)
+    callback(nil, table.concat({assert(issued).request_id,epoch,'17',generation,issued.action,status,
+                               resolved_actor or actor,frame,position or '0|0|0'},'|'))
+end
+local function inspect(action)
+    request(action=='apply' and 'inspect' or 'locate', action=='apply' and source or dest, '0')
+    answer(action=='apply' and 'INSPECTED' or 'LOCATED', source)
+end
+local function expect_refusal(action, frame, status, resolved_actor, id)
+    assert(reply == table.concat({'P',lease,'RESULT',id,epoch,'17',generation,
+                                 action,status,resolved_actor,frame,'0|0|0|0|0|0|-'},'|'), reply)
+end
+for _, action in ipairs({'apply', 'transfer'}) do
+    local frame = action=='apply' and source or dest
+    inspect(action)
+    docking=true
+    local id=request(action,frame)
+    assert(not issued)
+    expect_refusal(action, frame, 'DOCKING_OR_STORED', actor, id)
+    docking=false
+    id=request(action,frame)
+    assert(not issued)
+    expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
+
+    inspect(action)
+    docked=true;stored=nil
+    id=request(action,frame)
+    assert(not issued)
+    expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
+    docked=false;stored=false
+
+    inspect(action)
+    docked=true
+    id=request(action,frame,'0x23')
+    assert(not issued)
+    expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
+    docked=false
+
+    inspect(action)
+    id=request(action,frame)
+    answer('DOCKING_OR_STORED', frame)
+    expect_refusal(action, frame, 'DOCKING_OR_STORED', actor, id)
+end
+inspect('apply')
+stored=true;actual_frame=dest
+local id=request('apply',source)
+assert(not issued)
+expect_refusal('apply',source,'BRIDGE_LOCAL_REFUSED','0',id)
+stored=false;actual_frame=source
+inspect('apply')
+id=request('apply',source)
+answer('DISPATCHED',source)
+assert(reply:find('|DISPATCHED|'..actor..'|'..source..'|',1,true))
+request('verify', source)
+docking=true
+answer('OBSERVED', source)
+expect_refusal('verify', source, 'BRIDGE_LOCAL_REFUSED', '0', issued.request_id)
+docking=false
+
+inspect('apply')
+id=request('apply',source)
+answer('DOCKING_OR_STORED', source, '0x23')
+expect_refusal('apply', source, 'BRIDGE_MD_INVALID', '0', id)
+-- An invalid MD result fences future writes on this bridge.
+inspect('apply')
+id=request('apply',source)
+assert(not issued)
+expect_refusal('apply', source, 'BRIDGE_LOCAL_REFUSED', '0', id)
 '''
         subprocess.run(['luajit', '-', str(LUA)], input=script, text=True, check=True)
 
