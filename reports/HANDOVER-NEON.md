@@ -102,6 +102,21 @@ movement. Its use on the wire requires a timing choice. A physical
 position change on the receiving pilot is the next separate trial.
 [Native velocity and order restoration](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
+At `e1c6a7bd` the Linux cockpit physically moved MFQ-419 exactly once,
+975.927 m to the next fresh server pose. Immediate native readback
+reported zero position and orientation error. HVC-420 stayed in place.
+The captain resumed the previous order. This remains a one-shot trial.
+[Position readback and last-pilot checkpoint](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
+Matching internal packages are in `.local/flight-build-e1c6a7bd`. The
+Linux archive is 1,612,554 bytes, SHA-256
+`29078593fe5cfab51de43308a4c5915d6e119dc71460c8945dbd9eab13163f7c`.
+The Windows ZIP is 3,054,572 bytes, SHA-256
+`76a26b0e7e43d6c77cc5cb760264378d800e0447923ac8038d9d5545cf2be452`.
+All 174 shared source files matched, and the extracted Linux provider
+and pilot help entrypoints ran. The verified alignment is Linux-only.
+The operator has not flown this Windows package.
+
 At 19:00 Cobalt confirmed that his Windows system also lacks the original
 x4-re references and released lane tool. The corresponding twelve tests
 remain open. His WAN flight is waiting for the operator. Astra is checking

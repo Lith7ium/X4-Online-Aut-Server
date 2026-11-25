@@ -429,9 +429,8 @@ Use matching provider and pilot builds of the NPC trial and an identified
 operational NPC in the confirmed vanilla save. Both launchers need its
 registry index and display code. In the HVC-420 cold-rejoin fixture,
 index 943 is the Antigone freighter MFQ-419. These identifiers belong to
-that world. At `0a4c4e08` the Linux cockpit confirmed 35 server poses over
-21 seconds, including one nonzero velocity. Physical playback on this path
-remains unverified.
+that world. At `e1c6a7bd` the Linux cockpit confirmed 51 server poses and
+verified one physical correction with the separate alignment trial below.
 
 - Add `--base-game-only --company-motion --observe-registered-npc 943 MFQ-419`
   to the pinned Linux provider and Linux pilot commands.
@@ -455,6 +454,14 @@ local freighter and restores its NPC order. The provider keeps running the
 freighter's original orders. In the X4 pilot log, look for `RESTORED` after
 `HELD`, `CHECKED` and `RELEASING`. `UNCERTAIN` means release could not be
 confirmed. Use a new disposable pilot copy for this test.
+For one actual position correction on the disposable Linux pilot, choose
+`--trial-registered-npc-align` as the trial option. Start from the same
+confirmed world and use the same pilot and NPC indices. The cockpit waits
+for a newer server sample after the hold check, verifies the target zone,
+and checks native position and orientation after the write. A successful
+run logs `ALIGNED` and later `RESTORED`. If `ALIGN_UNCERTAIN` appears, a
+subsequent `RESTORED` confirms only the NPC order. The alignment trial
+performs one correction per pilot process.
 [Linux run and saved result](../reports/AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
 ## Try a Company fleet order

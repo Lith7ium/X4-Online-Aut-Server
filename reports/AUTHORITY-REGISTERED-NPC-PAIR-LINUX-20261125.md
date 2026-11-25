@@ -19,6 +19,7 @@ copy of the freighter or measure where X4 rendered it.
 | `24284592` | Published 25 native positions. No velocity met the rate interval. | 18 exact confirmations, 7 distinct positions, 17.65 km displacement. | `checkpoint-5208c84259934e7fbcb9d6e31abdf62f` |
 | `0a4c4e08` | 48 native poses, 40 with a real-time rate, including two nonzero vectors. | 35 confirmations spanning 18.67 km. One nonzero rate reached the cockpit. | `checkpoint-66b943f469274265b0c9e45028768774` |
 | `5f83cb22` | 48 direct native velocity observations alongside the existing V3 stream. | 53 exact confirmations. Briefly held and then restored the freighter's original order. | `checkpoint-a519b7cc16854fb08ae6e539f823992c` |
+| `e1c6a7bd` | 51 provider poses matched native cockpit confirmations. No provider pose setter. | Aligned the held freighter once by 975.93 m to a fresh pose, with zero endpoint or rotation error. Restored its captain's order. | `checkpoint-840bf3138d414eeeadabb735e00b3519` |
 
 In the first run the provider checked the identifier for a pending join
 offer after resume. That identifier expires by design. The corrected
@@ -136,3 +137,26 @@ elapsed real seconds. This run recorded it locally.
 
 The last-pilot checkpoint hash was
 `13a262385827f8d26522cb4d3232c904ee36fecd6d660224f29e4b89cd7e7f89`.
+
+## One native position correction on the observing pilot
+
+At `e1c6a7bd` the Linux pilot prepared the temporary Wait on sequence 1,
+then used a fresh sequence 2 from the same generation after X4 confirmed
+the hold. The provider captured that pose 199.785 ms after the hold check.
+The pilot transport received it 94.173 ms after capture. Both instances
+ran on the same host for these latency measurements. The freshness check
+itself used the receiving host's monotonic clock.
+
+The local MFQ-419 moved 975.927 m to (175818.84375, 305.3389892578125,
+5660.52490234375) m. X4 read back zero endpoint error and zero angular
+error. The target, sequence, generation and timestamps matched the original
+provider publication. The captain's previous order resumed. HVC-420's
+first and last native samples had the same identity and coordinates.
+Only one alignment was issued. The later real radar loss ended receipt.
+These are native position readbacks from two Linux processes and cover
+one correction. Continuous cockpit playback and the Windows WAN path
+remain to be tested.
+
+All 51 native receipts matched. The disposable client saved no new world.
+The provider confirmed the final marker and SHA-256
+`3cbf3252978fbc9f8ec121ca5866d4d9e1d5cc0619ca7120556159fd3a9181a4`.
