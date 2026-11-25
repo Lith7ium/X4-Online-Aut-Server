@@ -433,3 +433,37 @@ nine units. The host stopped with no remaining X4 processes.
 
 This test exercised two purchases on the same ship. Simultaneous real
 cockpits, sales and purchases at other stations remain separate cases.
+
+## One server pose after departure with the original NPC captain
+
+The private Linux run `idle-npc-pose-native-01` loaded a verified copy of
+`checkpoint-1dac0e4056eb41739aeecd30dbb1f1ca`. It waited for the critical
+trade to finish and for the stock undock readback to confirm a free bay at
+354.000 s. The overlay reserved only WRN-302 at registry index 7354 for its
+local pose channel. The channel verified the owned X4 process on loopback.
+
+The private cue required a matching registry binding and sector, Company
+ownership, and the same assigned captain PYN-740 aboard and at the helm.
+Both order queues had to be empty, with `Wait` as the current and default
+order, no critical state or trade computer, and the server avatar still
+parked away from the ship. The cue allowed one write and rechecked the
+identity, captain and idle guards for each readback.
+
+| X4 game age | Observation in `cluster_01_sector001_macro` |
+| --- | --- |
+| 355.672 s | MD read the starting position as `(-168484.156, -3672.636, 46890.363)` m. |
+| 356.509 s | One stock pose write requested `(-168434.156, -3672.636, 46890.363)` m, a shift of 50 m along sector X. |
+| 357.356 s | A separate MD and FFI readback matched the target within 0.000377 m. |
+| 359.883 s | A second MD and FFI readback matched the target within 0.000377 m. |
+
+The ship and captain retained the same runtime references throughout the
+pose checks. The trial made no crew changes, wrote no save, and left the
+source SHA-256 unchanged. The host paused and stopped all owned test
+processes. The run exercised one local server write with no external pilot
+or WAN connection. The regular player and provider launch paths were unchanged.
+
+The private artifacts are `.local/idle-npc-pose-native-01/result.json`
+(SHA-256 `658c9ae1c778979de6e9db3c2120c6cc8b9cc0aede41af3899ba70605a5ca22d`)
+and the engine log (SHA-256
+`c9cfce449f155709baee236b78708966a726804ac1155f2ec05c8636ad2f7697`,
+lines 540–557).
