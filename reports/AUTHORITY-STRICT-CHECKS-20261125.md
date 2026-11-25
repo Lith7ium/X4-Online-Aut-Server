@@ -97,3 +97,11 @@ Windows denies symlink creation. The Company motion Lua check uses
 CLI LuaJIT or Lupa's LuaJIT, and the combat checks use the pinned Lupa
 runtime. The adjusted IPv6 and Lupa paths were exercised on Linux.
 Cobalt's Windows measurements apply to his submitted revision.
+
+A local reference inventory also checked the available project archives for
+the original UI/FFI inputs and the released lane tool. The historic lane
+directory was named `release-5d5a680ec6ef`. A development copy on
+`contrib/ferrite-rw-lane` contains four matching profile strings, but has
+no original release archive or release manifest for comparison. The named
+commit was unavailable from either checked upstream repository. The twelve
+reference-dependent cases remain open.

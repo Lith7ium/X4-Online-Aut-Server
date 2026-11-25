@@ -423,6 +423,30 @@ to your own world if using another test save. The ordinary map observer
 continues to cover the selected remote sector. Both the trial receiver and
 the provider must support the opt-in loss notifications.
 
+## Observe a registered NPC in an internal test
+
+Use matching provider and pilot builds of the NPC trial and an identified
+operational NPC in the confirmed vanilla save. Both launchers need its
+registry index and display code. In the HVC-420 cold-rejoin fixture,
+index 943 is the Antigone freighter MFQ-419. These identifiers belong to
+that world. At `3e005330` the Linux cockpit confirmed one pose. Continuous
+movement and a rendered position change have yet to be verified.
+
+- Add `--base-game-only --company-motion --observe-registered-npc 943 MFQ-419`
+  to the pinned Linux provider and Linux pilot commands.
+- On the Windows pilot, the corresponding PowerShell options are
+  `-BaseGameOnly -CompanyMotion -ObserveRegisteredNpc @('943','MFQ-419')`.
+  The Company ship selection still refers to the pilot's own seat.
+
+One cockpit view checks X4's radar. The map view requires the selected ship
+under the pointer in its sector. Only a current local observation can
+acknowledge a server sample. This mode leaves the NPC under X4's local
+control and records reception without changing its position on the pilot.
+It is used separately from Company ship playback. The provider samples one
+running interval and retires the source on loss of its verified binding or
+a pause. Use the provider's `registered_npc_observation` and the pilot's
+`company_observer` results for comparison.
+
 ## Try a Company fleet order
 
 Use matching provider and pilot packages from `1ad21866` for the stock map's

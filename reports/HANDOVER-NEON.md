@@ -53,8 +53,8 @@ purchase ledger's business rows matched the source. This used one actual
 pilot and a separate CPU-rendered provider on Bazzite.
 [Native cold queue and saved result](AUTHORITY-STOCK-FLEET-QUEUE-LINUX-20261125.md)
 
-Matching internal server/Linux pilot and Windows pilot packages for the
-next NPC observation are in `.local/flight-build-5d2299f3`. Linux SHA-256
+Historical internal server/Linux pilot and Windows pilot packages for the
+first NPC observation are in `.local/flight-build-5d2299f3`. Linux SHA-256
 is `e29ef9f162b85bbd6dfe6c22e4689e4438906a04236086b7c05d104b69629981`,
 Windows SHA-256 is `4babf51e632ede4bc6f4ec8bdb282f8d45e128eecd88c81d08ce18a29a99447e`.
 All 173 shared source files matched. The pilot's NPC mode observes one
@@ -62,6 +62,15 @@ identified ship through native radar or an explicitly selected and picked
 map target. It has no NPC playback writer. The provider uses its existing
 authenticated movement channel for this one-window trial. The recorded
 velocity is calculated from measured displacement per real second.
+
+The first live Linux pair rejected the running world's expired join-offer ID.
+After the guard was corrected, the stock radar observer for HVC-420 confirmed
+one exact provider pose for the Antigone freighter MFQ-419 in two independent
+runs. At `3e005330` the second native capture took 2.199 s and arrived after
+the two-second source lifetime. The maximum Python polling gap was 131 ms.
+No nonzero rate or rendered movement was observed. The next work is on the
+GPU-free provider capture cadence. The initial ZIPs predate these fixes.
+[Native NPC observations and checkpoints](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
 The regular Docked trade window at `abf70d48` received current server
 offers. A purchase of two water settled at 116 Cr. On reopening, the
