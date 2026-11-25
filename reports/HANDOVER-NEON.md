@@ -208,6 +208,17 @@ The trade window also recovers after the server declines an unavailable
 offer or quantity and rejects a stale Company basket after the pilot
 changes ships. [Trade window regressions](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#a-declined-basket-and-a-change-of-ship-in-the-trade-window)
 
+At `bdec1390`, two admitted TLS protocol participants appended one
+flight order each for BBS-493. The native provider returned both order
+IDs, and the final paused save retained their order and the captain.
+Both participant cockpits were simulated. [Two orders in the native save](AUTHORITY-STOCK-FLEET-TWO-PILOTS-20261125.md)
+
+A separate GPU-free provider started a stock boarding operation against
+ZNG-430 with ARU-541 and eight marines. The native operation event and
+engine getters agreed on the target, attacker and marine count. This
+was a disposable, unsaved provider trial. A pilot's menu click, boarding
+pods and capture remain open. [Boarding evidence](AUTHORITY-BOARDING-BASELINE-20261125.md#native-start-through-stock-exports)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
