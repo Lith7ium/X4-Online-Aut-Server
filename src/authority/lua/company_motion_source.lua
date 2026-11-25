@@ -169,6 +169,9 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
         if config.observed_npc_index then
             assert(not config.playback_index and not config.cockpit_radar_playback)
             assert(config.registered_npc_alignment_trial ~= true or config.registered_npc_hold_trial == true)
+            local measure = config.registered_npc_local_measurement == true
+            assert(not measure or (config.registered_npc_hold_trial ~= true and
+                config.index == 1073 and config.observed_npc_index == 943 and config.observed_npc_code == 'MFQ-419'))
             local hold_trial
             local function radar_withdrawn()
                 if hold_trial then hold_trial:withdraw() end
@@ -177,6 +180,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 return assert(X4LAN_NPC_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
                     enabled = true, mode = mode, target_index = config.observed_npc_index,
                     target_code = assert(config.observed_npc_code), clock = udp.monotonic,
+                    local_measurement = measure and mode == 'radar',
                     on_withdrawal = config.registered_npc_hold_trial == true and mode == 'radar' and radar_withdrawn or nil,
                 }))
             end

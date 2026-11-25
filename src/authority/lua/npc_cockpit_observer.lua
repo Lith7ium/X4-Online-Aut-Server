@@ -6,6 +6,7 @@ local M = {}
 local SCREEN = 'X4AuthorityNpcCockpitObserver'
 local INTERVAL, FRESHNESS = 0.12, 0.45
 local MAX_INDEX = 200000
+local LOCAL_MEASUREMENT_LIMIT = 160
 
 local function token(value)
     return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
@@ -60,6 +61,8 @@ function M.new(pinned, own_index, engine)
     local interest_active = engine.initial_interest ~= false
     local pending, observed, last, next_poll
     local sequence = 0
+    local measurement_stopped = false
+    local measurement_count = 0
     local closed = false
     local ever_observed = false
     local was_withdrawn = false
@@ -78,6 +81,7 @@ function M.new(pinned, own_index, engine)
     end
 
     local function clear_observation(reason, detail, distance, range)
+        if observed then measurement_stopped = true end
         if observed == nil then return end
         local previous = observed.row
         observed = nil
@@ -168,6 +172,10 @@ function M.new(pinned, own_index, engine)
             clear_observation('native_verification_failed', why or 'target_binding_changed', distance, range)
             return
         end
+        if request.measurement and not measurement_stopped then
+            local ok = pcall(engine.measure, request.measurement, epoch, index, code, actor_text, hull)
+            if not ok then measurement_stopped = true end
+        end
         local was_new = (observed == nil)
         observed = {
             row = {
@@ -236,7 +244,13 @@ function M.new(pinned, own_index, engine)
                 target = probe.ref,
                 view_space = probe.sector_ref,
             }
-            pending = {id = id, deadline = now + FRESHNESS, target = probe}
+            local measurement = engine.measure ~= nil and not measurement_stopped
+                and measurement_count < LOCAL_MEASUREMENT_LIMIT
+            if measurement then
+                measurement_count = measurement_count + 1
+                args.local_measurement = measurement_count
+            end
+            pending = {id = id, deadline = now + FRESHNESS, target = probe, measurement = args.local_measurement}
             next_poll = now + INTERVAL
             if engine.issue(args) ~= true then
                 pending = nil
@@ -377,12 +391,38 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         return '-'
     end
 
+    local measure
+    if options.local_measurement == true then
+        assert(mode == 'radar' and own_index == 1073 and options.target_index == 943 and options.target_code == 'MFQ-419')
+        if not pcall(ffi.typeof, 'UIPosRot') then
+            ffi.cdef('typedef struct {float x,y,z,yaw,pitch,roll;} UIPosRot;')
+        end
+        pcall(ffi.cdef, 'UIPosRot GetObjectPositionInSector(UniverseID);')
+        pcall(ffi.cdef, 'double GetCurrentGameTime(void);')
+        local clock = assert(options.clock)
+        measure = function(request, epoch, index, code, actor, hull)
+            local before = clock()
+            local game_before = tonumber(C.GetCurrentGameTime())
+            local pose = C.GetObjectPositionInSector(hull.actor)
+            local game_after = tonumber(C.GetCurrentGameTime())
+            local after = clock()
+            assert(before <= after and game_before <= game_after)
+            for _, value in ipairs({pose.x, pose.y, pose.z, before, after, game_before, game_after}) do
+                assert(type(value) == 'number' and value == value and math.abs(value) < math.huge)
+            end
+            DebugError(('[X4LAN] AUTH_NPC_LOCAL_POSE %d|%s|%d|%s|%s|%s|%.17g|%.17g|%.17g|%.17g|%.17g,%.17g,%.17g'):format(
+                request, epoch, index, code, actor, hull.sector_macro, before, after, game_before, game_after,
+                pose.x, pose.y, pose.z))
+        end
+    end
+
     return M.new(pinned, own_index, {
         enabled = true,
         target_index = options.target_index,
         target_code = options.target_code,
         mode = mode,
         initial_interest = options.initial_interest,
+        measure = measure,
         clock = options.clock or GetCurRealTime,
         on_withdrawal = options.on_withdrawal,
         on_reacquire = options.on_reacquire,

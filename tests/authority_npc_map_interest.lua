@@ -186,3 +186,40 @@ assert(#status == 10 and status[10]:find('END|radar|20|NPC-021|code_mismatch', 1
 stream:close()
 assert(#status == 10)
 for _, row in ipairs(status) do assert(not row:find(pinned.nonce, 1, true)) end
+
+-- Private measurement starts only from a verified radar response and never
+-- starts again after loss, even when the normal observer reacquires.
+code[key(npc)] = 'NPC-021'
+local measurement_args, measurement_reply, measured = nil, nil, 0
+local visible, replies = true, {}
+local bounded = observer.new(pinned, 1, {
+    enabled=true, target_index=20, target_code='NPC-021',
+    clock=function() return now end,
+    probe=function() return {mode='radar'} end,
+    parse_actor=resolve.parse_hex,
+    verify_actor=function() return visible and {actor=npc} or nil end,
+    validate_actor=function() return visible end,
+    register=function(handler) measurement_reply=handler; return true end,
+    issue=function(args) measurement_args=args; return true end,
+    measure=function(id, epoch, index, shipcode, actor, hull)
+        assert(id == measurement_args.local_measurement and epoch == pinned.epoch and index == 20
+            and shipcode == 'NPC-021' and resolve.parse_hex(actor) == npc and hull.actor == npc)
+        measured = measured + 1
+    end,
+})
+local function measurement_step()
+    now = now + .17
+    bounded:tick()
+    local args = assert(measurement_args)
+    replies[#replies + 1] = args.local_measurement
+    measurement_reply(nil, table.concat({args.request_id, pinned.epoch, 'OBSERVED', '20',
+        actor_text[key(npc)], frame[key(sector)], code[key(npc)], 'radar', '1000', '10000'}, '|'))
+end
+measurement_step()
+assert(measured == 1 and replies[1] == 1)
+visible = false
+measurement_step()
+assert(measured == 1 and measurement_args.local_measurement == nil)
+visible = true
+measurement_step()
+assert(measured == 1 and measurement_args.local_measurement == nil)
