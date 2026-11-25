@@ -555,3 +555,45 @@ Independent save and ledger reads confirmed the berth, cargo, balance,
 captain and bid. No sale was submitted during this preparation. The
 original source remained byte-identical and the normal recovery checks
 accepted the new checkpoint as an input for the seller's session.
+
+### Sale through the admitted Linux pilot's stock trade menu
+
+On `f74edbfe`, a disposable CPU Vulkan provider (llvmpipe) and a separate
+Linux pilot enabled Company sales over the existing loopback TLS
+connection. The pilot took the registered WRN-302 seat at CTD-093 and
+used the mounted stock Water slider and Confirm callback exactly once.
+The live station bid was 3,473 cents per unit for 60 water, minimum one.
+The pilot offered two water.
+
+The provider rechecked the same bid, issued order `0x8775` and matched
+the stock completion event to deal `0x8774`. X4 reported two units
+transferred and zero destroyed. Two later native readbacks agreed on
+10 water aboard WRN, 3,310 at CTD and a Company balance of 937,000 cents.
+Ship journal entry `14` linked to trade `5` and recorded the actual
+6,900-cent credit. The quoted total was 6,946 cents. The pilot received
+the same settlement over TLS. Reopening the stock menu fetched a new
+server view showing 10 water, 937,000 cents and a bid for 58 water at
+3,472 cents. The pilot's local copy still held 12 water and 930,100 cents.
+
+After the pilot left, the provider paused and confirmed
+`checkpoint-e25e7e18853d491f8e6a6974d9c598b3`, SHA-256
+`ed2b6cf99cb9ae39b86b088b0caf2fd5bc25eb70e695f7fc64cd5fc836e14fdd`.
+Independent save and SQLite reads found exactly one new confirmed sale
+alongside the six existing purchases. The save recorded WRN's cargo
+falling from 12 to 10, CTD's rising from 3,308 to 3,310, and Company
+funds rising from 930,100 to 937,000 cents. The 14 checked source and
+clone files retained their original hashes. The provider and pilot
+processes, private displays and TLS listener stopped, and the host
+lock cleared.
+
+The pilot launcher separately reported `participant_cleanup_failed`.
+Its Linux redactor rejected the staged `sales=true` field and left the
+private config file in place with mode `0600`. Commit `a53408d4` fixed
+that field, and the fix is present at `df53039d` on the fork. Validation
+of the fix is offline. The native sale evidence comes from the single
+`f74edbfe` run.
+
+The private operator artifacts are `.local/native-stock-sale/run-01/verified.json`
+(SHA-256 `5dde047ac066dbd2a2235ebee70bc8a6f3b83d3751b6ec74cd01fb6e2a157e14`),
+`lifecycle.json`, the provider and pilot engine logs, their launcher
+results, and the confirmed checkpoint under the same run directory.
