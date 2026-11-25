@@ -21,7 +21,7 @@ class CompanyObserverTargetTests(unittest.TestCase):
         radar = script.find(".//set_value[@name='$withinradar']")
         self.assertIn('$target.distanceto.{player.controlled} le player.controlled.currentradarrange', radar.get('exact'))
         guards = ' '.join(node.get('value') for node in script.iter('do_if'))
-        for field in ('State.$epoch == $args.$epoch', 'State.$last == $args.$count', 'not md.X4AuthorityShipRegistry.State.$faulted',
+        for field in ('State.$epoch == $args.$epoch', 'State.$last ge $args.$count', '$registered le $args.$count', 'not md.X4AuthorityShipRegistry.State.$faulted',
                       '$target.owner == faction.player', '$target.isoperational', '$target != player.occupiedship',
                       '$target != player.controlled', '$target.sector == player.sector',
                       '$target.attention ge attention.visible', '$target.isphysicsready',

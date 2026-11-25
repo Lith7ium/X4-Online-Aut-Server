@@ -53,10 +53,14 @@ class CompanyCockpitObserverMdTests(unittest.TestCase):
         # Must never mutate positions, velocity, or orders.
         for forbidden in ('warp', 'set_object_velocity', 'create_order', 'create_ship'):
             self.assertIsNone(root.find(f'.//{forbidden}'))
-        guards = ' '.join(node.get('value', '') for node in root.iter() if node.get('value'))
+        guards = ' '.join(node.get('value') or node.get('exact', '') for node in root.iter())
         for required in (
             'State.$epoch == $args.$epoch',
-            'State.$last == $args.$count',
+            'State.$last ge $args.$count',
+            '$target_index le $args.$count',
+            '$reg le $args.$count',
+            '$registered le $args.$count',
+            '$canobserve and (not $args.$target_index? or $indexed)',
             'not md.X4AuthorityShipRegistry.State.$faulted',
             '$target.owner == faction.player',
             '$target != player.controlled',
