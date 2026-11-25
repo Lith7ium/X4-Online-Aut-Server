@@ -207,7 +207,8 @@ class CompanyPoseTrial:
         self.last = {}
         self.window_moves = {}
         self.baselines = {}
-        report.update(unavailable_before_write=0, sector_transfers_verified=0)
+        report.update(unavailable_before_write=0, unavailable_reasons={}, unavailable_at_pause={},
+                      sector_transfers_verified=0)
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
                       max_verified_step_metres=0.0, max_source_travel_metres=0.0,
                       max_source_speed_mps=None, last_verified={}, paused={})
@@ -219,21 +220,22 @@ class CompanyPoseTrial:
         sample = record.sample
         index = sample['index']
         if index not in self.channel.ship_codes:
-            self._skip_unavailable(index)
+            self._skip_unavailable(sample, 'catalogue', 'SHIP_NOT_IN_CATALOGUE')
             return
         target = _xyz(sample[key] for key in 'xyz')
         sector = sample['sector_macro']
         changed_sector = sector != self.channel.ship_sectors[index]
         if changed_sector and record.sector_revision == 0:
             # A first sample in a different frame cannot prove a gate crossing.
-            self._skip_unavailable(index)
+            self._skip_unavailable(sample, 'sector', 'INITIAL_SECTOR_MISMATCH')
             return
+        # A pilot can revisit the same sector between two consumed samples.
+        flight = (sample['generation'], sector, record.sector_revision)
         baseline = self.baselines.get(index)
-        if baseline is None or baseline[0] != sector:
-            self.baselines[index] = (sector, target)
-        base = self.baselines[index][1]
-        self.report['max_source_travel_metres'] = max(self.report['max_source_travel_metres'],
-                                                    math.dist(target, base))
+        if baseline is None or baseline[0] != flight:
+            baseline = self.baselines[index] = (flight, target)
+        distance_from_start = math.dist(target, baseline[1])
+        self.report['max_source_travel_metres'] = max(self.report['max_source_travel_metres'], distance_from_start)
         if sample['real_velocity'] is not None:
             speed = math.hypot(*(sample['real_velocity'][key] for key in 'xyz'))
             peak = self.report['max_source_speed_mps']
@@ -256,7 +258,7 @@ class CompanyPoseTrial:
                 return
             if stage == 'locate' and reply['sector_macro'] != sample['sector_macro']:
                 if reply['sector_macro'] != self.channel.ship_sectors[sample['index']]:
-                    self._skip_unavailable(sample['index'])
+                    self._skip_unavailable(sample, stage, 'SOURCE_SECTOR_MISMATCH')
                     return
                 active['source_sector_macro'] = reply['sector_macro']
                 active['stage'] = 'transfer'
@@ -305,8 +307,15 @@ class CompanyPoseTrial:
         }
         self.active = None
 
-    def _skip_unavailable(self, index):
+    def _skip_unavailable(self, sample, stage, reason):
+        index = sample['index']
         self.report['unavailable_before_write'] += 1
+        counts = self.report['unavailable_reasons']
+        counts[reason] = counts.get(reason, 0) + 1
+        self.report['last_unavailable_before_write'] = {
+            'index': index, 'sequence': sample['sequence'], 'stage': stage, 'reason': reason,
+        }
+        self.baselines.pop(index, None)
         self.last.pop(index, None)
         self.window_moves.pop(index, None)
         self.active = None
@@ -319,8 +328,8 @@ class CompanyPoseTrial:
                 raise
             self.channel.begin('verify', self.active['sample'], self.active['actor'])
             return
-        except ShipUnavailable:
-            self._skip_unavailable(self.active['sample']['index'])
+        except ShipUnavailable as unavailable:
+            self._skip_unavailable(self.active['sample'], self.active['stage'], str(unavailable))
             return
         if reply is not None:
             self._advance(service, reply)
@@ -344,11 +353,13 @@ class CompanyPoseTrial:
 
     def after_pause(self):
         paused = {}
+        unavailable_at_pause = {}
         for index, sample in self.last.items():
             self.channel.begin('inspect', sample)
             try:
                 reply = self.channel.wait()
-            except ShipUnavailable:
+            except ShipUnavailable as unavailable:
+                unavailable_at_pause[str(index)] = str(unavailable)
                 continue
             target = self.report['last_verified'][str(index)]['target']
             if _readback_error(target, reply['md'], reply['ui']) > READBACK_METRES:
@@ -363,10 +374,13 @@ class CompanyPoseTrial:
                 item['movement'] = move
             paused[str(index)] = item
         self.report['paused'] = paused
+        self.report['unavailable_at_pause'] = unavailable_at_pause
 
     def start_window(self):
+        self.baselines.clear()
         self.last.clear()
         self.window_moves.clear()
+        self.report['unavailable_at_pause'] = {}
         self.report['paused'] = {}
         self.report.pop('saved_checkpoint_id', None)
         self.report.pop('saved_checkpoint_sha256', None)

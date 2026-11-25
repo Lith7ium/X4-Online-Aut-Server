@@ -142,7 +142,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
 
     def trial(self):
         report = {}
-        service = ApplicationQueue(SimpleNamespace(sample=self.sample))
+        service = ApplicationQueue(SimpleNamespace(sample=self.sample, sector_revision=0))
         return CompanyPoseTrial(self.channel, report), report, service
 
     def test_missing_velocity_has_no_measured_peak_speed(self):
@@ -206,11 +206,43 @@ class CompanyPoseTrialTests(unittest.TestCase):
             self.load_catalogue(self.channel, {INDEX: CODE}, epoch='f' * 32)
         self.assertFalse(self.channel.ship_codes)
 
+    def test_source_travel_stays_within_one_grant_sector_visit_and_running_window(self):
+        trial, report, _ = self.trial()
+
+        def observe(x, generation, sector_revision):
+            sample = dict(self.sample, x=x, generation=generation)
+            service = ApplicationQueue(SimpleNamespace(sample=sample, sector_revision=sector_revision))
+            trial.poll(service)
+            self.reply(self.command('inspect'), (x, sample['y'], sample['z']))
+            trial.poll(service)
+
+        observe(10, GENERATION, 0)
+        observe(16, GENERATION, 0)
+        self.assertEqual(6, report['max_source_travel_metres'])
+        new_generation = 'd' * 32
+        observe(100, new_generation, 0)
+        observe(200, new_generation, 2)  # A visit to another sector between consumed samples.
+        trial.start_window()
+        observe(300, new_generation, 2)
+        self.assertEqual(6, report['max_source_travel_metres'])
+        observe(312, new_generation, 2)
+        self.assertEqual(12, report['max_source_travel_metres'])
+
+    def test_pause_reports_why_a_previously_verified_ship_has_no_saved_pose(self):
+        trial, report, service = self.trial()
+        self.move(trial, service)
+        self.read_pause(trial, status='PILOT_PRESENT')
+        self.assertEqual({}, report['paused'])
+        self.assertEqual({str(INDEX): 'PILOT_PRESENT'}, report['unavailable_at_pause'])
+        self.assertEqual(0, report['unavailable_before_write'])
+        trial.start_window()
+        self.assertEqual({}, report['unavailable_at_pause'])
+
     def test_docked_ship_does_not_block_another_pilot_before_write(self):
         trial, report, service = self.trial()
         trial.poll(service)
         self.reply(self.command('inspect'), status='DOCKING_OR_STORED')
-        other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970)))
+        other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970), sector_revision=0))
         trial.poll(other)
         self.reply(self.command('inspect', index=1970), code='WOO-831')
         trial.poll(other)
@@ -238,7 +270,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 self.reply(self.command(write, sector=sector), status=status)
 
                 other_actor = '0x20000000000020'
-                other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970)))
+                other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970), sector_revision=0))
                 trial.poll(other)
                 self.reply(self.command('inspect', index=1970), ORIGIN, actor=other_actor, code='WOO-831')
                 trial.poll(other)
@@ -247,6 +279,9 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 self.reply(self.command('verify', index=1970, actor=other_actor), actor=other_actor, code='WOO-831')
                 trial.poll(other)
                 self.assertEqual(1, report['unavailable_before_write'])
+                self.assertEqual({status: 1}, report['unavailable_reasons'])
+                self.assertEqual({'index': INDEX, 'sequence': sample['sequence'], 'stage': write, 'reason': status},
+                                 report['last_unavailable_before_write'])
                 self.assertEqual(1, report['writes_verified'])
                 self.assertEqual({'1970'}, set(report['last_verified']))
                 self.assertEqual(SECTOR, self.channel.ship_sectors[INDEX])
@@ -479,7 +514,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
                     trial.start_window()
                 else:
                     sample['generation'] = 'f' * 32
-                service = ApplicationQueue(SimpleNamespace(sample=sample))
+                service = ApplicationQueue(SimpleNamespace(sample=sample, sector_revision=0))
                 trial.poll(service)
                 self.reply(self.command('inspect'))
                 trial.poll(service)
@@ -511,7 +546,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
         other_code = 'WOO-831'
         self.channel.ship_sectors[other_index] = other_sector
         other_sample = dict(self.sample, index=other_index, sector_macro=other_sector)
-        other = ApplicationQueue(SimpleNamespace(sample=other_sample))
+        other = ApplicationQueue(SimpleNamespace(sample=other_sample, sector_revision=0))
         trial.poll(other)
         self.reply(self.command('inspect', index=other_index, sector=other_sector), code=other_code)
         trial.poll(other)
