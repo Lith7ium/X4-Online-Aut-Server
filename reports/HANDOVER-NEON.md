@@ -23,6 +23,15 @@ its paused readbacks. Both pilots started in their respective sectors.
 The optional map trigger stopped before opening the stock map.
 [Independent flight in two sectors](AUTHORITY-TWO-PILOT-SECTORS-20261125.md)
 
+A Linux pilot flew HVC-420 through the stock superhighway from Black Hole
+Sun V to IV. X4 briefly returned no sector in the corridor. The motion
+sender now resumes with a fresh destination baseline under the same
+grant. The authenticated service accepted subsequent velocity samples.
+The optional server position writer was disabled for this diagnostic.
+With the writer enabled, an earlier two-pilot run had ended on an
+unconfirmed position request before entry. Cold, authoritative adoption
+of this flight remains open. [Native transit and provider timeout](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
+
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
   with `-FreshCompanyProfile`. Run it directly with the existing private
