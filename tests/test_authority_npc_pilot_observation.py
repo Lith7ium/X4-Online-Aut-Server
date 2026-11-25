@@ -1,11 +1,16 @@
 """Read-only NPC observation on the regular pilot motion channel."""
+from contextlib import chdir
 from pathlib import Path
-import shutil
-import subprocess
 import unittest
 
 from authority.client_seat_overlay import company_motion_md, company_motion_ui
 from authority.company_motion_source import CompanyMotionSource, validate_npc_observation
+
+
+if __package__:
+    from .run_fixture_lua import run_fixture
+else:
+    from run_fixture_lua import run_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,10 +41,10 @@ class NpcPilotObservationTests(unittest.TestCase):
             with self.subTest(target=target, options=options), self.assertRaises(ValueError):
                 validate_npc_observation(target, **options)
 
-    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_registered_radar_and_map_require_current_native_visibility(self):
-        subprocess.run(['luajit', 'tests/authority_npc_map_interest.lua'], cwd=ROOT, check=True)
+        with chdir(ROOT):
+            run_fixture(ROOT / 'tests/authority_npc_map_interest.lua')
 
-    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
     def test_explicit_hold_trial_requires_radar_and_confirms_safe_release(self):
-        subprocess.run(['luajit', 'tests/authority_registered_npc_hold_trial.lua'], cwd=ROOT, check=True)
+        with chdir(ROOT):
+            run_fixture(ROOT / 'tests/authority_registered_npc_hold_trial.lua')
