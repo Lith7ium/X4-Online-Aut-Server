@@ -31,7 +31,8 @@ class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
                          'v3_mutate_snapshot_reference','v3_mutate_arrival','v3_mutate_key',
                          'v3_postwrite_mutation', 'mfq_success', 'mfq_wrong_epoch', 'mfq_wrong_index',
                          'mfq_wrong_code', 'mfq_wrong_macro', 'mfq_player', 'mfq_guard', 'mfq_unprepared',
-                         'mfq_stale', 'mfq_no_alignment'):
+                         'mfq_stale', 'mfq_no_alignment', 'inspector_enh', 'inspector_mfq',
+                         'inspector_wrong_code', 'inspector_default', 'inspector_epoch'):
                 with self.subTest(case=case):
                     result = subprocess.run(['luajit','tests/authority_saved_initial_alignment_native.lua'],
                         cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(library),ALIGNMENT_CASE=case),

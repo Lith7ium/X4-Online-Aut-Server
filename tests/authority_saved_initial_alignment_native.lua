@@ -116,6 +116,41 @@ if mode == 'v3_postwrite_mutation' then
   return true
  end
 end
+if mode:match('^inspector_') then
+ if mode ~= 'inspector_enh' then
+  options.fixture = 'recovery_mfq_419'
+  options.binding.epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
+  options.binding.index = 943
+  ffi.C.TestAlignmentMode(6)
+ end
+ options.initial_alignment_fixture = options.fixture
+ if mode == 'inspector_default' then
+  options.fixture = nil
+  assert(not pcall(module.new_inspector_x4, options))
+  return
+ end
+ if mode == 'inspector_epoch' then
+  options.binding.epoch = ('e'):rep(32)
+  assert(not pcall(module.new_inspector_x4, options))
+  return
+ end
+ options.prepared = function() error('inspector cannot prepare alignment') end
+ local reader = assert(module.new_inspector_x4(options))
+ local fields = 0
+ for key, value in pairs(reader) do
+  assert((key == 'read' or key == 'guard' or key == 'game') and type(value) == 'function')
+  fields = fields + 1
+ end
+ assert(fields == 3)
+ options.binding.actor_key = '42' -- The inspector retains the originally selected binding.
+ assert(reader.guard() == true and reader.read().x == 0 and reader.game() == 10)
+ if mode == 'inspector_wrong_code' then
+  ffi.C.TestAlignmentMode(0)
+  assert(reader.guard() == false and not pcall(reader.read))
+ end
+ assert(ffi.C.TestWrites() == 0 and #events == 0 and not options.initial_alignment_state.used)
+ return
+end
 local result = module.new_playback_x4(options)
 if mode == 'default_off' then
  assert(result and ffi.C.TestWrites() == 0 and #events == 0)

@@ -224,9 +224,9 @@ function M.new(options)
  return api
 end
 
-local function native_callbacks(o, playback_fixture)
+local function native_callbacks(o, selected_fixture, read_only)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
- local selected=playback_fixture or fixture(o.fixture)
+ local selected=selected_fixture or fixture(o.fixture)
  local c={};for k,v in pairs(o)do c[k]=v end
  assert(type(X4LAN_REPLICA_MOTION_BINDING)=='table' and
   type(X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path)=='function')
@@ -253,8 +253,6 @@ local function native_callbacks(o, playback_fixture)
   local id=o.resolve.actor_u64(ConvertIDTo64Bit(x));assert(id and key(id)==text)
   return x,id
  end
- assert(o.md_issue==nil or type(o.md_issue)=='function')
- local md_issue=o.md_issue or AddUITriggeredEvent
  local external=o.guard
  c.guard=function()
   native_stage='profile'
@@ -269,14 +267,6 @@ local function native_callbacks(o, playback_fixture)
  local function ids(p)
   local ar,a=ref(p.actor_key);local sr,s=ref(p.sector_key);local zr,z=ref(p.zone_key)
   return ar,a,sr,s,zr,z
- end
- c.issue=function(id,p)
-  local ar,a,sr,s,zr,z=ids(p);assert(a and s and z)
-  local args={request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr}
-  if selected.name then args.fixture=selected.name end
-  local accepted = md_issue('X4AuthoritySavedMotionApply','Inspect',args)
-  if o.md_issue then return accepted == true end
-  return accepted ~= false
  end
  local function live(p)
   native_stage='references'
@@ -308,6 +298,23 @@ local function native_callbacks(o, playback_fixture)
  c.inspect=function(p)
   local a=live(p);native_stage='position_read';local x=C.GetObjectPositionInSector(a);assert(live(p)==a)
   return {x=tonumber(x.x),y=tonumber(x.y),z=tonumber(x.z),yaw=tonumber(x.yaw),pitch=tonumber(x.pitch),roll=tonumber(x.roll)}
+ end
+ if read_only then
+  c.check_binding=function(p)
+   local ok=pcall(live,p)
+   return ok
+  end
+  return c
+ end
+ assert(o.md_issue==nil or type(o.md_issue)=='function')
+ local md_issue=o.md_issue or AddUITriggeredEvent
+ c.issue=function(id,p)
+  local ar,a,sr,s,zr,z=ids(p);assert(a and s and z)
+  local args={request_id=id,epoch=p.epoch,index=p.index,actor=ar,sector=sr,zone=zr}
+  if selected.name then args.fixture=selected.name end
+  local accepted = md_issue('X4AuthoritySavedMotionApply','Inspect',args)
+  if o.md_issue then return accepted == true end
+  return accepted ~= false
  end
  c.write=function(p,t)
   local a,s=live(p);native_stage='setter';C.SetObjectSectorPos(a,s,ffi.new('UIPosRot',t));assert(live(p)==a);return true
@@ -444,6 +451,32 @@ local function align_initial_fixture(options, callbacks, binding, selected)
  return true
 end
 
+local function copy_binding(value, selected)
+ assert(type(value) == 'table')
+ local binding = {epoch=value.epoch, index=value.index, sector_macro=value.sector_macro,
+  actor_key=value.actor_key, sector_key=value.sector_key, zone_key=value.zone_key}
+ assert(token(binding.epoch,32) and binding.index == selected.index and binding.sector_macro == selected.sector and
+  (not selected.epoch or binding.epoch == selected.epoch) and natural(binding.actor_key) and
+  natural(binding.sector_key) and natural(binding.zone_key))
+ return binding
+end
+
+-- A hold controller can inspect a local recovery binding before preparing it.
+function M.new_inspector_x4(options)
+ if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
+ local selected = options.fixture == MFQ_PLAYBACK_FIXTURE.name and MFQ_PLAYBACK_FIXTURE
+  or fixture(options.fixture)
+ assert(selected == RECOVERY_FIXTURE or selected == MFQ_PLAYBACK_FIXTURE,
+  'an explicit recovery fixture is required')
+ local binding = copy_binding(options.binding, selected)
+ local callbacks = assert(native_callbacks(options, selected, true))
+ return {
+  read=function() return callbacks.inspect(binding) end,
+  guard=function() return callbacks.check_binding(binding) end,
+  game=callbacks.game,
+ }
+end
+
 -- Separate sustained-playback factory. The one-shot state machine above is unchanged.
 function M.new_playback_x4(options)
  if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
@@ -465,12 +498,7 @@ function M.new_playback_x4(options)
  else
   selected = fixture(options.fixture)
  end
- assert(type(options.binding) == 'table')
- local binding = {}
- for key, value in pairs(options.binding) do binding[key] = value end
- assert(token(binding.epoch,32) and binding.index == selected.index and binding.sector_macro == selected.sector and
-  (not selected.epoch or binding.epoch == selected.epoch) and natural(binding.actor_key) and
-  natural(binding.sector_key) and natural(binding.zone_key))
+ local binding = copy_binding(options.binding, selected)
  local callbacks = assert(native_callbacks(options, selected))
  if options.initial_alignment_fixture ~= nil then
   if not align_initial_fixture(options, callbacks, binding, selected) then return nil, 'initial_alignment_failed' end
