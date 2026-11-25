@@ -3,13 +3,44 @@ import re
 import secrets
 import select
 import socket
+import sys
 import threading
+import time
 
 from .company_motion_observer import MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
+from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
+                                      REGISTRY_EPOCH, measurement_value)
 from .experimental_tcp_motion import check_motion_progress, motion_value
 
 
 _MAX_SAMPLER_DATAGRAM = 512
+_MAX_NPC_AGE = 1.0
+_NATIVE_NUMBER = re.compile(r'-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
+
+
+def _npc_now():
+    # The native UDP helper uses QPC on Windows and CLOCK_MONOTONIC on Linux.
+    return time.perf_counter() if sys.platform == 'win32' else time.monotonic()
+
+
+def _decode_npc_point(fields):
+    if len(fields) != 15:
+        raise ValueError('malformed local NPC point')
+    _, index, code, sector, actor, sequence, attention, *numbers = fields
+    if (index != str(NPC_INDEX) or not re.fullmatch(r'[1-9][0-9]{0,2}', sequence)
+            or any(len(number) > 30 or not _NATIVE_NUMBER.fullmatch(number) for number in numbers)):
+        raise ValueError('invalid local NPC point fields')
+    capture_time, game_time, x, y, z, vx, vy, vz = map(float, numbers)
+    return measurement_value({
+        'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': code, 'sector_macro': sector,
+        'actor': actor, 'sequence': int(sequence), 'attention': attention,
+        'capture_time': capture_time, 'game_time': game_time, 'position': [x, y, z],
+        'velocity_m_per_game_second': [vx, vy, vz],
+    })
+
+
+def _npc_progress(sample):
+    return sample['actor'], sample['sequence'], sample['capture_time'], sample['game_time']
 
 
 def validate_playback_index(index, *, company_motion, own_index=None, cockpit_radar_playback=False):
@@ -45,7 +76,8 @@ class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
-                 observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False):
+                 observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
+                 registered_npc_local_measurement=False):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
         if cockpit_radar_playback:
@@ -72,6 +104,11 @@ class CompanyMotionSource:
                 self._observed_npc != (943, 'MFQ-419')):
             raise ValueError('NPC hold trial requires observation of MFQ-419 at index 943')
         self._registered_npc_hold_trial = registered_npc_hold_trial
+        if type(registered_npc_local_measurement) is not bool or (registered_npc_local_measurement and (
+                self._observed_npc != (NPC_INDEX, NPC_CODE) or registered_npc_hold_trial
+                or registered_npc_alignment_trial)):
+            raise ValueError('NPC local measurement requires read-only observation of MFQ-419 at index 943')
+        self._registered_npc_local_measurement = registered_npc_local_measurement
         self._playback_index = playback_index
         self._cockpit_radar_playback = cockpit_radar_playback
         self._cockpit_max_pilots = cockpit_max_pilots
@@ -92,6 +129,9 @@ class CompanyMotionSource:
         self._previous = self._returned = None
         self._peer = None
         self._observer = None
+        self._npc_latest = self._npc_accepted = None
+        self._npc_ended = False
+        self._npc_seat_gap = False
 
     @property
     def socket(self):
@@ -113,6 +153,10 @@ class CompanyMotionSource:
     @property
     def registered_npc_alignment_trial(self):
         return self._registered_npc_alignment_trial
+
+    @property
+    def registered_npc_local_measurement(self):
+        return self._registered_npc_local_measurement
 
     @property
     def observed_npc(self):
@@ -158,6 +202,8 @@ class CompanyMotionSource:
                 raise ValueError('registered NPC must be a distinct operational entry in the offered checkpoint')
         if self._registered_npc_hold_trial and (epoch, index) != ('26a1a365c66788aa06f0aeb9e18ff62e', 1073):
             raise ValueError('NPC hold trial requires the verified HVC-420 seat in the MFQ-419 test world')
+        if self._registered_npc_local_measurement and (epoch, index) != (REGISTRY_EPOCH, PILOT_INDEX):
+            raise ValueError('NPC local measurement requires the verified HVC-420 seat in the MFQ-419 test world')
         self._registry = (epoch, index)
         config = {'port': self._socket.getsockname()[1], 'lease': self._lease,
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
@@ -167,6 +213,8 @@ class CompanyMotionSource:
             config['registered_npc_hold_trial'] = True
         if self.registered_npc_alignment_trial:
             config['registered_npc_alignment_trial'] = True
+        if self._registered_npc_local_measurement:
+            config['registered_npc_local_measurement'] = True
         if playback_index is not None:
             config['playback_index'] = playback_index
         if self._cockpit_radar_playback:
@@ -209,6 +257,64 @@ class CompanyMotionSource:
             self._reported_stages.add(stage)
             self._on_stage(stage)
 
+    def _npc_radar_view(self):
+        if self._observer is not None:
+            # Its combined subscription also includes the map. Only the cockpit
+            # slot can corroborate the native radar-only measurement.
+            return self._observer._slots['cockpit']
+
+    @staticmethod
+    def _npc_binding(sample):
+        return sample['sector_macro'], sample['index'], sample['actor'], sample['code']
+
+    def _receive_npc_measurement(self, body):
+        if not self._registered_npc_local_measurement or self._npc_ended:
+            return
+        try:
+            fields = body.decode('ascii').split('|')
+            if fields[0] == 'NPC_END':
+                if fields == ['NPC_END', str(NPC_INDEX), NPC_CODE]:
+                    self._npc_latest = RADAR_ENDED
+                    self._npc_ended = True
+                return
+            sample = _decode_npc_point(fields)
+        except (UnicodeError, ValueError):
+            return  # Malformed diagnostic data cannot stop pilot motion.
+
+        if self._npc_seat_gap or not 0 <= _npc_now() - sample['capture_time'] <= _MAX_NPC_AGE:
+            return
+        view = self._npc_radar_view()
+        if view is not None and view.active is not None:
+            if view.active != self._npc_binding(sample):
+                return
+            if self._npc_latest is not None and view.active != self._npc_binding(self._npc_latest):
+                self._npc_latest = None
+        actor, sequence, captured, game_time = _npc_progress(sample)
+        previous = self._npc_accepted
+        if self._npc_latest is not None:
+            previous = _npc_progress(self._npc_latest)
+        if previous is not None and (actor != previous[0] or sequence <= previous[1]
+                                     or captured <= previous[2] or game_time < previous[3]):
+            return
+        self._npc_latest = sample
+        if view is None or view.active is not None:
+            self._npc_accepted = (actor, sequence, captured, game_time)
+
+    def take_npc_measurement(self):
+        """Take the latest fresh local radar measurement or its one-shot end."""
+        self._owner()
+        sample, self._npc_latest = self._npc_latest, None
+        if sample is None or sample is RADAR_ENDED:
+            return sample
+        now = _npc_now()
+        if not 0 <= now - sample['capture_time'] <= _MAX_NPC_AGE:
+            return None
+        view = self._npc_radar_view()
+        if view is not None and (view.active != self._npc_binding(sample) or time.monotonic() >= view.deadline):
+            return None
+        self._npc_accepted = _npc_progress(sample)
+        return sample
+
     def poll(self, validate_peer):
         """Return one latest new V3 sample, or None. validate_peer takes (IPv4, port)."""
         self._owner()
@@ -228,7 +334,8 @@ class CompanyMotionSource:
             except BlockingIOError:
                 break
             except OSError as error:
-                if self._observer is not None and getattr(error, 'winerror', None) == 10040:
+                if ((self._observer is not None or self._registered_npc_local_measurement)
+                        and getattr(error, 'winerror', None) == 10040):
                     continue  # An oversized datagram is discarded by Winsock.
                 raise
             if not raw.startswith(prefix) or address[0] != '127.0.0.1':
@@ -244,7 +351,12 @@ class CompanyMotionSource:
                 if self._on_stage is not None:
                     self._report_once('first_local_motion_peer_verified')
             body = raw[len(prefix):]
-            if self._observer is not None and body.partition(b'|')[0] not in (b'GAP', b'SAMPLE3'):
+            kind = body.partition(b'|')[0]
+            if kind in (b'NPC_POINT', b'NPC_END'):
+                if len(raw) <= _MAX_SAMPLER_DATAGRAM:
+                    self._receive_npc_measurement(body)
+                continue
+            if self._observer is not None and kind not in (b'GAP', b'SAMPLE3'):
                 if len(raw) <= MAX_OBSERVER_DATAGRAM and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
                     try:
                         fields = body.decode('ascii').split('|')
@@ -256,6 +368,9 @@ class CompanyMotionSource:
             if fields == ['GAP']:
                 newest = None
                 self._returned = None
+                self._npc_seat_gap = True
+                if self._npc_latest is not RADAR_ENDED:
+                    self._npc_latest = None
                 continue
             if len(raw) > _MAX_SAMPLER_DATAGRAM or len(fields) != 14 or fields[0] != 'SAMPLE3':
                 raise ValueError('invalid local company motion packet')
@@ -278,6 +393,7 @@ class CompanyMotionSource:
                     sample['real_velocity'] = None
                 check_motion_progress(sample, self._previous)
             self._previous = newest = sample
+            self._npc_seat_gap = False
             if self._on_stage is not None:
                 self._report_once('first_local_own_pose_validated')
         if newest is not None:
@@ -292,4 +408,5 @@ class CompanyMotionSource:
 
     def close(self):
         self._owner()
+        self._npc_latest = None
         self._socket.close()

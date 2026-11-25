@@ -4,6 +4,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -14,9 +15,130 @@ from authority.company_motion_frames import MAX_COUNTER
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_source import CompanyMotionSource
+from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED, REGISTRY_EPOCH, SECTOR
 
 
 class CompanyMotionSourceTest(unittest.TestCase):
+    def test_local_npc_measurement_opt_in_requires_pinned_read_only_seat(self):
+        target = (NPC_INDEX, NPC_CODE)
+        operational = '1' * PILOT_INDEX
+        defaults = CompanyMotionSource(observed_npc=target)
+        self.addCleanup(defaults.close)
+        self.assertFalse(defaults.registered_npc_local_measurement)
+        self.assertNotIn('registered_npc_local_measurement',
+                         defaults.configure(REGISTRY_EPOCH, PILOT_INDEX, operational_bits=operational))
+        for options in ({}, {'observed_npc': (NPC_INDEX, 'ABC-123')},
+                        {'observed_npc': target, 'registered_npc_hold_trial': True},
+                        {'observed_npc': target, 'registered_npc_hold_trial': True,
+                         'registered_npc_alignment_trial': True}):
+            with self.assertRaisesRegex(ValueError, 'read-only observation'):
+                CompanyMotionSource(registered_npc_local_measurement=True, **options)
+        source = CompanyMotionSource(observed_npc=target, registered_npc_local_measurement=True)
+        self.addCleanup(source.close)
+        for epoch, index in (('b' * 32, PILOT_INDEX), (REGISTRY_EPOCH, PILOT_INDEX - 1)):
+            with self.assertRaisesRegex(ValueError, 'verified HVC-420'):
+                source.configure(epoch, index, operational_bits=operational)
+        settings = source.configure(REGISTRY_EPOCH, PILOT_INDEX, operational_bits=operational)
+        self.assertTrue(source.registered_npc_local_measurement)
+        self.assertTrue(settings['registered_npc_local_measurement'])
+        self.assertIsNone(source.take_npc_measurement())
+
+    def test_owned_udp_measurement_is_latest_only_and_ends_once_beside_own_motion(self):
+        source = CompanyMotionSource(observed_npc=(NPC_INDEX, NPC_CODE), registered_npc_local_measurement=True)
+        self.addCleanup(source.close)
+        settings = source.configure(REGISTRY_EPOCH, PILOT_INDEX, operational_bits='1' * PILOT_INDEX)
+        destination = ('127.0.0.1', settings['port'])
+        prefix = source._prefix()
+
+        def point(sequence, capture, *, actor='0xabc', code=NPC_CODE, game=12, sector=SECTOR):
+            return f'NPC_POINT|{NPC_INDEX}|{code}|{sector}|{actor}|{sequence}|visible|{capture}|{game}|1|2|3|4|5|6'
+
+        def own(sequence):
+            return f'SAMPLE3|{REGISTRY_EPOCH}|{PILOT_INDEX}|{sequence}|{SECTOR}|20|{sequence}|1|2|3|0|0|0|'
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as foreign, \
+                patch('authority.company_motion_source._npc_now', return_value=100) as clock:
+            owned.bind(('127.0.0.1', 0))
+            validate = Mock(side_effect=lambda address: address == owned.getsockname())
+            observer = source.observe(validate)
+            observer.bind_views(Mock())
+
+            def send(*rows):
+                for row in rows:
+                    owned.sendto(prefix + row.encode('ascii'), destination)
+
+            foreign.sendto(prefix + point(9, 99.9).encode('ascii'), destination)
+            owned.sendto(b'C|' + b'f' * 32 + b'|' + settings['generation'].encode() + b'|'
+                         + point(8, 99.8).encode('ascii'), destination)
+            owned.sendto(b'C|' + settings['lease'].encode() + b'|' + b'f' * 32 + b'|'
+                         + point(7, 99.7).encode('ascii'), destination)
+            # The untrusted map must not convert a point into radar telemetry.
+            send(f'VIEW|map|1|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}',
+                 point(6, 99.6), own(1))
+            self.assertEqual(source.poll(validate)['sequence'], 1)
+            self.assertIsNone(source.take_npc_measurement())
+            self.assertEqual(validate.call_count, 2)
+
+            send(point(1, 99.1), f'VIEW|cockpit|1|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}',
+                 point(2, 99.2), own(2), point(2, 99.3), point(3, 99.1))
+            self.assertEqual(source.poll(validate)['sequence'], 2)
+            measurement = source.take_npc_measurement()
+            self.assertEqual((measurement['index'], measurement['sequence'], measurement['actor']),
+                             (NPC_INDEX, 2, '0xabc'))
+            self.assertEqual(measurement['velocity_m_per_game_second'], [4., 5., 6.])
+            self.assertIsNone(source.take_npc_measurement())
+            measurement['sequence'] = 0  # The caller cannot reset the producer's progress.
+
+            send(point(2, 99.3), point(3, 99.4, actor='0xabd'), point(3, 99.5, game=11),
+                 point(4, 98), point(4, 101), point(4, 99.7, code='ABC-123'),
+                 point(4, 99.7, sector='sector_other'),
+                 point(4, 'NaN'), point(4, 99.7).replace('|1|2|3|', '|1_0|2|3|'),
+                 point(4, 99.7) + '|' + 'Z' * 600, own(3))
+            owned.sendto(prefix + b'NPC_POINT|\xff', destination)
+            self.assertEqual(source.poll(validate)['sequence'], 3)
+            self.assertIsNone(source.take_npc_measurement())
+
+            send(point(3, 99.7), 'GAP', point(4, 99.8))
+            self.assertIsNone(source.poll(validate))
+            self.assertIsNone(source.take_npc_measurement())
+            send(own(4), point(4, 99.8))
+            self.assertEqual(source.poll(validate)['sequence'], 4)
+            errors = []
+
+            def read_from_wrong_thread():
+                try:
+                    source.take_npc_measurement()
+                except RuntimeError as error:
+                    errors.append(str(error))
+
+            thread = threading.Thread(target=read_from_wrong_thread)
+            thread.start()
+            thread.join(timeout=1)
+            self.assertEqual(errors, ['exclusive company motion owner thread required'])
+            self.assertEqual(source.take_npc_measurement()['sequence'], 4)
+
+            send(point(5, 99.9))
+            self.assertIsNone(source.poll(validate))
+            clock.return_value = 101
+            self.assertIsNone(source.take_npc_measurement())
+            clock.return_value = 100
+            send(point(5, 100))
+            self.assertIsNone(source.poll(validate))
+            self.assertIsNone(source.take_npc_measurement())
+
+            send(point(5, 99.9), f'VIEW|cockpit|2|{REGISTRY_EPOCH}|-|0|-|-',
+                 f'NPC_END|{NPC_INDEX}|ABC-123')
+            self.assertIsNone(source.poll(validate))
+            self.assertIsNone(source.take_npc_measurement())  # Map retains its view.
+            send(f'NPC_END|{NPC_INDEX}|{NPC_CODE}', own(5), f'NPC_END|{NPC_INDEX}|{NPC_CODE}', point(6, 100))
+            self.assertEqual(source.poll(validate)['sequence'], 5)
+            self.assertIs(source.take_npc_measurement(), RADAR_ENDED)
+            self.assertIsNone(source.take_npc_measurement())
+            send(f'VIEW|cockpit|3|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}', point(7, 100))
+            self.assertIsNone(source.poll(validate))
+            self.assertIsNone(source.take_npc_measurement())
+
     def test_hold_trial_is_explicit_and_bound_to_a_single_vanilla_pair(self):
         target = (943, 'MFQ-419')
         epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
