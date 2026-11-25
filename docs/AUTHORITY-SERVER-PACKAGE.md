@@ -451,6 +451,12 @@ Other pilots can continue playing and the world can save. The saved journal
 currently holds up to 4,096 attempted orders per world.
 [Stock flight measurements](../reports/AUTHORITY-STOCK-FLEET-ORDER-LINUX-20261125.md)
 
+With `1ad21866` a native Linux pilot exercised both settings on a cold
+provider. The saved queue began with A, then held A and B after **Keep**.
+After **Clear** it held C. The last-pilot save retained C and the original
+captain. The pilot's own queue held its local copy of A throughout.
+[Native queue and saved result](../reports/AUTHORITY-STOCK-FLEET-QUEUE-LINUX-20261125.md)
+
 The earlier `494b470b` Linux test used an idle ship and one **Fly and Wait**
 order. The server checkpoint retained the order after the last pilot left.
 [Native pilot and server](../reports/AUTHORITY-STOCK-FLEET-PAIR-LINUX-20261125.md)

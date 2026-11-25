@@ -43,6 +43,26 @@ covered receive order with a simulated engine. The earlier native run
 covered one order on an idle ship.
 [Native fleet command and checkpoint](AUTHORITY-STOCK-FLEET-PAIR-LINUX-20261125.md)
 
+A cold-start Linux pair at `1ad21866` then used the stock **Keep** and
+**Clear** setting buttons. The same free WRN-302 retained its captain.
+The native server queue changed from A to A+B and then to C. The pilot's
+local queue stayed at its inherited A. The last-pilot checkpoint
+`checkpoint-118cee1e9ca54ec9bba1cb4ab1609540` retained only C plus the
+default behaviour. Its fleet journal holds all three request IDs. The
+purchase ledger's business rows matched the source. This used one actual
+pilot and a separate CPU-rendered provider on Bazzite.
+[Native cold queue and saved result](AUTHORITY-STOCK-FLEET-QUEUE-LINUX-20261125.md)
+
+Matching internal server/Linux pilot and Windows pilot packages for the
+next NPC observation are in `.local/flight-build-5d2299f3`. Linux SHA-256
+is `e29ef9f162b85bbd6dfe6c22e4689e4438906a04236086b7c05d104b69629981`,
+Windows SHA-256 is `4babf51e632ede4bc6f4ec8bdb282f8d45e128eecd88c81d08ce18a29a99447e`.
+All 173 shared source files matched. The pilot's NPC mode observes one
+identified ship through native radar or an explicitly selected and picked
+map target. It has no NPC playback writer. The provider uses its existing
+authenticated movement channel for this one-window trial. The recorded
+velocity is calculated from measured displacement per real second.
+
 The regular Docked trade window at `abf70d48` received current server
 offers. A purchase of two water settled at 116 Cr. On reopening, the
 same pilot saw 9,768 Cr and four water aboard while the underlying local
