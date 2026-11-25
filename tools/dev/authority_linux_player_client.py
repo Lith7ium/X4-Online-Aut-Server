@@ -42,7 +42,10 @@ def main(argv=None):
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
                           help='isolated test only: follow another company ship in the same cockpit sector')
-    parser.add_argument('--trial-registered-npc-hold', action='store_true',
+    npc_trial = parser.add_mutually_exclusive_group()
+    npc_trial.add_argument('--trial-registered-npc-align', action='store_true',
+                           help='isolated vanilla HVC-420 pilot only: align MFQ-419 once after its verified hold')
+    npc_trial.add_argument('--trial-registered-npc-hold', action='store_true',
                         help='isolated vanilla HVC-420 pilot only: briefly hold and release MFQ-419 on radar')
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
@@ -60,7 +63,8 @@ def main(argv=None):
     try:
         observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
                                                 company_motion=args.company_motion, own_index=args.company_ship_index)
-        if args.trial_registered_npc_hold and (not args.base_game_only or args.company_ship_index != 1073
+        hold_npc = args.trial_registered_npc_hold or args.trial_registered_npc_align
+        if hold_npc and (not args.base_game_only or args.company_ship_index != 1073
                                                 or observed_npc != (943, 'MFQ-419')):
             raise ValueError('NPC hold trial requires the vanilla HVC-420 pilot and observation of MFQ-419')
         validate_playback_index(playback_index, company_motion=args.company_motion,
@@ -97,8 +101,10 @@ def main(argv=None):
             motion_options['company_undock_test'] = True
         if observed_npc:
             motion_options['observed_npc'] = observed_npc
-        if args.trial_registered_npc_hold:
+        if hold_npc:
             motion_options['registered_npc_hold_trial'] = True
+        if args.trial_registered_npc_align:
+            motion_options['registered_npc_alignment_trial'] = True
         if playback_index is not None:
             motion_options['company_hull_playback_index'] = playback_index
         if cockpit_radar_playback:

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from authority.client_seat_overlay import company_motion_md, company_motion_ui
 from authority.company_motion_frames import MAX_COUNTER
+from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_source import CompanyMotionSource
 
@@ -35,6 +36,31 @@ class CompanyMotionSourceTest(unittest.TestCase):
         self.assertTrue(trial.configure(epoch, 1073, operational_bits=operational)['registered_npc_hold_trial'])
         self.assertIn('authority_saved_replica_control.xml', company_motion_md(trial))
         self.assertIn('registered_npc_hold_trial.lua', company_motion_ui(trial))
+
+    def test_alignment_adds_only_local_cockpit_receive_time_and_clears_track_on_loss(self):
+        epoch, generation = '26a1a365c66788aa06f0aeb9e18ff62e', 'd' * 32
+        source = CompanyMotionSource(observed_npc=(943, 'MFQ-419'), registered_npc_hold_trial=True,
+                                     registered_npc_alignment_trial=True)
+        self.addCleanup(source.close)
+        config = source.configure(epoch, 1073, operational_bits='1' * 1073)
+        self.assertTrue(config['registered_npc_alignment_trial'])
+        link = ReconnectingCompanyMotionClient.observing(1, {'ticket': 'f' * 64}, source, lambda peer: True)
+        self.addCleanup(link.close)
+        observer = source._observer
+        packets = []
+        observer._send = lambda packet: packets.append(packet) is None
+        for slot in ('cockpit', 'map'):
+            observer.receive(['VIEW', slot, '1', epoch, 'sector_a', '943', '0xab', 'MFQ-419'])
+        sample = dict(version=3, epoch=epoch, index=943, sequence=7, generation=generation, sector_macro='sector_a',
+                      source_time=31.0, capture_time=113.0, x=1.0, y=2.0, z=3.0, real_velocity=None)
+        with patch('authority.company_motion_observer.time.monotonic', return_value=29.0):
+            observer.snapshot(sample)
+        rows = {packet.split('|')[1]: packet.split('|') for packet in packets if packet.startswith('REMOTE|')}
+        self.assertEqual((len(rows['cockpit']), rows['cockpit'][-2:]), (17, ['113', '29']))
+        self.assertEqual((len(rows['map']), rows['map'][-1]), (16, '113'))
+        link._on_transport_lost(943, generation)
+        self.assertTrue(any(packet.startswith('END|cockpit|') for packet in packets))
+        self.assertIsNone(observer.resume_route())
 
     def test_loopback_coalesces_and_refuses_foreign_peer_and_selection(self):
         source = CompanyMotionSource()

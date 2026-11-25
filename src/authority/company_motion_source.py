@@ -45,7 +45,7 @@ class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
-                 observed_npc=None, registered_npc_hold_trial=False):
+                 observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
         if cockpit_radar_playback:
@@ -65,6 +65,9 @@ class CompanyMotionSource:
         self._reported_stages = set()
         self._observed_npc = validate_npc_observation(
             observed_npc, company_motion=True, playback_index=playback_index, cockpit_radar_playback=cockpit_radar_playback)
+        if type(registered_npc_alignment_trial) is not bool or (registered_npc_alignment_trial and not registered_npc_hold_trial):
+            raise ValueError('NPC alignment trial requires its reversible hold')
+        self._registered_npc_alignment_trial = registered_npc_alignment_trial
         if type(registered_npc_hold_trial) is not bool or (registered_npc_hold_trial and
                 self._observed_npc != (943, 'MFQ-419')):
             raise ValueError('NPC hold trial requires observation of MFQ-419 at index 943')
@@ -106,6 +109,10 @@ class CompanyMotionSource:
     @property
     def registered_npc_hold_trial(self):
         return self._registered_npc_hold_trial
+
+    @property
+    def registered_npc_alignment_trial(self):
+        return self._registered_npc_alignment_trial
 
     @property
     def observed_npc(self):
@@ -158,6 +165,8 @@ class CompanyMotionSource:
             config['observed_npc_index'], config['observed_npc_code'] = self._observed_npc
         if self._registered_npc_hold_trial:
             config['registered_npc_hold_trial'] = True
+        if self.registered_npc_alignment_trial:
+            config['registered_npc_alignment_trial'] = True
         if playback_index is not None:
             config['playback_index'] = playback_index
         if self._cockpit_radar_playback:
@@ -186,7 +195,8 @@ class CompanyMotionSource:
                 return False  # An unavailable native observer cannot stop cockpit publication.
 
         cockpit_slots = self._cockpit_max_pilots if self._cockpit_radar_playback and self._playback_index is None else 0
-        self._observer = CompanyMotionObserver(self._registry, send, trial_index=self.playback_index,
+        timed_index = self._observed_npc[0] if self.registered_npc_alignment_trial else self.playback_index
+        self._observer = CompanyMotionObserver(self._registry, send, trial_index=timed_index,
                                                cockpit_playback_slots=cockpit_slots)
         return self._observer
 

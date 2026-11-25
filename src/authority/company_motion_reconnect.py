@@ -217,7 +217,11 @@ class ReconnectingCompanyMotionClient:
         trial = {}
         trial_index = getattr(source, 'playback_index', None)
         cockpit_radar = getattr(source, 'cockpit_radar_playback', False)
-        if trial_index is not None:
+        if getattr(source, 'registered_npc_alignment_trial', False) is True:
+            # A disconnected cockpit must retire this one-shot placement, including a reconnect on the same seat.
+            trial = dict(on_transport_lost=observer.end, on_world_reset=observer.reset_world,
+                         trial_index=source.observed_npc[0], resume_route=observer.resume_route)
+        elif trial_index is not None:
             trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
                          trial_index=trial_index, resume_route=observer.resume_route)
         elif cockpit_radar:

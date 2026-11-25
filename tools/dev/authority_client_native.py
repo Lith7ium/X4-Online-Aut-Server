@@ -258,7 +258,7 @@ def error_code(error):
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
         cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
-        observed_npc=None, registered_npc_hold_trial=False):
+        observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
@@ -273,6 +273,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
+    if type(registered_npc_alignment_trial) is not bool or (registered_npc_alignment_trial and not registered_npc_hold_trial):
+        raise ValueError('NPC alignment trial requires its reversible hold')
     if type(registered_npc_hold_trial) is not bool or (registered_npc_hold_trial and
             (not getattr(args, 'base_game_only', False) or observed_npc != (943, 'MFQ-419'))):
         raise ValueError('NPC hold trial requires the vanilla MFQ-419 observation')
@@ -425,7 +427,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     if company_motion:
                         company_source = CompanyMotionSource(
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
-                            cockpit_radar_playback=cockpit_radar_playback, registered_npc_hold_trial=registered_npc_hold_trial)
+                            cockpit_radar_playback=cockpit_radar_playback, registered_npc_hold_trial=registered_npc_hold_trial,
+                            registered_npc_alignment_trial=registered_npc_alignment_trial)
                         source_options['company_motion'] = company_source
                     if company_purchases:
                         purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
