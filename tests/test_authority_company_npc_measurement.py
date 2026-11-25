@@ -10,7 +10,8 @@ from authority.company_motion_client import CompanyMotionClient
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_npc_measurement import (MEASUREMENT_KIND, NPC_INDEX, PILOT_INDEX,
-                                              RADAR_ENDED, REGISTRY_EPOCH, SECTOR, NpcMeasurementIngress)
+                                              RADAR_ENDED, REGISTRY_EPOCH, SECTOR, NpcMeasurementIngress,
+                                              native_capture_now)
 
 
 class NpcMeasurementTests(unittest.TestCase):
@@ -239,16 +240,16 @@ class NpcMeasurementTests(unittest.TestCase):
         observer.set_views([{'sector_macro': SECTOR, 'indices': [NPC_INDEX]}])
         own = {'version': 3, 'epoch': REGISTRY_EPOCH, 'generation': source.local_generation,
                'index': PILOT_INDEX, 'sequence': 1, 'sector_macro': SECTOR, 'source_time': 10.,
-               'capture_time': time.monotonic(), 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
+               'capture_time': native_capture_now(), 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
         probe = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
                  'actor': '0x41961', 'sequence': 1, 'attention': 'inzone', 'position': [1., 2., 3.],
-                 'game_time': 10., 'capture_time': time.monotonic(),
+                 'game_time': 10., 'capture_time': native_capture_now(),
                  'velocity_m_per_game_second': [2., 0., 1.]}
         drive()
         self.assertEqual(client.stats()['samples_acknowledged'], 1)
         self.assertEqual(self.rows[0]['sample'], probe)
         probe = RADAR_ENDED
-        own = dict(own, sequence=2, source_time=11., capture_time=time.monotonic())
+        own = dict(own, sequence=2, source_time=11., capture_time=native_capture_now())
         drive()
         self.assertEqual(self.ingress.retired_reason, 'radar_ended')
         self.assertEqual(client.stats()['samples_acknowledged'], 2)

@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -99,9 +100,22 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.source = RegisteredNpcSource(target(), clock=lambda: self.now)
         self.addCleanup(self.source.close)
         self.source.attach(self.service, lambda: self.unreserved)
-        image = Path('/proc/self/exe').stat()
-        ticks = int(Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
-        self.source.bind(dict(pid=os.getpid(), start_ticks=ticks, exe_dev=image.st_dev, exe_ino=image.st_ino))
+        if Path('/proc/self/exe').exists():
+            image = Path('/proc/self/exe').stat()
+            ticks = int(Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
+            identity = dict(pid=os.getpid(), start_ticks=ticks, exe_dev=image.st_dev, exe_ino=image.st_ino)
+        else:
+            # No /proc (Windows): the UDP ownership lookup is Linux-only, so accept exactly
+            # this test's connected sender, bound identity and source socket instead.
+            image = Path(sys.executable).stat()
+            identity = dict(pid=os.getpid(), start_ticks=0, exe_dev=image.st_dev, exe_ino=image.st_ino)
+            owner = patch('authority_registered_npc_source.socket_owner',
+                          side_effect=lambda peer, local, process: (
+                              process == identity and peer == self.sender.getsockname()
+                              and local == self.source._socket.getsockname()))
+            owner.start()
+            self.addCleanup(owner.stop)
+        self.source.bind(identity)
         self.sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sender.connect(self.source._socket.getsockname())
         self.addCleanup(self.sender.close)
@@ -121,7 +135,11 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.service.set_running(True)
         self.send()
         self.source.poll()
-        self.now = time.monotonic()
+        # The next capture must be later. On Windows 3.11 time.monotonic ticks every 15.625 ms.
+        first = self.now
+        while (now := time.monotonic()) <= first:
+            time.sleep(0.001)
+        self.now = now
         self.send(2, velocity=(2.75, 0, -11.625))
         self.source.poll()
 
@@ -273,6 +291,7 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.source.poll()
         self.assertIsNone(self.observation())
 
+    @unittest.skipUnless(hasattr(os, 'geteuid'), 'staging checks POSIX file ownership (Linux provider)')
     def test_staging_uses_single_registry_ready_update_and_archives_read_only_cue(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
