@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/dev'))
 from authority_company_trade_trial import install
@@ -37,32 +38,28 @@ class StockTradeReceiptSourceTests(unittest.TestCase):
         document = ET.parse(source)
         request = document.find(".//cue[@name='Request']")
         completed = document.find(".//cue[@name='Completed']")
-        snapshot = request.find(".//set_value[@name='$before_player_money']")
-        self.assertEqual(snapshot.attrib['exact'], 'player.money')
+        snapshot = request.find(".//set_value[@name='State.$purchase']")
+        self.assertIn('$before_player_money=player.money', snapshot.attrib['exact'])
+        snapshot_names = {name for name in re.findall(r'(\$before_[a-z_]+)=', snapshot.attrib['exact'])}
 
-        snapshot_names = {
-            node.attrib['name']
-            for node in request.iter('set_value')
-            if node.attrib['name'].startswith('$before_')
-        }
         writes = {
             node.attrib['name']: node.attrib['exact']
             for node in completed.iter('set_value')
         }
-        self.assertFalse(snapshot_names & writes.keys())
+        self.assertFalse(snapshot_names & {name.rsplit('.', 1)[-1] for name in writes})
         self.assertEqual(writes['$after_player_money'], '(player.money / 1ct)L')
-        self.assertEqual(writes['$delta_player_money'], '((player.money - $before_player_money) / 1ct)L')
+        self.assertEqual(writes['$delta_player_money'], '((player.money - $entry.$before_player_money) / 1ct)L')
 
         events = {
             node.attrib['name']: node.attrib['param'].split('.[', 1)[1].rstrip(']').split(',')
             for node in completed.iter('raise_lua_event')
         }
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][14:16],
-                         ['($before_player_money / 1ct)L', '$after_player_money'])
+                         ['($entry.$before_player_money / 1ct)L', '$after_player_money'])
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Observed'"][6], '$delta_player_money')
-        self.assertEqual(writes['$after_ship_cargo'], '$ship.cargo.{$ware}.count')
+        self.assertEqual(writes['$after_ship_cargo'], '$entry.$ship.cargo.{$entry.$ware}.count')
         self.assertEqual(events["'X4AuthorityCompanyStockTrade.Deal'"][-2:],
-                         ['$before_ship_cargo', '$after_ship_cargo'])
+                         ['$entry.$before_ship_cargo', '$after_ship_cargo'])
 
 
 class FixedTradeDriverTests(unittest.TestCase):

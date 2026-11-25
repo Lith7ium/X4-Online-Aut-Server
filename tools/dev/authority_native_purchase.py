@@ -247,8 +247,8 @@ class NativePurchaseProvider:
             if opening:
                 bound_dock(opening[0], attempt.id)
             quote = ['RESULT', attempt.id, 'quote', price]
-            if reason == 'not_tradeable' and (opening[1:] == [quote] or
-                                                (len(opening) == 1 and price == '0')):
+            if reason in ('not_tradeable', 'provider_limit') and (opening[1:] == [quote] or
+                                                                  (len(opening) == 1 and price == '0')):
                 return self._record(attempt, 'refused', reason=reason)
             if reason == 'price_changed' and len(opening) == 3 and opening[1] == quote:
                 refusal = opening[2]

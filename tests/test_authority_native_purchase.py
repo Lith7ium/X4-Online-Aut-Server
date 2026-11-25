@@ -173,6 +173,23 @@ class NativePurchaseProviderTests(unittest.TestCase):
             self.assertEqual(provider.poll(), dict(PURCHASE, outcome='refused', reason='captain_required'))
             self.assertIsNone(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32)))
 
+    def test_unarmed_monitor_refuses_after_bound_quote_without_locking_provider(self):
+        provider = self.provider()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+            peer.bind(('127.0.0.1', 0))
+            address = provider._socket.getsockname()
+            lease = provider._lease
+            purchase_id = PURCHASE['purchase_id']
+            peer.sendto(f'PURCHASE_HELLO|{lease}'.encode(), address)
+            self.assertIsNone(provider.begin(BINDING, PURCHASE))
+            rows = (f'DOCK|{purchase_id}|READY|0x10|0x20|0x30|11.000',
+                    f'RESULT|{purchase_id}|quote|5819',
+                    f'RESULT|{purchase_id}|provider_limit|5819', 'DONE')
+            for sequence, row in enumerate(rows, 1):
+                peer.sendto(f'RECEIPT|{lease}|{purchase_id}|{sequence}|{row}'.encode(), address)
+            self.assertEqual(provider.poll(), dict(PURCHASE, outcome='refused', reason='provider_limit'))
+            self.assertIsNone(provider.begin(BINDING, dict(PURCHASE, purchase_id='b' * 32)))
+
     @unittest.skipUnless(shutil.which('cc') and shutil.which('luajit'), 'LuaJIT and C compiler required')
     def test_real_udp_luajit_requotes_and_confirms_two_serial_purchases(self):
         with TemporaryDirectory() as directory:
@@ -260,12 +277,31 @@ class NativePurchaseProviderTests(unittest.TestCase):
         self.assertLess(ordered.index(observation), ordered.index(buys[0]))
         self.assertEqual(buys[0].attrib['immediate'], 'true')
         self.assertEqual(request.attrib['namespace'], 'this')
-        completed = request.find("./cues/cue[@name='Monitor']/cues/cue[@name='Completed']")
+        monitor = root.find("./cues/cue[@name='State']/cues/cue[@name='Monitor']")
+        completed = monitor.find("./cues/cue[@name='Completed']")
         self.assertIsNone(completed.get('instantiate'))
         completion_guard = completed.find('./conditions/check_value').attrib['value']
-        self.assertIn('event.param == $deal or event.param2 == $deal', completion_guard)
+        self.assertIn('event.param == State.$purchase.$deal', completion_guard)
+        self.assertIn('event.param2 == State.$purchase.$order', completion_guard)
+        self.assertIn('@event.param2.trade == State.$purchase.$deal', completion_guard)
         self.assertIn('$provider_lease == @State.$live_lease', completion_guard)
         self.assertIn('$request == @State.$live_request', completion_guard)
+
+        arm = next(node for node in request.iter('do_if')
+                   if node.get('value') == '@State.$monitor_ready == $request')
+        self.assertEqual(list(arm.iter('create_trade_order')), buys)
+        branch = next(node for node in request.iter() if arm in list(node))
+        children = list(branch)
+        reset, clear, snapshot, signal, allowed, refused = children
+        self.assertEqual((reset.tag, reset.get('cue')), ('reset_cue', 'Monitor'))
+        self.assertEqual(clear.attrib, {'name': 'State.$monitor_ready', 'exact': 'null'})
+        self.assertEqual(snapshot.get('name'), 'State.$purchase')
+        self.assertEqual(signal.attrib, {'cue': 'Monitor', 'param': '$request'})
+        self.assertIs(allowed, arm)
+        self.assertEqual(list(refused.iter('create_trade_order')), [])
+        self.assertIn("'provider_limit'", [node.get('exact') for node in refused.iter('set_value')])
+        self.assertEqual(monitor.find('./actions/set_value').attrib,
+                         {'name': 'State.$monitor_ready', 'exact': 'event.param'})
         for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
             self.assertEqual(list(root.iter(action)), [])
 
