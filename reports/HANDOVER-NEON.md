@@ -123,6 +123,15 @@ remain open. His WAN flight is waiting for the operator. Astra is checking
 X4's native ship velocity and the temporary cockpit-side NPC order.
 [19:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795629624674239)
 
+The 20:00 comparison covered one real cockpit correction, the saved marine
+transport and the full Linux regression. A later simultaneous run at
+`4deb8ecf` found 160 distinct samples of the locally simulated MFQ-419
+on the pilot. The provider had seven distinct positions in the same
+window. The pilot's previous native velocity predicted the next local
+position to 0.017 m median error in game time. This makes the pilot a
+candidate source for visible NPC movement. Authority transfer is open.
+[20:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795633226619129) · [Simultaneous trajectories](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).

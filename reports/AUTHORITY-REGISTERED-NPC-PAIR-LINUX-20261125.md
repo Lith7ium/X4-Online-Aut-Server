@@ -181,3 +181,35 @@ Percentiles use nearest rank. The shortest error on a changed step was
 but advancing it continuously did not predict the next low-attention
 sample within the existing 50 m correction budget. A cockpit-side native
 trajectory in high attention still needs separate measurement.
+
+### Simultaneous pilot and provider trajectories
+
+At `4deb8ecf`, two Linux X4 processes loaded the same world. The pilot's
+stock radar identified MFQ-419. While the pilot's own engine simulated the
+freighter, a read-only observer sampled its local position, attention and
+velocity. The provider independently sampled its version of the same ship.
+Their host monotonic clocks allowed the capture windows to be compared.
+
+| Over the pilot's capture window | Pilot | Provider |
+| --- | ---: | ---: |
+| Position samples | 160 | 34 |
+| Distinct positions | 160 | 7 |
+| Consecutive samples at the same position | 0/159 | 27/33 |
+| Median elapsed time between samples | 126 ms | 547 ms |
+
+The pilot reported 40 stock attention readings of `inzone` and 120 of
+`visible`. Every sample met the stock visible threshold. All were below
+the nearby threshold. The pilot's engine reported 1,132–1,148 m/s.
+Projecting the previous stock velocity across one interval predicted
+the next local position with a median error of 0.017 m using game time
+(90th percentile 0.032 m). Using real elapsed time gave 2.59 m and
+8.03 m. Holding the previous position gave a median error of 144.49 m.
+These errors compare successive positions in the same simulation.
+They do not measure agreement between the two worlds.
+
+The bounded measurement finished before the target naturally left radar.
+The provider then saved `checkpoint-533ef92a740e4121bf67ac54a9734705`,
+SHA-256 `99e9abcd124cf8101f1048946d324d2766654021ef2e1be8b1c40ae29cd3b4c2`.
+Both game processes stopped. This run measured a candidate pilot source.
+Server receipt of its native positions, authority handoff and remote
+playback still need separate evidence.

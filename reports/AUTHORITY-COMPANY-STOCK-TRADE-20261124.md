@@ -536,3 +536,22 @@ The 6,946-cent quoted total and 6,900-cent credited amount were
 recorded separately. See `.local/water-sale-native-04/result.json`
 and its engine log. This was a one-shot local Linux diagnostic. It did
 not exercise a remote player's stock trade menu or checkpoint persistence.
+
+### Confirmed CTD starting point for an admitted seller
+
+A disposable GPU-free Linux world at `a2aeb288` started from the same
+12-water source. The setup verified the original BIM berth and its
+assigned NPC captain, placed the ship near CTD-093 and issued one stock
+DockAt. X4 confirmed WRN-302 in the external trading berth with the same
+captain. CTD offered to buy 60 water at 3,473 cents each, minimum one.
+The ship still held 12 water and the Company had 930,100 cents. The
+initial diagnostic had treated a saved NPC code as a mandatory script
+property. The corrected run found that property null and verified the
+captain through its assigned role, native reference and saved seed.
+
+The provider paused and confirmed `checkpoint-8d8112cd545c48c8a9017648d2c4d340`,
+SHA-256 `c8e7735315db5c23246dc672effffb472638166d2e074ddc6488586fef424e30`.
+Independent save and ledger reads confirmed the berth, cargo, balance,
+captain and bid. No sale was submitted during this preparation. The
+original source remained byte-identical and the normal recovery checks
+accepted the new checkpoint as an input for the seller's session.
