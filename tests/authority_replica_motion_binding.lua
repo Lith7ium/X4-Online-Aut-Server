@@ -11,6 +11,14 @@ for _,path in ipairs({'relative/45841/save','/home/test/45842/save','C:/Users/Te
  '\\Users\\Test\\45841\\save','\\??\\C:\\Users\\Test\\45841\\save'})do
  assert(normalize(path)==nil,path)
 end
+assert(normalize('C:\\Users\\Test\\45850\\save\\','45850')=='C:/Users/Test/45850/save')
+assert(normalize('//Server/Share/Users/Test/45858/save','45858')=='//Server/Share/Users/Test/45858/save')
+assert(normalize('/home/test/45850/save','45850')==nil)
+assert(normalize('C:/Users/Test/45850/save')==nil)
+assert(normalize('C:/Users/Test/45850/save','45851')==nil)
+assert(normalize('C:/Users/Test/45850/save',45850)==nil)
+assert(normalize('C:/Users/Test/45859/save','45859')==nil)
+assert(normalize('//Server/45850/save','45850')==nil)
 local epoch,generation,nonce=string.rep('a',32),string.rep('b',32),string.rep('c',32)
 local function sample(seq)return {epoch=epoch,generation=generation,index=42,sequence=seq or 1,sector_macro='sector_a'}end
 local function rig(mode,custom_nonce)

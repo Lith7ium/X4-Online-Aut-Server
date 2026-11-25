@@ -106,14 +106,18 @@ function M.new(options)
     return api
 end
 
-function M.new_x4(config, save_path, pinned, udp)
+function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     local ffi = require('ffi')
+    assert(windows_company_profile == nil or ffi.os == 'Windows')
     ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); const char* GetSaveFolderPath(void);]]
     local C = ffi.C
-    local net = udp.open('127.0.0.1', config.port)
     local resolve = X4LAN_RESOLVE_STRING
-    local normalize = X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+    local normalize_path = X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+    local function normalize(path)
+        return normalize_path(path, windows_company_profile)
+    end
     local expected = assert(normalize(save_path))
+    local net = udp.open('127.0.0.1', config.port)
     local function actor()
         local selected = seat and seat:controlled_actor()
         return selected and resolve.parse_hex(selected) or nil

@@ -42,3 +42,17 @@ check_path('','',false)
 check_path('/','/',false)
 check_path('/private/save',nil,false)
 check_path('/private/save','/private/save\0unexpected',false)
+
+dofile('src/authority/lua/replica_motion_binding.lua')
+local ffi=require('ffi')
+ffi.os='Windows'
+X4LAN_CONFIG.test_profile='45850'
+local alternate='C:/Users/Player/45850/save'
+check_path(alternate,alternate,false)
+X4LAN_CONFIG.authority_windows_company_profile=true
+check_path('C:\\Users\\Player\\45850\\save\\',alternate,true)
+check_path('C:/Users/Other/45850/save',alternate,false)
+check_path('C:/Users/Player/45851/save',alternate,false)
+check_path('/home/Player/45850/save','/home/Player/45850/save',false)
+ffi.os='Linux'
+check_path(alternate,alternate,false)

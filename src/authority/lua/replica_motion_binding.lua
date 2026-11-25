@@ -5,7 +5,11 @@ local function integer(v)return type(v)=='number' and v==v and v>=1 and v<=MAX a
 local function finite(v)return type(v)=='number' and v==v and v>=0 and v<math.huge end
 local function token(v)return type(v)=='string' and #v==32 and v:match('^[0-9a-f]+$')~=nil end
 -- Lexically normalize separators only; this does not establish filesystem provenance or resolve filesystem case.
-function M.normalize_profile_save_path(value)
+function M.normalize_profile_save_path(value, windows_company_profile)
+ if windows_company_profile~=nil and
+  (type(windows_company_profile)~='string' or not windows_company_profile:match('^4585[0-8]$')) then
+  return nil
+ end
  if type(value)~='string' or #value==0 then
   return nil
  end
@@ -29,7 +33,7 @@ function M.normalize_profile_save_path(value)
   end
   prefix='//'..server..'/'..share
   remainder=tail:sub(2)
- elseif path:sub(1,1)=='/' then
+ elseif not windows_company_profile and path:sub(1,1)=='/' then
   prefix='/'
   remainder=path:sub(2)
  else
@@ -47,7 +51,9 @@ function M.normalize_profile_save_path(value)
 
  local separator=prefix=='/' and '' or '/'
  local normalized=prefix..separator..remainder
- if normalized:sub(-11)~='/45841/save' then
+ local suffix='/'..(windows_company_profile or '45841')..'/save'
+ local profile_path=windows_company_profile and '/'..remainder or normalized
+ if profile_path:sub(-#suffix)~=suffix then
   return nil
  end
  return normalized

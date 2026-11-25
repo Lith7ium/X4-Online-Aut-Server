@@ -3,7 +3,8 @@
 local M={}
 function M.new(cfg)
  if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
- assert(cfg.test_profile=='45841','isolated test profile required')
+ local windows_company_profile=cfg.authority_windows_company_profile==true
+ assert(windows_company_profile or cfg.test_profile=='45841','isolated test profile required')
  for _,name in ipairs({'Pause','Unpause','SaveGame','IsSavingPossible','GetCurRealTime'}) do
   assert(type(_G[name])=='function','required X4 UI function unavailable')
  end
@@ -17,8 +18,15 @@ function M.new(cfg)
  local C=ffi.C
  local raw=C.GetSaveFolderPath()
  assert(raw~=nil and raw~=ffi.NULL,'save folder unavailable')
- local path=ffi.string(raw):gsub('\\','/'):gsub('/+$','')
- assert(path:sub(-#'/45841/save')=='/45841/save','outside isolated profile')
+ if windows_company_profile then
+  assert(ffi.os=='Windows' and type(cfg.test_profile)=='string','isolated Windows Company profile required')
+  local normalize=X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+  local expected=assert(normalize(cfg.authority_load_save_path,cfg.test_profile),'invalid Windows Company save path')
+  assert(normalize(ffi.string(raw),cfg.test_profile)==expected,'outside isolated Windows Company profile')
+ else
+  local path=ffi.string(raw):gsub('\\','/'):gsub('/+$','')
+  assert(path:sub(-#'/45841/save')=='/45841/save','outside isolated profile')
+ end
  -- Capture the functions now. This is not protection against unrelated users
  -- or extensions invoking them; that requires an external admission fence.
  local pause,unpause,save,possible,realtime=Pause,Unpause,SaveGame,IsSavingPossible,GetCurRealTime

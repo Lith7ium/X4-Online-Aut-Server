@@ -17,12 +17,19 @@ local function frame()
  if not ffi.C.IsPlayerValid() then set_sources_running(false) end
  if not ffi.C.IsPlayerValid() then return end
  if not state then
-  engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new({enabled=true,test_profile='45841'}))
+  local control_config={enabled=true,test_profile='45841'}
+  if cfg.authority_windows_company_profile==true then
+   control_config.authority_windows_company_profile=true
+   control_config.test_profile=cfg.test_profile
+   control_config.authority_load_save_path=cfg.authority_load_save_path
+  end
+  engine=assert(X4LAN_AUTHORITY_X4_CONTROL_ENGINE.new(control_config))
   local lib=X4LAN_LOCAL_UDP_MODULE.load(ffi.os,package.loadlib)
   net=lib.open('127.0.0.1',cfg.authority_participant_port)
   if cfg.authority_company_motion then
    company_motion=assert(X4LAN_COMPANY_MOTION_SOURCE.new_x4(cfg.authority_company_motion,
-     cfg.authority_load_save_path,cfg.authority_registry_snapshot,lib))
+     cfg.authority_load_save_path,cfg.authority_registry_snapshot,lib,
+     control_config.authority_windows_company_profile and control_config.test_profile or nil))
   end
   if cfg.authority_company_purchase then
    company_purchase=assert(X4LAN_COMPANY_PURCHASE_SOURCE.new_x4(

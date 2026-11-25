@@ -143,3 +143,29 @@ for _, reason in ipairs({'event_dock_values|payload', 'sample_private_error', 17
 end
 config.fault(nil)
 assert(lines[#lines] == prefix .. 'unknown')
+
+dofile('src/authority/lua/replica_motion_binding.lua')
+local current_path = 'C:\\Users\\Player\\45858\\save\\'
+package.loaded.ffi = {
+    os = 'Windows', NULL = {}, cdef = function() end, string = function(value) return value end,
+    C = {
+        GetSaveFolderPath = function() return current_path end,
+        IsPlayerValid = function() return true end,
+        IsGamePaused = function() return false end,
+    },
+}
+X4LAN_RESOLVE_STRING = {parse_hex = function() return actor end}
+source.arm({controlled_actor = function() return '0x41' end})
+local windows_path = 'C:/Users/Player/45858/save'
+local motion_config = {port = 1, lease = 'test', generation = generation, nonce = nonce, index = index}
+local pinned = {epoch = epoch, issued_count = index}
+local udp = {open = function() return {} end}
+assert(not pcall(source.new_x4, motion_config, windows_path, pinned, udp))
+source.new_x4(motion_config, windows_path, pinned, udp, '45858')
+assert(native_options.available())
+config = native_options.make_sampler(actor, function() return true end)
+assert(config.expected_save_path == windows_path)
+assert(config.normalize_save_path(current_path) == windows_path)
+assert(config.normalize_save_path('C:/Users/Player/45857/save') == nil)
+current_path = 'C:/Users/Other/45858/save'
+assert(not native_options.available())

@@ -9,8 +9,15 @@ local function normalize_path(path)
  return normalized
 end
 local function profile()
- assert(cfg.test_profile=='45841')
  local p=ffi.C.GetSaveFolderPath();assert(p~=nil and p~=ffi.NULL)
+ if cfg.authority_windows_company_profile==true then
+  assert(ffi.os=='Windows' and type(cfg.test_profile)=='string')
+  local normalize=X4LAN_REPLICA_MOTION_BINDING.normalize_profile_save_path
+  local expected=assert(normalize(cfg.authority_load_save_path,cfg.test_profile))
+  assert(normalize(ffi.string(p),cfg.test_profile)==expected)
+  return
+ end
+ assert(cfg.test_profile=='45841')
  assert(normalize_path(ffi.string(p))==normalize_path(cfg.authority_load_save_path))
 end
 local t=cfg.authority_ticket
