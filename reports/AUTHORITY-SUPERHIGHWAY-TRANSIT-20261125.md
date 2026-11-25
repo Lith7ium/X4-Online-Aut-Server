@@ -1,5 +1,32 @@
 # Company superhighway passage and authoritative sector transfer
 
+## Two pilots, verified transfer and final save
+
+At `1d0c4e4b`, HVC-420 flew the stock superhighway from Black Hole Sun V
+to Black Hole Sun IV while KHI-630 remained connected in IV. Both
+ordinary Linux cockpits and the GPU-free provider ran on Bazzite over
+loopback TLS. The test observed the ordinary flight without delaying any
+reply. The provider's read-only verification requests shared one four-second
+budget after each position write.
+
+| Observed in the session | Result |
+| --- | --- |
+| HVC sender at the sector boundary | Origin sample 261, destination position 262, destination velocity by sample 266 |
+| KHI after HVC's exit | Stationary destination sample 176 acknowledged under KHI's existing grant |
+| Provider | 1,167 accepted motion samples, 15 verified writes, one verified sector transfer for HVC at sequence 275 |
+| Independent inspection of the final save | HVC and KHI both in Black Hole Sun IV, respectively 0.580 mm and 0.391 mm from their paused readbacks |
+
+The longest interval measured between a verification request and its accepted
+readback was 1.599 s. The 2.01597 s case from the earlier run was covered in
+the bridge regression tests. The passive flight did not need the extra time.
+The provider saved on last departure and all three processes exited normally.
+The verified checkpoint was `checkpoint-04007b4314214624a09ce825893fc160`,
+save SHA-256 `82fcded5ce876e812a2700ebf0c7dc322af60a77bcbf02e34e9f14205412df90`.
+The private evidence `.local/native-authority-transit-pair-md-readback/native-01/verified.json`
+has SHA-256 `2ad59ab75bb0b2f5ce4c91437dfab25df1c73f407d625045d92739a8d588d137`.
+This checkpoint was inspected offline. Cold recovery was exercised separately
+in the earlier one-pilot flight.
+
 ## Interrupted sender with two admitted pilots
 
 At `7ae7a5a0` two ordinary Linux cockpits joined the GPU-free Bazzite

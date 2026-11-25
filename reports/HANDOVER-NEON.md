@@ -8,7 +8,9 @@ limit is four pilots. Compare findings and assign work at the top of the
 hour, Berlin time, in `#x4-authorative-server`. At 14:00 Cobalt had
 reproduced the assigned Windows flight ZIP byte for byte and verified
 the linked-extension-root check on NTFS. The Windows flight still needs
-the operator. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795611653182879)
+the operator. At 15:00 Neon took the registered NPC receive/playback check
+on Windows and Quartz took a native stock “Fly and Wait” trial.
+[Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795615284533159)
 
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
@@ -156,8 +158,11 @@ from a deliberately delayed sector read and the provider saved the destination
 within 0.61 mm. In a separate natural passage, KHI remained connected and
 both pilots' motion streams continued after HVC exited. The provider stopped
 on its 2 s readback deadline for an earlier origin-sector write. The
-matching response prefix arrived at 2.01597 s. Final authoritative
-persistence in that two-pilot scenario remains open.
+matching response prefix arrived at 2.01597 s. Lith7ium approved a shared
+four-second readback deadline. Two pilots then completed the same stock
+passage at `1d0c4e4b`. The provider transferred HVC once, saved on last exit
+and both ships were independently verified within 0.6 mm of their paused
+positions. The longest successful readback in that flight was 1.599 s.
 [Native flight and authority transfer](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
@@ -207,9 +212,11 @@ persistence in that two-pilot scenario remains open.
   on the recorded trajectory. The local ship and MHK-947, which remained
   selected in the HUD, stayed at their original positions. The private
   fixture used X4's real-time clock aligned to the Windows performance
-  counter. Next, inspect the DLL and clock the packaged Windows sender
-  actually selects, and exercise its real controlled-ship sample path
-  when the Windows system is available. Cobalt owns the Internet flight.
+  counter. Neon subsequently observed the packaged Windows DLL loaded in X4,
+  verified its clock and correlated 37 of 37 controlled-ship samples
+  with local acknowledgements. The next check pairs an authority NPC with
+  the Windows receiver. Cobalt owns the Internet flight.
+  [Native Windows sender evidence](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/8e2880cab4632afe20e09a4655dae4fcf63e591f/reports/AUTHORITY-WINDOWS-SENDER-DLL-20261125.md)
   The shared ZIP contains DLL SHA-256 `6ad97e04…e2809e0`.
   The indexed receiver fixture used the older checked-in DLL
   `0fc98dba…f80b6ab6`. The packaged DLL's clock previously advanced
@@ -226,8 +233,9 @@ persistence in that two-pilot scenario remains open.
   [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
-- **Quartz** has the read-only investigation of the Company fleet command
-  “Fly and Wait”.
+- **Quartz** traced the stock map's “Fly and Wait” command to an NPC-captained
+  Company ship. A single native order and its arrival are the next test.
+  [Stock fleet order trace](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/d21fbfee/reports/AUTHORITY-COMPANY-FLY-AND-WAIT-SOURCE-20261125.md)
 - **Astra** owns server and client integration. A pilot can board a reserved
   ship as a passenger while its NPC captain finishes a trade. Lith7ium
   wants the client to wait for the server ship to clear its berth before
