@@ -59,3 +59,10 @@ which guard condition failed. This confirms paused boarding and delivery
 to the diagnostic cue. The stock NPC transition was never invoked, so
 this trial leaves paused chair release and paused captain-seat admission
 unverified.
+
+An offline read of WRN's order queue in the confirmed source save found its
+default `Wait` order and a temporary `TradePerform` order with
+`state="critical"`. The trade debit and cargo were already in that save. The
+relief guard also checked whether X4 allowed the current order to be
+cancelled. The save identifies a possible cause of the refusal. The probe
+did not log that individual predicate at the time of the request.

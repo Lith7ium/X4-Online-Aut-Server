@@ -128,8 +128,11 @@ The intended seat selection includes ships with an assigned Company captain.
 When a human takes the helm, the same NPC should remain aboard and assigned
 to the ship. On the server that NPC can execute confirmed station purchases.
 An uncrewed ship should still be available for flight. The current seat
-handover and flight-position writer require an empty helm. Taking over a
-crewed ship is under native development.
+handover and flight-position writer require an empty helm. An isolated X4
+client took the helm with the original captain aboard while simulation was
+running. In a paused copy the player could board on foot. Taking control
+of a crewed ship during normal admission still requires verification.
+[Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
 
 ## Server positions for reserved Company ships
 
