@@ -42,3 +42,20 @@ the saved NPC seed and exact runtime reference.
 
 The isolated run opened no network session and wrote no checkpoint. The
 source SHA-256 matched after cleanup, and no owned X4 processes remained.
+
+## Follow-up with the world paused
+
+A separate one-shot trial loaded the same confirmed copy and held the world
+paused throughout. The MD baseline verified the same captain aboard and in
+the chair, with the player outside the ship and out of control. The stock
+teleport with `control=false` returned, and an independent native read
+confirmed the player aboard on foot and the captain still in the chair.
+All receipts stayed at X4 game age 321.60 s. The Lua observer also checked
+the pause flag and unchanged game time on every observed frame.
+
+The correlated relief request reached the MD cue. Its aggregate guard
+refused before emitting `npc__leave_post`. The receipt did not identify
+which guard condition failed. This confirms paused boarding and delivery
+to the diagnostic cue. The stock NPC transition was never invoked, so
+this trial leaves paused chair release and paused captain-seat admission
+unverified.
