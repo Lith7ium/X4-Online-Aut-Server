@@ -211,8 +211,7 @@ The bounded measurement finished before the target naturally left radar.
 The provider then saved `checkpoint-533ef92a740e4121bf67ac54a9734705`,
 SHA-256 `99e9abcd124cf8101f1048946d324d2766654021ef2e1be8b1c40ae29cd3b4c2`.
 Both game processes stopped. This run measured a candidate pilot source.
-Server receipt of its native positions, authority handoff and remote
-playback still need separate evidence.
+Run 10 later verified read-only server receipt.
 
 ### Run 08 absolute sector positions
 
@@ -248,3 +247,57 @@ game-time pairs of native publications differed by 1.35 and 4.43 km.
 These are discrepancies between observed simulation positions. They
 do not estimate the provider position between its low-attention jumps
 or establish the effect of a playback correction.
+
+
+### Read-only pilot-to-provider measurement
+
+Run 09 at `df53039d` admitted HVC-420 on Linux and recorded 160 local
+MFQ-419 measurements. The normal reconnect wrapper omitted the NPC
+binding metadata, so the movement connection never bound and the
+provider received zero pilot measurements. The private overlay also
+added an unexpected option to the credential table, which failed
+redaction. The provider still confirmed its last-departure save
+`checkpoint-0ec0f62faa4b457aa55e34f1582caa3d` and both processes stopped.
+The source bytes remained unchanged.
+
+Run 10 at `46fc471a213aebd36d38954122dd29bb2e91547c` used the same source
+on one private Linux provider and one Linux cockpit. The provider
+received **155 of 160** autonomous MFQ-419 observations from the admitted
+HVC-420 movement grant. Every received record matched the native
+cockpit record for identity, sector, XYZ, game time, capture time,
+stock attention, and sector velocity in metres per game second.
+The cockpit recorded 39 `inzone` and 121 `visible` observations,
+all at or above the stock `visible` threshold and below `nearby`.
+The received subset included 35 `inzone` and 120 `visible` records.
+
+The observed capture-to-receiver delay was 22.7–255.0 ms, with a
+123.0 ms median. This subtracts the cockpit's native monotonic
+capture timestamp from the provider's monotonic receipt timestamp
+on the same host. Game time describes the simulation sample and
+the velocity basis. The delay includes the private live-log reader
+and the loopback movement channel. The normal own-ship stream
+acknowledged 148 HVC-420 samples in the same session.
+
+Radar ended naturally at cockpit game time 589.78. The provider
+recorded `view_lost` and cleared its last sample while the pilot
+remained connected. The private receiver only recorded the pilot's
+report. It issued no world writes or onward snapshots. The open-map
+radar-END case has separate socket-test evidence.
+
+The offered checkpoint was `checkpoint-4d5f23378a164e9396e2318bc5c9aae4`.
+Normal departure produced `checkpoint-6608d311fc70408badf45da1761d5c02`,
+SHA-256 `50abd251197206efc2832581353485b694ef041441eb63350711e3bbe2ff64b0`.
+Both saved markers were verified. The original and staged input retained
+SHA-256 `972b596cebcac38396321477287b84e5bf8da0a4b60ec705717be061257f6c01`.
+Credential redaction succeeded, both owned process lists were empty,
+and the native and private slot locks were released. Evidence covers
+read-only receipt on Linux loopback. Authority handoff, remote gameplay
+application and Windows require separate trials.
+
+Private evidence is under `.local/native-registered-npc-pair/`. The
+`run-09/findings.md` digest is
+`26db9903558903d9738cfd6c816d767d2f92adca95c0eb29b007dc63339e5ddd`.
+The `run-10/native-measurement-ingress-verified.json` digest is
+`597aaf871f40f8069abe087a644d4de6f8803b4aa4cda9c303e4df414b7a618a`
+and the corresponding raw receiver log `run-10/server-native-measurements.jsonl`
+has digest `9d99a4d914c76f3b8852b9a3ef66cbb34c35ba1df59051764f55a9bb0e2e2b75`.
