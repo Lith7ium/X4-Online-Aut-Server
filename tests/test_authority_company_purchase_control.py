@@ -7,7 +7,7 @@ import unittest
 import test_authority_experimental_tcp_participants as fixtures
 from authority.company_purchase_control import (
     ClientPurchaseControl, CompanyPurchasePeerLost, poll_company_purchase, poll_company_undock, purchase_receipt,
-    deliver_company_purchase_statement_result, request_company_purchase_statement,
+    deliver_company_purchase_statement_result, poll_company_fleet, request_company_purchase_statement,
 )
 from authority.company_undock_messages import UndockWindow, undock_receipt, undock_request
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
@@ -144,6 +144,7 @@ class CompanyPurchaseTests(unittest.TestCase):
         case.control._company_purchases = True
         case.control._company_undock = True
         case.control._company_trade_view = True
+        case.control._company_fleet_orders = True
         session = case.control._session
         session._company_ship_reader = lambda _checkpoint: CompanyShipCatalogue('d' * 32, (
             CompanyShip(7, '[0x123]', PURCHASE['sector'], 'Company ship', 'WRN-302'),
@@ -173,7 +174,7 @@ class CompanyPurchaseTests(unittest.TestCase):
                              ship_index)
             if ship_index == 7:
                 enable = dict(choose, kind='enable_company_purchases', statement_version=1, undock_version=1,
-                              trade_view_version=1)
+                              trade_view_version=1, fleet_order_version=1)
                 self.assertEqual(json.loads(exchange(client, json.dumps(enable).encode())), dict(
                     enable, kind='company_purchases_enabled', registry_epoch='d' * 32))
             self.assertEqual(json.loads(exchange(client, encode_load_claim(claim_for(offer))))['kind'], 'accepted')
@@ -197,6 +198,14 @@ class CompanyPurchaseTests(unittest.TestCase):
         def undock_exchange(receipt):
             departure_receipts.append(receipt)
             return DEPARTURE if len(departure_receipts) == 1 else None
+
+        order = dict(order_id='e' * 32, ship_index=17, ship_code='NPC-001',
+                     sector='sector_1', x=1200.125, y=-20, z=0)
+        order_receipts = []
+
+        def fleet_exchange(receipt):
+            order_receipts.append(receipt)
+            return order if len(order_receipts) == 1 else None
 
         def statement_result(receipt):
             deliveries.append(receipt)
@@ -223,6 +232,7 @@ class CompanyPurchaseTests(unittest.TestCase):
                         company_purchase_attempt=bound.attempt_id, company_purchase_ship_index=index,
                         company_purchase_statement=statement if index == 7 else None,
                         company_purchase_statement_result=statement_result if index == 7 else None,
+                        company_fleet_exchange=fleet_exchange if index == 7 else None,
                         company_undock_exchange=undock_exchange if index == 7 else None,
                         company_trade_view_exchange=trade_view_exchange if index == 7 else None)
                     started.set()
@@ -302,6 +312,16 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poll_company_undock(*args, departure_confirmed)
         self.assertEqual(departure_receipts, [None, departure_confirmed])
+        self.assertEqual(poll_company_fleet(*args, guard=guard), order)
+        accepted = dict(order, outcome='accepted')
+        with self.assertRaises(ValueError):
+            poll_company_fleet(*args, dict(accepted, y=-21))
+        with self.assertRaises(ValueError):
+            poll_company_fleet(case.participants, other_offer.connection_handle, other_offer.attempt_id, 8)
+        self.assertIsNone(poll_company_fleet(*args, accepted))
+        with self.assertRaises(ValueError):
+            poll_company_fleet(*args, accepted)
+        self.assertEqual(order_receipts, [None, accepted])
         self.assertEqual(deliveries, [REPORTED])
         with self.assertRaises(ValueError):
             deliver_company_purchase_statement_result(*args, CONFIRMED)
