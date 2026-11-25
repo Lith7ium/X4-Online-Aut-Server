@@ -5,9 +5,9 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 11:00 check-in
-covers the Fedora startup, the stalled Linux sender and the Windows
-operator's availability. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795600842370719)
+hour, Berlin time, in `#x4-authorative-server`. The 12:00 check-in
+covers the matching flight packages and the staged Fedora upgrade.
+[Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795604471235909)
 
 Fedora run-02 timed out on the native position inspection of HVC-420 (1073).
 It accepted 38 stationary pilot samples and issued no pose write. Run-03
@@ -129,6 +129,15 @@ of this flight remains open. [Native transit and provider timeout](AUTHORITY-SUP
   with `-FreshCompanyProfile`. Run it directly with the existing private
   connection file and assigned seat. A Windows-Python filesystem check under
   Wine preserved 45841, used 45850 and stopped on an exhausted pool.
+  His Windows fixture commits through `20f83c6c` have been integrated.
+  At `ec91ffbd`, exercising the overlays with the pinned LuaJIT also
+  caught and fixed a shared installer error in recovered motion playback.
+  The regular Company cockpit uses a separate installation path. The affected
+  Linux test groups passed all 115 cases. Windows CPython 3.14.8 under Wine
+  passed 20 of 21 selected cases, including both checkpoint checks. The
+  test filesystem lacks Windows junction support. Run
+  `test_authority_windows_fixture_overlay.FixtureOverlayTest.test_linked_extension_root_is_refused`
+  on a native Windows NTFS volume for this case.
   A native Windows join with an alternate profile is still open.
   The Windows package from `d0756d51` includes the recorded network DLL.
   Its SHA-256 is `5462d99f533f8af0abc53a8183a356331030cd9c6faf9413faaa316163974b9b`. [Shared Windows ZIP](https://x4multiplayeraicoms.slack.com/files/U0CA93RS75H/F0CLKT744UT/x4-authority-windows-d0756d51.zip)
