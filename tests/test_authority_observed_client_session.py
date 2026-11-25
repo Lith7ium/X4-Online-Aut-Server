@@ -78,7 +78,14 @@ class ObservedSessionTest(unittest.TestCase):
                         'version': 1, 'kind': 'participant_command', 'epoch': self.offer.world_epoch,
                         'connection_handle': 1, 'request_id': 1, 'operation': 'resume'}
                     conn.sendall(json.dumps(command).encode() + b'\n')
-                    reply = stream.readline()
+                    try:
+                        reply = stream.readline()
+                    except ConnectionResetError:
+                        # A client that faults before reading this command closes with
+                        # it still unread, which TCP turns into a reset (WSAECONNRESET
+                        # on Windows) rather than an orderly EOF. Both mean the peer
+                        # left without replying.
+                        return
                     if reply:
                         self.replies.append(json.loads(reply))
                     else:
@@ -119,6 +126,11 @@ class ObservedSessionTest(unittest.TestCase):
                     try:
                         data, peer = udp.recvfrom(1024)
                     except socket.timeout:
+                        continue
+                    except ConnectionResetError:
+                        # Windows reports an ICMP port-unreachable for an earlier HELLO
+                        # here once the controller socket has closed; Linux ignores it
+                        # for unconnected UDP sockets.
                         continue
                     fields = data.decode('ascii').split('|')
                     if len(fields) != 5 or fields[:3] != ['CMD', controller.lease, self.offer.world_epoch]:
