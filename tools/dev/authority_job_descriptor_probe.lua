@@ -182,6 +182,9 @@ function M.new_x4(cfg)
  assert(cfg.include_capture_time==nil or type(cfg.include_capture_time)=='boolean')
  if cfg.include_capture_time then assert(type(cfg.capture_clock)=='function') end
  local saved_baseline=cfg.saved_baseline~=nil
+ local velocity_sequence=cfg.registered_npc_velocity_sequence
+ assert(velocity_sequence==nil or (saved_baseline and cfg.include_capture_time and
+  integer(velocity_sequence) and velocity_sequence<=48))
  local function posix_path(value)
   local path=value:gsub('\\','/'):gsub('/+$','')
   if path:sub(1,1)=='/' and path:sub(-11)=='/45841/save' then return path end
@@ -212,7 +215,7 @@ function M.new_x4(cfg)
   end
   local converted=X4LAN_RESOLVE_STRING.actor_u64(ConvertIDTo64Bit(ref))
   assert(converted and original==converted)
-  return component_key(converted)
+  return component_key(converted),ref
  end
  -- A sectorless context only qualifies when both native lookups identify
  -- the same highway. Guard and exact component checks also fence ordinary poses.
@@ -234,7 +237,14 @@ function M.new_x4(cfg)
   return cfg.guard()==true and p~=nil and p~=ffi.NULL and normalize(ffi.string(p))==expected_path
    and C.IsPlayerValid() and not C.IsGamePaused()
  end
- o.issue=function(screen,operation,args) return AddUITriggeredEvent(screen,operation,args)~=false end
+ o.issue=function(screen,operation,args)
+  if velocity_sequence then
+   local _,actor=actor_key(cfg.actor)
+   args.registered_npc_velocity_sequence=velocity_sequence
+   args.registered_npc_velocity_actor=actor
+  end
+  return AddUITriggeredEvent(screen,operation,args)~=false
+ end
  o.snapshot=function(actor,sector_hex)
   local a=X4LAN_RESOLVE_STRING.actor_u64(actor);local s=X4LAN_RESOLVE_STRING.parse_hex(sector_hex)
   assert(a and s)

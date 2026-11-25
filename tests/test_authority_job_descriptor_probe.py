@@ -59,7 +59,8 @@ class JobDescriptorTest(unittest.TestCase):
             'registry_faulted', 'epoch_mismatch', 'index_below_range', 'index_above_range',
             'index_noninteger', 'all_pass_on_recheck',
         }
-        labels = [node.get('text') for node in root.iter('debug_text')]
+        labels = [node.get('text') for node in root.iter('debug_text')
+                  if 'AUTH_DESCRIPTOR_RECHECK' in node.get('text')]
         self.assertEqual(set(labels), {"'[X4LAN] AUTH_DESCRIPTOR_RECHECK " + label + "'" for label in expected})
         self.assertEqual(len(labels), len(expected) + 1)  # each branch has its own all-pass label
         unavailable_branches = [node for node in root.iter('do_else')
@@ -69,6 +70,23 @@ class JobDescriptorTest(unittest.TestCase):
             self.assertEqual(branch[0].tag, 'raise_lua_event')
             self.assertTrue(all(node.tag == 'debug_text' for condition in branch[1:]
                                 for node in condition))
+
+    def test_velocity_debug_is_scoped_to_the_bound_numbered_npc(self):
+        root = ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
+        ship_gate = root.find('./cues/cue/actions/do_if/do_if')
+        diagnostic = ship_gate.find('do_if')
+        guard = diagnostic.get('value')
+        for term in ('registered_npc_velocity_sequence ge 1', 'registered_npc_velocity_sequence le 48',
+                     'registered_npc_velocity_actor == $ship', '$ship != player.controlled'):
+            self.assertIn(term, guard)
+        self.assertEqual([node.get('exact') for node in diagnostic.findall('set_value')],
+                         ['$ship.velocity', '$ship.relativerotation.{$ship.sector}',
+                          '$ship.relativeposition.{$ship.sector}'])
+        message = diagnostic.find('debug_text').get('text')
+        for label in ('seq=', 'age_s=', 'local_mps=', 'right=', 'up=', 'forward=', 'sector_m='):
+            self.assertIn(label, message)
+        for field in ('request_id', 'lease', 'nonce'):
+            self.assertNotIn(field, message)
 
     @unittest.skipUnless(shutil.which('luajit'),'LuaJIT required')
     def test_lua_correlates_original_actor_and_fails_closed(self):

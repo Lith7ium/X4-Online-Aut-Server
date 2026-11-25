@@ -1,5 +1,6 @@
 -- One guarded, read-only source in the recovered provider's existing update.
 local M = {}
+local VELOCITY_TRACE_LIMIT = 48
 
 function M.new_x4(cfg, net, clock, registry_ready)
     local ffi = require('ffi')
@@ -18,6 +19,19 @@ function M.new_x4(cfg, net, clock, registry_ready)
     local wanted, runtime_ref
     local reported_rate = false
     local cadence = {updates=0}
+    local velocity_requests = 0
+    local descriptor_probe = X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE
+
+    -- Only this already opted-in source annotates its sample descriptors.
+    -- The separate saved-baseline lookup continues to use the ordinary cue.
+    local descriptor = {new_x4=function(options)
+        if velocity_requests < VELOCITY_TRACE_LIMIT then
+            assert(runtime_ref and options.actor == wanted and options.row.index == cfg.index)
+            velocity_requests = velocity_requests + 1
+            options.registered_npc_velocity_sequence = velocity_requests
+        end
+        return descriptor_probe.new_x4(options)
+    end}
 
     local function trace_time()
         local ok, now = pcall(clock)
@@ -195,7 +209,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
                 interval_from_start=true, real_time_motion=true, capture_clock=clock, expected_save_path=save_path,
                 guard=guard, binding_guard=function() return false end,
                 saved_baseline_limit=cfg.count, saved_baseline_guard=local_binding,
-                descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE, resolve=resolve,
+                descriptor=descriptor, resolve=resolve,
                 diagnostics=true, fault=function(reason) stop('sampler_' .. reason) end,
             }))
             assert(sampler:register({epoch=cfg.epoch, index=cfg.index, classification='saved_baseline'}, wanted))

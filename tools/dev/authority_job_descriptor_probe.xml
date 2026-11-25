@@ -8,6 +8,14 @@
    <do_if value="md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and not md.X4AuthorityShipRegistry.State.$faulted and $v.$epoch == md.X4AuthorityShipRegistry.State.$epoch and $index ge 1 and $index le md.X4AuthorityShipRegistry.State.$last and $index == ($index)i">
     <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
     <do_if value="@$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and @$ship.sector.isclass.sector and $ship.macro and $ship.owner and $ship.sector.macro">
+     <!-- Scoped to numbered descriptors from the opt-in provider, never its lookup.
+          These point observations go only to the local debug log. -->
+     <do_if value="@$v.$registered_npc_velocity_sequence ge 1 and $v.$registered_npc_velocity_sequence le 48 and $v.$registered_npc_velocity_sequence == ($v.$registered_npc_velocity_sequence)i and @$v.$registered_npc_velocity_actor == $ship and $ship != player.controlled and $ship.owner != faction.player and @$ship.pilot and $ship.pilot != player.entity">
+      <set_value name="$velocity" exact="$ship.velocity"/>
+      <set_value name="$rotation" exact="$ship.relativerotation.{$ship.sector}"/>
+      <set_value name="$position" exact="$ship.relativeposition.{$ship.sector}"/>
+      <debug_text text="'[X4LAN] AUTH_REGISTERED_NPC_VELOCITY|seq=%s|index=%s|age_s=%s|local_mps=%s,%s,%s|right=%s,%s,%s|up=%s,%s,%s|forward=%s,%s,%s|sector_m=%s,%s,%s'.[$v.$registered_npc_velocity_sequence,$index,player.age / 1s,$velocity.x / 1m,$velocity.y / 1m,$velocity.z / 1m,$rotation.right.x / 1m,$rotation.right.y / 1m,$rotation.right.z / 1m,$rotation.up.x / 1m,$rotation.up.y / 1m,$rotation.up.z / 1m,$rotation.forward.x / 1m,$rotation.forward.y / 1m,$rotation.forward.z / 1m,$position.x / 1m,$position.y / 1m,$position.z / 1m]"/>
+     </do_if>
      <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|ok|%s|%s|%s|%s|%s'.[$v.$request_id,$v.$epoch,$index,$ship,$ship.macro.id,$ship.owner.id,$ship.sector,$ship.sector.macro.id]"/>
     </do_if>
     <!-- A superhighway corridor can temporarily have no sector. Only the

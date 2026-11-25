@@ -36,8 +36,15 @@ AddUITriggeredEvent = function(screen, action, args)
     request = args.request_id
     if request:sub(1, 1) == 'f' then
         requests = requests + 1
+        if requests <= 48 then
+            assert(args.registered_npc_velocity_sequence == requests and args.registered_npc_velocity_actor == actor)
+        else
+            assert(args.registered_npc_velocity_sequence == nil and args.registered_npc_velocity_actor == nil)
+        end
         host_time = host_time + .001
         if inline_sample then reply() end
+    else
+        assert(args.registered_npc_velocity_sequence == nil and args.registered_npc_velocity_actor == nil)
     end
 end
 DebugError = function(row) logs[#logs + 1] = row end
@@ -185,3 +192,12 @@ assert(request == nil and #messages == 1 and messages[1]:find('|END|code_mismatc
 live_code, live_owner = code, 'teladi'
 boot()
 assert(request == nil and #messages == 1 and messages[1]:find('|END|owner_mismatch$'))
+
+-- The diagnostic has a hard descriptor count limit and does not stop normal samples.
+live_owner = owner
+boot()
+for index = 1, 50 do
+    now, host_time, x = now + .15, host_time + .15, x + 1
+    reply()
+    assert(requests == index + 1 and #messages == index)
+end
