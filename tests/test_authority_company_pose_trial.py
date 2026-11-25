@@ -199,9 +199,15 @@ class CompanyPoseTrialTests(unittest.TestCase):
         self.assertEqual({'1970'}, set(report['last_verified']))
         self.assert_no_command()
 
-    def test_docking_between_inspection_and_write_allows_another_pilot_to_move(self):
-        for write, sector in (('apply', SECTOR), ('transfer', 'cluster_06_sector002_macro')):
-            with self.subTest(write=write):
+    def test_new_docking_or_pilot_before_write_allows_another_ship_to_move(self):
+        cases = (
+            ('apply', SECTOR, 'DOCKING_OR_STORED'),
+            ('transfer', 'cluster_06_sector002_macro', 'DOCKING_OR_STORED'),
+            ('apply', SECTOR, 'PILOT_PRESENT'),
+            ('transfer', 'cluster_06_sector002_macro', 'PILOT_PRESENT'),
+        )
+        for write, sector, status in cases:
+            with self.subTest(write=write, status=status):
                 sample = dict(self.sample, sector_macro=sector)
                 service = ApplicationQueue(SimpleNamespace(sample=sample, sector_revision=1))
                 report = {}
@@ -210,7 +216,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 read = 'inspect' if write == 'apply' else 'locate'
                 self.reply(self.command(read, sector=sector), ORIGIN, sector=SECTOR)
                 trial.poll(service)
-                self.reply(self.command(write, sector=sector), status='DOCKING_OR_STORED')
+                self.reply(self.command(write, sector=sector), status=status)
 
                 other_actor = '0x20000000000020'
                 other = ApplicationQueue(SimpleNamespace(sample=dict(self.sample, index=1970)))
@@ -227,7 +233,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 self.assertEqual(SECTOR, self.channel.ship_sectors[INDEX])
                 self.assert_no_command()
 
-    def test_docking_reply_with_wrong_fields_or_after_dispatch_is_fatal(self):
+    def test_unavailable_reply_with_wrong_fields_or_after_dispatch_is_fatal(self):
         variants = (
             ('apply', {'actor': '0'}),
             ('apply', {'sector': 'wrong_sector'}),
@@ -235,6 +241,9 @@ class CompanyPoseTrialTests(unittest.TestCase):
             ('transfer', {'ui': (0, 1, 0)}),
             ('apply', {'code': CODE}),
             ('apply', {'status': 'BRIDGE_LOCAL_REFUSED'}),
+            ('apply', {'status': 'PILOT_PRESENT', 'actor': '0'}),
+            ('transfer', {'status': 'PILOT_PRESENT', 'sector': 'wrong_sector'}),
+            ('verify', {'status': 'PILOT_PRESENT'}),
             ('verify', {}),
         )
         for action, changes in variants:
@@ -243,7 +252,7 @@ class CompanyPoseTrialTests(unittest.TestCase):
                 channel.begin(action, self.sample, ACTOR)
                 command = self.command(action, peer=peer, channel=channel)
                 self.reply(command, peer=peer, **({'status': 'DOCKING_OR_STORED'} | changes))
-                with self.assertRaisesRegex(ValueError, 'invalid pre-write docking|pending command|X4 refused') as error:
+                with self.assertRaisesRegex(ValueError, 'invalid pre-write ship availability|pending command|X4 refused') as error:
                     channel.poll()
                 self.assertIs(type(error.exception), ValueError)
                 self.assertIsNotNone(channel.pending)

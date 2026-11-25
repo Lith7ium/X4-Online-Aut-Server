@@ -294,10 +294,15 @@ for _, action in ipairs({'apply', 'transfer'}) do
     expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
     docked=false
 
-    inspect(action)
-    id=request(action,frame)
-    answer('DOCKING_OR_STORED', frame)
-    expect_refusal(action, frame, 'DOCKING_OR_STORED', actor, id)
+    for _, reason in ipairs({'DOCKING_OR_STORED', 'PILOT_PRESENT'}) do
+        inspect(action)
+        id=request(action,frame)
+        answer(reason, frame)
+        expect_refusal(action, frame, reason, actor, id)
+        id=request(action,frame)
+        assert(not issued)
+        expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
+    end
 end
 inspect('apply')
 stored=true;actual_frame=dest

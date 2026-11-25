@@ -155,9 +155,9 @@ class GamePoseChannel:
                 if action in ('inspect', 'locate') and status in _INSPECT_UNAVAILABLE:
                     self.pending = None
                     raise ShipUnavailable(status)
-                if action in _WRITE_ACTIONS and status == 'DOCKING_OR_STORED':
+                if action in _WRITE_ACTIONS and status in ('DOCKING_OR_STORED', 'PILOT_PRESENT'):
                     if actual_actor != actor or frame != sector or fields[8:] != ['0'] * 6 + ['-']:
-                        raise ValueError('invalid pre-write docking receipt')
+                        raise ValueError('invalid pre-write ship availability receipt')
                     self.pending = None
                     raise ShipUnavailable(status)
                 detail = status if re.fullmatch(r'[A-Z_]{1,64}', status) else 'INVALID_STATUS'

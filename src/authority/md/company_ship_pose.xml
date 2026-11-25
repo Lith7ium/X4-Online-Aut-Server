@@ -56,6 +56,15 @@
      </do_elseif>
      <do_elseif value="$ship.pilot.exists or $ship.assignedpilot.exists">
       <set_value name="$status" exact="'PILOT_PRESENT'"/>
+      <!-- A pilot can take the helm between inspection and dispatch. Only
+           identify a refused write if the original ship is still in its frame. -->
+      <do_if value="$writes and @$args.$actor == '%s'.[$ship] and @$ship.sector.isclass.sector
+                    and (($action == 'apply' and $ship.sector.macro.id == $args.$frame)
+                         or ($action == 'transfer' and @$located.$ship == $ship
+                             and @$located.$request.$request_id == @$args.$locate_id
+                             and @$located.$sector == $ship.sector and $ship.sector.macro.id == @$args.$source_frame))">
+       <set_value name="$actor" exact="'%s'.[$ship]"/>
+      </do_if>
      </do_elseif>
      <do_elseif value="not $writes and $docking">
       <set_value name="$status" exact="'DOCKING_OR_STORED'"/>

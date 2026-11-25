@@ -127,13 +127,14 @@ function M.new(config, engine, net)
             end
             if resolves_actor[args.action] and row[8] == args.frame then inspected = binding(args, row[7]) end
         else
-            local docking_before_write = writes_pose[args.action] and row[6] == DOCKING_OR_STORED
-            local expected_actor = docking_before_write and args.actor or '0'
+            local unavailable_before_write = writes_pose[args.action]
+                and (row[6] == DOCKING_OR_STORED or row[6] == 'PILOT_PRESENT')
+            local expected_actor = unavailable_before_write and args.actor or '0'
             if row[7] ~= expected_actor or row[9] ~= '0' or row[10] ~= '0' or row[11] ~= '0' then
                 fail_pending('BRIDGE_MD_INVALID')
                 return
             end
-            if docking_before_write then inspected = nil end
+            if unavailable_before_write then inspected = nil end
         end
         pending = nil
         net:send(prefix .. 'RESULT|' .. value .. suffix)
