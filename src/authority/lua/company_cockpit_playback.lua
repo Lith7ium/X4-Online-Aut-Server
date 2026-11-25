@@ -599,39 +599,47 @@ function M.new_multi(options)
 end
 
 local function make_x4_record(readers_by_slot, clock)
-    local origins, last_logged_at, logged_count = {}, {}, {}
+    local tracks = {}
     local function decimal(value) return ('%.17g'):format(value) end
     local function coordinates(pose)
         return table.concat({decimal(pose.x), decimal(pose.y), decimal(pose.z)}, ',')
     end
     return function(event)
-        local key = event.index
-        if not origins[key] then origins[key] = event.actual end
-        if event.kind == 'readback' or event.kind == 'alignment_readback' then
-            local now = clock()
-            local actual, target = event.actual, event.target
-            local origin = origins[key]
-            local dx, dy, dz = actual.x - origin.x, actual.y - origin.y, actual.z - origin.z
-            local displacement = math.sqrt(dx * dx + dy * dy + dz * dz)
-            local count = logged_count[key] or 0
-            local prev_at = last_logged_at[key] or 0
-            if event.kind == 'alignment_readback' or count < 3 or (now - prev_at >= 0.5) then
-                last_logged_at[key] = now
-                logged_count[key] = count + 1
-                local slot_name = event.slot or 'cockpit'
-                local reader = readers_by_slot[slot_name]
-                local mode = reader and reader.mode and reader:mode() or slot_name
-                DebugError(table.concat({
-                    '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'slot=' .. tostring(slot_name),
-                    'kind=' .. event.kind, 'mode=' .. tostring(mode),
-                    'ship=' .. event.code, 'epoch=' .. event.epoch, 'index=' .. event.index,
-                    'sector=' .. event.sector_macro, 'generation=' .. event.generation,
-                    'sequence=' .. event.source_sequence, 'source_time=' .. decimal(event.source_time),
-                    'capture_time=' .. decimal(event.capture_time), 'elapsed=' .. decimal(event.elapsed),
-                    'target=' .. coordinates(target), 'actual=' .. coordinates(actual),
-                    'error=' .. decimal(event.error), 'displacement=' .. decimal(displacement),
-                }, ' '))
-            end
+        local slot_name = event.slot
+        local track = tracks[slot_name]
+        if not track or track.serial ~= event.serial or track.epoch ~= event.epoch
+                or track.sector ~= event.sector_macro or track.index ~= event.index
+                or track.generation ~= event.generation then
+            track = {
+                serial = event.serial, epoch = event.epoch, sector = event.sector_macro,
+                index = event.index, generation = event.generation,
+                origin = event.actual, count = 0, last_logged_at = 0,
+            }
+            tracks[slot_name] = track
+        end
+        -- The first observation is pre-write. A later alignment sets a new
+        -- origin at its readback so the correction itself adds no displacement.
+        local alignment = event.kind == 'alignment_readback'
+        if alignment then track.origin = event.actual end
+        if not alignment and event.kind ~= 'readback' then return true end
+
+        local now = clock()
+        if alignment or track.count < 3 or now - track.last_logged_at >= 0.5 then
+            track.last_logged_at = now
+            track.count = track.count + 1
+            local reader = readers_by_slot[slot_name]
+            local mode = reader and reader.mode and reader:mode() or slot_name
+            DebugError(table.concat({
+                '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'slot=' .. slot_name,
+                'kind=' .. event.kind, 'mode=' .. tostring(mode),
+                'ship=' .. event.code, 'epoch=' .. event.epoch, 'index=' .. event.index,
+                'sector=' .. event.sector_macro, 'generation=' .. event.generation,
+                'serial=' .. ('%.0f'):format(event.serial),
+                'sequence=' .. event.source_sequence, 'source_time=' .. decimal(event.source_time),
+                'capture_time=' .. decimal(event.capture_time), 'elapsed=' .. decimal(event.elapsed),
+                'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
+                'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
+            }, ' '))
         end
         return true
     end

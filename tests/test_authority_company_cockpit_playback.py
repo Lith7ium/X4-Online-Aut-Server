@@ -125,6 +125,106 @@ class CompanyCockpitOptInConfigTests(unittest.TestCase):
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')
 class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
+    def test_x4_log_restarts_displacement_and_throttle_at_new_binding(self):
+        lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        lua.globals()._ROOT = str(ROOT).replace('\\', '/')
+        lua.execute(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
+            dofile(root .. 'motion_playback.lua')
+            dofile(root .. 'company_hull_playback.lua')
+            local module = dofile(root .. 'company_cockpit_playback.lua')
+            local now, logs = 10, {}
+            local positions = {cockpit = 0, cockpit2 = 2000}
+            package.loaded.ffi = {cdef = function() end, C = {
+                GetCurrentGameTime = function() return now end,
+                IsGamePaused = function() return false end,
+            }}
+            DebugError = function(line)
+                if line:find('AUTH_COMPANY_COCKPIT_READBACK', 1, true) then
+                    local fields = {}
+                    for name, value in line:gmatch('(%w+)=([^ ]+)') do fields[name] = value end
+                    logs[#logs + 1] = fields
+                end
+            end
+            X4LAN_COMPANY_HULL_PLAYBACK_X4 = {new_x4 = function()
+                return {bind = function(_, binding)
+                    local slot = binding.slot
+                    local function move(_, pose) positions[slot] = pose.x; return true end
+                    return {
+                        guard = function() return true end,
+                        read = function() return {x = positions[slot], y = 0, z = 0} end,
+                        write = move, align = move, close = function() end,
+                    }
+                end}
+            end}
+            local controller = module.new_multi_x4({index = 1}, {}, {cockpit = {}, cockpit2 = {}},
+                function() return true end, function() return now end)
+            local epoch, generation = ('a'):rep(32), ('b'):rep(32)
+            local binding = {epoch = epoch, sector_macro = 'sector_a', index = 2,
+                             actor = '0x20', code = 'ABC-002'}
+            local sequence = 0
+            local function push(slot, serial, x)
+                sequence = sequence + 1
+                return controller:sample(binding, serial, {
+                    version = 3, epoch = binding.epoch, generation = generation,
+                    sector_macro = binding.sector_macro, index = binding.index, sequence = sequence,
+                    source_time = now, capture_time = now, x = x, y = 0, z = 0,
+                    real_velocity = {x = 10, y = 0, z = 0},
+                }, now, slot)
+            end
+            local function tick(count, step)
+                for _ = 1, count do now = now + step; controller:tick(now) end
+            end
+            assert(push('cockpit', 1, 5))
+            tick(7, .05)
+            assert(#logs == 3 and logs[1].serial == '1')
+            assert(tonumber(logs[1].displacement) >= 5)
+            tick(1, .5)
+            assert(#logs == 4 and tonumber(logs[4].displacement) > tonumber(logs[1].displacement))
+
+            -- The same ship in another slot has its own origin and log budget.
+            assert(push('cockpit2', 1, 2001))
+            tick(2, .05)
+            assert(#logs == 5 and logs[5].slot == 'cockpit2')
+            assert(tonumber(logs[5].displacement) >= 1 and tonumber(logs[5].displacement) < 3)
+            controller:view(nil, 2, 'cockpit2')
+
+            -- The same slot and ship can now refer to a different view and sector.
+            controller:view(nil, 2, 'cockpit')
+            binding.sector_macro = 'sector_b'
+            positions.cockpit = 10000
+            assert(push('cockpit', 3, 10004))
+            tick(2, .05)
+            assert(#logs == 6 and logs[6].slot == 'cockpit' and logs[6].serial == '3')
+            assert(logs[6].sector == 'sector_b')
+            assert(tonumber(logs[6].displacement) >= 4 and tonumber(logs[6].displacement) < 6)
+
+            -- Rejoining with a new grant must reset the origin even in the same view.
+            controller:end_track(binding, 3, generation, 'cockpit')
+            generation = ('c'):rep(32)
+            positions.cockpit = 15000
+            assert(push('cockpit', 3, 15003))
+            tick(2, .05)
+            assert(#logs == 7 and logs[7].generation == generation)
+            assert(tonumber(logs[7].displacement) >= 3 and tonumber(logs[7].displacement) < 5)
+
+            -- A loss and alignment on the same binding starts a new position baseline.
+            tick(1, 5.1)
+            local aligned, reason = push('cockpit', 3, 20000)
+            assert(aligned and reason == 'aligned')
+            tick(1, .05)
+            local alignment = logs[#logs]
+            assert(alignment.kind == 'alignment_readback' and alignment.displacement == '0')
+            tick(1, .55)
+            assert(push('cockpit', 3, 20002))
+            tick(2, .05)
+            local resumed = logs[#logs]
+            assert(resumed.kind == 'readback' and resumed.serial == '3')
+            assert(tonumber(resumed.displacement) >= 2 and tonumber(resumed.displacement) < 4)
+            controller:close()
+        """)
+
     def test_indexed_observer_reports_each_actual_withdrawal_reason_once(self):
         lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
         lua.globals()._ROOT = str(ROOT).replace('\\', '/')
