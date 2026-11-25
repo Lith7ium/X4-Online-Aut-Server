@@ -213,3 +213,38 @@ SHA-256 `99e9abcd124cf8101f1048946d324d2766654021ef2e1be8b1c40ae29cd3b4c2`.
 Both game processes stopped. This run measured a candidate pilot source.
 Server receipt of its native positions, authority handoff and remote
 playback still need separate evidence.
+
+### Run 08 absolute sector positions
+
+Both processes resolved MFQ-419 at registry index 943 in
+`cluster_06_sector001_macro` under the same saved registry epoch. Their
+runtime component IDs were local to each process. For this comparison,
+the retained `run-08/client/process.log` contains 157 complete
+`AUTH_NPC_LOCAL_POSE` rows. Row 158 ends partway through the record and
+rows 159–160 are absent there. The preceding trajectory counts and
+one-step statistics use the 160 retained points in
+`run-08/native-cockpit-measurement.json`.
+
+For each provider sample inside the complete cockpit rows' clock range,
+pair it with the nearest cockpit sample on that clock and compute the
+Euclidean distance between the two absolute sector XYZ positions. Use the
+published native position and its game and capture times from
+`run-08/server/result.json`. For the cockpit, use the game time and the
+midpoint of the monotonic capture bracket in each complete log row. The
+independent MD check uses `AUTH_REGISTERED_NPC_VELOCITY` rows from
+`run-08/server/process.log` and matches on MD `age_s`. All three
+comparisons use the observed points directly, with no interpolation.
+
+| Provider position and matching clock | Pairs | Absolute clock gap | XYZ distance, min / median / P90 / max |
+| --- | ---: | ---: | ---: |
+| Native publication, game time | 32 | 0.7–63.8 ms | 1.35 / 5.60 / 7.00 / 7.54 km |
+| MD position, game time | 32 | 0.3–64.2 ms | 1.35 / 6.29 / 7.57 / 8.14 km |
+| Native publication, same-host monotonic time | 33 | 0.7–60.2 ms | 0.47 / 5.00 / 6.36 / 6.97 km |
+
+P90 uses nearest rank. In game-time pairs, the cockpit captures occurred
+0.14–0.79 real seconds after their provider partners. In real-time pairs,
+the cockpit game clock was 0.065–0.797 seconds behind. The first and last
+game-time pairs of native publications differed by 1.35 and 4.43 km.
+These are discrepancies between observed simulation positions. They
+do not estimate the provider position between its low-attention jumps
+or establish the effect of a playback correction.
