@@ -39,6 +39,20 @@ class CompanyUndockTrialTests(unittest.TestCase):
             self.assertIn(guard, receipt.get('value'))
         self.assertEqual(receipt.find('set_value').get('exact'), "'undocked'")
 
+    def test_trace_records_individual_fields_even_if_bay_event_does_not_match(self):
+        tree = ET.parse(trial.ROOT / 'tools/dev' / trial.CUE)
+        trace = tree.find(".//cue[@name='UndockEventTrace']")
+        self.assertEqual(trace.find('conditions/event_object_undocked').attrib, {'object': '$Ship'})
+        self.assertNotIn('param3', trace.find('conditions/check_value').get('value'))
+        event = trace.find('actions/debug_text').get('text')
+        for field in ('event.param3', 'expected_bay', 'matches'):
+            self.assertIn(field, event)
+        values = ' '.join(row.get('text') for row in tree.findall(".//library[@name='TraceDetachment']/actions/debug_text"))
+        for field in ('$Ship.dock', '$Ship.assigneddock', '$Ship.parkedat', '$Ship.isinternallystored',
+                      '$Bay.docked.indexof.{$Ship}', '$Bay.assignedship', '$Ship.order.id',
+                      '$Ship.order.state', '$Order.exists'):
+            self.assertIn(field, values)
+
     def test_private_overlay_stages_and_rejects_reinstallation(self):
         with tempfile.TemporaryDirectory() as temporary:
             case = Path(temporary)

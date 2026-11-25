@@ -53,6 +53,8 @@
          <set_value name="$Deadline" exact="player.age + 45s"/>
          <create_order name="$Order" id="'Undock'" object="$Ship" immediate="true"/>
          <set_value name="$Status" exact="if @$Order.id == 'Undock' then 'awaiting' else 'dispatch_unconfirmed'"/>
+         <set_value name="$TracePhase" exact="'dispatch'"/>
+         <include_actions ref="TraceDetachment"/>
         </do_else>
        </do_else>
       </do_if>
@@ -62,9 +64,21 @@
       <cue name="Undocked">
        <conditions>
         <event_object_undocked object="$Ship" dock="$Station"/>
-        <check_value value="$Status == 'awaiting' and event.object == $Ship and event.param == $Station and event.param3 == $Bay"/>
+        <check_value value="$Status == 'awaiting' and event.object == $Ship and @event.param == $Station and @event.param3 == $Bay"/>
        </conditions>
        <actions><set_value name="$Witness" exact="true"/></actions>
+      </cue>
+      <cue name="UndockEventTrace">
+       <conditions>
+        <event_object_undocked object="$Ship"/>
+        <check_value value="$Status == 'awaiting'"/>
+       </conditions>
+       <actions>
+        <!-- Read the engine event even if its station or bay fails the witness check. -->
+        <set_value name="$TracePhase" exact="'event'"/>
+        <debug_text text="'[X4LAN] AUTH_COMPANY_UNDOCK_EVENT %s|object=%s|param=%s|param2=%s|param3=%s|expected_station=%s|expected_bay=%s|matches=%s'.[$Nonce,event.object,@event.param,@event.param2,@event.param3,$Station,$Bay,if event.object == $Ship and @event.param == $Station and @event.param3 == $Bay then 1 else 0]" chance="100"/>
+        <include_actions ref="TraceDetachment"/>
+       </actions>
       </cue>
       <cue name="Readback" checkinterval="250ms">
        <conditions>
@@ -84,6 +98,8 @@
                       and $Bay.dockstate == dockstate.default">
          <set_value name="$Status" exact="'undocked'"/>
         </do_if>
+        <set_value name="$TracePhase" exact="'final'"/>
+        <include_actions ref="TraceDetachment"/>
         <include_actions ref="Report"/>
        </actions>
       </cue>
@@ -129,6 +145,13 @@
         @$Input.$bay_macro,@$Input.$dockarea_macro,@$Input.$captain_seed,if $Witness then 1 else 0,@$Ship.order.id,@$Ship.order.state,
         @$Ship,@$Captain,@$Station,@$Bay]"/>
     <raise_lua_event name="'X4AuthorityCompanyUndockTrial.Result'" param="$Row"/>
+   </actions>
+  </library>
+
+  <library name="TraceDetachment" purpose="include_actions">
+   <actions>
+    <debug_text text="'[X4LAN] AUTH_COMPANY_UNDOCK_READBACK %s|phase=%s|status=%s|ship=%s|dock=%s|assigneddock=%s|parkedat=%s|stored=%s|parent=%s|old_bay=%s|old_bay_index=%s|old_bay_count=%s|old_bay_assignedship=%s|old_bay_state=%s'.[$Nonce,$TracePhase,$Status,$Ship,@$Ship.dock,@$Ship.assigneddock,@$Ship.parkedat,@$Ship.isinternallystored,@$Ship.parent,$Bay,@$Bay.docked.indexof.{$Ship},@$Bay.docked.count,@$Bay.assignedship,@$Bay.dockstate]" chance="100"/>
+    <debug_text text="'[X4LAN] AUTH_COMPANY_UNDOCK_ORDER %s|phase=%s|witness=%s|current_id=%s|current_state=%s|queue_count=%s|issued_id=%s|issued_state=%s|issued_exists=%s|age_s=%s'.[$Nonce,$TracePhase,if $Witness then 1 else 0,@$Ship.order.id,@$Ship.order.state,@$Ship.orders.count,@$Order.id,@$Order.state,if @$Order.exists then 1 else 0,player.age / 1s]" chance="100"/>
    </actions>
   </library>
  </cues>
