@@ -77,7 +77,10 @@ class RegisteredNpcSource:
         self._lease, self._generation, self._nonce, self._lookup_nonce = (secrets.token_hex(16) for _ in range(4))
         self._prefix = f'N|{self._lease}|{self._generation}|'.encode('ascii')
         self._process = self._peer = self._binding = self._previous = None
-        self._descriptor = self._runtime_ref = self._last_received = None
+        self._descriptor = self._runtime_ref = None
+        self._previous_poll_time = self._end_time = None
+        self._longest_poll_gap = 0.0
+        self._stale_samples = 0
         self._join_checkpoint = self._join_component = None
         self._running_seen = False
         self._service = self._reservation_guard = self._end_reason = None
@@ -185,6 +188,7 @@ class RegisteredNpcSource:
 
     def _withdraw(self, reason):
         self._end_reason = reason
+        self._end_time = self._clock()
         if self._binding is not None:
             self._service.withdraw_npc_source(self._binding)
             self._binding = None
@@ -219,14 +223,15 @@ class RegisteredNpcSource:
             return
         self._running_seen = True
         now = self._clock()
+        if self._previous_poll_time is not None:
+            self._longest_poll_gap = max(self._longest_poll_gap, now - self._previous_poll_time)
+        self._previous_poll_time = now
         try:
             unreserved = self._reservation_guard() is True
         except (OSError, RuntimeError, ValueError):
             unreserved = False
         if not unreserved:
             return self._withdraw('source_guard_failed')
-        if self._last_received is not None and now - self._last_received >= _MAX_AGE:
-            return self._withdraw('source_expired')
 
         samples, checked_peer = [], None
         for _ in range(32):
@@ -258,11 +263,21 @@ class RegisteredNpcSource:
                 sample, runtime_ref = self._decode(fields)
             except (ValueError, OverflowError):
                 return self._withdraw('invalid_native_sample')
-            if not 0 <= self._clock() - sample['capture_time'] < _MAX_AGE:
+            capture = sample['capture_time']
+            if capture > self._clock():
                 return self._withdraw('sample_clock_or_age_invalid')
+            if self._previous is not None and capture - self._previous['capture_time'] >= _MAX_AGE:
+                return self._withdraw('source_expired')
             self._previous, self._runtime_ref = sample, runtime_ref
             samples.append(sample)
-        if not samples:
+        # A late polling tick can contain older frames followed by a current one.
+        # Validate the entire sequence, but only publish captures still fresh now.
+        drain_time = self._clock()
+        fresh = [sample for sample in samples if drain_time - sample['capture_time'] < _MAX_AGE]
+        self._stale_samples += len(samples) - len(fresh)
+        if not fresh:
+            if self._previous is not None and drain_time - self._previous['capture_time'] >= _MAX_AGE:
+                self._withdraw('source_expired')
             return
         if self._binding is None:
             try:
@@ -271,7 +286,7 @@ class RegisteredNpcSource:
             except (OSError, RuntimeError, ValueError):
                 return self._withdraw('publication_refused')
         # Keep the first pose in each sector so the service sees its no-rate baseline.
-        for original in samples:
+        for original in fresh:
             sample = dict(original, generation=self._binding.generation)
             try:
                 accepted = service.publish_npc_sample(self._binding, sample)
@@ -279,7 +294,6 @@ class RegisteredNpcSource:
                 return self._withdraw('publication_rejected')
             if not accepted:
                 return self._withdraw('publication_lost')
-            self._last_received = sample['capture_time']
             self._samples += 1
             self._velocity_samples += int(sample['real_velocity'] is not None)
             if len(self._initial_publications) < 64:
@@ -291,7 +305,9 @@ class RegisteredNpcSource:
                 'owner': self.target['owner'], 'saved_component_ref': self.target['actor'],
                 'join_component_ref': self._join_component, 'runtime_component_ref': self._runtime_ref,
                 'join_checkpoint_id': self._join_checkpoint.checkpoint_id if self._join_checkpoint else None,
-                'samples': self._samples, 'initial_publications': list(self._initial_publications),
+                'samples': self._samples, 'stale_samples_discarded': self._stale_samples,
+                'longest_running_poll_gap': self._longest_poll_gap, 'end_monotonic_time': self._end_time,
+                'initial_publications': list(self._initial_publications),
                 'samples_with_velocity': self._velocity_samples, 'last_native_sample': self._previous,
                 'recent_publications': list(self._recent_publications), 'end_reason': self._end_reason}
 

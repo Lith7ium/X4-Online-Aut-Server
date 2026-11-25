@@ -175,6 +175,35 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.assertIsNone(self.observation())
         self.assertEqual(self.source.stats()['end_reason'], 'source_guard_failed')
 
+    def test_late_poll_drains_continuous_captures_and_publishes_only_fresh_samples(self):
+        self.service.set_running(True)
+        with patch('authority.company_motion_service.time.monotonic', side_effect=lambda: self.now):
+            self.send()
+            self.source.poll()
+            self.now += .1
+            self.send(2)
+            self.now += 1.4
+            self.send(3, velocity=(7.0, 0.0, 0.0))
+            self.now += .8
+            self.source.poll()
+        stats = self.source.stats()
+        self.assertIsNone(stats['end_reason'])
+        self.assertEqual(stats['stale_samples_discarded'], 1)
+        self.assertGreater(stats['longest_running_poll_gap'], 2)
+        self.assertEqual([row['sequence'] for row in stats['recent_publications']], [1, 3])
+        self.assertEqual(self.observation().last_sample['real_velocity']['x'], 7.0)
+        self.assertFalse(self.service._application_pending)
+
+    def test_fresh_packet_after_silent_source_deadline_cannot_revive_it(self):
+        self.service.set_running(True)
+        self.send()
+        self.source.poll()
+        self.now += 2.5
+        self.send(2)
+        self.source.poll()
+        self.assertEqual(self.source.stats()['end_reason'], 'source_expired')
+        self.assertIsNone(self.observation())
+
     def test_missing_samples_expire(self):
         self.service.set_running(True)
         self.send()
