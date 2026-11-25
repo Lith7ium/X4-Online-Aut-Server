@@ -71,11 +71,19 @@ function M.new(pinned, own_index, engine)
         rejections = 0,
     }
 
-    local function clear_observation(reason)
+    local function report(state, row, reason, distance, range)
+        if engine.on_status then
+            pcall(engine.on_status, state, reason, row.sector_macro, row.code, distance, range)
+        end
+    end
+
+    local function clear_observation(reason, detail, distance, range)
         if observed == nil then return end
+        local previous = observed.row
         observed = nil
         was_withdrawn = true
         stats.withdrawals = stats.withdrawals + 1
+        report('END', previous, detail or reason, distance, range)
         if engine.on_withdrawal then pcall(engine.on_withdrawal, reason) end
     end
 
@@ -94,12 +102,12 @@ function M.new(pinned, own_index, engine)
             clear_observation('interest_withdrawn')
             return nil, now
         end
-        local ok, probe = pcall(engine.probe)
+        local ok, probe, reason = pcall(engine.probe)
         if not ok or probe == nil or probe.mode ~= mode
                 or (same_map_target and (not probe.actor or not probe.ref or not probe.space or not probe.sector_ref
                                          or not valid_sector(probe.sector_macro) or not valid_code(probe.code))) then
             pending = nil
-            clear_observation('probe_unavailable')
+            clear_observation('probe_unavailable', ok and (reason or 'probe_unavailable') or 'probe_failed')
             return nil, now
         end
         if pending and (now >= pending.deadline or (same_map_target and not same_map_target(pending.target, probe))) then
@@ -111,9 +119,10 @@ function M.new(pinned, own_index, engine)
             elseif same_map_target and not same_map_target(observed.hull, probe) then
                 clear_observation('map_target_changed')
             elseif engine.validate_actor then
-                local vok, valid = pcall(engine.validate_actor, observed.hull, mode, probe)
+                local vok, valid, why, distance, range = pcall(engine.validate_actor, observed.hull, mode, probe)
                 if not vok or valid ~= true then
-                    clear_observation('revalidation_failed')
+                    clear_observation('revalidation_failed', vok and (why or 'revalidation_failed') or 'native_check_failed',
+                                      distance, range)
                 end
             end
         end
@@ -141,13 +150,22 @@ function M.new(pinned, own_index, engine)
                 or index ~= target_index or index == own_index or rmode ~= mode
                 or not valid_sector(sector) or not valid_code(code) or (target_code and code ~= target_code) or not actor_id then
             stats.rejections = stats.rejections + 1
-            clear_observation('ineligible_or_out_of_range')
+            local why = 'md_reply_invalid'
+            if status == 'NONE' then
+                why = 'md_refused'
+            elseif target_code and valid_code(code) and code ~= target_code then
+                why = 'code_mismatch'
+            end
+            clear_observation('ineligible_or_out_of_range', why, dist_text, radar_text)
             return
         end
-        local hull = engine.verify_actor and engine.verify_actor(actor_id, sector, code, mode, probe) or nil
+        local hull, why, distance, range
+        if engine.verify_actor then
+            hull, why, distance, range = engine.verify_actor(actor_id, sector, code, mode, probe)
+        end
         if not hull or (same_map_target and not same_map_target(hull, request.target)) then
             stats.rejections = stats.rejections + 1
-            clear_observation('native_verification_failed')
+            clear_observation('native_verification_failed', why or 'target_binding_changed', distance, range)
             return
         end
         local was_new = (observed == nil)
@@ -167,6 +185,7 @@ function M.new(pinned, own_index, engine)
         }
         stats.observations = stats.observations + 1
         if was_new then
+            report('VISIBLE', observed.row, 'verified', dist_text, radar_text)
             if ever_observed and was_withdrawn then
                 stats.reacquisitions = stats.reacquisitions + 1
                 was_withdrawn = false
@@ -251,6 +270,7 @@ function M.new(pinned, own_index, engine)
     function api:close()
         closed = true
         pending = nil
+        if observed then report('END', observed.row, 'reader_closed') end
         observed = nil
     end
 
@@ -289,11 +309,13 @@ function M.new_x4(pinned, own_index, registry_ready, options)
     end
 
     local function cockpit_ship()
-        if registry_ready() ~= true or not C.IsPlayerValid() or C.IsGamePaused() then return nil end
+        if registry_ready() ~= true then return nil, 'pilot_registry_not_ready' end
+        if not C.IsPlayerValid() then return nil, 'player_unavailable' end
+        if C.IsGamePaused() then return nil, 'paused' end
         local ship = C.GetPlayerControlledShipID()
         if ship == 0 or ship ~= C.GetPlayerOccupiedShipID() or ship ~= C.GetPlayerContainerID()
                 or not C.IsValidComponent(ship) or not C.IsComponentClass(ship, 'ship') then
-            return nil
+            return nil, 'cockpit_binding_changed'
         end
         return ship
     end
@@ -301,47 +323,58 @@ function M.new_x4(pinned, own_index, registry_ready, options)
     local function within_radar(cockpit, actor)
         local ref = native_ref(cockpit)
         local range = ref and GetComponentData(ref, 'maxradarrange')
-        if type(range) ~= 'number' or not (range > 0 and range < math.huge) then return false end
+        if type(range) ~= 'number' or not (range > 0 and range < math.huge) then
+            return false, 'radar_range_unavailable', nil, range
+        end
         local distance = tonumber(C.GetDistanceBetween(cockpit, actor))
-        return distance ~= nil and distance >= 0 and distance <= range
+        if distance == nil or not (distance >= 0) then return false, 'radar_distance_unavailable', distance, range end
+        return distance <= range, 'radar_out_of_range', distance, range
     end
 
     local function check_npc(cockpit, actor_id, expected_sector, expected_code, check_mode, viewed_sector)
         if not actor_id or actor_id == cockpit or not C.IsValidComponent(actor_id)
                 or not C.IsComponentOperational(actor_id) or not C.IsComponentClass(actor_id, 'ship') then
-            return nil
+            return nil, 'ship_unavailable'
         end
         local space = C.GetContextByClass(actor_id, 'sector', false)
         if space == 0 or not C.IsValidComponent(space) or not C.IsComponentClass(space, 'sector') then
-            return nil
+            return nil, 'npc_sector_unavailable'
         end
         if check_mode == 'radar' then
             local own_space = C.GetContextByClass(cockpit, 'sector', false)
-            if space ~= own_space or not within_radar(cockpit, actor_id) then return nil end
+            if space ~= own_space then return nil, 'radar_sector_mismatch' end
+            local in_range, why, distance, range = within_radar(cockpit, actor_id)
+            if not in_range then return nil, why, distance, range end
         elseif check_mode == 'map' then
-            if space ~= viewed_sector then return nil end
+            if space ~= viewed_sector then return nil, 'map_sector_mismatch' end
         else
             return nil
         end
         local ship_ref, sector_ref = native_ref(actor_id), native_ref(space)
-        if not ship_ref or not sector_ref then return nil end
+        if not ship_ref or not sector_ref then return nil, 'native_reference_mismatch' end
         local owner, docked, docking, stored, pilot, assigned, ai = GetComponentData(
             ship_ref, 'owner', 'isdocked', 'isdocking', 'isinternallystored', 'pilot', 'assignedpilot', 'assignedaipilot')
         -- Strictly non-player AI-piloted NPC (mutually exclusive with Company player-ship observer).
-        if owner == nil or owner == 'player' or docked ~= false or docking ~= false or stored ~= false
-                or not (pilot or assigned or ai) then
-            return nil
-        end
+        if owner == nil or owner == 'player' then return nil, 'owner_mismatch' end
+        if docked ~= false or docking ~= false or stored ~= false then return nil, 'docked_or_stored' end
+        if not (pilot or assigned or ai) then return nil, 'captain_unavailable' end
         local known, visible = GetComponentData(ship_ref, 'isknown', 'isradarvisible')
-        if known ~= true or (check_mode == 'radar' and visible ~= true) then return nil end
+        if known ~= true then return nil, 'native_ship_unknown' end
+        if check_mode == 'radar' and visible ~= true then return nil, 'native_radar_hidden' end
         local sector_macro = GetComponentData(sector_ref, 'macro')
         local code_ptr = C.GetObjectIDCode(actor_id)
         if not valid_sector(sector_macro) or code_ptr == nil or code_ptr == ffi.NULL then return nil end
         local code = ffi.string(code_ptr)
-        if expected_sector and sector_macro ~= expected_sector then return nil end
-        if expected_code and code ~= expected_code then return nil end
+        if expected_sector and sector_macro ~= expected_sector then return nil, 'npc_sector_changed' end
+        if expected_code and code ~= expected_code then return nil, 'code_mismatch' end
         return {actor = actor_id, space = space, sector_macro = sector_macro, code = code, mode = check_mode,
                 ref = ship_ref, sector_ref = sector_ref}
+    end
+
+    local function measurement(value)
+        local text = tostring(value)
+        if #text <= 32 and text:match('^[0-9.eE+%-]+%s*[km]*$') then return text end
+        return '-'
     end
 
     return M.new(pinned, own_index, {
@@ -353,26 +386,32 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         clock = options.clock or GetCurRealTime,
         on_withdrawal = options.on_withdrawal,
         on_reacquire = options.on_reacquire,
+        on_status = function(state, reason, sector, code, distance, range)
+            DebugError(('[X4LAN] AUTH_REGISTERED_NPC_PILOT %s|%s|%d|%s|%s|%s|distance=%s|range=%s'):format(
+                state, mode, options.target_index, code, reason, sector, measurement(distance), measurement(range)))
+        end,
         probe = function()
-            local cockpit = cockpit_ship()
-            if not cockpit then return nil end
+            local cockpit, why = cockpit_ship()
+            if not cockpit then return nil, why end
             if map_selection then
                 local actor, viewed_sector = map_selection:sample()
+                if not actor then return nil, 'map_pick_unavailable' end
                 return check_npc(cockpit, actor, nil, nil, mode, viewed_sector)
             end
             return {mode = mode}
         end,
         parse_actor = resolve.parse_hex,
         verify_actor = function(actor_id, sector, code, check_mode, probe)
-            local cockpit = cockpit_ship()
-            if not cockpit then return nil end
+            local cockpit, why = cockpit_ship()
+            if not cockpit then return nil, why end
             return check_npc(cockpit, actor_id, sector, code, check_mode, probe.space)
         end,
         validate_actor = function(hull, check_mode, probe)
-            local cockpit = cockpit_ship()
-            if not cockpit or not hull then return false end
-            local checked = check_npc(cockpit, hull.actor, hull.sector_macro, hull.code, check_mode, probe.space)
-            return checked ~= nil and same_hull(checked, hull)
+            local cockpit, why = cockpit_ship()
+            if not cockpit or not hull then return false, why end
+            local checked, reason, distance, range = check_npc(cockpit, hull.actor, hull.sector_macro, hull.code, check_mode, probe.space)
+            if not checked then return false, reason, distance, range end
+            return same_hull(checked, hull), 'target_binding_changed'
         end,
         register = function(callback) return RegisterEvent(SCREEN .. '.Result', callback) ~= false end,
         issue = function(args) return AddUITriggeredEvent(SCREEN, 'Read', args) ~= false end,

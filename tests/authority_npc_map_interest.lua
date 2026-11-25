@@ -27,6 +27,8 @@ local rendered = {npc, unrelated}
 local handlers, waiting, requests = {}, {}, {radar=0, map=0}
 local now = 0
 local radar_visible, known = true, true
+local radar_distance, status = 1000, {}
+DebugError = function(row) status[#status + 1] = row end
 
 ConvertStringToLuaID = function(id) return by_decimal[id] end
 ConvertIDTo64Bit = function(id) return id end
@@ -56,7 +58,7 @@ package.loaded.ffi = {cdef=function(def) if def:find('typedef', 1, true) then ff
         end,
         GetPlayerControlledShipID=function() return own end, GetPlayerOccupiedShipID=function() return own end,
         GetPlayerContainerID=function() return own end, GetContextByClass=function(id) return space[key(id)] end,
-        GetObjectIDCode=function(id) return code[key(id)] end, GetDistanceBetween=function() return 1000 end,
+        GetObjectIDCode=function(id) return code[key(id)] end, GetDistanceBetween=function() return radar_distance end,
         GetNumMapSelectedComponents=function(id) assert(id == map_id); return #selected end,
         GetMapSelectedComponents=function(out, count, id)
             assert(id == map_id and count == 1); out[0] = selected[1]; return #selected
@@ -111,6 +113,7 @@ end
 
 step() -- A closed map cannot use stale selections.
 assert(requests.map == 0 and published.map == 0)
+assert(#status == 1 and status[1]:find('VISIBLE|radar|20|NPC-021|verified|cluster_01_sector001_macro|distance=1000|range=10000', 1, true))
 menu.shown, selected = true, {}
 step() -- An open map with no selection is not interest.
 assert(requests.map == 0 and published.map == 0)
@@ -146,24 +149,40 @@ step()
 reply('map', npc)
 stream:tick(true)
 assert(published.map == 20 and published.cockpit == 20)
+assert(#status == 2 and status[2]:find('VISIBLE|map|20|NPC-021|verified', 1, true))
 menu.shown = false
 step()
 assert(published.map == 0 and published.cockpit == 20)
+assert(#status == 3 and status[3]:find('END|map|20|NPC-021|map_pick_unavailable', 1, true))
 
 -- A pilot outside radar visibility cannot attest a reading for this ship.
 radar_visible = false
 stream:tick(true)
 assert(published.cockpit == 0)
+assert(#status == 4 and status[4]:find('END|radar|20|NPC-021|native_radar_hidden', 1, true))
+stream:tick(true)
+assert(#status == 4)
 radar_visible = true
 step()
 known = false
 stream:tick(true)
 assert(published.cockpit == 0)
+assert(#status == 6 and status[6]:find('END|radar|20|NPC-021|native_ship_unknown', 1, true))
 known = true
+step()
+radar_distance = 12000
+stream:tick(true)
+assert(published.cockpit == 0 and #status == 8)
+assert(status[8]:find('END|radar|20|NPC-021|radar_out_of_range|cluster_01_sector001_macro|distance=12000|range=10000', 1, true))
+radar_distance = 1000
+step()
 code[key(npc)] = 'NPC-999'
 now = now + .16
 stream:tick(true)
 reply('radar', npc)
 stream:tick(true)
 assert(published.cockpit == 0)
+assert(#status == 10 and status[10]:find('END|radar|20|NPC-021|code_mismatch', 1, true))
 stream:close()
+assert(#status == 10)
+for _, row in ipairs(status) do assert(not row:find(pinned.nonce, 1, true)) end
