@@ -597,3 +597,23 @@ The private operator artifacts are `.local/native-stock-sale/run-01/verified.jso
 (SHA-256 `5dde047ac066dbd2a2235ebee70bc8a6f3b83d3751b6ec74cd01fb6e2a157e14`),
 `lifecycle.json`, the provider and pilot engine logs, their launcher
 results, and the confirmed checkpoint under the same run directory.
+
+### A declined basket and a change of ship in the trade window
+
+If the server no longer has a unique station offer (`no_unique_offer`) or
+cannot book the requested quantity (`not_tradeable`), X4 reaches those
+checks before it creates a trade order. The cockpit previously discarded
+both reasons and disabled further purchases for the session. At
+`5a2974cb` it explains the refusal and allows the pilot to open a fresh
+offer. Neither the original Confirm button nor its orders table can submit
+again. A LuaJIT peer and the Linux native UDP transport exercised both
+refusals followed by successful purchases with simulated X4 events.
+
+Changing the selected ship while the basket was open could also pass a
+Company purchase offer to the stock local confirmation function. At
+`911d2dae` the cockpit intercepts Company offer IDs for either direction
+of trade. A separate LuaJIT check executed the installed game's stock
+`buttonConfirmTrade` body with recorded engine calls. It withheld all
+eight stale baskets and forwarded all eight genuine stock baskets across
+immediate and queued orders, with selling enabled and disabled. These
+two corrections still need an in-game pilot check.

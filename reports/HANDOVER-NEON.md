@@ -201,6 +201,13 @@ reached the receiver with the fresh sample and rejected stale and
 future samples. Windows gameplay on the corrected build remains open.
 [23:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795644032861319)
 
+The two NPC observation fixtures now run under the pinned Lupa LuaJIT
+runtime without a separate executable. All three tests in that module
+passed on Linux at `ec929eea`. Native Windows verification is pending.
+The trade window also recovers after the server declines an unavailable
+offer or quantity and rejects a stale Company basket after the pilot
+changes ships. [Trade window regressions](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#a-declined-basket-and-a-change-of-ship-in-the-trade-window)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
