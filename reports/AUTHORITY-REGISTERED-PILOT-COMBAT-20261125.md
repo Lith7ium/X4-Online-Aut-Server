@@ -54,7 +54,12 @@ occupied and controlled by the admitted pilot. Health reads were passive.
 
 The provider confirmed and offered `checkpoint-8588ae0463304a26be1430e7c5e70dd8`
 with SHA-256 `cfdc798c41169f2bcc04279e39faf97c503620807f1622aea42ada9f757683c2`.
-The supervisor stopped the attempt for sustained host memory pressure.
+The supervisor stopped on one host memory pressure reading. At 221.48 s
+the kernel's `full avg10` reached 0.60%, above the 0.20% stop threshold.
+15.43 GiB of host RAM was available. The provider and pilot used 6.51
+and 1.44 GiB of proportional set size at that point. The earlier successful
+Run 02 recorded 0.00% on all 385 samples, with a minimum of 12.30 GiB
+available. The logs did not record the cumulative stall time.
 The cockpit was in `load_receipts` and had yet to attempt admission.
 Its engine log also reported `Failed to create file for writing:
 config.xml` before reaching the start menu. The relationship between
