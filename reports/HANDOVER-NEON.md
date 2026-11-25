@@ -171,13 +171,22 @@ loss. The Linux and Windows operator packages for this trial are in
 (1,632,127 bytes). Windows SHA-256 is
 `6d2bac188052fcfc37100ba35080bf640f4091991b84ad13171ddb31c149b22c`
 (3,110,247 bytes). All 176 shared source entries matched.
-[Regular game IPC and Linux acceptance](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+[Regular game IPC and Linux acceptance](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md) · [22:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795640423420209)
 
 The confirmed private vanilla seed `.local/base-four-fighters-trade-seed.zip`
 preserves all four start fighters and the existing Company scout.
 BBS-493 has an assigned captain and four energy cells. The other
 three fighters retain their original start positions and equipment.
 [Seed, formation and verified restore](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
+
+Two local attempts to issue stock orders to BBS-493 from separate
+cockpits ended before the second pilot reached the helm. The first
+exposed a failed private stimulus and a pause-time disconnect. The
+second stopped on a host memory-pressure reading. There were zero
+fleet clicks in both. The second departure save preserved the captain
+and the empty queue. A split-host run still needs both pilots to reach
+the helm together before either issues an order.
+[Two-pilot stock fleet attempts](AUTHORITY-STOCK-FLEET-TWO-PILOTS-20261125.md)
 
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
