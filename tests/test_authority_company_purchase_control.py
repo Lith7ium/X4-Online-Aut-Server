@@ -171,7 +171,8 @@ class CompanyPurchaseTests(unittest.TestCase):
             self.assertEqual(json.loads(exchange(client, json.dumps(choose).encode()))['ship']['ship_index'],
                              ship_index)
             if ship_index == 7:
-                enable = dict(choose, kind='enable_company_purchases', statement_version=1, undock_version=1)
+                enable = dict(choose, kind='enable_company_purchases', statement_version=1, undock_version=1,
+                              trade_view_version=1)
                 self.assertEqual(json.loads(exchange(client, json.dumps(enable).encode())), dict(
                     enable, kind='company_purchases_enabled', registry_epoch='d' * 32))
             self.assertEqual(json.loads(exchange(client, encode_load_claim(claim_for(offer))))['kind'], 'accepted')
@@ -185,6 +186,12 @@ class CompanyPurchaseTests(unittest.TestCase):
         guard_calls, callback_receipts, other_receipts, errors = [], [], [], []
         disconnect = threading.Event()
         statements, deliveries, departure_receipts = [], [], []
+
+        view = dict(view_id='f' * 32, sector=PURCHASE['sector'], station_code=PURCHASE['station_code'], offset=0)
+        market_pages = []
+        def trade_view_exchange(page):
+            market_pages.append(page)
+            return view if page is None else None
 
         def undock_exchange(receipt):
             departure_receipts.append(receipt)
@@ -215,7 +222,8 @@ class CompanyPurchaseTests(unittest.TestCase):
                         company_purchase_attempt=bound.attempt_id, company_purchase_ship_index=index,
                         company_purchase_statement=statement if index == 7 else None,
                         company_purchase_statement_result=statement_result if index == 7 else None,
-                        company_undock_exchange=undock_exchange if index == 7 else None)
+                        company_undock_exchange=undock_exchange if index == 7 else None,
+                        company_trade_view_exchange=trade_view_exchange if index == 7 else None)
                     started.set()
                     while not stop.is_set():
                         owner.poll(.02)
@@ -253,7 +261,8 @@ class CompanyPurchaseTests(unittest.TestCase):
             guard_calls.append(True)
             return True
 
-        self.assertEqual(poll_company_purchase(*args, guard=guard), PURCHASE)
+        self.assertEqual(poll_company_purchase(*args, guard=guard, market=True),
+                         {'purchase': PURCHASE, 'view': view})
         with self.assertRaises(ValueError):
             poll_company_purchase(*args)
         request_statement = request_company_purchase_statement
@@ -269,7 +278,14 @@ class CompanyPurchaseTests(unittest.TestCase):
                               8, purchase_id, '4' * 32)
         with self.assertRaises(ValueError):
             poll_company_purchase(*args, dict(CONFIRMED, ship_code='ABC-123'))
-        self.assertIsNone(poll_company_purchase(*args, CONFIRMED, guard=guard))
+        page = dict(view, outcome='observed', company_balance_cents=CONFIRMED['company_balance_cents'],
+                    offers=[], total_offers=0)
+        self.assertEqual(poll_company_purchase(*args, CONFIRMED, guard=guard, market=True, page=page),
+                         {'purchase': None, 'view': None})
+        self.assertEqual(market_pages, [None, page])
+        with self.assertRaises(ValueError):
+            poll_company_purchase(case.participants, other_offer.connection_handle, other_offer.attempt_id,
+                                  8, market=True)
         with self.assertRaises(ValueError):
             poll_company_purchase(*args, CONFIRMED)
         self.assertEqual(callback_receipts, [None, CONFIRMED])

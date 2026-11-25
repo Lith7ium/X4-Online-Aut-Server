@@ -7,8 +7,10 @@ import time
 
 from .company_purchase_control import (
     CompanyPurchasePeerLost, deliver_company_purchase_statement_result, poll_company_purchase,
-    purchase_receipt, request_company_purchase_statement,
+    purchase_receipt, request_company_purchase_statement, supports_trade_view,
 )
+
+from .company_trade_view import CompanyTradeViews
 
 
 @dataclass(frozen=True)
@@ -50,7 +52,7 @@ class CompanyPurchaseScheduler:
     """Serialize native bookings and departures for admitted pilots."""
 
     def __init__(self, participants, native, ledger, *, guard=None, clock=time.monotonic,
-                 verify_timeout=50, undock=None):
+                 verify_timeout=50, undock=None, market=None):
         if not 0 < verify_timeout <= 60:
             raise ValueError('company purchase verify timeout must be in (0, 60]')
         self._participants = participants
@@ -65,6 +67,7 @@ class CompanyPurchaseScheduler:
         self._report_search = {}
         self._last_handle = 0
         self._next_poll = float('-inf')
+        self._market = None if market is None else CompanyTradeViews(market)
         self._undock = undock
         self._active_undock = None
         self._undock_uncertain = False
@@ -279,6 +282,8 @@ class CompanyPurchaseScheduler:
         self._report_search = {binding: search for binding, search in self._report_search.items()
                                if binding in current}
         self._begin_one(bindings)
+        if self._market is not None:
+            self._market.step(bindings, can_start=self._active is None and self._active_undock is None)
 
         now = self._clock()
         if now < self._next_poll:
@@ -308,8 +313,14 @@ class CompanyPurchaseScheduler:
         try:
             if receipt is None and self._recover_one(binding, now):
                 return
-            purchase = poll_company_purchase(self._participants, handle, binding.attempt_id,
-                                             binding.ship_index, receipt, guard=self._guard)
+            endpoint = (self._participants, handle, binding.attempt_id, binding.ship_index, receipt)
+            if self._market is not None and supports_trade_view(self._participants._host._control._peers[binding.conn]):
+                response = poll_company_purchase(*endpoint, guard=self._guard, market=True,
+                                                 page=self._market.page(binding))
+                self._market.request(binding, response['view'])
+                purchase = response['purchase']
+            else:
+                purchase = poll_company_purchase(*endpoint, guard=self._guard)
         except CompanyPurchasePeerLost:
             self._receipts.pop(handle, None)
             return
@@ -324,6 +335,8 @@ class CompanyPurchaseScheduler:
         an already-dispatched purchase or departure. It never requests more work.
         """
         self._check()
+        if self._market is not None:
+            self._market.reset()
         if self._active is not None:
             self._advance_native()
         if self._active_undock is not None:

@@ -130,7 +130,7 @@ def verify_receipts(path, ticket, marker):
 def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
                          registry_check=None, motion_consumer=None, company_purchase_exchange=None,
                          company_purchase_statement=None, company_purchase_statement_result=None,
-                         company_undock_exchange=None, play_until_exit=False):
+                         company_undock_exchange=None, company_trade_view_exchange=None, play_until_exit=False):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -164,6 +164,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
     if company_purchase_exchange is not None:
         motion_options['company_purchase_exchange'] = company_purchase_exchange
+    if company_trade_view_exchange is not None:
+        motion_options['company_trade_view_exchange'] = company_trade_view_exchange
     if company_undock_exchange is not None:
         motion_options['company_undock_exchange'] = company_undock_exchange
     if company_purchase_statement is not None:
@@ -252,12 +254,14 @@ def error_code(error):
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
-        cockpit_radar_playback=False, company_undock_test=False):
+        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
     if type(company_purchases) is not bool or (company_purchases and not player_mode):
         raise ValueError('Company purchases require player mode')
+    if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
+        raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
         raise ValueError('Company undock test requires Company purchases')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
@@ -334,8 +338,12 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     if company_motion:
                         owner.request_ship_motion()
                     if company_purchases:
-                        purchase_epoch = (owner.enable_company_purchases(undock=True) if company_undock_test
-                                          else owner.enable_company_purchases())
+                        capabilities = {}
+                        if company_undock_test:
+                            capabilities['undock'] = True
+                        if company_trade_view:
+                            capabilities['trade_view'] = True
+                        purchase_epoch = owner.enable_company_purchases(**capabilities)
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
                 stage_offered_save(owner, out/'download', target)
@@ -405,7 +413,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         source_options['company_motion'] = company_source
                     if company_purchases:
                         purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
-                            server_fingerprint=connection_settings['server_fingerprint'], undock=company_undock_test)
+                            server_fingerprint=connection_settings['server_fingerprint'], undock=company_undock_test, trade_view=company_trade_view)
                         source_options['company_purchase'] = purchase_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)
