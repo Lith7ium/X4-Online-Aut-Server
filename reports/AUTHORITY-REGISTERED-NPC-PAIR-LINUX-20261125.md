@@ -340,3 +340,37 @@ The comparison file `native-measurement-ingress-verified.json` has
 SHA-256 `2ac73b124d8db269c7cdf8c7a63855a8fbbd321c4ac173dcad439f98b159ce4e`.
 The raw accepted receiver log `server-native-measurements.jsonl` has
 SHA-256 `8072a671ec770931bf2f61ba7367894c94d9b757604c35cf4d441aa3f0a0433e`.
+
+#### Run 11 displacement and packet-only velocity estimate
+
+Of 154 accepted packets, 153 arrived between two complete native cockpit
+observations of the same freighter. The raw packet position was 144.0 m
+away from the nearest observation at median, 285.4 m at P90 and 300.7 m
+at maximum. The absolute time difference between receipt and observation
+was 31.2 ms at median and 57.6 ms at P90. The nearest observation followed
+receipt 74 times and preceded it 79 times. No positions were interpolated.
+
+For 152 receipts, the current packet had both an earlier accepted packet
+for the same binding and a complete cockpit observation after receipt.
+The first packet had no predecessor, and the last had no following
+observation. The difference in capture and game timestamps of the current
+and previous accepted packets estimated local game seconds per monotonic
+second. That rate and the current packet's native sector velocity
+projected its XYZ to the exact capture timestamp of the next cockpit
+observation. The offline comparator supplied only that timestamp as the
+projection horizon. Its game time and position were unavailable to the
+estimate. One pair crossed a stock attention label change within the
+same binding.
+
+| Position compared to the next observed XYZ | Median | P90 | Max |
+| --- | ---: | ---: | ---: |
+| Raw packet | 281.9 m | 296.6 m | 316.2 m |
+| Packet-only velocity estimate | 4.5 m | 14.2 m | 28.6 m |
+
+The estimate reduced the gap in all 152 comparisons. The next observation
+followed receipt by 0.3–134.1 ms (median 67.7 ms, P90 116.1 ms). The full
+projection horizon from packet capture was 114.8–273.7 ms (median
+244.1 ms, P90 260.1 ms). These are errors against a later measured
+cockpit position on the same host's monotonic clock. The comparison
+does not establish the position at receipt, predict when the next sample
+will arrive, or cover separate hosts and WAN timing.
