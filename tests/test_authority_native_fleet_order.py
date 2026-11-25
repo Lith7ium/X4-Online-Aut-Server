@@ -133,6 +133,12 @@ class NativeFleetOrderTests(unittest.TestCase):
                          dict(another, outcome='refused', reason='provider_limit'))
         self.assert_no_dispatch()
 
+    def test_loop_preflight_has_a_definite_refusal(self):
+        order = dict(ORDER, queue_mode='replace')
+        self.begin(order)
+        self.reply('queue_loop_unsupported', ('-', '0', '0'), queue_mode='replace')
+        self.assertEqual(self.provider.poll(), dict(order, outcome='refused', reason='queue_loop_unsupported'))
+
     def test_installation_binds_the_md_and_driver_to_this_lease(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
@@ -174,11 +180,15 @@ class NativeFleetOrderTests(unittest.TestCase):
         request = cues.find("library[@name='CheckRequest']")
         self.assertTrue(any("$queue_mode == '-'" in guard.get('value') and '$ship.orders.count != 0' in guard.get('value')
                             for guard in request.iter('do_elseif')))
+        preflight = next(guard for guard in request.iter('do_if') if guard.get('value') == "$queue_mode != '-'")
+        self.assertEqual(preflight.find('set_value').get('exact'), '$ship.orders.clone')
+        loop_guard = preflight.find('do_for_each/do_if')
+        self.assertEqual(loop_guard.get('value'), '@$queued.isinloop')
+        self.assertEqual(loop_guard.find('set_value').get('exact'), "'queue_loop_unsupported'")
         issue = cues.find("library[@name='IssueMoveWait']/actions/do_if")
         tags = [action.tag for action in issue]
         self.assertLess(tags.index('do_if'), tags.index('create_order'))
-        self.assertEqual(issue.find('./do_if/set_value').get('exact'), '$ship.orders.clone')
-        snapshot = issue.findall('do_if')[1].find('do_for_each')
+        snapshot = issue.find('do_if/do_for_each')
         self.assertEqual(snapshot.get('in'), '$expected_queue')
         self.assertIn('$prior.state != orderstate.critical and $prior.canplayercancel', snapshot.find('do_if').get('value'))
         self.assertEqual(snapshot.find('do_if/append_to_list').get('name'), '$replaceable')
@@ -190,6 +200,7 @@ class NativeFleetOrderTests(unittest.TestCase):
         self.assertEqual(retirement.get('in'), '$replaceable')
         self.assertEqual(retirement.get('reverse'), 'true')
         self.assertIn('$prior == $order', retirement.find('do_if').get('value'))
+        self.assertIn('$prior.isinloop', retirement.find('do_if').get('value'))
         eligible = retirement.findall('do_if')[1]
         self.assertIn('$prior.state != orderstate.critical and $prior.canplayercancel', eligible.get('value'))
         self.assertEqual(eligible.find('cancel_order').attrib, {'order': '$prior', 'keepinloop': 'false'})

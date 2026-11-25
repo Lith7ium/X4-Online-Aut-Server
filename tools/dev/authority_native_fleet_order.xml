@@ -82,7 +82,18 @@
                    or ($ship.order and ($ship.order.id != 'Wait' or $ship.order.state == orderstate.critical)))">
       <set_value name="$status" exact="'ship_busy'"/>
      </do_elseif>
-     <do_else><include_actions ref="IssueMoveWait"/></do_else>
+     <do_else>
+      <do_if value="$queue_mode != '-'">
+       <set_value name="$expected_queue" exact="$ship.orders.clone"/>
+       <do_for_each name="$queued" in="$expected_queue">
+        <do_if value="@$queued.isinloop">
+         <set_value name="$status" exact="'queue_loop_unsupported'"/>
+         <break/>
+        </do_if>
+       </do_for_each>
+      </do_if>
+      <do_if value="$status != 'queue_loop_unsupported'"><include_actions ref="IssueMoveWait"/></do_if>
+     </do_else>
     </do_else>
    </actions>
   </library>
@@ -95,7 +106,6 @@
     <set_value name="State.$attempted.{$attempt_key}" exact="true"/>
     <set_value name="State.$attempted_count" exact="State.$attempted_count + 1"/>
     <do_if value="@State.$attempted.{$attempt_key} == true">
-     <do_if value="$queue_mode != '-'"><set_value name="$expected_queue" exact="$ship.orders.clone"/></do_if>
      <do_if value="$queue_mode == 'replace'">
       <set_value name="$replaceable" exact="[]"/>
       <do_for_each name="$prior" in="$expected_queue">
@@ -160,7 +170,7 @@
          so avoid invoking it on any critical or otherwise protected order. -->
     <do_for_each name="$prior" in="$replaceable" reverse="true">
      <set_value name="$prior_index" exact="$expected_queue.indexof.{$prior}"/>
-     <do_if value="not @$prior.exists or $prior == $order or $prior.object != $ship
+     <do_if value="not @$prior.exists or $prior == $order or $prior.object != $ship or $prior.isinloop
                 or not $prior_index or @$ship.orders.{$prior_index} != $prior or $ship.orders.count != $expected_queue.count + 1
                 or @$ship.orders.{$ship.orders.count} != $order or $ship.pilot != $captain">
       <set_value name="$queue_verified" exact="false"/>

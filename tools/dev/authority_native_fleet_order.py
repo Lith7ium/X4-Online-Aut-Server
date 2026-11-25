@@ -17,7 +17,7 @@ _SCRIPT = 'authority_native_fleet_order'
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _ACTOR = re.compile(r'0[xX]0*[1-9a-fA-F][0-9a-fA-F]*')
 _REFUSALS = {'invalid_registry', 'identity_mismatch', 'unavailable_ship', 'captain_required',
-             'sector_mismatch', 'ship_busy', 'provider_limit'}
+             'sector_mismatch', 'ship_busy', 'queue_loop_unsupported', 'provider_limit'}
 _MAX_PACKET = 512
 _MAX_ATTEMPTS = 4096
 
