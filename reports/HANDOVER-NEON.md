@@ -46,6 +46,11 @@ records the current Windows assignments. [Development check-in](https://x4multip
   counter. Next, inspect the DLL and clock the packaged Windows sender
   actually selects, and exercise its real controlled-ship sample path
   when the Windows system is available. Cobalt owns the Internet flight.
+  The shared ZIP contains DLL SHA-256 `6ad97e04…e2809e0`.
+  The indexed receiver fixture used the older checked-in DLL
+  `0fc98dba…f80b6ab6`. The packaged DLL's clock previously advanced
+  under Wine. Capture which DLL the regular launcher loads on Windows.
+  [Network DLL evidence](AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md)
   [Windows GPU report and harness revision](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/7d575ef1cd904acfc3d30e6cccd5d7ca1e4c8257/reports/AUTHORITY-COMPANY-INDEXED-HUD-WINDOWS-20261125.md)
   Neon previously delivered Windows observations of shield and hull damage from
   weapons. Shared damage across machines and boarding remain open.
