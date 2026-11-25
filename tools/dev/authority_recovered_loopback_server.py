@@ -1591,16 +1591,14 @@ def run(args):
             motion_service = CompanyMotionService(application_drops=application_drops)
         if npc_source is not None:
             def npc_unreserved():
-                with session._lock:
-                    session._live()
-                    baseline = world._baseline
-                    if baseline is None or world.session.baseline_id != baseline[0]:
-                        return False
-                    current = baseline[1]
-                    receipt = registry_snapshot_state.latest_receipt
-                    return ((receipt['checkpoint_id'], receipt['sha256'], receipt['run_id'])
-                            == (current.checkpoint_id, current.sha256, current.marker)
-                            and not npc_source.reserved_or_unverified(current, session._reserved_ships(current)))
+                reservations = session.running_ship_reservations()
+                if reservations is None:
+                    return False
+                current, occupied = reservations
+                receipt = registry_snapshot_state.latest_receipt
+                return ((receipt['checkpoint_id'], receipt['sha256'], receipt['run_id'])
+                        == (current.checkpoint_id, current.sha256, current.marker)
+                        and not npc_source.reserved_or_unverified(current, occupied))
 
             npc_source.attach(motion_service, npc_unreserved)
         undock_capability = {'company_undock': True} if company_undock else {}

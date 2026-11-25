@@ -100,6 +100,26 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         adapter.choose_company_ship(client, offer.attempt_id, 1)
         self.assertEqual(adapter.accept(client, claim_for(offer)).attempt_id, offer.attempt_id)
 
+    def test_running_reservations_follow_the_pilots_verified_checkpoint_after_offer_expires(self):
+        self.adapter.disconnect(self.b)
+        offer = self.adapter.begin(self.a).offer
+        checkpoint = self.store.latest_marked_confirmed()
+        seat = self.adapter.choose_company_ship(self.a, offer.attempt_id, 1)
+        self.assertIsNone(self.adapter.running_ship_reservations())
+        self.adapter.accept(self.a, claim_for(offer))
+        self.assertEqual(self.world.session.state, 'resuming')
+        self.assertIsNone(self.adapter.running_ship_reservations())
+        with patch.object(self.world._engine, 'resume'), patch.object(self.world, '_participants') as peers:
+            peers.resume.return_value = True
+            self.world.step()
+        self.assertEqual(self.world.session.state, 'running')
+        self.assertIsNone(self.world.session.baseline_id)
+        self.assertEqual(self.adapter.running_ship_reservations(), (checkpoint, (seat,)))
+        with patch.object(self.adapter, '_verified_marker_checkpoint', replace(checkpoint, sha256='f' * 64)):
+            self.assertIsNone(self.adapter.running_ship_reservations())
+        self.adapter.disconnect(self.a)
+        self.assertIsNone(self.adapter.running_ship_reservations())
+
     def test_fleet_order_excludes_admitted_and_joining_ships_and_holds_target_across_pilot_loss(self):
         epoch = 'c' * 32
         ships = tuple(CompanyShip(index, f'[0x{index}]', 'sector', None, code)

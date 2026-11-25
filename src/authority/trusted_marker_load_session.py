@@ -232,6 +232,21 @@ class TrustedMarkerLoadSession:
         occupied.extend(ship for _, ship in self._fleet_targets.values())
         return occupied
 
+    def running_ship_reservations(self):
+        """Read the checkpoint loaded by the current pilots and the seats held in that world."""
+        with self._lock:
+            self._live()
+            lifecycle = self._world.session
+            if lifecycle.state != 'running' or lifecycle.pending is not None or not lifecycle.ready_players:
+                return None
+            # The paused load offer expires on resume. Its verified identity still
+            # describes which checkpoint these pilots loaded into the running world.
+            baseline = self._world._baseline
+            if baseline is None or baseline[1] != self._verified_marker_checkpoint:
+                return None
+            checkpoint = self._verified_marker_checkpoint
+            return checkpoint, tuple(self._reserved_ships(checkpoint))
+
     def hold_fleet_target(self, connection, pilot_ship, registry_epoch, order):
         """Exclude the target from pilot selection until native dispatch has settled."""
         with self._lock:
