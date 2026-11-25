@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable opt-in native Windows X4 9.00 setup + throttle cue for packaged Company sender verification.
+     Never auto-runs: every cue requires an explicit correlated UI-triggered event in disposable profile 45850. -->
+<mdscript name="X4AuthorityWindowsSenderProbe" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Setup" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityWindowsSenderProbe'" control="'Setup'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$epoch" exact="@$r.$epoch"/>
+    <do_if value="$r.$request_id? and $epoch? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container and @player.sector.isclass.sector">
+     <set_value name="$own" exact="player.controlled"/>
+     <set_value name="$sec" exact="player.sector"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$ships.{1}" exact="$own"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$own}" exact="1"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="1"/>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|Ready|%s|%s|%s|%s'.[$r.$request_id,$own,$own.idcode,$own.macro.id,$sec.macro.id]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|Refused|setup_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="StartThrottle" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityWindowsSenderProbe'" control="'StartThrottle'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$own" exact="@md.X4AuthorityShipRegistry.State.$ships.{1}"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and @$own.isoperational and player.controlled == $own and player.occupiedship == $own and player.container == $own and not $own.dock.exists">
+     <set_playership_throttle value="0.35"/>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|ThrottleStarted|%s|%s'.[$r.$request_id,$own,$own.speed]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|Refused|throttle_start_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="StopThrottle" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityWindowsSenderProbe'" control="'StopThrottle'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$own" exact="@md.X4AuthorityShipRegistry.State.$ships.{1}"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and @$own.isoperational and player.controlled == $own and player.occupiedship == $own and player.container == $own">
+     <set_playership_throttle value="0"/>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|ThrottleStopped|%s|%s'.[$r.$request_id,$own,$own.speed]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityWindowsSenderProbe.Result'" param="'%s|Refused|throttle_stop_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
