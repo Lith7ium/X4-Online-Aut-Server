@@ -34,7 +34,9 @@ local function quotes(view)
         -- Stock TradeIDs are unsigned. Negative numeric IDs exist only in the
         -- scoped Lua environment for this view and cannot match another trade.
         local offer = {id = -(view.serial * 4096 + i), ware = value.ware, price = value.price_cents / 100,
-            price_cents = value.price_cents, amount = value.amount, minamount = value.min_amount,
+            -- The server reports the effective unit price, with no separate quantity adjustment.
+            quantityfactor = 1, price_cents = value.price_cents, amount = value.amount,
+            minamount = value.min_amount,
             desiredamount = value.amount, free = value.free_units, tradeable = value.tradeable,
             isselloffer = value.side == 'buy', isbuyoffer = value.side == 'sell'}
         local ammotypename = view.get_ammo_type(value.ware)
@@ -128,6 +130,8 @@ function M.install(o)
                 return c.by_id[id] and id or ConvertIDTo64Bit(id)
             end,
             ConvertStringToLuaID = function(value)
+                -- The stock trade-context event passes its uint64 station directly.
+                if type(value) == 'cdata' and value == c.dock.station then value = tostring(value) end
                 local id = tonumber(value)
                 return c.by_id[id] and id or ConvertStringToLuaID(value)
             end,
@@ -176,6 +180,11 @@ function M.install(o)
         local c = active
         if not owns(c) then return native.getTradeContextRowContent(waredata) end
         local result = scoped(native.getTradeContextRowContent, scope(c), waredata)
+        -- The last stock modifier compares the effective price with the ware
+        -- average. The provider does not report the component breakdown.
+        local modifiers = result[11]
+        local comparison = modifiers[#modifiers]
+        result[11] = comparison and {{text = 'Net price vs. average', amount = comparison.amount}} or {}
         local scale = result[4].scale
         local offer = waredata.sell
         scale.min, scale.minselect = 0, 0 -- Provider settlement currently accepts purchases only.

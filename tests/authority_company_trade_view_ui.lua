@@ -1,3 +1,4 @@
+local ffi = require('ffi')
 local module = dofile('src/authority/lua/company_trade_view_ui.lua')
 local local_money = 1
 function GetPlayerMoney() return local_money end
@@ -13,7 +14,12 @@ function GetCargoAfterTradeOrders() return {water = 99} end
 function GetAmmoCountAfterTradeOrders() return {} end
 function GetComponentData() return false end
 function ConvertIDTo64Bit(id) assert(id > 0); return id end
-function ConvertStringToLuaID(id) assert(tonumber(id) > 0); return tonumber(id) end
+function ConvertStringToLuaID(id)
+    assert(type(id) == 'string')
+    local value = tonumber((id:gsub('ULL$', '')))
+    assert(value > 0)
+    return value
+end
 function IsSameTrade(left, right) return left == right end
 function CanTradeWith() return false end
 
@@ -28,6 +34,7 @@ function menu.initTradeContextData()
     for _, offer in ipairs(data.offers) do offer.active = CanTradeWith(offer.id) end
 end
 function menu.createTradeContext()
+    assert(ConvertStringToLuaID(ffi.new('uint64_t', 9)) == 9)
     assert(GetPlayerMoney() == 116)
     assert(GetComponentData(9, 'tradesubscription'))
     menu.updateTradeCost()
@@ -40,8 +47,12 @@ function menu.updateTradeCost()
     end
 end
 function menu.getTradeContextRowContent(row)
-    if row.sell then ConvertIDTo64Bit(row.sell.id) end
-    return {{}, {}, {}, {scale = {min = -100, minselect = -100, max = 100, start = 0}}}
+    if row.sell then
+        ConvertIDTo64Bit(row.sell.id)
+        assert(not (row.sell.quantityfactor > 1) and row.sell.quantityfactor - 1 == 0)
+    end
+    return {{}, {}, {}, {scale = {min = -100, minselect = -100, max = 100, start = 0}},
+        [11] = {{text = 'Volume adjustment', amount = '0%'}, {text = 'Total', amount = '2%'}}}
 end
 function menu.getTradeOfferByID() end
 function menu.getTradeContextStorableAmountAfterTradeOrders() return 1 end
@@ -83,7 +94,9 @@ ui:tick()
 assert(#data.offers == 3 and data.currentcargo.water == 2 and data.playerMoney == local_money)
 local buy, sell, disabled = unpack(data.offers)
 assert(buy.active and not sell.active and not disabled.active)
-local scale = menu.getTradeContextRowContent({sell = buy, buy = sell})[4].scale
+local content = menu.getTradeContextRowContent({sell = buy, buy = sell})
+local scale = content[4].scale
+assert(#content[11] == 1 and content[11][1].text == 'Net price vs. average' and content[11][1].amount == '2%')
 assert(scale.min == 0 and scale.max == 2) -- $116 can buy two despite a 58.48 unit quote.
 assert(menu.getTradeContextRowContent({sell = disabled})[4].scale.max == 0)
 menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -1)
