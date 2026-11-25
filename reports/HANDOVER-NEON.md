@@ -16,6 +16,13 @@ positions. All three native processes ran on Bazzite over loopback.
 The outstanding live comparison is Windows over the Internet.
 [Two pilots, both cockpit readbacks and final checkpoint](AUTHORITY-TWO-PILOT-FLIGHT-20261125.md)
 
+Two regular pilots also flew concurrently in different sectors. HVC-420
+remained in Black Hole Sun V and KHI-630 in Black Hole Sun IV. The
+provider confirmed both movements and saved both ships within 0.4 mm of
+its paused readbacks. Both pilots started in their respective sectors.
+The optional map trigger stopped before opening the stock map.
+[Independent flight in two sectors](AUTHORITY-TWO-PILOT-SECTORS-20261125.md)
+
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
   with `-FreshCompanyProfile`. Run it directly with the existing private
