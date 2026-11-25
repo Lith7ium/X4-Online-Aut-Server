@@ -81,3 +81,32 @@ run's scope.
 | Read-only ledger comparison | `5d26155d16ff92f0727ae34f7afc4a2c9ad835a9b1fabc075f577b467a92c48d` |
 | Staged source provenance | `873ce70ab5cc14d2b1d371655218cbaa891f5b2eb1cb58c50cf9581b9204b2a0` |
 | Private cockpit observer | `038069b696c7098503f8512874a91a3019b0286980b483894cd229f21cc5b842` |
+
+## Cross-sector transfer with the saved idle captain
+
+At `2f1578fd152a8bdd0f43eb97f7c40c7ccf5b9913` a GPU-free native
+X4 provider on Bazzite admitted one headless TLS participant for
+BBS-493 (1077). The participant simulated the cockpit confirmations
+and supplied scripted poses through the regular motion grant and TLS
+movement channel. The provider acknowledged 69 V3 samples, including
+24 before the scripted sector change.
+
+The native pose path verified exactly one transfer on sequence 30,
+from `cluster_06_sector002_macro` to `cluster_06_sector001_macro`.
+Native Mission Director and UI readbacks both measured
+(30000, 100000, 55000) m immediately after transfer and again after
+pause. Independent parsing of the confirmed last-departure save
+found BBS-493 at the same registry index in the destination sector,
+with the original captain seed `-97168325741795052` and only its
+started default `Wait`.
+
+The provider exited paused at `checkpoint-15e7b01029a94d1f8a7f84ceeeb65361`,
+marker `9468c4e17ba51505b0772503dc78af06`, SHA-256
+`53419833e3122ebf7421d1857dc0c0eea3e718d2bcd5c6c8c29219710e591a5d`.
+The portable source and restored copy were unchanged. No owned
+processes or locks remained. Private verification evidence is under
+`.local/headless-captain-sector/run-01/`. Its `verified.json` SHA-256
+is `ea0fb97aa5dec27ad6b2e04b108999d3d3600f44444aa9377954e4747e8c5eec`.
+
+This run verifies provider-side movement and crew persistence.
+An actual cockpit gate flight with the retained captain path remains open.
