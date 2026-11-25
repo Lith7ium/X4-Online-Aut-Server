@@ -210,7 +210,11 @@ still needs testing. [Native flight and authority transfer](AUTHORITY-SUPERHIGHW
   [Network DLL evidence](AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md)
   [Windows GPU report and harness revision](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/7d575ef1cd904acfc3d30e6cccd5d7ca1e4c8257/reports/AUTHORITY-COMPANY-INDEXED-HUD-WINDOWS-20261125.md)
   Neon previously delivered Windows observations of shield and hull damage from
-  weapons. Shared damage across machines and boarding remain open.
+  weapons. A regular Linux pilot's stock guns have since produced 49 shield
+  callbacks against KHI-630. Its registry identity and HVC-420's last-attacker
+  identity matched the pilot's offered checkpoint. The provider retained
+  the ships' starting health. [Registered-pilot volley](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md)
+  Shared damage across machines and boarding remain open.
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
 - **Quartz** has the read-only investigation of the Company fleet command
