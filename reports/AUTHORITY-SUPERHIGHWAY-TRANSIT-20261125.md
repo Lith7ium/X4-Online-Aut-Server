@@ -304,3 +304,28 @@ write. Six focused tests passed. The private approach and timeout reports had SH
 | Provider result | `23021fc09cc6c832ea00c0c6eed8332bb62d07134b564d845edfc16307b69c7c` |
 | Supervisor result | `5cc89a52584169a62da41aed476b7b59ceb688df5c7bc84528516598e2126737` |
 | Independent save verification | `0406e84f95aa5cb2e9baa6c8f0786aac09100d695706f60466737aa1622326ce` |
+
+## Ordinary jump gate staging attempt
+
+A separate Bazzite attempt at `f444e5f0ef13d4ef6aa89bf2006d62550cbdbf12`
+targeted the reciprocal stock gates ZGH-239 and NEL-546 from
+`cluster_06_sector002_macro` to `cluster_01_sector002_macro`. The
+private seed was intended to stage HVC-420 near the entrance and the
+unoccupied KHI-630 in the far sector before a later stock cockpit flight.
+
+One GPU-free provider reloaded a disposable copy of
+`checkpoint-c3a43fc74180427bac0ef75df94a3479`, observed its marker
+`0ac65001d40474528e22ade9a383f7d4`, and completed live inspection of
+5,048 registry entries. The private seed cue returned neither a ready
+receipt nor a refusal during roughly four minutes after inspection.
+The harness stopped the provider. The result reports `startup cancelled`,
+zero engine operations, and zero remaining owned processes. No staging
+checkpoint was published. Whether any private fixture placement occurred
+in RAM remains unknown.
+
+The original and copied input hashes remained
+`ef811ab5d7ee212c0d38230fbc48944261b096be3c2d3d34b9baa24ffb033676`.
+Both locks cleared. The cockpit phase did not run, so this attempt
+establishes no ordinary jump-gate passage. Private evidence is under
+`.local/ordinary-jump-gate/run-01/`. The `staged/result.json` digest is
+`f0469eeea70d243192c97bb7932ee4a20ad3b12af93b61f8857de1e94336d907`.
