@@ -89,6 +89,38 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.assertNotIn(self.second['ticket'], json.dumps(traffic))
         self.assertNotIn(self.first['generation'], json.dumps(traffic))
 
+    def test_source_movement_measurements_exclude_unrelated_positions(self):
+        self.service.set_running(True)
+        source, _ = self.bind(self.first)
+
+        def record(sequence, sector, x, y, velocity=None):
+            sample = self.sample(self.first, sequence, sector, velocity)
+            sample.update(x=x, y=y)
+            self.send(source, {'kind': 'motion_sample', 'window': self.service.window, 'sample': sample})
+            return self.service.participant_traffic()['active'][0]
+
+        zero_velocity = {'x': 0, 'y': 0, 'z': 0}
+        with patch('authority.company_motion_service.time.monotonic', return_value=10):
+            first = record(1, 'sector_a', 0, 0)
+            self.assertIsNone(first['max_source_step_metres'])
+            self.assertIsNone(first['max_reported_speed_mps'])
+            stationary = record(2, 'sector_a', 0, 0, zero_velocity)
+            self.assertEqual(stationary['max_source_step_metres'], 0)
+            self.assertEqual(stationary['max_reported_speed_mps'], 0)
+            record(3, 'sector_a', 3, 4, {'x': 2, 'y': 3, 'z': 6})
+            record(4, 'sector_b', 2000, 0)
+
+        with patch('authority.company_motion_service.time.monotonic', return_value=10 + MAX_SAMPLE_AGE + 1):
+            record(5, 'sector_b', 4000, 0)
+            self.service.set_running(False)
+            self.service.set_running(True)
+            final = record(6, 'sector_b', 6000, 0)
+        self.assertEqual(final['samples_accepted'], 6)
+        self.assertEqual(final['max_source_step_metres'], 5)
+        self.assertEqual(final['max_reported_speed_mps'], 7)
+        self.service.revoke(1)
+        self.assertEqual(self.service.participant_traffic()['recently_closed'], [final])
+
     def test_unobserved_sector_and_stale_window_are_fenced(self):
         self.service.set_running(True)
         source, _ = self.bind(self.first)

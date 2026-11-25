@@ -2,6 +2,7 @@
 from collections import deque
 import copy
 from dataclasses import asdict, dataclass, field
+import math
 import re
 import secrets
 import socket
@@ -24,10 +25,27 @@ class _MotionTraffic:
     channel_bindings: int = 0
     samples_accepted: int = 0
     samples_with_velocity: int = 0
+    max_source_step_metres: float | None = None
+    max_reported_speed_mps: float | None = None
     view_updates: int = 0
     nonempty_view_updates: int = 0
     snapshot_receipts: int = 0
     last_received_ship_index: int | None = None
+
+    def record_source(self, sample, previous):
+        self.samples_accepted += 1
+        velocity = sample['real_velocity']
+        if velocity is not None:
+            self.samples_with_velocity += 1
+            speed = math.hypot(velocity['x'], velocity['y'], velocity['z'])
+            if self.max_reported_speed_mps is None or speed > self.max_reported_speed_mps:
+                self.max_reported_speed_mps = speed
+
+        if previous is not None and previous['sector_macro'] == sample['sector_macro']:
+            step = math.hypot(sample['x'] - previous['x'], sample['y'] - previous['y'],
+                              sample['z'] - previous['z'])
+            if self.max_source_step_metres is None or step > self.max_source_step_metres:
+                self.max_source_step_metres = step
 
 
 @dataclass
@@ -490,13 +508,12 @@ class CompanyMotionService:
             # that entry also keeps it invalid if the grant is later revoked.
             self._application_batch.pop(grant.index, None)
         now = time.monotonic()
+        grant.traffic.record_source(value, grant.last_sample if grant.visible_until > now else None)
         grant.last_accepted = grant.last_sample = value
         grant.last_sequence = value['sequence']
         grant.visible_until = now + MAX_SAMPLE_AGE
         self._remember_application(AcceptedCompanyMotion(
             grant.handle, self.window, now, value, sector_revision=grant.sector_revision))
-        grant.traffic.samples_accepted += 1
-        grant.traffic.samples_with_velocity += int(value['real_velocity'] is not None)
         self.accepted_samples += 1
         self.samples_with_velocity += int(value['real_velocity'] is not None)
         self.last_ship_position = {key: value[key] for key in ('index', 'sector_macro', 'sequence')}

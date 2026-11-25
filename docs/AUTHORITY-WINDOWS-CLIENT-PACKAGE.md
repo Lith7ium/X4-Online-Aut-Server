@@ -158,6 +158,13 @@ with `-CompanyMotion` / `--company-motion`. If the other pilot disconnects durin
 steady flight, check that the visible ship stops receiving corrections within
 five real seconds of the last usable sample. Two-machine validation is pending.
 
+The provider report lists each reserved ship under `company_motion_participants`.
+During a flight, compare that ship's `max_source_step_metres` (largest change
+between consecutive positions in the same sector) and `max_reported_speed_mps`
+with the observing game's `AUTH_COMPANY_COCKPIT_READBACK` entries.
+A zero measures a stationary sample or pair. A null means the provider had
+no eligible pair of positions or no reported velocity for that measurement.
+
 ### Run the isolated HUD playback diagnostic
 
 Use an isolated world and matching playback-capable packages. Get both pilots
