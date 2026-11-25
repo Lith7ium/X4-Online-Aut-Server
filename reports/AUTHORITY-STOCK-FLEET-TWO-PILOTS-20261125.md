@@ -109,3 +109,37 @@ stock map action once, in sequence. Capture the two TLS receipts and
 native queues, then confirm the marked last-departure save, captain and
 both saved destinations. Deployment and a live two-machine run remain
 pending.
+
+## Native provider with two headless TLS participants
+
+One private loopback run at `bdec1390d576cb5fc5c797fa2a4e023abf7dd766`
+used a single native X4 9.00 provider on Bazzite, on a Ryzen 7 7800X3D
+with CPU Vulkan through llvmpipe. Two independent ordinary TLS control
+connections selected EST-929 (1078) and OVO-739 (1079), downloaded their
+distinct confirmed offers, and received normal acceptance and Resume.
+A acknowledged the join pause for B. The harness simulated game-side
+load and pause confirmations for both participants.
+
+After both resumed, the protocol participants sent one Fleet v2 **Keep**
+each for BBS-493 (1077). Both received accepted replies. Native queue
+readback showed zero, one, then two MoveWait entries. B retained A's
+native order 10407 and appended order 10497. The independently parsed
+final save contained both destinations in that order in
+`cluster_06_sector002_macro`, at (30000, 0, 55000) and
+(55000, 0, −40000) metres. The saved captain seed remained
+`-97168325741795052`. Both native attempt keys appeared once and no
+business transaction was recorded.
+
+The source copy retained the portable seed
+`checkpoint-924ab73caa75491d97598b73b85de645` and SHA-256
+`2966ae73ef1c0779684fb9dbd88cb031e89f44d31f874907d8648f9e809cae28`.
+Both departures led to a marked final save at
+`checkpoint-88bb0d566ee3429495170502c636b370`, SHA-256
+`6d567ede0234799a86e077cdbbd246fc40ff351cb7e3c1c202deb6bdc56bc51c`.
+The provider exited paused with no owned processes and the slot was
+released. The verifier returned 0. Its private `verified.json` in
+`.local/headless-stock-fleet/run-01/` has SHA-256
+`249511d13f9455924a7ac4bef056707b196f082d48a8dd7410d3919123d34b71`.
+
+Two native cockpit loads and stock-map actions, Fedora and a
+machine-boundary transport remain open.
