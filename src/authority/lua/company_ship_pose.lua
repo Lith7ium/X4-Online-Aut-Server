@@ -74,7 +74,7 @@ function M.new(config, engine, net)
     local prefix = 'P|' .. config.lease .. '|'
     local allow_apply = config.allow_apply == true
     local next_hello = 0
-    local pending, inspected, located, last_request
+    local pending, inspected, located, retained_transfer, last_request
     local closed, write_fault = false, false
     local api = {}
 
@@ -151,6 +151,12 @@ function M.new(config, engine, net)
             if read then
                 suffix = '|' .. number(x) .. '|' .. number(y) .. '|' .. number(z) .. '|' .. code
             end
+            if args.action == 'transfer' and args.captain_seed then
+                retained_transfer = {key = binding(args, row[7]), source = args.source_frame,
+                                     deadline = engine.clock() + VERIFY_TIMEOUT}
+            elseif args.action == 'verify' then
+                retained_transfer = nil
+            end
             if args.action == 'locate' then
                 local dx, dy, dz = x - tonumber(row[9]), y - tonumber(row[10]), z - tonumber(row[11])
                 if dx*dx + dy*dy + dz*dz > 1 then
@@ -182,7 +188,7 @@ function M.new(config, engine, net)
             elseif not engine.ready() or (row[6] ~= 'INSPECTED' and not inspect_unavailable[row[6]]) then
                 fail_pending('BRIDGE_MD_TIMEOUT')
             else
-                inspected, located = nil, nil
+                inspected, located, retained_transfer = nil, nil, nil
                 fail_pending('BRIDGE_INSPECT_DRAINED')
             end
             return
@@ -193,7 +199,7 @@ function M.new(config, engine, net)
 
     local function update()
         if not engine.ready() then
-            inspected, located = nil, nil
+            inspected, located, retained_transfer = nil, nil, nil
             if pending then fail_pending('BRIDGE_LOCAL_REFUSED') end
             return
         end
@@ -230,8 +236,16 @@ function M.new(config, engine, net)
             refuse(args, 'BRIDGE_LOCAL_REFUSED')
             return
         end
+        if args.action ~= 'verify' then retained_transfer = nil end
         if not resolves_actor[args.action] then
             local live, reason = engine.actor(args, args.actor, false, args.source_frame or args.frame)
+            if not live and args.action == 'verify' and retained_transfer
+                    and now < retained_transfer.deadline
+                    and retained_transfer.key == binding(args, args.actor) then
+                -- After dispatch only, MD may check the unchanged captain in
+                -- the known source sector while the warp is still pending.
+                live = engine.actor(args, args.actor, false, retained_transfer.source)
+            end
             if not live then
                 if writes_pose[args.action] and reason == DOCKING_OR_STORED then
                     inspected = nil
@@ -256,7 +270,7 @@ function M.new(config, engine, net)
     function api:close()
         if closed then return end
         closed = true
-        pending, inspected, located = nil, nil, nil
+        pending, inspected, located, retained_transfer = nil, nil, nil, nil
         net:close()
     end
 

@@ -37,13 +37,16 @@ class CompanyShipPoseTests(unittest.TestCase):
                          'not $ship.orders.count', 'not $ship.tradeorders.count', 'not @$ship.tradecomputer.exists',
                          "@$ship.order.id == 'Wait'", '$ship.order.state != orderstate.critical',
                          'not player.controlled', '@player.station.isclass.station',
-                         '@State.$crewBinding.$ship == $ship', '@State.$crewBinding.$captain == $captain',
-                         '@State.$crewBinding.$sector == $ship.sector', '@State.$crewBinding.$generation == $args.$generation'):
+                         '@$crewBinding.$ship == $ship', '@$crewBinding.$captain == $captain',
+                         '@$crewBinding.$sector == $ship.sector', '@$crewBinding.$generation == $args.$generation',
+                         '@$crewBinding.$epoch == $args.$epoch', '@$crewBinding.$sector.macro.id == $args.$frame',
+                         "$action == 'transfer' and @$crewBinding.$sector == $ship.sector",
+                         '@$crewBinding.$sector == @$located.$sector',
+                         "$action == 'verify' and @$crewBinding.$sourceSector == $ship.sector"):
             self.assertIn(required, guard.get('exact'))
-        self.assertNotIn("'transfer'", guard.get('exact'))
-        self.assertNotIn("'locate'", guard.get('exact'))
+        self.assertIn("$action == 'inspect' or $action == 'locate'", guard.get('exact'))
         capture = root.find(".//library[@name='CheckShip']//set_value[@name='State.$crewBinding']/..")
-        self.assertEqual(capture.get('value'), "$action == 'inspect' and $retainedCaptainReady")
+        self.assertEqual(capture.get('value'), "($action == 'inspect' or $action == 'locate') and $retainedCaptainReady")
         refusal = root.find(".//library[@name='CheckShip']//set_value[@exact=\"'PILOT_PRESENT'\"]/..")
         self.assertIn('$args.$captain_seed?', refusal.get('value'))
         self.assertIn('not $retainedCaptainReady', refusal.get('value'))
@@ -65,6 +68,12 @@ class CompanyShipPoseTests(unittest.TestCase):
         self.assertIn('$targets.{1}.macro.id == $args.$frame', unique.get('value'))
         self.assertEqual(unique.find("set_value[@name='$sector']").get('exact'), '$targets.{1}')
         self.assertEqual(unique.find('include_actions').get('ref'), 'ApplyPose')
+        self.assertIn('@$args.$captain_seed == @$located.$request.$captain_seed', transfer.get('value'))
+        dispatch_binding = unique.find("do_if/set_value[@name='State.$crewBinding']")
+        self.assertEqual(unique.find('do_if').get('value'), "$status == 'DISPATCHED' and $retainedCaptainReady")
+        self.assertEqual(dispatch_binding.get('name'), 'State.$crewBinding')
+        self.assertIn('$sector=$sector, $sourceSector=$located.$sector', dispatch_binding.get('exact'))
+        self.assertIsNotNone(process.find("do_else/do_else/do_if/remove_value[@name='State.$crewBinding.$sourceSector']"))
         self.assertEqual(len(list(doc.iter('warp'))), 1)
 
         apply = doc.find("./cues/library[@name='ApplyPose']/actions")
@@ -350,6 +359,51 @@ for _, action in ipairs({'apply', 'transfer'}) do
         expect_refusal(action, frame, 'BRIDGE_LOCAL_REFUSED', '0', id)
     end
 end
+-- A captain-bound locate in its destination permits ordinary same-sector apply.
+local saved_seed = '-97168325741795052'
+request('locate', source, '0', saved_seed)
+answer('LOCATED', source)
+request('apply', source, actor, saved_seed)
+assert(issued and issued.captain_seed == saved_seed)
+answer('DISPATCHED', source)
+request('verify', source, actor, saved_seed)
+answer('OBSERVED', source)
+
+-- A true sector transfer consumes locate and permits source checks only
+-- for the matching retained captain while the game queues the warp.
+local locate_id = request('locate', dest, '0', saved_seed)
+answer('LOCATED', source)
+local denied = request('transfer', dest, actor, '90')
+assert(not issued)
+expect_refusal('transfer', dest, 'BRIDGE_LOCAL_REFUSED', '0', denied)
+locate_id = request('locate', dest, '0', saved_seed)
+answer('LOCATED', source)
+request('transfer', dest, actor, saved_seed)
+assert(issued.locate_id == locate_id and issued.source_frame == source and issued.captain_seed == saved_seed)
+answer('DISPATCHED', dest)
+local verify_id = request('verify', dest, actor, '90')
+assert(not issued)
+expect_refusal('verify', dest, 'BRIDGE_LOCAL_REFUSED', '0', verify_id)
+verify_id = request('verify', dest, actor, saved_seed)
+assert(issued and issued.captain_seed == saved_seed)
+answer('FRAME_INVALID', dest, '0')
+expect_refusal('verify', dest, 'FRAME_INVALID', '0', verify_id)
+actual_frame=dest
+request('verify', dest, actor, saved_seed)
+answer('OBSERVED', dest)
+assert(reply:find('|OBSERVED|'..actor..'|'..dest..'|',1,true))
+actual_frame=source
+verify_id = request('verify', dest, actor, saved_seed)
+assert(not issued)
+expect_refusal('verify', dest, 'BRIDGE_LOCAL_REFUSED', '0', verify_id)
+actual_frame=dest
+request('inspect', dest, '0', saved_seed)
+answer('INSPECTED', dest)
+request('apply', dest, actor, saved_seed)
+assert(issued and issued.captain_seed == saved_seed)
+answer('DISPATCHED', dest)
+actual_frame=source
+
 inspect('apply')
 stored=true;actual_frame=dest
 local id=request('apply',source)

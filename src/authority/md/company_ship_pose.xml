@@ -19,7 +19,8 @@
      <set_value name="$replyframe" exact="$args.$frame"/>
      <set_value name="$located" exact="@State.$located"/>
      <do_if value="State.$located?"><remove_value name="State.$located"/></do_if>
-     <do_if value="($action == 'inspect' or $action == 'locate') and State.$crewBinding?">
+     <set_value name="$crewBinding" exact="@State.$crewBinding"/>
+     <do_if value="($action == 'inspect' or $action == 'locate' or $action == 'transfer') and State.$crewBinding?">
       <remove_value name="State.$crewBinding"/>
      </do_if>
      <set_value name="$actor" exact="'0'"/>
@@ -61,7 +62,7 @@
      <do_elseif value="$ship == player.ship or $ship == player.occupiedship or $ship == player.controlled or $ship == player.container or @player.entity.hascontext.{$ship}">
       <set_value name="$status" exact="'PLAYER_CONTEXT'"/>
      </do_elseif>
-     <do_elseif value="($args.$captain_seed? or (@State.$crewBinding.$ship == $ship and @State.$crewBinding.$generation == $args.$generation)
+     <do_elseif value="($args.$captain_seed? or (($action != 'inspect' and $action != 'locate') and @$crewBinding.$ship == $ship and @$crewBinding.$generation == $args.$generation)
                         or @$ship.pilot.exists or @$ship.assignedpilot.exists
                         or @$ship.assignedaipilot.exists) and not $retainedCaptainReady">
       <set_value name="$status" exact="'PILOT_PRESENT'"/>
@@ -91,7 +92,7 @@
        <set_value name="$status" exact="'TARGET_CHANGED'"/>
       </do_if>
       <do_else>
-       <do_if value="$action == 'inspect' and $retainedCaptainReady">
+       <do_if value="($action == 'inspect' or $action == 'locate') and $retainedCaptainReady">
         <set_value name="State.$crewBinding" exact="table[$ship=$ship, $captain=$captain, $generation=$args.$generation,
             $epoch=$args.$epoch, $sector=$sector]"/>
        </do_if>
@@ -102,22 +103,27 @@
    </actions>
   </library>
 
-  <!-- Only an idle captain already present in the verified Company save can
-       accompany same-sector motion. The private bridge serializes requests. -->
+  <!-- An idle captain from the verified Company save must stay bound to
+       the same ship across dispatch and independent pose readback. -->
   <library name="CheckRetainedCaptain" purpose="include_actions">
    <actions>
     <set_value name="$captain" exact="@$ship.assignedaipilot"/>
-    <set_value name="$retainedCaptainReady" exact="($action == 'inspect' or $action == 'apply' or $action == 'verify')
-        and @$captain.isclass.npc and $ship.trueowner == faction.player and $captain.owner == faction.player
+    <set_value name="$retainedCaptainReady" exact="@$captain.isclass.npc and $ship.trueowner == faction.player and $captain.owner == faction.player
         and '%s'.[$captain.seed] == $args.$captain_seed and $ship.pilot == $captain
         and $captain.assignedcontrolled == $ship and $captain.ship == $ship and $captain.hascontext.{$ship}
         and not $captain.isbusy and not $ship.orders.count and not $ship.tradeorders.count
         and not @$ship.tradecomputer.exists and @$ship.defaultorder.id == 'Wait'
         and @$ship.order.id == 'Wait' and $ship.order.state != orderstate.critical
         and not player.controlled and not player.occupiedship and @player.station.isclass.station and @player.room.exists
-        and ($action == 'inspect' or (@State.$crewBinding.$ship == $ship and @State.$crewBinding.$captain == $captain
-             and @State.$crewBinding.$generation == $args.$generation and @State.$crewBinding.$epoch == $args.$epoch
-             and @State.$crewBinding.$sector == $ship.sector))"/>
+        and ($action == 'inspect' or $action == 'locate'
+             or (@$crewBinding.$ship == $ship and @$crewBinding.$captain == $captain
+                 and @$crewBinding.$generation == $args.$generation and @$crewBinding.$epoch == $args.$epoch
+                 and (($action == 'transfer' and @$crewBinding.$sector == $ship.sector
+                       and @$crewBinding.$sector == @$located.$sector)
+                      or (($action == 'apply' or $action == 'verify')
+                          and @$crewBinding.$sector.macro.id == $args.$frame
+                          and (@$crewBinding.$sector == $ship.sector
+                               or ($action == 'verify' and @$crewBinding.$sourceSector == $ship.sector))))))"/>
    </actions>
   </library>
 
@@ -134,12 +140,19 @@
           and $sector.macro.id == @$args.$source_frame and $args.$frame != $args.$source_frame
           and $args.$epoch == $located.$request.$epoch and $index == $located.$request.$index
           and $args.$generation == $located.$request.$generation and $args.$frame == $located.$request.$frame
+          and @$args.$captain_seed == @$located.$request.$captain_seed
           and $args.$x == $located.$request.$x and $args.$y == $located.$request.$y and $args.$z == $located.$request.$z">
       <find_sector name="$targets" macro="macro.{$args.$frame}" multiple="true" required="false"/>
       <do_if value="@$targets.count == 1 and @$targets.{1}.isclass.sector and $targets.{1}.macro.id == $args.$frame">
        <set_value name="$actor" exact="'%s'.[$ship]"/>
        <set_value name="$sector" exact="$targets.{1}"/>
        <include_actions ref="ApplyPose"/>
+       <do_if value="$status == 'DISPATCHED' and $retainedCaptainReady">
+        <!-- The warp can still be pending. Verification in the original
+             sector gets FRAME_INVALID and may retry within its own deadline. -->
+        <set_value name="State.$crewBinding" exact="table[$ship=$ship, $captain=$captain, $generation=$args.$generation,
+            $epoch=$args.$epoch, $sector=$sector, $sourceSector=$located.$sector]"/>
+       </do_if>
       </do_if>
      </do_if>
     </do_elseif>
@@ -158,6 +171,9 @@
      </do_if>
      <do_else>
       <set_value name="$status" exact="if $action == 'inspect' then 'INSPECTED' else 'OBSERVED'"/>
+      <do_if value="$action == 'verify' and $retainedCaptainReady and State.$crewBinding.$sourceSector?">
+       <remove_value name="State.$crewBinding.$sourceSector"/>
+      </do_if>
      </do_else>
     </do_else>
    </actions>
