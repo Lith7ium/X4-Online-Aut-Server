@@ -41,7 +41,9 @@ function M.new(lease, net, monotonic)
         local packet = net:receive()
         if type(packet) ~= 'string' or #packet > 512 then return end
         local fields = split(packet)
-        if #fields ~= 11 or fields[1] ~= 'FLEET_ORDER' or fields[2] ~= lease then return end
+        if (#fields ~= 11 and #fields ~= 12) or fields[1] ~= 'FLEET_ORDER' or fields[2] ~= lease then return end
+        local queue_mode = fields[12]
+        if queue_mode and queue_mode ~= 'append' and queue_mode ~= 'replace' then return end
         local id, epoch, code, sector = fields[3], fields[4], fields[6], fields[7]
         if not token(id) or not token(epoch) or seen[id]
                 or not code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$')
@@ -56,7 +58,7 @@ function M.new(lease, net, monotonic)
         -- Lua and Python never resubmit a native event, even after a missing callback.
         -- A failed API call remains pending until the supervisor reports an unknown outcome.
         pcall(AddUITriggeredEvent, screen, 'MoveWait', {lease=lease, order_id=id, epoch=epoch,
-            ship_index=index, ship_code=code, sector=sector, x=x, y=y, z=z})
+            ship_index=index, ship_code=code, sector=sector, x=x, y=y, z=z, queue_mode=queue_mode})
     end
 end
 

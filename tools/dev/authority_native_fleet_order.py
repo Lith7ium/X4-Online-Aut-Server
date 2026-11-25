@@ -160,8 +160,11 @@ class NativeFleetOrderProvider:
         if self._peer is None or not self._owns(self._peer):
             return self._finish('refused', 'provider_unavailable')
         coordinates = (format(order[axis], '.17g') for axis in ('x', 'y', 'z'))
-        packet = '|'.join(('FLEET_ORDER', self._lease, order_id, *attempt.identity,
-                           *coordinates, format(attempt.deadline, '.17g'))).encode('ascii')
+        fields = ['FLEET_ORDER', self._lease, order_id, *attempt.identity,
+                  *coordinates, format(attempt.deadline, '.17g')]
+        if 'queue_mode' in order:
+            fields.append(order['queue_mode'])
+        packet = '|'.join(fields).encode('ascii')
         try:
             if self._socket.sendto(packet, self._peer) == len(packet):
                 return None
@@ -182,6 +185,9 @@ class NativeFleetOrderProvider:
 
     def _native_result(self, row):
         fields = row.split('|')
+        queue_mode = self._active.order.get('queue_mode')
+        if queue_mode is not None and (len(fields) != 9 or fields.pop() != queue_mode):
+            return self._finish('unknown')
         if len(fields) != 8 or tuple(fields[:4]) != self._active.identity:
             return self._finish('unknown')
         status, order_name, ship, captain = fields[4:]

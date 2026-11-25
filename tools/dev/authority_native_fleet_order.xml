@@ -11,10 +11,12 @@
                and typeof @$args.$order_id == datatype.string and $args.$order_id
                and typeof @$args.$epoch == datatype.string and typeof @$args.$ship_code == datatype.string
                and typeof @$args.$sector == datatype.string and $args.$ship_index?
+               and (not $args.$queue_mode? or $args.$queue_mode == 'append' or $args.$queue_mode == 'replace')
                and @$args.$x ge -10000000 and @$args.$x le 10000000
                and @$args.$y ge -10000000 and @$args.$y le 10000000
                and @$args.$z ge -10000000 and @$args.$z le 10000000">
      <set_value name="$index" exact="($args.$ship_index)i"/>
+     <set_value name="$queue_mode" exact="if $args.$queue_mode? then $args.$queue_mode else '-'"/>
      <set_value name="$status" exact="'invalid_registry'"/>
      <set_value name="$order_name" exact="'-'"/>
      <set_value name="$witness_ship" exact="'0'"/>
@@ -28,7 +30,9 @@
       <include_actions ref="CheckRequest"/>
      </do_if>
      <debug_text text="'[X4LAN] AUTH_NATIVE_FLEET_ORDER %s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$order_id,$status,$index,$args.$ship_code,$args.$sector,$order_name,$witness_ship,$witness_captain,player.age]" chance="100"/>
-     <raise_lua_event name="'X4AuthorityNativeFleetOrder.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$lease,$args.$order_id,$args.$epoch,$index,$args.$ship_code,$args.$sector,$status,$order_name,$witness_ship,$witness_captain]"/>
+     <set_value name="$reply" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$lease,$args.$order_id,$args.$epoch,$index,$args.$ship_code,$args.$sector,$status,$order_name,$witness_ship,$witness_captain]"/>
+     <do_if value="$queue_mode != '-'"><set_value name="$reply" exact="$reply + '|' + $queue_mode"/></do_if>
+     <raise_lua_event name="'X4AuthorityNativeFleetOrder.Result'" param="$reply"/>
     </do_if>
    </actions>
   </cue>
@@ -70,10 +74,12 @@
       <set_value name="$status" exact="'sector_mismatch'"/>
      </do_elseif>
      <do_elseif value="not @$ship.parent.isclass.zone or @$ship.zone.islocalhighway or @$ship.zone.issuperhighway
-                   or @$ship.dock.exists or @$ship.assigneddock.exists or @$ship.parkedat.exists or $ship.isinternallystored
-                   or $captain.isbusy or $ship.orders.count != 0 or $ship.tradeorders.count != 0
+                   or @$ship.dock.exists or @$ship.assigneddock.exists or @$ship.parkedat.exists or $ship.isinternallystored">
+      <set_value name="$status" exact="'ship_busy'"/>
+     </do_elseif>
+     <do_elseif value="$queue_mode == '-' and ($captain.isbusy or $ship.orders.count != 0 or $ship.tradeorders.count != 0
                    or ($ship.defaultorder and $ship.defaultorder.id != 'Wait')
-                   or ($ship.order and ($ship.order.id != 'Wait' or $ship.order.state == orderstate.critical))">
+                   or ($ship.order and ($ship.order.id != 'Wait' or $ship.order.state == orderstate.critical)))">
       <set_value name="$status" exact="'ship_busy'"/>
      </do_elseif>
      <do_else><include_actions ref="IssueMoveWait"/></do_else>
@@ -89,6 +95,15 @@
     <set_value name="State.$attempted.{$attempt_key}" exact="true"/>
     <set_value name="State.$attempted_count" exact="State.$attempted_count + 1"/>
     <do_if value="@State.$attempted.{$attempt_key} == true">
+     <do_if value="$queue_mode != '-'"><set_value name="$expected_queue" exact="$ship.orders.clone"/></do_if>
+     <do_if value="$queue_mode == 'replace'">
+      <set_value name="$replaceable" exact="[]"/>
+      <do_for_each name="$prior" in="$expected_queue">
+       <do_if value="@$prior.exists and $prior.state != orderstate.critical and $prior.canplayercancel">
+        <append_to_list name="$replaceable" exact="$prior"/>
+       </do_if>
+      </do_for_each>
+     </do_if>
      <create_position name="$destination" x="$args.$x * 1m" y="$args.$y * 1m" z="$args.$z * 1m"/>
      <!-- Stock single-ship map movement uses a sector-relative point and
           playerprecise, which still lets X4 choose a safe flight position. -->
@@ -96,17 +111,71 @@
       <param name="destination" value="[$sector, $destination]"/>
       <param name="playerprecise" value="true"/>
      </create_order>
-     <do_if value="@$order.exists and $order.id == 'MoveWait' and $order.object == $ship
-                and @$ship.orders.indexof.{$order} and $ship.pilot == $captain
-                and @$order.$destination.{1} == $sector and @$order.$playerprecise
-                and @$order.$destination.{2}.x == $destination.x and @$order.$destination.{2}.y == $destination.y
-                and @$order.$destination.{2}.z == $destination.z">
+     <include_actions ref="CheckMoveWait"/>
+     <set_value name="$queue_verified" exact="$queue_mode == '-'"/>
+     <do_if value="$new_order_verified and $queue_mode != '-'">
+      <include_actions ref="CheckQueue"/>
+      <do_if value="$queue_verified and $queue_mode == 'replace'">
+       <include_actions ref="ReplacePriorOrders"/>
+       <include_actions ref="CheckMoveWait"/>
+      </do_if>
+     </do_if>
+     <do_if value="$new_order_verified and $queue_verified">
       <set_value name="$status" exact="'accepted'"/>
       <set_value name="$order_name" exact="$order.id"/>
       <set_value name="$witness_ship" exact="'%s'.[$ship]"/>
       <set_value name="$witness_captain" exact="'%s'.[$captain]"/>
      </do_if>
     </do_if>
+   </actions>
+  </library>
+
+  <library name="CheckMoveWait" purpose="include_actions">
+   <actions>
+    <set_value name="$new_order_verified" exact="@$order.exists and $order.id == 'MoveWait' and $order.object == $ship
+               and @$ship.orders.indexof.{$order} and $ship.pilot == $captain
+               and @$order.$destination.{1} == $sector and @$order.$playerprecise
+               and @$order.$destination.{2}.x == $destination.x and @$order.$destination.{2}.y == $destination.y
+               and @$order.$destination.{2}.z == $destination.z"/>
+   </actions>
+  </library>
+
+  <library name="CheckQueue" purpose="include_actions">
+   <actions>
+    <set_value name="$tail" exact="$expected_queue.count + 1"/>
+    <set_value name="$queue_verified" exact="$ship.orders.count == $tail and @$ship.orders.{$tail} == $order"/>
+    <do_all exact="$expected_queue.count" counter="$position">
+     <do_if value="@$ship.orders.{$position} != $expected_queue.{$position}">
+      <set_value name="$queue_verified" exact="false"/>
+      <break/>
+     </do_if>
+    </do_all>
+   </actions>
+  </library>
+
+  <library name="ReplacePriorOrders" purpose="include_actions">
+   <actions>
+    <!-- Cancel only handles seen before insertion, newest first. The schema
+         documents cancel_order on a critical order as a cancellation request,
+         so avoid invoking it on any critical or otherwise protected order. -->
+    <do_for_each name="$prior" in="$replaceable" reverse="true">
+     <set_value name="$prior_index" exact="$expected_queue.indexof.{$prior}"/>
+     <do_if value="not @$prior.exists or $prior == $order or $prior.object != $ship
+                or not $prior_index or @$ship.orders.{$prior_index} != $prior or $ship.orders.count != $expected_queue.count + 1
+                or @$ship.orders.{$ship.orders.count} != $order or $ship.pilot != $captain">
+      <set_value name="$queue_verified" exact="false"/>
+      <break/>
+     </do_if>
+     <do_if value="$prior.state != orderstate.critical and $prior.canplayercancel">
+      <cancel_order order="$prior" keepinloop="false"/>
+      <do_if value="@$ship.orders.indexof.{$prior}">
+       <set_value name="$queue_verified" exact="false"/>
+       <break/>
+      </do_if>
+      <remove_value name="$expected_queue.{$prior_index}"/>
+     </do_if>
+    </do_for_each>
+    <do_if value="$queue_verified"><include_actions ref="CheckQueue"/></do_if>
    </actions>
   </library>
  </cues>
