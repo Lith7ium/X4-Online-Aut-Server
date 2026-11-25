@@ -46,6 +46,29 @@ set `$dll` to the extracted `network\x4lan_net_64.dll` path and run
 `py -3 tools/make_authority_windows_client_package.py --ref 592733f8 --recorded-network-dll $dll --out X4-Authority-Windows-592733f8.zip`.
 Compare the printed SHA-256 with the table before launching.
 
+The retained Fedora run-02 archive records revision `1611dbe1`. Its
+deployed pose bridge and the bridge in the failing X4 overlay both hash
+to `039f97b1d18332d6e5518613e9ba145bd182f4140e1a6a989f080cde6fcc2841`.
+That build predates the timeout diagnostics and the handling of a late
+inspection reply. Its log cannot distinguish a delayed reply from a
+missing one. The replacement Linux package is staged separately on Fedora
+under `provider-cobalt-outbound-20261125/kit-592733f8`. All 419 files
+were compared with the archive. The deployment's Flatpak Steam wrapper
+loaded the staged provider through its normal help entry point.
+
+For the next writer-enabled run, use the sibling
+`run-provider-592733f8.py --run-name run-04 --source <restored-store>`
+with the absolute `checkpoints` directory of the restored world under the
+new kit's `.local`. The launcher requires an explicit source and requests
+persistent hosting. Close the current provider cleanly and migrate its
+confirmed world before switching. The currently offered run-03 uses
+the previous package in relay mode. A rehearsal on Fedora exported and
+restored the earlier closed two-ship seed using the new kit. Its marker
+and saved registry passed the restore checks. The checkpoint remained
+`checkpoint-6e5948ba473f4b399c01fcac9ba2f7bc`, with SHA-256
+`1ceb756b1fc6080c6a6752e51d146cfc17c72762b8af9f9c1aed7bce20fa4958`.
+The rehearsal did not start X4 or use the running world's files.
+
 A separate native purchase and departure test confirmed the server
 released WRN-302's berth before its pilot received authorization and
 X4 started the pilot's undock. The client-side final physical read was
