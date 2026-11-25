@@ -47,10 +47,10 @@ class _ReportSearch:
 
 
 class CompanyPurchaseScheduler:
-    """Poll admitted pilots while running and settle an in-flight booking before saving."""
+    """Serialize native bookings and departures for admitted pilots."""
 
     def __init__(self, participants, native, ledger, *, guard=None, clock=time.monotonic,
-                 verify_timeout=50):
+                 verify_timeout=50, undock=None):
         if not 0 < verify_timeout <= 60:
             raise ValueError('company purchase verify timeout must be in (0, 60]')
         self._participants = participants
@@ -65,6 +65,12 @@ class CompanyPurchaseScheduler:
         self._report_search = {}
         self._last_handle = 0
         self._next_poll = float('-inf')
+        self._undock = undock
+        self._active_undock = None
+        self._undock_uncertain = False
+        self._undock_turn = set()
+        self._undock_receipts = {}
+        self._purchased_docks = {}
 
 
     def _check(self):
@@ -103,6 +109,8 @@ class CompanyPurchaseScheduler:
         durable_receipt = self._ledger.finish(active.purchase['purchase_id'], receipt)
         if durable_receipt['outcome'] == 'confirmed':
             self._native.confirm_persisted(durable_receipt)
+            if self._undock is not None:
+                self._purchased_docks[active.binding] = (active.purchase['sector'], active.purchase['station_code'])
         self._receipts[active.binding.handle] = (active.binding, durable_receipt)
         self._active = None
 
@@ -128,7 +136,7 @@ class CompanyPurchaseScheduler:
         self._check()
 
     def _begin_one(self, bindings):
-        if self._active is not None:
+        if self._active is not None or self._active_undock is not None:
             return
         while self._queue:
             binding, purchase = self._queue.popleft()
@@ -192,17 +200,82 @@ class CompanyPurchaseScheduler:
             return True
         return False
 
+    def _advance_undock(self, *, captain=None):
+        from .company_undock_messages import undock_receipt
+        binding, request = self._active_undock
+        self._check()
+        try:
+            if captain is None:
+                receipt = self._undock.poll()
+            else:
+                native = dict(binding.native_value(), captain_seed=captain)
+                receipt = self._undock.begin(native, request)
+            if receipt is not None:
+                receipt = undock_receipt(receipt)
+                if any(receipt[key] != value for key, value in request.items()):
+                    raise ValueError('native undock receipt binding changed')
+        except Exception:
+            receipt = dict(request, outcome='unknown')
+        self._check()
+        if receipt is None:
+            return
+        if receipt['outcome'] == 'unknown':
+            self._undock_uncertain = True
+        if receipt['outcome'] == 'confirmed':
+            self._purchased_docks.pop(binding, None)
+        self._undock_receipts[binding] = receipt
+        self._active_undock = None
+
+    def _poll_undock(self, binding):
+        from .company_purchase_control import poll_company_undock
+        from .company_undock_messages import undock_request
+        reply = self._undock_receipts.pop(binding, None)
+        try:
+            request = poll_company_undock(self._participants, binding.handle, binding.attempt_id,
+                                          binding.ship_index, reply, guard=self._guard)
+        except CompanyPurchasePeerLost:
+            return
+        if request is None:
+            return
+        request = undock_request(request)
+        purchased = self._purchased_docks.get(binding)
+        reason = None
+        if self._undock_uncertain:
+            reason = 'provider_limit'
+        elif purchased != (request['sector'], request['station_code']):
+            reason = 'purchase_required'
+        elif self._active is not None or self._active_undock is not None or self._queue:
+            reason = 'provider_busy'
+        captain = getattr(binding.reservation, 'captain_seed', None)
+        if reason is None and captain is None:
+            reason = 'captain_required'
+        if reason is not None:
+            self._undock_receipts[binding] = dict(request, outcome='refused', reason=reason)
+            return
+        # The current native cue verifies the exact reported bay. It cannot
+        # release a client whose own dock differs from the server's dock.
+        self._active_undock = (binding, request)
+        self._advance_undock(captain=captain)
+
     def step(self):
         """Advance native work, then poll at most one peer each half-second."""
         self._check()
         bindings = self._bindings()
         if self._active is not None:
             self._advance_native()
+        if self._active_undock is not None:
+            self._advance_undock()
         self._queue = deque((binding, purchase) for binding, purchase in self._queue
                             if bindings.get(binding.handle) == binding)
         self._receipts = {handle: item for handle, item in self._receipts.items()
                           if bindings.get(handle) == item[0]}
         current = set(bindings.values())
+        if self._undock is not None:
+            self._purchased_docks = {binding: dock for binding, dock in self._purchased_docks.items()
+                                     if binding in current}
+            self._undock_receipts = {binding: receipt for binding, receipt in self._undock_receipts.items()
+                                     if binding in current}
+            self._undock_turn.intersection_update(current)
         self._report_search = {binding: search for binding, search in self._report_search.items()
                                if binding in current}
         self._begin_one(bindings)
@@ -213,6 +286,8 @@ class CompanyPurchaseScheduler:
         busy = {binding for binding, _ in self._queue}
         if self._active is not None:
             busy.add(self._active.binding)
+        if self._active_undock is not None:
+            busy.add(self._active_undock[0])
         eligible = [handle for handle, binding in bindings.items() if binding not in busy]
         if not eligible:
             return
@@ -221,6 +296,15 @@ class CompanyPurchaseScheduler:
         self._next_poll = now + 0.5
         binding = bindings[handle]
         _, receipt = self._receipts.get(handle, (None, None))
+        if self._undock is not None:
+            peer = self._participants._host._control._peers[binding.conn]
+            version = peer.get('company_undock_version')
+            if type(version) is int and version == 1:
+                if binding in self._undock_receipts or (receipt is None and binding in self._undock_turn):
+                    self._undock_turn.discard(binding)
+                    self._poll_undock(binding)
+                    return
+                self._undock_turn.add(binding)
         try:
             if receipt is None and self._recover_one(binding, now):
                 return
@@ -237,9 +321,11 @@ class CompanyPurchaseScheduler:
         """Allow a transition once the current native decision has been recorded.
 
         While deferred, call this again on a later running tick. It only verifies
-        an already-dispatched purchase. It never reads or starts another request.
+        an already-dispatched purchase or departure. It never requests more work.
         """
         self._check()
         if self._active is not None:
             self._advance_native()
-        return self._active is None
+        if self._active_undock is not None:
+            self._advance_undock()
+        return self._active is None and self._active_undock is None

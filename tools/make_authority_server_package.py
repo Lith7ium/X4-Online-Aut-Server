@@ -32,6 +32,8 @@ REQUIRED = {
     'tools/dev/authority_company_trade_trial.py',
     'tools/dev/authority_company_trade_dock.xml',
     'tools/dev/authority_company_stock_trade.xml',
+    'tools/dev/authority_company_undock_trial.xml',
+    'tools/dev/authority_native_undock.py',
     'tools/dev/authority_company_trade_driver.lua',
     'tools/dev/authority_trade_ledger.lua',
     'tools/dev/authority_native_purchase.lua',

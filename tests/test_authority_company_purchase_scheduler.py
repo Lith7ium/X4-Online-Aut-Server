@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from authority import company_purchase_scheduler as scheduler
+from authority import company_purchase_control as control
 from authority.company_purchase_control import CompanyPurchasePeerLost
 from authority.company_purchase_ledger import CompanyPurchaseLedger
 
@@ -18,7 +19,7 @@ def confirmed(purchase):
                 company_balance_cents=965100, cargo_units=6, ship_code='WRN-302')
 
 
-def world_fixture(test):
+def world_fixture(test, **options):
     epoch = 'a' * 32
     peers = {h: dict(handle=h, stage='admitted', attempt_id=f'{h:032x}',
                      company_purchase_epoch=epoch, company_purchase_ship=7353+h,
@@ -56,7 +57,7 @@ def world_fixture(test):
     native = Mock()
     native.begin.return_value = native.poll.return_value = None
     schedule = scheduler.CompanyPurchaseScheduler(participants, native, ledger, clock=lambda: now[0],
-                                                   verify_timeout=5)
+                                                   verify_timeout=5, **options)
 
     def step(t):
         now[0] = t
@@ -68,6 +69,42 @@ def world_fixture(test):
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_undock_is_bound_to_a_confirmed_purchase_and_held_for_physical_readback(self):
+        undock = Mock()
+        undock.begin.return_value = undock.poll.return_value = None
+        world = world_fixture(self, undock=undock)
+        world.peers.pop(2)
+        world.peers[1]['company_undock_version'] = 1
+        world.reservations[1].captain_seed = '2211373338772438693'
+        purchase = order(1)
+        world.outcomes[1].append(purchase)
+        world.native.begin.return_value = confirmed(purchase)
+        request = dict(request_id='b' * 32, sector=purchase['sector'], station_code=purchase['station_code'],
+                       bay_seed='507326418098681806', bay_macro='external_bay', dockarea_macro='dock_area')
+        with patch.object(control, 'poll_company_undock', side_effect=[request, None, dict(
+                request, request_id='c' * 32), None], create=True) as exchange:
+            world.step(0)
+            world.step(.5)
+            world.step(1)
+            undock.begin.assert_called_once_with(
+                dict(registry_epoch='a' * 32, ship_index=7354, ship_code='WRN-302',
+                     captain_seed='2211373338772438693'), request)
+            self.assertFalse(world.schedule.before_world_transition())
+            self.assertEqual(exchange.call_count, 1)
+            undock.poll.return_value = dict(request, outcome='confirmed')
+            self.assertTrue(world.schedule.before_world_transition())
+            world.step(1.5)
+            self.assertEqual(exchange.call_args.args[1:],
+                             (1, world.peers[1]['attempt_id'], 7354, dict(request, outcome='confirmed')))
+
+            # This reservation's purchase cannot unlock another departure.
+            world.step(2)
+            world.step(2.5)
+            world.step(3)
+            refused = dict(request, request_id='c' * 32, outcome='refused', reason='purchase_required')
+            self.assertEqual(exchange.call_args.args[4], refused)
+            undock.begin.assert_called_once()
+
     def test_round_robin_serial_and_scoped_terminal_receipts(self):
         world = world_fixture(self)
         first, second = order(1), order(2)
