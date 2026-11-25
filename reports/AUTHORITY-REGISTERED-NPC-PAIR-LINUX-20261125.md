@@ -301,3 +301,42 @@ The `run-10/native-measurement-ingress-verified.json` digest is
 `597aaf871f40f8069abe087a644d4de6f8803b4aa4cda9c303e4df414b7a618a`
 and the corresponding raw receiver log `run-10/server-native-measurements.jsonl`
 has digest `9d99a4d914c76f3b8852b9a3ef66cbb34c35ba1df59051764f55a9bb0e2e2b75`.
+
+### Run 11 regular game IPC
+
+At `9c558603f603736d0e6117fc1ef379c985d57958`, both regular Linux
+launchers used `--trial-registered-npc-measurement` and
+`--observe-registered-npc 943 MFQ-419`. Run 10 used a live log adapter
+as the source. Run 11 took the measurement from X4 over the existing
+process-bound local UDP socket, then passed it through the local relay
+and authenticated TLS movement connection for admitted pilot HVC-420.
+The cockpit log was used only for the independent post-run comparison.
+
+The provider received **154 of 160** native samples. Each received
+sample matched the cockpit's registry identity, local actor, sector,
+XYZ, game and capture clocks, stock attention, and sector velocity.
+The velocity was independently reproduced from the native vector and
+basis with zero observed difference in metres per game second. The
+received subset contained 36 `inzone` and 118 `visible` samples. The
+same-host monotonic interval from native capture to provider receipt
+was 13.4–230.1 ms, median 131.9 ms. It includes UDP, the local relay,
+and TLS. Simulation time describes the sample and its velocity, while
+the delay uses elapsed host time. The normal own-ship stream
+acknowledged 159 HVC-420 samples.
+
+Stock radar ended naturally at game time 589.78. The receiver recorded
+`view_lost` and cleared its latest sample before pilot logout. Normal
+departure produced `checkpoint-fac1f84d93a34752b399c81928ac2c30`,
+SHA-256 `9b7d6770c9b16a333e61e92579420eba9b67670979a2de9ca89caf4b1f6425e0`.
+The offered and final saved markers were verified, the source remained
+unchanged, credential redaction passed, and both processes and locks
+cleared. The evidence covers one NPC and one admitted Linux cockpit
+over private same-host loopback. The receiver remained read-only.
+Authority handoff, remote application and Windows require their own
+native trials.
+
+Private evidence is in `.local/native-registered-npc-pair/run-11/`.
+The comparison file `native-measurement-ingress-verified.json` has
+SHA-256 `2ac73b124d8db269c7cdf8c7a63855a8fbbd321c4ac173dcad439f98b159ce4e`.
+The raw accepted receiver log `server-native-measurements.jsonl` has
+SHA-256 `8072a671ec770931bf2f61ba7367894c94d9b757604c35cf4d441aa3f0a0433e`.
