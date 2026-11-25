@@ -66,3 +66,28 @@ default `Wait` order and a temporary `TradePerform` order with
 relief guard also checked whether X4 allowed the current order to be
 cancelled. The save identifies a possible cause of the refusal. The probe
 did not log that individual predicate at the time of the request.
+
+## Passenger admission through the Linux player launcher
+
+The regular Linux player client downloaded the original checkpoint above
+through a loopback TLS connection. The downloaded file matched the source
+SHA-256. X4 reported the saved marker after loading and reported the paused
+state. The seat module verified boarding on foot. At game age 321.60 s it
+reported `aboard` for index 7354, and the session admitted the passenger.
+The host retained that index for the sole participant.
+
+Following one acknowledged resume, the client waited for stock seat relief.
+At 330.51 s X4 reported `controlled` for index 7354. The crewed seat
+check required the originally captured NPC to remain assigned and aboard,
+the player to occupy the cockpit chair, and the local ship/control reads
+to agree. After a normal disconnect the host released the reservation.
+The client supervisor exited successfully with no owned processes remaining.
+
+This run used a real native Linux client. The loopback host ran the normal
+transfer, seat reservation and participant-control code with simulated world
+pause, resume and save callbacks. The client stayed docked and issued no
+purchase. It published zero acknowledged flight samples. The client verified
+the load marker, and the launcher leaves `exact_loaded_file_proven` false.
+Windows, simultaneous independent game simulations and disconnect during
+the passenger wait still require separate evidence. Private client result
+SHA-256: `0888628af4e3215a4abb261162c16c01149e2c80c053c546ac5c6d3cc2960898`.

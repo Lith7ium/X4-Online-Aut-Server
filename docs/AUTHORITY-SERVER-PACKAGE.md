@@ -133,9 +133,9 @@ report that the human controls the ship. The existing captain remains aboard.
 An empty ship can still be flown. Server flight-position writes currently
 require an empty NPC helm.
 
-The running native experiment verified the original captain aboard during
-the handover. Verification of the full passenger admission path is in
-progress. [Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
+A native Linux client joined as a passenger, received a resume and
+acquired the helm on the same reservation. The loopback test host ran the
+usual transfer and participant controls with simulated world operations. [Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
 
 ## Server positions for reserved Company ships
 
