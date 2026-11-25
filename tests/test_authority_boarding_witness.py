@@ -1,6 +1,5 @@
+from contextlib import chdir
 from pathlib import Path
-import shutil
-import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
@@ -9,6 +8,11 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'tools/dev'))
 from verify_boarding_witness import verify
+
+if __package__:
+    from .run_fixture_lua import run_fixture
+else:
+    from run_fixture_lua import run_fixture
 
 
 class BoardingWitnessTests(unittest.TestCase):
@@ -52,11 +56,9 @@ class BoardingWitnessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'follows operation removal'):
             self.verify(self.arm, self.start, self.company, self.removed, self.boarded, self.owner)
 
-    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_preflight_converts_lua_references_and_reports_identity_failure_stage(self):
-        result = subprocess.run(['luajit', 'tests/authority_boarding_preflight.lua'],
-                                cwd=ROOT, capture_output=True, text=True, timeout=5)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        with chdir(ROOT):
+            run_fixture(ROOT / 'tests/authority_boarding_preflight.lua')
 
     def test_stock_event_selectors_and_no_game_actions(self):
         root = ET.parse(ROOT/'tools/dev/authority_boarding_witness.xml').getroot()
