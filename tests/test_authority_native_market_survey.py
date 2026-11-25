@@ -58,20 +58,20 @@ class NativeMarketSurveyTests(unittest.TestCase):
         self.assertIsNone(self.reply('HEADER', nonce, '976800', '3'))
         self.read(nonce, 0)
         self.assertIsNone(self.reply('PAGE', nonce, '0',
-                                     'buy,water,5848,80,1,4,21', 'buy,water,5901,120,1,4,21'))
+                                     'buy,water,5848,80,1,4,21,1', 'buy,water,5901,120,1,4,21,0'))
         self.read(nonce, 2)
-        self.assertIsNone(self.reply('PAGE', nonce, '0', 'buy,water,5848,80,1,4,21'))
+        self.assertIsNone(self.reply('PAGE', nonce, '0', 'buy,water,5848,80,1,4,21,1'))
         self.now += .25
         self.assertIsNone(self.provider.poll())
         self.read(nonce, 2)
-        value = self.reply('PAGE', nonce, '2', 'sell,water,4450,10,2,4,21')
+        value = self.reply('PAGE', nonce, '2', 'sell,water,4450,10,2,4,21,1')
         self.assertEqual(value, {'outcome': 'observed', 'company_balance_cents': 976800, 'offers': [
             {'side': 'buy', 'ware': 'water', 'price_cents': 5848,
-             'amount': 80, 'min_amount': 1, 'cargo_units': 4, 'free_units': 21},
+             'amount': 80, 'min_amount': 1, 'cargo_units': 4, 'free_units': 21, 'tradeable': True},
             {'side': 'buy', 'ware': 'water', 'price_cents': 5901,
-             'amount': 120, 'min_amount': 1, 'cargo_units': 4, 'free_units': 21},
+             'amount': 120, 'min_amount': 1, 'cargo_units': 4, 'free_units': 21, 'tradeable': False},
             {'side': 'sell', 'ware': 'water', 'price_cents': 4450,
-             'amount': 10, 'min_amount': 2, 'cargo_units': 4, 'free_units': 21},
+             'amount': 10, 'min_amount': 2, 'cargo_units': 4, 'free_units': 21, 'tradeable': True},
         ]})
 
     def test_cancel_fences_partial_snapshot_and_late_replies(self):
@@ -79,7 +79,7 @@ class NativeMarketSurveyTests(unittest.TestCase):
         self.assertIsNone(self.reply('HEADER', first, '976800', '2'))
         self.read(first, 0)
         self.provider.cancel()
-        self.assertIsNone(self.reply('PAGE', first, '0', 'buy,water,5848,80,1,4,21'))
+        self.assertIsNone(self.reply('PAGE', first, '0', 'buy,water,5848,80,1,4,21,1'))
         second, new_serial = self.begin()
         self.assertNotEqual(second, first)
         self.assertEqual(new_serial, serial + 1)
@@ -97,7 +97,7 @@ class NativeMarketSurveyTests(unittest.TestCase):
         nonce, _ = self.begin()
         self.assertIsNone(self.reply('HEADER', nonce, '976800', '1'))
         self.read(nonce, 0)
-        self.assertEqual(self.reply('PAGE', nonce, '0', 'buy,water,5848.0,80,1,4,21'),
+        self.assertEqual(self.reply('PAGE', nonce, '0', 'buy,water,5848.0,80,1,4,21,1'),
                          {'outcome': 'unavailable', 'reason': 'invalid_observation'})
         nonce, _ = self.begin()
         self.now += 2

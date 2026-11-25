@@ -30,7 +30,20 @@ local function free_units(C, ship, ship_lua, ware, ammo)
     if ammo == 'deployable' then return tonumber(C.GetFreeDeployableStorageAfterTradeOrders(ship)) end
 end
 
-local function stock_rows(C, ship, station)
+local function can_trade(ffi, offer, ship, side)
+    local allowed
+    if side == 'buy' then
+        allowed = CanTradeWith(offer.id, ship, offer.minamount, true)
+    else
+        allowed = CanTradeWith(offer.id, ship, offer.minamount)
+    end
+    if ffi.istype('bool', allowed) then return tonumber(allowed) == 1 end
+    if allowed == nil or type(allowed) == 'boolean' then return allowed == true end
+    error('invalid stock trade permission')
+end
+
+local function stock_rows(ffi, ship, station)
+    local C = ffi.C
     local ship_lua = assert(ConvertStringToLuaID(tostring(ship)))
     local station_lua = assert(ConvertStringToLuaID(tostring(station)))
     local cargo = GetCargoAfterTradeOrders(ship_lua)
@@ -72,7 +85,10 @@ local function stock_rows(C, ship, station)
                 return nil, 'invalid_observation'
             end
             local side = offer.isselloffer == true and 'buy' or 'sell'
-            rows[#rows + 1] = table.concat({side, ware, price, amount, minimum, available, free}, ',')
+            local tradeable = (side == 'buy' or available >= math.max(1, minimum))
+                and can_trade(ffi, offer, ship_lua, side)
+            rows[#rows + 1] = table.concat({side, ware, price, amount, minimum,
+                available, free, tradeable and '1' or '0'}, ',')
         end
     end
     -- Keep all same-ware offers. Order is stable within the cached observation.
@@ -121,7 +137,7 @@ function M.new(lease, net, monotonic)
         local station = resolve.parse_hex(station_hex)
         local balance = exact_text(balance_text, 0, max_exact)
         if not ship or not station or not balance then reject('invalid_observation'); return end
-        local ok, rows, reason = pcall(stock_rows, ffi.C, ship, station)
+        local ok, rows, reason = pcall(stock_rows, ffi, ship, station)
         if not ok or not rows then reject(reason or 'invalid_observation'); return end
         active.rows, active.balance = rows, balance
         header()

@@ -1,3 +1,4 @@
+local ffi = require('ffi')
 local survey = dofile('tools/dev/authority_native_market_survey.lua')
 dofile('tools/dev/authority_registry_resolve_string.lua')
 local lease, epoch = string.rep('a', 32), string.rep('e', 32)
@@ -13,7 +14,7 @@ local net = {
 }
 local ship = X4LAN_RESOLVE_STRING.parse_hex('0x1')
 local station = X4LAN_RESOLVE_STRING.parse_hex('0x2')
-local calls = {market = 0, cargo = 0, free = 0}
+local calls = {market = 0, cargo = 0, free = 0, sell = 0, buy = 0}
 local ware = string.rep('w', 128)
 local offers = {
     {id = 1, ware = 'water', price = 58.48, amount = 80, minamount = 1, isselloffer = true},
@@ -21,6 +22,8 @@ local offers = {
     {id = 3, ware = 'water', price = 58.51, amount = 22, minamount = 1, isselloffer = true},
     {id = 4, ware = 'water', price = 10.22, amount = 1, minamount = 1, isselloffer = true, ismissionoffer = true},
     {id = 5, ware = 'water', price = 92.55, amount = 3, minamount = 2, isbuyoffer = true, stale = true},
+    {id = 19, ware = 'energycells', price = 13, amount = 120, minamount = 1, isbuyoffer = true},
+    {id = 20, ware = 'water', price = 51, amount = 120, minamount = 1, isbuyoffer = true},
     {id = 6, ware = 'defencedrone', price = 153, amount = 18, minamount = 1, isselloffer = true, ammotypename = 'unit'},
 }
 for i = 1, 12 do
@@ -78,6 +81,19 @@ function GetFreeUnitStorageAfterTradeOrders(ship_lua)
     return 3
 end
 
+function CanTradeWith(id, ship_lua, minimum, buying)
+    assert(ship_lua == 'ship' and id ~= 19)
+    if id == 2 or id == 20 then
+        assert(buying == nil and minimum == (id == 2 and 2 or 1))
+        calls.sell = calls.sell + 1
+        if id == 20 then return false end
+    else
+        assert(buying == true and minimum == 1)
+        calls.buy = calls.buy + 1
+    end
+    return ffi.new('bool', id ~= 3)
+end
+
 function GetTradeData(id)
     assert(id ~= 4 and id ~= 5)
     return {station = 'station'}
@@ -102,11 +118,11 @@ assert(#requests == 1 and requests[1] == first)
 observe(second)
 assert(calls.market == 0)
 observe(first)
-assert(sent[#sent] == 'MARKET_HEADER|' .. lease .. '|' .. first .. '|976800|16')
+assert(sent[#sent] == 'MARKET_HEADER|' .. lease .. '|' .. first .. '|976800|18')
 open(first, 1)
 assert(#requests == 1 and calls.market == 1 and calls.cargo == 1)
 local offset, pages, seen = 0, 0, {}
-while offset < 16 do
+while offset < 18 do
     send('READ', first, tostring(offset))
     local prefix = 'MARKET_PAGE|' .. lease .. '|' .. first .. '|' .. offset .. '|'
     local page = sent[#sent]
@@ -118,10 +134,11 @@ while offset < 16 do
     pages = pages + 1
 end
 assert(pages > 1)
-assert(seen['buy,water,5848,80,1,4,21'] and seen['sell,water,5325,31,2,4,21'])
-assert(seen['buy,water,5851,22,1,4,21'] and seen['buy,defencedrone,15300,18,1,2,3'])
-assert(seen['buy,' .. ware .. ',3200,120,1,0,13'])
-assert(calls.market == 1 and calls.cargo == 1 and calls.free == 2)
+assert(seen['buy,water,5848,80,1,4,21,1'] and seen['sell,water,5325,31,2,4,21,1'])
+assert(seen['buy,water,5851,22,1,4,21,0'] and seen['buy,defencedrone,15300,18,1,2,3,1'])
+assert(seen['buy,' .. ware .. ',3200,120,1,0,13,1'])
+assert(seen['sell,energycells,1300,120,1,0,13,0'] and seen['sell,water,5100,120,1,4,21,0'])
+assert(calls.market == 1 and calls.cargo == 1 and calls.free == 3 and calls.buy == 15 and calls.sell == 2)
 
 open(second, 2)
 open(first, 1)

@@ -40,12 +40,13 @@ def _amount(text, low, high):
 
 
 def _offer(text):
-    side, ware, price, amount, minimum, cargo, free = text.split(',')
-    if side not in ('buy', 'sell') or not _WARE.fullmatch(ware):
+    side, ware, price, amount, minimum, cargo, free, tradeable = text.split(',')
+    if side not in ('buy', 'sell') or not _WARE.fullmatch(ware) or tradeable not in ('0', '1'):
         raise ValueError('invalid market offer identity')
     return {'side': side, 'ware': ware, 'price_cents': _amount(price, 1, _MAX_INTEGER),
             'amount': _amount(amount, 0, _MAX_INTEGER), 'min_amount': _amount(minimum, 0, _MAX_INTEGER),
-            'cargo_units': _amount(cargo, 0, _MAX_INTEGER), 'free_units': _amount(free, 0, _MAX_INTEGER)}
+            'cargo_units': _amount(cargo, 0, _MAX_INTEGER), 'free_units': _amount(free, 0, _MAX_INTEGER),
+            'tradeable': tradeable == '1'}
 
 
 @dataclass
