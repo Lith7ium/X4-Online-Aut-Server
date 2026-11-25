@@ -1,6 +1,8 @@
 -- Feed the stock MapMenu trade initializer, renderer and controls with Company data.
 local TradeViewUI = {}
-local max_order_integer = 2147483647
+-- Limits accepted by the native Company trade command.
+local max_unit_price_cents = 2147483647
+local max_units_per_order = 65535
 
 local function capture_returns(...)
     return {n = select('#', ...), ...}
@@ -111,9 +113,10 @@ function TradeViewUI.install(options)
 
     local function maximum_purchase_quantity(context, offer)
         if context.status ~= 'observed' or context.used or not offer or not offer.isselloffer or not offer.tradeable
-                or offer.price_cents > max_order_integer then return 0 end
+                or offer.price_cents > max_unit_price_cents then return 0 end
         local cash, capacity = remaining_cash_and_space(context, offer)
-        local maximum = math.min(offer.amount, capacity, GetNumAffordableTradeItems(cash, offer.price))
+        local maximum = math.min(max_units_per_order, offer.amount, capacity,
+            GetNumAffordableTradeItems(cash, offer.price))
         local minimum = math.max(1, offer.minamount)
         if maximum < minimum or RoundTotalTradePrice(minimum * offer.price) > cash then return 0 end
         local low = minimum

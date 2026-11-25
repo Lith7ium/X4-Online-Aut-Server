@@ -73,6 +73,8 @@ function market:open()
             cargo_units = 2, free_units = 6, tradeable = true},
         {side = 'buy', ware = 'ore', price_cents = 5000, amount = 50, min_amount = 1,
             cargo_units = 0, free_units = 6, tradeable = false},
+        {side = 'buy', ware = 'energycells', price_cents = 100, amount = 70000, min_amount = 1,
+            cargo_units = 0, free_units = 70000, tradeable = true},
     }}
     return view
 end
@@ -91,8 +93,8 @@ menu.initTradeContextData()
 assert(#data.offers == 0 and not ui:order(data))
 view.status = 'observed'
 ui:tick()
-assert(#data.offers == 3 and data.currentcargo.water == 2 and data.playerMoney == local_money)
-local buy, sell, disabled = unpack(data.offers)
+assert(#data.offers == 4 and data.currentcargo.water == 2 and data.playerMoney == local_money)
+local buy, sell, disabled, large_offer = unpack(data.offers)
 assert(buy.active and not sell.active and not disabled.active)
 local content = menu.getTradeContextRowContent({sell = buy, buy = sell})
 local scale = content[4].scale
@@ -107,6 +109,13 @@ assert(intent.ware == 'water' and intent.quantity == 2 and intent.price_cents ==
 assert(total == 11600 and data.total == 116 and native_slider_calls == 0)
 menu.createTradeContext({content = {}})
 assert(GetPlayerMoney() == local_money and GetTradeList()[1].ware == 'local_only')
+
+-- The native Company trade command accepts at most 65,535 units per confirmation.
+view.balance = 7000000
+menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, 0)
+assert(menu.getTradeContextRowContent({sell = large_offer})[4].scale.max == 65535)
+large_offer.minamount = 65536
+assert(menu.getTradeContextRowContent({sell = large_offer})[4].scale.max == 0)
 
 -- A newly opened window may not accept stale widget callbacks or old quotes.
 ui:consume(data)
