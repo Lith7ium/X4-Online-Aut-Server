@@ -29,6 +29,15 @@ reader, real LuaJIT and a simulated X4 ABI. The prior game's generic
 3,217. Use the fixed player build for both pilots when the operator
 returns. Check for sustained native flight and actual cockpit playback.
 
+The matching private packages were built from `98b6d3ae`. Both archive
+copies of the descriptor matched the Git blob. The Windows ZIP retained
+the verified network DLL from the previous Windows package.
+
+| Internal player package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| X4-Authority-Linux-98b6d3ae.tar.gz | 1,531,207 | `366fe35c3e18b4185c5c2cdf7f907aa44c05cb58160fb3ee26832b7c3db64c2d` |
+| X4-Authority-Windows-98b6d3ae.zip | 2,893,189 | `2b1525133fad90f2298db83e7e8f6737efadf68d14370e086dc9431abed9c232` |
+
 A separate native purchase and departure test confirmed the server
 released WRN-302's berth before its pilot received authorization and
 X4 started the pilot's undock. The client-side final physical read was
