@@ -142,6 +142,49 @@ class CompanyMotionTLSHarness(unittest.IsolatedAsyncioTestCase):
                 await writer.wait_closed()
 
 class CompanyMotionTLSTests(CompanyMotionTLSHarness):
+    async def test_verified_npc_uses_existing_visible_snapshots_without_pilot_authority(self):
+        self.service.set_running(True)
+        _, port = await self.link()
+        pilot = self.grant(1, 1, 'sector_a')
+        client, _, snapshots, ended = self.attach(port, pilot)
+        self.clients.append(client)
+        await self.drive(lambda: client._running)
+        guard = Mock(return_value=True)
+        npc = self.service.register_npc_source(REGISTRY_EPOCH, 3, 'NPC-003', reservation_guard=guard)
+
+        def publish(sequence, sector='sector_a', velocity=VELOCITY):
+            sample = dict(version=3, epoch=npc.epoch, index=npc.index, generation=npc.generation,
+                          sequence=sequence, sector_macro=sector, source_time=sequence / 2,
+                          capture_time=time.monotonic(), x=-141.3, y=3.1, z=41.7, real_velocity=velocity)
+            self.assertTrue(self.service.publish_npc_sample(npc, sample))
+            return sample
+
+        publish(1)
+        latest = publish(2)
+        client.set_view('sector_a', [3])
+        await self.drive(lambda: len(snapshots) == 1)
+        self.assertEqual(snapshots, [latest])
+        self.assertEqual(self.service.take_application_batch(), ())
+        traffic = self.service.participant_traffic()['active']
+        self.assertEqual([(row['ship_index'], row['samples_accepted']) for row in traffic], [(1, 0)])
+        self.assertEqual(len(self.service._tickets), 1)
+
+        client.set_views([])
+        await self.drive(lambda: not next(iter(self.service._peers.values())).views)
+        self.assertEqual(ended, [(npc.index, npc.generation)])
+        publish(3, sector='sector_b', velocity=None)
+        latest = publish(4, sector='sector_b')
+        client.set_view('sector_a', [3])
+        await self.drive(lambda: bool(next(iter(self.service._peers.values())).views))
+        self.assertEqual(len(snapshots), 1)
+        client.set_view('sector_b', [3])
+        await self.drive(lambda: len(snapshots) == 2)
+        self.assertEqual(snapshots[-1], latest)
+        guard.return_value = False
+        await self.drive(lambda: len(ended) == 2)
+        self.assertFalse(self.service.publish_npc_sample(npc, latest))
+        self.assertEqual(self.service.freeze_application(), ())
+
     async def asyncSetUp(self):
         await super().asyncSetUp()
         control = await asyncio.start_server(self.echo_control, '127.0.0.1', 0)

@@ -56,6 +56,57 @@ class CompanyMotionServiceTests(unittest.TestCase):
         self.send(viewer, {'kind': 'motion_view', 'window': self.service.window,
                            'view_id': view_id, 'indices': indices, 'sector_macro': sector})
 
+    def test_npc_observation_expiry_and_competing_grant_retire_without_writes(self):
+        self.service.set_running(True)
+        viewer, stream = self.bind(self.first)
+        self.view(viewer, [3])
+        now = [100.]
+        guard = Mock(return_value=True)
+        with patch('authority.company_motion_service.time.monotonic', side_effect=lambda: now[0]):
+            npc = self.service.register_npc_source(self.first['epoch'], 3, 'NPC-003', reservation_guard=guard)
+            source = dict(epoch=npc.epoch, generation=npc.generation, index=npc.index)
+            old = dict(self.sample(source, 1), capture_time=now[0] - MAX_SAMPLE_AGE)
+            self.assertFalse(self.service.publish_npc_sample(npc, old))
+            current = dict(old, capture_time=now[0])
+            self.assertTrue(self.service.publish_npc_sample(npc, current))
+            self.assertFalse(self.service.publish_npc_sample(npc, current))
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['sample'], current)
+            self.send(viewer, dict(kind='motion_received', window=self.service.window, view_id=1,
+                                   index=npc.index, generation=npc.generation, sequence=1))
+            self.assertEqual(self.service.take_application_batch(), ())
+            now[0] += MAX_SAMPLE_AGE
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['kind'], 'motion_end')
+            self.assertFalse(self.service.publish_npc_sample(npc, dict(current, sequence=2)))
+            refreshed = dict(current, sequence=2, capture_time=now[0])
+            self.assertTrue(self.service.publish_npc_sample(npc, refreshed))
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['sample'], refreshed)
+            self.grant(3)
+            self.service.poll()
+            self.assertEqual(json.loads(stream.readline())['kind'], 'motion_end')
+            self.assertFalse(self.service.withdraw_npc_source(npc))
+            with self.assertRaises(ValueError):
+                self.service.register_npc_source(npc.epoch, npc.index, npc.ship_code, reservation_guard=guard)
+            self.assertFalse(self.service.publish_npc_sample(npc, current))
+
+    def test_npc_binding_does_not_cross_world_windows_or_service_close(self):
+        self.service.set_running(True)
+        guard = Mock(return_value=True)
+        npc = self.service.register_npc_source(self.first['epoch'], 3, 'NPC-003', reservation_guard=guard)
+        self.service.set_running(False)
+        self.assertFalse(self.service.withdraw_npc_source(npc))
+        self.service.set_running(True)
+        fresh = self.service.register_npc_source('c' * 32, 3, 'NPC-003', reservation_guard=guard)
+        self.assertNotEqual((fresh.window, fresh.generation), (npc.window, npc.generation))
+        self.assertFalse(self.service.publish_npc_sample(npc, None))
+        self.service.close()
+        self.assertFalse(self.service.withdraw_npc_source(fresh))
+        self.assertFalse(self.service.publish_npc_sample(fresh, None))
+        with self.assertRaises(ValueError):
+            self.service.register_npc_source(fresh.epoch, fresh.index, fresh.ship_code, reservation_guard=guard)
+
     def test_pilot_roster_tracks_same_epoch_control_grants_without_view_subscriptions(self):
         self.service.set_running(True)
         for index in reversed(range(4, MAX_PEERS + 1)):

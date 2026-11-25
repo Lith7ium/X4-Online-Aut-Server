@@ -1,5 +1,6 @@
 """Local backend for the pinned TLS movement service, polled by the world owner."""
 from collections import deque
+from collections.abc import Callable
 import copy
 from dataclasses import asdict, dataclass, field
 import math
@@ -10,6 +11,7 @@ import threading
 import time
 
 from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
+from .company_ships import _DISPLAY_CODE
 from .experimental_tcp_motion import check_motion_progress, motion_value
 from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
@@ -111,6 +113,25 @@ class AcceptedCompanyMotion:
         return copy.deepcopy(self._sample)
 
 
+@dataclass(frozen=True, slots=True)
+class NPCMotionBinding:
+    """One provider-owned observation lifetime, without pilot authorization."""
+
+    epoch: str
+    index: int
+    ship_code: str
+    generation: str
+    window: int
+
+
+@dataclass
+class _NPCObservation:
+    binding: NPCMotionBinding
+    reservation_guard: Callable[[], bool] = field(repr=False)
+    last_sample: dict | None = None
+    visible_until: float = 0
+
+
 class CompanyMotionService:
     """Authorize a stream for one admitted ship and coalesce unsent views by ship.
 
@@ -141,6 +162,7 @@ class CompanyMotionService:
         self._owner = threading.current_thread()
         self._application_pending = {}
         self._application_batch = {}
+        self._npc_observation = None
         self.running = False
         self.window = 0
         self.accepted_samples = 0
@@ -159,7 +181,11 @@ class CompanyMotionService:
             raise ValueError('invalid participant movement grant')
         # A previous source may have left over a failed control link. A new
         # owner ends its remaining route metadata before receiving authority.
-        self._retire_sample(ship_index)
+        observation = self._npc_observation
+        if observation is not None and observation.binding.index == ship_index:
+            self.withdraw_npc_source(observation.binding)
+        else:
+            self._retire_sample(ship_index)
         grant = _Grant(handle, secrets.token_hex(32), ship_index, registry_epoch, secrets.token_hex(16))
         # A previous grant's sealed sample cannot move a reassigned ship.
         pending = self._application_pending.pop(ship_index, None)
@@ -169,6 +195,75 @@ class CompanyMotionService:
         self._grants[handle] = self._tickets[grant.ticket] = grant
         return {'ticket': grant.ticket, 'epoch': grant.epoch, 'generation': grant.generation,
                 'index': ship_index, 'session_epoch': session_epoch}
+
+    def register_npc_source(self, registry_epoch, ship_index, ship_code, *, reservation_guard):
+        """Register one trusted local observation for the current running world.
+
+        The provider verifies the registry identity and supplies a read-only
+        guard that returns True while the NPC remains verified and unreserved.
+        """
+        self._check_owner()
+        if (not self.running or self.listener.fileno() < 0 or self._npc_observation is not None
+                or type(registry_epoch) is not str or not _HEX32.fullmatch(registry_epoch)
+                or type(ship_index) is not int or not 1 <= ship_index <= 200000
+                or type(ship_code) is not str or not _DISPLAY_CODE.fullmatch(ship_code)
+                or not callable(reservation_guard)
+                or any(grant.index == ship_index for grant in self._grants.values())
+                or ship_index in self._application_pending or ship_index in self._application_batch
+                or reservation_guard() is not True):
+            raise ValueError('invalid or unavailable provider NPC observation')
+        binding = NPCMotionBinding(registry_epoch, ship_index, ship_code, secrets.token_hex(16), self.window)
+        # A recently departed pilot may still have a retained visibility route.
+        self._retire_sample(ship_index)
+        self._npc_observation = _NPCObservation(binding, reservation_guard)
+        return binding
+
+    def _current_npc(self):
+        observation = self._npc_observation
+        if observation is None:
+            return None
+        try:
+            allowed = observation.reservation_guard() is True
+        except Exception:
+            self.withdraw_npc_source(observation.binding)
+            raise
+        if not allowed:
+            self.withdraw_npc_source(observation.binding)
+            return None
+        return observation
+
+    def publish_npc_sample(self, binding, sample):
+        """Publish an unmodified V3 observation captured on the provider host."""
+        self._check_owner()
+        observation = self._npc_observation
+        if observation is None or observation.binding is not binding or self._current_npc() is None:
+            return False
+        value = motion_value(sample)
+        if (value['version'], value['index'], value['epoch'], value['generation']) != (
+                3, binding.index, binding.epoch, binding.generation):
+            raise ValueError('sample does not match this NPC observation')
+        now = time.monotonic()
+        previous = observation.last_sample
+        if (not 0 <= now - value['capture_time'] < MAX_SAMPLE_AGE
+                or (previous is not None and value['sequence'] <= previous['sequence'])):
+            return False
+        check_motion_progress(value, previous)
+        if previous is not None and previous['sector_macro'] != value['sector_macro']:
+            self._retire_sample(binding.index, binding.generation)
+        observation.last_sample = value
+        observation.visible_until = value['capture_time'] + MAX_SAMPLE_AGE
+        self._fan_out(value)
+        return True
+
+    def withdraw_npc_source(self, binding):
+        """Retire this exact observation without touching pilot authority."""
+        self._check_owner()
+        observation = self._npc_observation
+        if observation is None or observation.binding is not binding:
+            return False
+        self._npc_observation = None
+        self._retire_sample(binding.index, binding.generation)
+        return True
 
     def _drop(self, peer, *, transport_lost=True):
         if self._peers.pop(peer.connection, None) is None:
@@ -260,6 +355,7 @@ class CompanyMotionService:
         self.window += 1
         self._application_pending.clear()
         self._application_batch.clear()
+        self._npc_observation = None
         for grant in self._grants.values():
             grant.last_sample = None
             grant.visible_until = 0
@@ -489,13 +585,22 @@ class CompanyMotionService:
         peer.latest = {index: sample for index, sample in peer.latest.items()
                        if view_matches(views, index, sample['sector_macro'])}
         now = time.monotonic()
-        for grant in self._grants.values():
-            sample = grant.last_sample
-            if sample is None or grant.visible_until <= now:
+        for source in (*self._grants.values(), self._npc_observation):
+            if source is None or source.last_sample is None or source.visible_until <= now:
                 continue
+            sample = source.last_sample
+            index = sample['index']
             sector = sample['sector_macro']
-            if view_matches(views, grant.index, sector) and not view_matches(previous, grant.index, sector):
-                peer.latest[grant.index] = sample
+            if (sample['epoch'] == peer.grant.epoch and view_matches(views, index, sector)
+                    and not view_matches(previous, index, sector)):
+                peer.latest[index] = sample
+
+    def _fan_out(self, sample, *, source_peer=None):
+        index, sector, epoch = sample['index'], sample['sector_macro'], sample['epoch']
+        for viewer in self._peers.values():
+            if (viewer is not source_peer and viewer.grant is not None and viewer.grant.epoch == epoch
+                    and view_matches(viewer.views, index, sector)):
+                viewer.latest[index] = sample
 
     def _sample(self, peer, message):
         if set(message) != {'kind', 'window', 'sample'}:
@@ -527,9 +632,7 @@ class CompanyMotionService:
         self.last_ship_position = {key: value[key] for key in ('index', 'sector_macro', 'sequence')}
         peer.source_ack = encode_frame({'kind': 'motion_sampled', 'window': self.window,
                                    'sequence': grant.last_sequence})
-        for viewer in self._peers.values():
-            if viewer is not peer and view_matches(viewer.views, grant.index, value['sector_macro']):
-                viewer.latest[grant.index] = value
+        self._fan_out(value, source_peer=peer)
 
     def _receive(self, peer, message):
         if peer.grant is None:
@@ -607,6 +710,10 @@ class CompanyMotionService:
         """Bound ingress and egress work per peer so world control can progress."""
         self._check_owner()
         now = time.monotonic()
+        observation = self._current_npc()
+        if observation is not None and observation.visible_until and observation.visible_until <= now:
+            observation.visible_until = 0
+            self._retire_sample(observation.binding.index, observation.binding.generation)
         for grant in self._grants.values():
             if grant.visible_until and grant.visible_until <= now:
                 grant.visible_until = 0
@@ -645,3 +752,4 @@ class CompanyMotionService:
         self._tickets.clear()
         self._application_pending.clear()
         self._application_batch.clear()
+        self._npc_observation = None
