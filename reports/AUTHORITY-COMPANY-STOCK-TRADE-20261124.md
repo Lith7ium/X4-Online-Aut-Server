@@ -467,3 +467,28 @@ The private artifacts are `.local/idle-npc-pose-native-01/result.json`
 and the engine log (SHA-256
 `c9cfce449f155709baee236b78708966a726804ac1155f2ec05c8636ad2f7697`,
 lines 540–557).
+
+### Local Linux sale attempt at CTD-093
+
+A disposable copy of checkpoint `eb507e137a094f2c9591d7563df19b34`, SHA-256
+`ae06a6c657146406ddb95058aba1aff9efa4e19c6b95cf3c8cece95ecb19bac5`,
+loaded WRN-302 with 12 water and 930,100 cents in the player and faction
+accounts. A staged native berth search found six compatible S berths and five
+free at CTD-093, and six compatible and free at SMG-953. Each station had
+one eligible water buy offer for WRN. The measured unit quotes were 3,473
+and 5,554 cents respectively.
+
+The server observed the old BIM-169 berth clear, moved the same WRN and
+assigned NPC captain PYN-740 to a stock-selected safe position in the target
+sector for fixture setup, and issued one stock `DockAt` into CTD's selected
+external berth `0x2717`. The berth quote and immediate recheck both returned
+3,473 cents. The private diagnostic submitted one stock sale of one water.
+X4 returned order `0x97f0` and deal `0x97ef` at game age 466.80 seconds.
+
+The readback timed out. Cargo debit, Company credit and a linked transaction
+journal entry remain unverified. This attempt coupled journal collection to
+the completion event, so the missing receipt leaves the transaction outcome
+indeterminate. The supervisor recorded no repeat submission, no verified
+save and no remaining owned processes. The source checksum was unchanged.
+Evidence is local under `.local/water-sale-native-02/result.json` and the
+private engine log. A remote player's trade menu was outside this run.
