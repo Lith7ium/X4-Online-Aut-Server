@@ -42,3 +42,29 @@ python3 tools/dev/authority_combat_hit_evidence.py \
   --sha256 ace5a0a0e0fd9e7d3e659b40be496e5efee0b8029dafe8d0e67a4418a88b83e4 \
   --log "$run/cockpit-1073/client/case/home/.config/EgoSoft/X4/45841/engine-output.log" --sequence 49
 ```
+
+## Occupied target attempt on Linux
+
+One further isolated attempt at `3b5f00d4331f0aad32e4b5017fbe00e098635239`
+used a fresh copy of the confirmed Run 02 source. The pilot fixture was
+prepared to assign a native Company NPC captain to registry entry 1074
+(KHI-630) locally, confirm both registry directions and captain assignment,
+then request one 0.25 s stock burst at HVC-420 (1073) only while HVC was
+occupied and controlled by the admitted pilot. Health reads were passive.
+
+The provider confirmed and offered `checkpoint-8588ae0463304a26be1430e7c5e70dd8`
+with SHA-256 `cfdc798c41169f2bcc04279e39faf97c503620807f1622aea42ada9f757683c2`.
+The supervisor stopped the attempt for sustained host memory pressure.
+The cockpit was in `load_receipts` and had yet to attempt admission.
+Its engine log also reported `Failed to create file for writing:
+config.xml` before reaching the start menu. The relationship between
+that warning and the interrupted load is unverified. The captain cue and
+shot never ran. This attempt produced no new hit, health or projectile evidence.
+
+The provider exited successfully, paused at the offered checkpoint with
+zero admissions. No owned processes or locks remained. The original and
+staged source save hashes matched
+`1ceb756b1fc6080c6a6752e51d146cfc17c72762b8af9f9c1aed7bce20fa4958`
+after the run. Private evidence is in
+`.local/registered-combat-occupied/native-03/`. The terminal summary
+SHA-256 is `bef5ed9f53c09f50276bd412c4da5775b92871e2db85e81fc3bb390049865d90`.
