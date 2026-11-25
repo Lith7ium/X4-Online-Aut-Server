@@ -145,6 +145,22 @@ correspond to that earlier revision and include the cleanup defect.
 Windows and WAN sale acceptance are pending.
 [Sale receipt, ship journal and final save](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#sale-through-the-admitted-linux-pilots-stock-trade-menu) · [21:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795636827290579)
 
+At `46fc471a` the GPU-free provider received 155 of the cockpit's 160
+native observations of MFQ-419. Every received position and velocity
+matched the pilot's raw record. Radar loss ended the stream while the
+pilot was still connected. The same connection acknowledged 148
+own-ship samples. This diagnostic route only recorded the freighter.
+[Native receipt and limits](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
+
+The internal operator archives at `.local/flight-build-04f409f6` contain
+the cleanup fix and the market eligibility fix for separately stored
+equipment. Linux is 1,627,954 bytes (SHA-256
+`76e8dc601dc19054512437739ce765585001136aafe02668038549a1760860ac`).
+Windows is 3,098,037 bytes (SHA-256
+`6da7217a0b7e030ec491271720f0b4ef4994c687a07828e1e80ee5cd22b1ee90`).
+Both refer to `04f409f68eae3078666191a6c0c4221ac7415ec6`. All 176
+shared files matched. Deployment and human flight with this build are pending.
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
