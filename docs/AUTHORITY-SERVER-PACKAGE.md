@@ -431,6 +431,16 @@ command with `--require-registry-snapshot` and the pinned TLS settings above.
 On Linux, add `--company-purchases` and select the buyer's ship. On Windows,
 add `-CompanyPurchases` and select the same index you reserved for that pilot.
 
+To try the authority-backed trade window, also pass `--company-trade-view`
+to the Linux player or `-CompanyTradeView` to the Windows player. The
+provider uses its existing `--company-purchases` setting. Both packages
+must support the trade-view capability. At the reserved ship's station,
+open **Trade** from the Docked menu. After loading the server's offers,
+the stock window uses the shared account and the ship's available space
+to limit the quantity. A fresh opening requests a fresh observation.
+This trial supports buying one ware per confirmation. Offers for selling
+are visible with sale submission disabled.
+
 Open the stock Docked menu, choose Trade, select a single ware and quantity,
 review the price, and confirm. The provider checks the reserved ship's
 identity, external berth, assigned Company NPC pilot, empty order queue,

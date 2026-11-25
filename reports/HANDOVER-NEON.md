@@ -12,13 +12,13 @@ the operator. At 15:00 Neon took the registered NPC receive/playback check
 on Windows and Quartz took a native stock “Fly and Wait” trial.
 [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795615284533159)
 
-At 16:00 Neon reported that a native Windows cockpit received 90 of 90
-recorded NPC samples with velocity. The observer used a development
+At 16:00 Neon reported that a native Windows cockpit received all 90
+recorded NPC samples, including 89 with velocity. The observer used a development
 adapter. Its target was outside radar range. Neon now owns live NPC
 sampling, interest-filtered playback, withdrawal and reacquisition on a
 separate branch. Cobalt retains the actual Windows/Fedora Internet flight.
 Molander reported that Quartz has exhausted its budget, with an estimated
-return on 2 December. The native fleet-order trial is unassigned.
+return on 2 December. Astra has taken over the native fleet-order trial.
 [Windows NPC experiment](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/ed9ebb7277dfa7bea79b8ecb7463fa63c27e7b60/reports/AUTHORITY-WINDOWS-NPC-RECEIVE-PLAYBACK-20261125.md) ·
 [16:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795618874995979)
 
@@ -130,12 +130,26 @@ still unavailable, and the provider saved WRN-302 detached with the
 correct captain, cargo and balance.
 [Linux purchase and departure evidence](AUTHORITY-PURCHASE-AND-UNDOCK-LINUX-20261125.md)
 
-Lith7ium approved populating the regular trade window from current server
-offers, shared funds and available cargo space for the selected ship.
-The existing native purchase receipt already displays the correct account
-and cargo. The stock slider currently reads the client's local economy.
-The new read-only station query is in development. Purchases must still
-recheck the exact unit price when the pilot confirms.
+At `abf70d48`, opening the stock Docked → Trade window requested a fresh
+server observation for WRN-302 at BIM-169. One stock confirmation bought
+two water at 58.48 Cr each. X4 settled 116 Cr. Reopening the window showed
+four water instead of two, 9,768 Cr instead of 9,884 Cr, and space for 21
+further units instead of 23. Station supply fell by two. The pilot's own
+local cargo and cash still held their initial values. The GPU-free server
+paused and saved after the pilot left. The saved world and sealed ledger
+agreed on exactly one new purchase. This was a Linux loopback test with
+a real server, pilot and stock UI. Windows and WAN trade remain untested.
+Sales are displayed and submission is currently limited to purchases.
+[Native stock window evidence](AUTHORITY-STOCK-MARKET-VIEW-20261125.md) · [Package options](../docs/AUTHORITY-SERVER-PACKAGE.md#try-an-opt-in-company-purchase)
+
+Matching private packages from that revision are in
+`.local/flight-build-abf70d48` on Bazzite. Cobalt's assigned flight and
+the Fedora provider use their earlier dedicated builds.
+
+| Market test package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| X4-Authority-Linux-abf70d48.tar.gz | 1,559,463 | `3b4a8fbb546310b5ce89043d0baa389bf28ea126a0b16af9c609efdea3e79f93` |
+| X4-Authority-Windows-abf70d48.zip | 2,962,718 | `f8d1593aabc3c92178fd893092e2fa34b3961f4fb01c3338fccd6a869696b807` |
 
 Lith7ium selected a separate marker for a visible remote pilot on the
 stock map. The installed MapMenu and its exported interfaces examined so
