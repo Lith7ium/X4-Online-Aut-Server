@@ -12,6 +12,7 @@ import time
 
 from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_ships import _DISPLAY_CODE
+from .company_npc_measurement import MEASUREMENT_KIND, NpcMeasurementIngress
 from .experimental_tcp_motion import check_motion_progress, motion_value
 from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
@@ -141,7 +142,10 @@ class CompanyMotionService:
     A source acknowledgement confirms transport acceptance. The world owner
     separately takes and settles samples before any native pause and save.
     """
-    def __init__(self, *, application_drops=None):
+    def __init__(self, *, application_drops=None, npc_measurement=None):
+        if npc_measurement is not None and type(npc_measurement) is not NpcMeasurementIngress:
+            raise ValueError('invalid private NPC measurement ingress')
+        self._npc_measurement = npc_measurement
         self._application_drops = application_drops
         if application_drops is not None:
             application_drops.update(last_reason=None, by_reason={})
@@ -168,6 +172,14 @@ class CompanyMotionService:
         self.accepted_samples = 0
         self.samples_with_velocity = 0
         self.last_ship_position = None
+
+    def install_npc_measurement(self, measurement):
+        """Install the private receiver before any participant admission."""
+        self._check_owner()
+        if (type(measurement) is not NpcMeasurementIngress or self._npc_measurement is not None
+                or self.running or self._grants or self._peers):
+            raise ValueError('private NPC measurement must be configured before admission')
+        self._npc_measurement = measurement
 
     def admit(self, handle, attempt_id, ship_index, sector_macro, session_epoch, registry_epoch):
         self._check_owner()
@@ -269,6 +281,8 @@ class CompanyMotionService:
         if self._peers.pop(peer.connection, None) is None:
             return
         peer.connection.close()
+        if self._npc_measurement is not None and self._npc_measurement.peer is peer:
+            self._npc_measurement.retire('socket_closed')
         grant = peer.grant
         if (grant is not None and self._grants.get(grant.handle) is grant
                 and (grant.last_sample is not None or not transport_lost)):
@@ -351,6 +365,8 @@ class CompanyMotionService:
             raise ValueError('invalid movement clock state')
         if self.running == running:
             return
+        if not running and self._npc_measurement is not None and self._npc_measurement.peer is not None:
+            self._npc_measurement.retire('motion_window_ended')
         self.running = running
         self.window += 1
         self._application_pending.clear()
@@ -464,7 +480,7 @@ class CompanyMotionService:
         ticket = message.get('ticket')
         fields = set(message)
         allowed = {'kind', 'ticket', 'loss_notifications', 'trial_index', 'resume_route',
-                   'cockpit_playback_limit', 'resume_routes', 'pilot_roster'}
+                   'cockpit_playback_limit', 'resume_routes', 'pilot_roster', MEASUREMENT_KIND}
         if (fields - allowed or message.get('kind') != 'bind_motion'
                 or type(ticket) is not str or not _TICKET.fullmatch(ticket)):
             raise ValueError('invalid movement binding')
@@ -515,6 +531,10 @@ class CompanyMotionService:
                 triple = tuple(claim)
                 if self.running and grant.cockpit_routes.get(claim[0]) == triple:
                     resumed_routes[claim[0]] = triple
+        if MEASUREMENT_KIND in fields:
+            if message[MEASUREMENT_KIND] is not True or self._npc_measurement is None:
+                raise ValueError('private NPC measurement unavailable')
+            self._npc_measurement.bind(peer, grant)
         grant.trial_route = peer.resuming = route
         grant.cockpit_routes = dict(resumed_routes)
         peer.resuming_routes = dict(resumed_routes)
@@ -535,6 +555,8 @@ class CompanyMotionService:
             bound['resume_valid_indices'] = sorted(resumed_routes)
         if peer.pilot_roster:
             bound['pilot_roster'] = True
+        if MEASUREMENT_KIND in fields:
+            bound[MEASUREMENT_KIND] = True
         self._notice(peer, bound)
 
     def _view(self, peer, message):
@@ -554,6 +576,8 @@ class CompanyMotionService:
         previous = peer.views
         peer.view_id = message['view_id']
         peer.views = views
+        if self._npc_measurement is not None:
+            self._npc_measurement.view(peer, self.window, time.monotonic())
         peer.delivered = {index: route for index, route in peer.delivered.items()
                           if view_matches(views, index, route[1])}
         peer.hidden.intersection_update(peer.delivered)
@@ -641,6 +665,11 @@ class CompanyMotionService:
         window = message.get('window')
         if type(window) is not int or not 0 <= window <= self.window:
             raise ValueError('invalid movement window')
+        if message.get('kind') == MEASUREMENT_KIND:
+            if self._npc_measurement is None or window != self.window or not self.running:
+                raise ValueError('private NPC measurement outside active window')
+            self._npc_measurement.receive(peer, message, window, time.monotonic())
+            return
         if window < self.window or not self.running:
             return
         if message.get('kind') == 'motion_received':
@@ -710,6 +739,8 @@ class CompanyMotionService:
         """Bound ingress and egress work per peer so world control can progress."""
         self._check_owner()
         now = time.monotonic()
+        if self._npc_measurement is not None:
+            self._npc_measurement.check(now)
         observation = self._current_npc()
         if observation is not None and observation.visible_until and observation.visible_until <= now:
             observation.visible_until = 0

@@ -7,6 +7,8 @@ import time
 from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_motion_frames import (BIND_TIMEOUT, MAX_COUNTER, encode_frame,
                                     normalize_views, read_frames, validate_pilot_roster, view_matches)
+from .company_npc_measurement import (MEASUREMENT_KIND, NPC_CODE, NPC_INDEX, PILOT_INDEX,
+                                      REGISTRY_EPOCH, SECTOR, measurement_value)
 from .experimental_tcp_motion import motion_value
 from .trusted_load_messages import validate_ship_motion_credential
 
@@ -19,11 +21,17 @@ class CompanyMotionClient:
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
                  on_view_reset=None, on_transport_lost=None, on_clock=None, trial_index=None,
                  resume_route=None, cockpit_playback_limit=None, resume_routes=None,
-                 on_pilot_roster=None, _latest_seen=None):
+                 on_pilot_roster=None, _latest_seen=None, npc_measurement_source=None):
         epoch, index = source.registry
         if any(callback is not None and not callable(callback)
                for callback in (on_view_reset, on_transport_lost, on_clock, on_pilot_roster)):
             raise ValueError('invalid movement observation callback')
+        if npc_measurement_source is not None and (
+                not callable(npc_measurement_source) or (epoch, index) != (REGISTRY_EPOCH, PILOT_INDEX)
+                or getattr(source, 'observed_npc', None) != (NPC_INDEX, NPC_CODE)
+                or getattr(source, 'registered_npc_hold_trial', False)
+                or trial_index is not None or cockpit_playback_limit is not None):
+            raise ValueError('private NPC measurement requires the designated radar-only pilot')
         if on_pilot_roster is not None and cockpit_playback_limit is None:
             raise ValueError('pilot roster requires cockpit playback')
         if (trial_index is not None or resume_route is not None) and (
@@ -75,6 +83,8 @@ class CompanyMotionClient:
                 bind['resume_routes'] = [list(item) for item in normalized_resume_routes]
             if on_pilot_roster is not None:
                 bind['pilot_roster'] = True
+            if npc_measurement_source is not None:
+                bind[MEASUREMENT_KIND] = True
             self._outgoing = encode_frame(bind)
         except BaseException:
             self._connection.close()
@@ -93,6 +103,9 @@ class CompanyMotionClient:
         self._cockpit_playback_limit = cockpit_playback_limit
         self._resume_routes = normalized_resume_routes if normalized_resume_routes else None
         self._generation = credential['generation']
+        self._npc_measurement_source = npc_measurement_source
+        self._npc_measurement_sequence = 0
+        self._npc_measurement_seen_view = False
         self._incoming = bytearray()
         self._bind_deadline = time.monotonic() + BIND_TIMEOUT
         self.disconnected_before_bind = False
@@ -176,6 +189,10 @@ class CompanyMotionClient:
         fields = {'kind', 'window', 'running'}
         if binding:
             fields.add('last_sequence')
+            if getattr(self, '_npc_measurement_source', None) is not None:
+                fields.add(MEASUREMENT_KIND)
+                if message.get(MEASUREMENT_KIND) is not True:
+                    raise ValueError('private NPC measurement not negotiated')
             if self._trial_index is not None:
                 fields.update(('loss_notifications', 'trial_index'))
                 if (message.get('loss_notifications') is not True or type(message.get('trial_index')) is not int
@@ -212,6 +229,8 @@ class CompanyMotionClient:
         elif window != self._window + 1 or message['running'] == self._running:
             raise ValueError('movement clock transition out of order')
         self._window, self._running = window, message['running']
+        if not binding and not self._running:
+            self._npc_measurement_source = None
         self._latest = self._awaiting_sample = self._receipt = self._last_sector = None
         self._sent_view = None
         self._view_id = 0
@@ -334,13 +353,35 @@ class CompanyMotionClient:
                 return {'kind': 'motion_view', 'view_id': self._view_id, **row}
             return {'kind': 'motion_views', 'view_id': self._view_id, 'views': rows}
         if self._awaiting_sample is not None or self._latest is None:
-            return None
+            return self._next_npc_measurement()
         sample, self._latest = self._latest, None
         if sample['sector_macro'] != self._last_sector:
             sample['real_velocity'] = None
         self._last_sector, self._last_sequence = sample['sector_macro'], sample['sequence']
         self._awaiting_sample = sample
         return {'kind': 'motion_sample', 'sample': sample}
+
+
+    def _next_npc_measurement(self):
+        source = getattr(self, '_npc_measurement_source', None)
+        if source is None:
+            return None
+        if not view_matches(self._desired_view or {}, NPC_INDEX, SECTOR):
+            if self._npc_measurement_seen_view:
+                self._npc_measurement_source = None
+            return None
+        self._npc_measurement_seen_view = True
+        raw = source()
+        if raw is None:
+            return None
+        sample = measurement_value(raw)
+        if sample['sequence'] <= self._npc_measurement_sequence:
+            return None
+        if not 0 <= time.monotonic() - sample['capture_time'] <= 1:
+            return None
+        self._npc_measurement_sequence = sample['sequence']
+        return {'kind': MEASUREMENT_KIND, 'generation': self._generation,
+                'view_id': self._view_id, 'sample': sample}
 
     def poll(self):
         try:
