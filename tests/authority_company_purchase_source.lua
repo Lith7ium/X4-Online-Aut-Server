@@ -165,3 +165,40 @@ fresh_source:set_running(true)
 incoming = {prefix .. row}
 fresh_source:tick()
 assert(#displayed == 3 and outgoing[6] == ack and outgoing[7] == prefix .. 'NOTICE_POLL')
+
+-- A complete Company view may span pages, arrive out of order and contain
+-- distinct station offers for the same ware. Nothing renders until assembled.
+local market_in, market_out = {}, {}
+local market_source = module.new({net = {
+    send = function(_, value) market_out[#market_out + 1] = value end,
+    receive = function() return table.remove(market_in, 1) end,
+}, lease = lease, clock = function() return 0 end, available = function() return true end,
+    trade_view = true})
+market_source:set_running(true)
+local station = {sector = 'cluster_01_sector001_macro', station_code = 'BIM-169'}
+local view = assert(market_source.market:open(station))
+market_source:tick()
+assert(market_out[1] == prefix .. 'MARKET|' .. view.id .. '|cluster_01_sector001_macro|BIM-169|0')
+local function market_message(kind, id, offset, suffix)
+    market_in[#market_in + 1] = prefix .. kind .. '|' .. id .. '|' .. offset .. '|' .. suffix
+end
+for index = 8, 1, -1 do
+    market_message('MARKET_ROW', view.id, 0, index .. '|buy|water|5848|25|1|2|6|1')
+end
+market_message('MARKET_PAGE', view.id, 0, 'observed|11600|9|8')
+market_source:tick()
+assert(view.status == 'pending' and view.offset == 0)
+market_source:tick()
+assert(view.status == 'pending' and view.offset == 8)
+market_message('MARKET_ROW', view.id, 8, '1|sell|water|4510|25|1|2|6|0')
+market_message('MARKET_PAGE', view.id, 8, 'observed|11600|9|1')
+market_source:tick()
+assert(view.status == 'observed' and #view.rows == 9
+    and view.rows[1].tradeable and not view.rows[9].tradeable)
+local reopened = assert(market_source.market:open(station))
+market_message('MARKET_PAGE', view.id, 0, 'observed|0|0|0')
+market_source:tick()
+assert(view.status == 'unavailable' and reopened.id ~= view.id and reopened.status == 'pending')
+market_message('MARKET_PAGE', reopened.id, 0, 'refused|dock_mismatch')
+market_source:tick()
+assert(reopened.status == 'unavailable' and reopened.rows == nil)

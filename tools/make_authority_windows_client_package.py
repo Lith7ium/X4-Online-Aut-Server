@@ -70,6 +70,7 @@ COMPANY_SEAT = {
     'src/authority/lua/company_cockpit_playback.lua',
     'src/authority/md/company_cockpit_observer.xml',
     'src/authority/lua/company_trade_capture.lua', 'src/authority/lua/company_purchase_source.lua',
+    'src/authority/lua/company_trade_view_ui.lua',
     'src/authority/lua/company_undock_hold.lua', 'src/authority/md/company_client_undock.xml',
     'src/authority/lua/company_motion_source.lua', 'src/authority/lua/source_motion_sampler.lua',
     'tools/dev/authority_job_descriptor_probe.lua', 'tools/dev/authority_job_descriptor_probe.xml',
