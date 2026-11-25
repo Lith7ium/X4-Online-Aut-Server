@@ -243,6 +243,7 @@ local function native_callbacks(o, selected_fixture, read_only)
   UniverseID GetContextByClass(UniverseID,const char*,bool);UniverseID GetPlayerControlledShipID(void);
   UniverseID GetPlayerOccupiedShipID(void);UniverseID GetPlayerContainerID(void);const char* GetObjectIDCode(UniverseID);
   UIPosRot GetObjectPositionInSector(UniverseID);void SetObjectSectorPos(UniverseID,UniverseID,UIPosRot);double GetCurrentGameTime(void);]]
+ if c.alignment_same_zone then ffi.cdef('UniverseID GetZoneAt(UniverseID, UIPosRot*);') end
  local C=ffi.C
  local native_stage='initial'
  c.failure_stage=function()return native_stage end
@@ -293,7 +294,7 @@ local function native_callbacks(o, selected_fixture, read_only)
   local sector_macro=GetComponentData(sr,'macro');assert(sector_macro==p.sector_macro)
   native_stage='fixture_code'
   local code=C.GetObjectIDCode(a);assert(code~=nil and code~=ffi.NULL and ffi.string(code)==selected.code)
-  assert(c.guard());native_stage='validated';return a,s
+  assert(c.guard());native_stage='validated';return a,s,z
  end
  c.inspect=function(p)
   local a=live(p);native_stage='position_read';local x=C.GetObjectPositionInSector(a);assert(live(p)==a)
@@ -319,6 +320,16 @@ local function native_callbacks(o, selected_fixture, read_only)
  c.write=function(p,t)
   local a,s=live(p);native_stage='setter';C.SetObjectSectorPos(a,s,ffi.new('UIPosRot',t));assert(live(p)==a);return true
  end
+ if c.alignment_same_zone then
+  c.check_destination=function(p,t)
+   local a,s,z=live(p)
+   native_stage='destination_zone'
+   -- GetZoneAt may convert its offset in place. Keep the write target in sector coordinates.
+   local offset=ffi.new('UIPosRot[1]')
+   offset[0].x,offset[0].y,offset[0].z=t.x,t.y,t.z
+   return C.GetZoneAt(s,offset)==z and live(p)==a
+  end
+ end
  return c
 end
 
@@ -332,6 +343,7 @@ end
 -- Three metres is the existing bounded native playback endpoint proof tolerance.
 -- This exception never changes the later playback correction limit (50 metres).
 local INITIAL_ALIGNMENT_READBACK_TOLERANCE = 3
+local ROTATION_READBACK_TOLERANCE = math.rad(.1)
 local function align_initial_fixture(options, callbacks, binding, selected)
  local mutation_requested = false
  local alignment_state = options.initial_alignment_state
@@ -420,7 +432,14 @@ local function align_initial_fixture(options, callbacks, binding, selected)
   local actual = callbacks.inspect(binding)
   for _, axis in ipairs({'x', 'y', 'z'}) do assert(finite(actual[axis])) end
   for _, angle in ipairs({'yaw', 'pitch', 'roll'}) do assert(finite(actual[angle])) end
+  if callbacks.check_destination then assert(callbacks.check_destination(binding, target) == true) end
   check_fresh_prepared()
+  local evidence = {kind='initial_alignment', index=binding.index, epoch=binding.epoch,
+   sector_macro=binding.sector_macro, source_sequence=original.sequence,
+   source_time=original.source_time, capture_time=original.capture_time,
+   arrival=arrival, before={x=actual.x, y=actual.y, z=actual.z}, target=target,
+   tolerance=INITIAL_ALIGNMENT_READBACK_TOLERANCE}
+  if options.verify_rotation then alignment_state.evidence = evidence end
   -- Mark before calling the setter: a throwing or reentrant request may have written.
   mutation_requested = true
   alignment_state.uncertain = true
@@ -429,17 +448,22 @@ local function align_initial_fixture(options, callbacks, binding, selected)
   check_fresh_prepared()
   local readback = callbacks.inspect(binding)
   for _, axis in ipairs({'x', 'y', 'z'}) do assert(finite(readback[axis])) end
+  evidence.actual = {x=readback.x, y=readback.y, z=readback.z}
   local dx, dy, dz = readback.x-target.x, readback.y-target.y, readback.z-target.z
-  local error_metres = math.sqrt(dx*dx + dy*dy + dz*dz)
-  assert(error_metres <= INITIAL_ALIGNMENT_READBACK_TOLERANCE)
-  local verified_at = check_fresh_prepared()
-  assert(options.record({kind='initial_alignment', index=binding.index, epoch=binding.epoch,
-   sector_macro=binding.sector_macro, source_sequence=original.sequence,
-   source_time=original.source_time, capture_time=original.capture_time,
-   arrival=arrival, local_time=verified_at,
-   before={x=actual.x, y=actual.y, z=actual.z},
-   actual={x=readback.x, y=readback.y, z=readback.z}, target=target,
-   error=error_metres, tolerance=INITIAL_ALIGNMENT_READBACK_TOLERANCE}) == true)
+  evidence.error = math.sqrt(dx*dx + dy*dy + dz*dz)
+  if options.verify_rotation then
+   local rotation_error = 0
+   for _, angle in ipairs({'yaw', 'pitch', 'roll'}) do
+    assert(finite(readback[angle]))
+    local delta = (readback[angle] - actual[angle] + math.pi) % (2 * math.pi) - math.pi
+    rotation_error = math.max(rotation_error, math.abs(delta))
+   end
+   evidence.rotation_error_rad = rotation_error
+   assert(rotation_error <= ROTATION_READBACK_TOLERANCE)
+  end
+  assert(evidence.error <= INITIAL_ALIGNMENT_READBACK_TOLERANCE)
+  evidence.local_time = check_fresh_prepared()
+  assert(options.record(evidence) == true)
   check_fresh_prepared()
   alignment_state.uncertain = false
  end)
@@ -475,6 +499,25 @@ function M.new_inspector_x4(options)
   guard=function() return callbacks.check_binding(binding) end,
   game=callbacks.game,
  }
+end
+
+-- MFQ's opted-in diagnostic exposes only one alignment, never a playback writer.
+function M.align_once_x4(options)
+ if type(options) ~= 'table' or options.enabled ~= true then return false end
+ assert(options.fixture == MFQ_PLAYBACK_FIXTURE.name and type(options.clock) == 'function')
+ assert(type(options.record) == 'function' and type(options.fault) == 'function')
+ local selected = MFQ_PLAYBACK_FIXTURE
+ local binding = copy_binding(options.binding, selected)
+ local setup = {}
+ for key, value in pairs(options) do setup[key] = value end
+ setup.test_profile = '45841'
+ setup.alignment_same_zone = true
+ local callbacks = assert(native_callbacks(setup, selected))
+ callbacks.clock = options.clock -- Same host monotonic clock as the REMOTE receive timestamp.
+ return align_initial_fixture({sample_version=3, initial_alignment_fixture=selected.name,
+  initial_alignment_state=options.initial_alignment_state, initial_sample=options.initial_sample,
+  prepared=options.prepared, record=options.record, fault=options.fault,
+  max_age=options.max_age, verify_rotation=true}, callbacks, binding, selected)
 end
 
 -- Separate sustained-playback factory. The one-shot state machine above is unchanged.

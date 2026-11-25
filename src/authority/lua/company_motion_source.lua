@@ -168,6 +168,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     local ok, observer = pcall(function()
         if config.observed_npc_index then
             assert(not config.playback_index and not config.cockpit_radar_playback)
+            assert(config.registered_npc_alignment_trial ~= true or config.registered_npc_hold_trial == true)
             local hold_trial
             local function radar_withdrawn()
                 if hold_trial then hold_trial:withdraw() end
@@ -185,6 +186,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                     enabled = true, pinned = pinned, own_index = config.index, target_index = config.observed_npc_index,
                     target_code = config.observed_npc_code, radar = readers.cockpit, nonce = config.nonce,
                     expected_save_path = expected, clock = udp.monotonic, guard = available, own_actor = actor,
+                    alignment = config.registered_npc_alignment_trial == true,
                 }))
             end
             return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, nil, nil, hold_trial)

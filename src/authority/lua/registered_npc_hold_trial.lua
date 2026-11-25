@@ -1,8 +1,9 @@
--- One opt-in hold/release observation on the pilot copy. No pose writer.
+-- One opt-in hold/release observation on the pilot copy, with optional single alignment.
 local M = {}
 local EPOCH, SECTOR = '26a1a365c66788aa06f0aeb9e18ff62e', 'cluster_06_sector001_macro'
 local NPC_INDEX, NPC_CODE = 943, 'MFQ-419'
 local SEAT_INDEX, SEAT_CODE = 1073, 'HVC-420'
+local ALIGNMENT_WAIT, MAX_SAMPLE_AGE = 3, .75
 
 function M.new_x4(options)
     if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
@@ -16,8 +17,10 @@ function M.new_x4(options)
         UniverseID GetPlayerContainerID(void); const char* GetObjectIDCode(UniverseID);]]
     local C, resolve = ffi.C, assert(X4LAN_RESOLVE_STRING)
     local saved_control, radar = assert(X4LAN_SAVED_REPLICA_CONTROL), options.radar
-    local api = {}
-    local control, observed, cockpit, release_reason, native_fault
+    local api = {alignment_enabled = options.alignment == true}
+    local control, observed, cockpit, binding, release_reason, native_fault
+    local checked_at, deadline, candidate
+    local alignment_state = {used=false, uncertain=false}
     local phase = 'waiting'
 
     local function report(state, detail)
@@ -63,7 +66,7 @@ function M.new_x4(options)
         assert(target ~= cockpit)
         local sector = C.GetContextByClass(target, 'sector', false)
         local zone = C.GetContextByClass(target, 'zone', false)
-        local binding = {epoch=EPOCH, index=NPC_INDEX, sector_macro=SECTOR,
+        binding = {epoch=EPOCH, index=NPC_INDEX, sector_macro=SECTOR,
             actor_key=actor_key(target), sector_key=actor_key(sector), zone_key=actor_key(zone)}
         -- The native inspector round-trips these references and revalidates
         -- live code, ownership, undocked state, sector and zone on each operation.
@@ -76,19 +79,88 @@ function M.new_x4(options)
         })
     end
 
-    function api:sample(row, sequence)
-        if phase ~= 'waiting' or row.mode ~= 'radar' or row.epoch ~= EPOCH or row.sector_macro ~= SECTOR
+    local function same_track(row, serial, generation)
+        return observed and row.actor == observed.actor and serial == observed.serial and generation == observed.generation
+    end
+
+    local function local_now()
+        local now = options.clock()
+        if type(now) == 'number' and now >= 0 and now <= 1e12 then return now end
+    end
+
+    local function report_alignment(state, detail, evidence)
+        local function point(value)
+            if not value then return '-' end
+            return ('%.17g,%.17g,%.17g'):format(value.x, value.y, value.z)
+        end
+        local function scalar(value) return value and ('%.17g'):format(value) or '-' end
+        local snapshot = candidate.snapshot
+        report(state, ('seq=%.0f|generation=%s|arrival=%.17g|source_time=%.17g|capture_time=%.17g'
+            .. '|before=%s|target=%s|actual=%s|error_m=%s|rotation_error_rad=%s|reason=%s'):format(
+            snapshot.sequence, observed.generation, candidate.arrival, snapshot.source_time, snapshot.capture_time,
+            point(evidence and evidence.before), point(evidence and evidence.target), point(evidence and evidence.actual),
+            scalar(evidence and evidence.error), scalar(evidence and evidence.rotation_error_rad), detail))
+    end
+
+    local function align()
+        local proof, fault
+        local function prepared()
+            local now = local_now()
+            return now and now >= checked_at and now < deadline and not release_reason
+                and control:state() == 'prepared' and exact_cockpit() ~= nil and visible()
+        end
+        local ok, aligned = pcall(X4LAN_SAVED_MOTION_APPLY.align_once_x4, {
+            enabled=true, fixture='recovery_mfq_419', binding=binding,
+            expected_save_path=options.expected_save_path, resolve=resolve,
+            clock=options.clock, guard=prepared, prepared=prepared, max_age=MAX_SAMPLE_AGE,
+            initial_alignment_state=alignment_state, initial_sample=candidate,
+            record=function(evidence) proof = evidence; return true end,
+            fault=function(_, _, _, stage) fault = stage end,
+        })
+        if ok and aligned == true then
+            report_alignment('ALIGNED', 'verified', proof)
+            return 'alignment_complete'
+        end
+        report_alignment(alignment_state.uncertain and 'ALIGN_UNCERTAIN' or 'ALIGN_ABORTED',
+            fault or 'guard', alignment_state.evidence)
+        return 'alignment_failed'
+    end
+
+    function api:sample(row, serial, sample, arrival)
+        if phase == 'finished' or row.mode ~= 'radar' or row.epoch ~= EPOCH or row.sector_macro ~= SECTOR
                 or row.index ~= NPC_INDEX or row.code ~= NPC_CODE then return end
         -- The observer stream calls this only after the validated REMOTE
         -- was acknowledged by its local cockpit SEEN transport.
-        observed = {actor=row.actor}
+        if self.alignment_enabled then
+            local now = local_now()
+            if not arrival or not now or arrival > now or now - arrival >= MAX_SAMPLE_AGE then return end
+            if observed then
+                if not same_track(row, serial, sample.generation) then
+                    release_reason = release_reason or 'track_changed'
+                    return
+                end
+                if sample.sequence <= observed.sequence or sample.capture_time <= observed.capture_time then return end
+                observed.sequence, observed.capture_time = sample.sequence, sample.capture_time
+                if phase == 'awaiting_alignment' and not release_reason and now < deadline and arrival > checked_at then
+                    local velocity = sample.real_velocity
+                    candidate = {arrival=arrival, snapshot={version=3, frame=SECTOR, sequence=sample.sequence,
+                        source_time=sample.source_time, capture_time=sample.capture_time, pose={sample.x, sample.y, sample.z},
+                        real_rate=velocity and {velocity.x, velocity.y, velocity.z}}}
+                    phase = 'checking_alignment'
+                    operate('prepare') -- Recheck ownership of the exact Wait just before the setter.
+                end
+                return
+            end
+        elseif phase ~= 'waiting' then return end
+        observed = {actor=row.actor, serial=serial, generation=sample.generation,
+            sequence=sample.sequence, capture_time=sample.capture_time}
         if not visible() then fail('radar_not_verified'); return end
         local ok, created = pcall(bind)
         if not ok or not created then fail('binding_refused'); return end
         control = created
         if operate('prepare') then
             phase = 'preparing'
-            report('PREPARE', ('seq=%.0f'):format(sequence))
+            report('PREPARE', ('seq=%.0f'):format(sample.sequence))
         end
     end
 
@@ -96,11 +168,21 @@ function M.new_x4(options)
         if control and phase ~= 'finished' then release_reason = release_reason or 'radar_lost' end
     end
 
+    function api:end_track(row, serial, generation)
+        if same_track(row, serial, generation) then release_reason = release_reason or 'source_ended' end
+    end
+
     function api:tick(running)
         if not control or phase == 'finished' then return end
         if not release_reason then
             if not running then release_reason = 'observation_stopped'
             elseif not visible() then self:withdraw() end
+            if deadline then
+                local now = local_now()
+                if not now or now < checked_at or now >= deadline then
+                    release_reason = release_reason or 'alignment_timeout'
+                end
+            end
         end
         -- After loss, an already-issued Hold may still acknowledge. Finish
         -- reading that result so the owned Wait can be released. The controller
@@ -119,7 +201,22 @@ function M.new_x4(options)
                 end
             elseif phase == 'checking' then
                 report('CHECKED', release_reason or 'radar')
+                if self.alignment_enabled and not release_reason then
+                    checked_at = local_now()
+                    if checked_at then
+                        deadline = checked_at + ALIGNMENT_WAIT
+                        phase = 'awaiting_alignment'
+                        report('ALIGN_WAIT', ('after_seq=%.0f|checked_at=%.17g'):format(observed.sequence, checked_at))
+                        return
+                    end
+                    release_reason = 'alignment_clock'
+                end
                 release_reason = release_reason or 'check_complete'
+            elseif phase == 'awaiting_alignment' and not release_reason then
+                return
+            elseif phase == 'checking_alignment' and not release_reason then
+                local outcome = align()
+                release_reason = release_reason or outcome
             end
             if operate('release') then
                 phase = 'releasing'

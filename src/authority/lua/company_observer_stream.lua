@@ -41,8 +41,19 @@ local function valid_sample(row)
     return true
 end
 
+local function remote_sample(row, binding)
+    local velocity
+    if row[12] ~= '-' then
+        velocity = {x=tonumber(row[12]), y=tonumber(row[13]), z=tonumber(row[14])}
+    end
+    return {version=3, epoch=binding.epoch, index=binding.index, sector_macro=binding.sector_macro,
+        generation=row[6], sequence=tonumber(row[7]), x=tonumber(row[9]), y=tonumber(row[10]), z=tonumber(row[11]),
+        real_velocity=velocity, source_time=tonumber(row[15]), capture_time=tonumber(row[16])}
+end
+
 function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial)
     assert(not hold_trial or not playback_trial)
+    local alignment = hold_trial and hold_trial.alignment_enabled
     local slot_names = {'cockpit'}
     local playback_slots = {cockpit = true}
     for _, extra in ipairs({'cockpit2', 'cockpit3'}) do
@@ -112,17 +123,19 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             observe_roster(row, packet, now)
             return
         end
-        if playback_trial and #row == 7 and row[1] == 'END' and playback_slots[row[2]] then
+        local timed_trial = playback_trial and playback_slots[row[2]] and playback_trial
+            or alignment and row[2] == 'cockpit' and hold_trial
+        if timed_trial and #row == 7 and row[1] == 'END' then
             local slot = slots[row[2]]
             if slot and slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
                     and counter(row[5]) == slot.binding.index and row[7] == slot.binding.sector_macro
                     and #row[6] == 32 and row[6]:match('^[0-9a-f]+$') then
-                playback_trial:end_track(slot.binding, slot.serial, row[6], row[2])
+                timed_trial:end_track(slot.binding, slot.serial, row[6], row[2])
             end
             return
         end
         local received_at
-        if #row == 17 and playback_slots[row[2]] and playback_trial then
+        if #row == 17 and timed_trial then
             -- Both clocks here belong to the receiving machine. Field 16 is
             -- the original capture clock on the remote pilot's machine.
             received_at = coordinate(row[17], 1e12)
@@ -140,19 +153,10 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
                          binding.actor, binding.code, unpack(row, 9, 16)}
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
         if hold_trial and confirmed == true and row[2] == 'cockpit' then
-            hold_trial:sample(binding, counter(row[7]))
+            hold_trial:sample(binding, slot.serial, remote_sample(row, binding), received_at)
         end
-        if received_at and confirmed == true then
-            local velocity
-            if row[12] ~= '-' then
-                velocity = {x = tonumber(row[12]), y = tonumber(row[13]), z = tonumber(row[14])}
-            end
-            playback_trial:sample(binding, slot.serial, {
-                version = 3, epoch = epoch, index = binding.index, sector_macro = binding.sector_macro,
-                generation = row[6], sequence = tonumber(row[7]), x = tonumber(row[9]),
-                y = tonumber(row[10]), z = tonumber(row[11]), real_velocity = velocity,
-                source_time = tonumber(row[15]), capture_time = tonumber(row[16]),
-            }, received_at, row[2])
+        if playback_trial and received_at and confirmed == true then
+            playback_trial:sample(binding, slot.serial, remote_sample(row, binding), received_at, row[2])
         end
     end
 
