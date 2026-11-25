@@ -35,13 +35,24 @@ class CompanyUndockTrialTests(unittest.TestCase):
         receipt = tree.find(".//cue[@name='Readback']/actions/do_if")
         for guard in ('$Witness', '$SameIdentity', '$SameBerth', 'not @$Order.exists',
                       'not @$Ship.dock.exists', 'not @$Ship.assigneddock.exists',
-                      '$Bay.docked.count == 0', 'not @$Bay.assignedship.exists'):
+                      '$Ship.parent.isclass.zone', 'not $Ship.orders.count'):
             self.assertIn(guard, receipt.get('value'))
         ready = tree.find(".//cue[@name='Readback']/conditions/check_value")
         for guard in ('not @$Ship.parkedat.exists', 'not $Ship.isinternallystored'):
             self.assertIn(guard, ready.get('value'))
             self.assertIn(guard, receipt.get('value'))
         self.assertEqual(receipt.find('set_value').get('exact'), "'undocked'")
+
+    def test_settled_original_berth_may_hold_another_ship(self):
+        tree = ET.parse(trial.ROOT / 'tools/dev' / trial.CUE)
+        readback = tree.find(".//cue[@name='Readback']")
+        for predicate in (readback.find('conditions/check_value'), readback.find('actions/do_if')):
+            value = predicate.get('value')
+            self.assertIn('@$Bay.assignedship != $Ship', value)
+            self.assertIn('@$Bay.docked.indexof.{$Ship} == 0', value)
+            self.assertIn('$Bay.dockstate == dockstate.default', value)
+            self.assertNotIn('$Bay.assignedship.exists', value)
+            self.assertNotIn('$Bay.docked.count', value)
 
     def test_trace_records_individual_fields_even_if_bay_event_does_not_match(self):
         tree = ET.parse(trial.ROOT / 'tools/dev' / trial.CUE)

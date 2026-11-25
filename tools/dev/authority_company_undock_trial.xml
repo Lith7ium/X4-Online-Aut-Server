@@ -80,12 +80,15 @@
         <include_actions ref="TraceDetachment"/>
        </actions>
       </cue>
+      <!-- A settled berth may already belong to another ship. Recheck both
+           directions for the departing ship after the delay. -->
       <cue name="Readback" checkinterval="250ms">
        <conditions>
         <check_value value="$Status == 'awaiting' and (player.age ge $Deadline
             or ($Witness and not @$Order.exists and not @$Ship.dock.exists and not @$Ship.assigneddock.exists
                 and not @$Ship.parkedat.exists and not $Ship.isinternallystored
-                and not @$Bay.assignedship.exists and @$Bay.docked.count == 0 and $Bay.dockstate == dockstate.default))"/>
+                and @$Bay.assignedship != $Ship and @$Bay.docked.indexof.{$Ship} == 0
+                and $Bay.dockstate == dockstate.default))"/>
        </conditions>
        <delay exact="250ms"/>
        <actions>
@@ -96,7 +99,7 @@
                       and not @$Ship.dock.exists and not @$Ship.assigneddock.exists
                       and not @$Ship.parkedat.exists and not $Ship.isinternallystored
                       and $Ship.parent.isclass.zone and not $Ship.orders.count
-                      and not @$Bay.assignedship.exists and $Bay.docked.count == 0
+                      and @$Bay.assignedship != $Ship and @$Bay.docked.indexof.{$Ship} == 0
                       and $Bay.dockstate == dockstate.default">
          <set_value name="$Status" exact="'undocked'"/>
         </do_if>

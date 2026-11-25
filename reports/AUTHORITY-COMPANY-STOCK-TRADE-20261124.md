@@ -406,6 +406,13 @@ and the native engine log (SHA-256
 `8910e3bc82825e10716b1d62d3f8d936b7a45f65e31f6b9ca727124684705ff9`,
 lines 524–552).
 
+The retained trace recorded the original ship's berth-list index as `1` at
+dispatch and `0` at both the event and final readback. The developer cue now
+requires index `0` and no bay assignment to that ship. This allows a different
+ship to occupy a settled original bay while preserving the witness, identity,
+order, and physical-detachment checks. The recorded native run had an empty
+bay at completion. Reoccupation before readback has not been exercised natively.
+
 ## Two consecutive purchases through one native server
 
 One native Linux provider reloaded the idle WRN-302 checkpoint containing
