@@ -16,6 +16,31 @@ function M.new_x4(cfg, net, clock, registry_ready)
     local stopped, lookup, sampler = false, nil, nil
     local wanted, runtime_ref
     local reported_rate = false
+    local cadence = {updates=0}
+
+    local function trace_time()
+        local ok, now = pcall(clock)
+        if ok and type(now) == 'number' and now >= 0 and now < math.huge then return now end
+    end
+
+    local function elapsed_ms(before, after)
+        return before and after and after >= before and ('%.3f'):format((after - before) * 1000) or '-'
+    end
+
+    local function trace_capture(sample, reply_at)
+        if not cadence then return '' end
+        local start, dispatched = cadence.tick_started, cadence.tick_completed
+        local suffix = ('|updates=%d|max_update_gap_ms=%s|capture_to_dispatch_ms=%s|dispatch_tick_ms=%s|md_reply_wait_ms=%s|reply_to_capture_ms=%s'):format(
+            cadence.updates, elapsed_ms(0, cadence.max_gap), elapsed_ms(cadence.last_capture, start),
+            elapsed_ms(start, dispatched), elapsed_ms(dispatched, reply_at), elapsed_ms(reply_at, sample.capture_time))
+        if sample.sequence == 2 then
+            cadence = nil
+        else
+            cadence.updates, cadence.max_gap, cadence.last_capture = 0, nil, sample.capture_time
+            cadence.tick_started, cadence.tick_completed = nil, nil
+        end
+        return suffix
+    end
 
     local function stop(reason)
         if not stopped then
@@ -63,7 +88,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
         return accepted
     end
 
-    local function deliver(sample)
+    local function deliver(sample, reply_at)
         local velocity, format = sample.real_velocity, string.format
         local fields = {'SAMPLE3', sample.epoch, tostring(sample.index), format('%.0f', sample.sequence),
             cfg.code, cfg.owner, runtime_ref, sample.sector_macro, format('%.17g', sample.source_time),
@@ -76,8 +101,10 @@ function M.new_x4(cfg, net, clock, registry_ready)
         end
         if sample.sequence <= 2 or (velocity and not reported_rate) then
             reported_rate = reported_rate or velocity ~= nil
-            pcall(DebugError, ('[X4LAN] AUTH_REGISTERED_NPC_SOURCE SENT|seq=%s|capture=%s|velocity=%s'):format(
-                fields[4], fields[10], velocity and 'present' or 'absent'))
+            pcall(function()
+                DebugError(('[X4LAN] AUTH_REGISTERED_NPC_SOURCE SENT|seq=%s|capture=%s|velocity=%s%s'):format(
+                    fields[4], fields[10], velocity and 'present' or 'absent', trace_capture(sample, reply_at)))
+            end)
         end
     end
 
@@ -99,9 +126,10 @@ function M.new_x4(cfg, net, clock, registry_ready)
         end
         request = sampler and sampler:expected_request()
         if not request or reply:sub(1, #request + 1) ~= request .. '|' then return end
+        local reply_at = cadence and trace_time()
         local ok, accepted, sample = pcall(sampler.event, sampler, reply)
         if not ok or accepted ~= true then stop('sample_refused'); return end
-        if sample and not pcall(deliver, sample) then stop('sample_send_failed') end
+        if sample and not pcall(deliver, sample, reply_at) then stop('sample_send_failed') end
     end) ~= false)
 
     local function advance()
@@ -143,7 +171,22 @@ function M.new_x4(cfg, net, clock, registry_ready)
             }))
             assert(sampler:register({epoch=cfg.epoch, index=cfg.index, classification='saved_baseline'}, wanted))
         end
-        if sampler:tick() ~= true then stop('sampler_tick_failed') end
+        -- Sample only the existing update and matching MD callback. This
+        -- stops measuring after the second successful send.
+        local started_at = cadence and trace_time()
+        local was_pending = started_at and sampler:expected_request()
+        if started_at then
+            cadence.updates = cadence.updates + 1
+            if cadence.last_update and started_at >= cadence.last_update then
+                cadence.max_gap = math.max(cadence.max_gap or 0, started_at - cadence.last_update)
+            end
+            cadence.last_update = started_at
+        end
+        if sampler:tick() ~= true then
+            stop('sampler_tick_failed')
+        elseif started_at and not was_pending and sampler:expected_request() then
+            cadence.tick_started, cadence.tick_completed = started_at, trace_time()
+        end
     end
 
     return function()

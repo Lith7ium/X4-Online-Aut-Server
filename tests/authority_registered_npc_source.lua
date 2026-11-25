@@ -6,7 +6,7 @@ local actor, captain = resolve.parse_hex('0x201'), resolve.parse_hex('0x202')
 local sector, zero = resolve.parse_hex('0x302'), ffi.new('UniverseID', 0)
 local epoch, code, owner = ('a'):rep(32), 'ABC-401', 'argon'
 local handler, request, messages, logs
-local live_code, live_owner, now, host_time, paused = code, owner, 0, 1000, false
+local live_code, live_owner, now, host_time, paused = code, owner, 0, 999.95, false
 local x, inline_sample = 100, false
 
 local function reply()
@@ -32,7 +32,10 @@ AddUITriggeredEvent = function(screen, action, args)
     assert(screen == 'X4AuthorityJobDescriptorProbe' and action == 'Read')
     assert(args.epoch == epoch and args.index == 40 and request == nil)
     request = args.request_id
-    if inline_sample and request:sub(1, 1) == 'f' then reply() end
+    if request:sub(1, 1) == 'f' then
+        host_time = host_time + .001
+        if inline_sample then reply() end
+    end
 end
 DebugError = function(row) logs[#logs + 1] = row end
 
@@ -90,20 +93,24 @@ local function next_sample()
     tick()
     assert(request)
 end
+host_time = 1000
 delayed_reply()
 assert(#messages == 1 and messages[1]:find('|SAMPLE3|%x+|40|1|ABC%-401|argon|0x201|sector_a|500|1000|100|200|300|%-|%-|%-$'))
-assert(logs[2]:find('SENT|seq=1|capture=1000|velocity=absent', 1, true))
+assert(logs[2]:find('SENT|seq=1|capture=1000|velocity=absent|updates=2|max_update_gap_ms=50.000'
+    .. '|capture_to_dispatch_ms=-|dispatch_tick_ms=1.000|md_reply_wait_ms=49.000|reply_to_capture_ms=0.000', 1, true))
+host_time = 1000.004
 next_sample()
 -- Pose 2 is still sent when its capture interval is too short for velocity.
 host_time, x = 1000.01, 101
 delayed_reply()
 assert(#messages == 2 and messages[2]:find('|500|1000%.01|101|200|300|%-|%-|%-$'))
-assert(logs[3]:find('SENT|seq=2|capture=1000.01|velocity=absent', 1, true))
+assert(logs[3]:find('SENT|seq=2|capture=1000.01|velocity=absent|updates=3|max_update_gap_ms=6.000'
+    .. '|capture_to_dispatch_ms=4.000|dispatch_tick_ms=1.000|md_reply_wait_ms=5.000|reply_to_capture_ms=0.000', 1, true))
 next_sample()
 host_time, x = 1000.5, 110
 delayed_reply()
 assert(#messages == 3 and messages[3]:find('|500|1000%.5|110|200|300|20|0|0$'))
-assert(logs[4]:find('SENT|seq=3|capture=1000.5|velocity=present', 1, true))
+assert(logs[4]:find('SENT|seq=3|capture=1000%.5|velocity=present$'))
 next_sample()
 host_time, x = 1000.75, 115
 delayed_reply()
