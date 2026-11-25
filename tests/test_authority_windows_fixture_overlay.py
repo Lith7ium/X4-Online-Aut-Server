@@ -1,5 +1,6 @@
 """Synthetic files only: no X4, Windows installation, or real DLL."""
 import hashlib
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -116,6 +117,8 @@ class FixtureOverlayTest(unittest.TestCase):
                         paths.index('ui/authority_download_load_probe.lua'))
         self.assertIn('md/authority_ship_registry.xml', manifest)
         root = Path(__file__).resolve().parents[1]
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         for mode in ('ready', 'wrong_count'):
             with self.subTest(mode=mode):
                 subprocess.run(['luajit', str(root / 'tests/authority_windows_registry_gate.lua'),
@@ -177,6 +180,8 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
         root = Path(__file__).resolve().parents[1]
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         subprocess.run(['luajit', 'tests/authority_client_seat.lua'], cwd=root, check=True)
 
     def test_explicit_undock_overlay_orders_hook_before_participant_and_stages_lock_cue(self):
@@ -233,6 +238,8 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertIn('X4LAN_RECOVERED_CLIENT_LOAD_READY', (target/'ui/authority_download_load_probe.lua').read_text())
         self.assertNotIn('md/authority_saved_motion_apply.xml', manifest)  # Playback uses native setters, not the one-shot MD route.
         root = Path(__file__).resolve().parents[1]
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         for path in paths:
             subprocess.run(['luajit', '-b', str(target/path), str(target/'compiled.out')],
                            check=True, capture_output=True, cwd=root)

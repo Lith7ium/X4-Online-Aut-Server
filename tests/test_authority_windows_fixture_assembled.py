@@ -281,6 +281,10 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                     data, peer = udp.recvfrom(1024)
                                 except socket.timeout:
                                     continue
+                                except ConnectionResetError:
+                                    # Windows reports an ICMP port-unreachable for an earlier
+                                    # datagram here; Linux ignores it for unconnected UDP.
+                                    continue
                                 parts = data.decode('ascii').split('|')
                                 test.assertEqual(parts[:3], ['M', *prefix])
                                 motion_messages.append(parts[3])
@@ -314,6 +318,10 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                                     data, peer = udp.recvfrom(1024)
                                 except socket.timeout:
                                     continue
+                                except ConnectionResetError:
+                                    # Windows reports an ICMP port-unreachable for an earlier
+                                    # HELLO here; Linux ignores it for unconnected UDP.
+                                    continue
                                 parts = data.decode('ascii').split('|')
                                 if len(parts) != 5 or parts[:3] != ['CMD', lease, offer.world_epoch]:
                                     raise AssertionError('unexpected UDP command')
@@ -334,9 +342,13 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 return self.thread is not None and self.thread.is_alive()
 
             def close(self):
-                if motion_enabled and not self.cleanup_confirmed:
-                    test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
-                self.done.set()
+                try:
+                    if motion_enabled and not self.cleanup_confirmed:
+                        test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
+                finally:
+                    # Stop the fake X4 threads even when that check fails; otherwise
+                    # they keep polling and the test process never exits.
+                    self.done.set()
                 if self.motion_thread is not None:
                     self.motion_thread.join(3)
                     test.assertFalse(self.motion_thread.is_alive())
