@@ -2,6 +2,7 @@
 """Check a recorded native water-sale result offline."""
 
 import argparse
+from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
@@ -32,7 +33,49 @@ def component(value):
     return value
 
 
-def verify(result):
+@dataclass(frozen=True)
+class SaleRequest:
+    ship_id: int
+    station_id: int
+    ware: str
+    quantity: int
+    unit_price_cents: int
+
+    def __post_init__(self):
+        for field in ('ship_id', 'station_id', 'quantity', 'unit_price_cents'):
+            value = getattr(self, field)
+            require(type(value) is int and value > 0, f'invalid requested sale {field}')
+        require(self.ship_id != self.station_id, 'requested sale needs distinct ship and station IDs')
+        require(self.ware == 'water', 'this recording format only supports water')
+
+
+@dataclass(frozen=True)
+class SaleSettlement:
+    ship_id: int
+    station_id: int
+    ware: str
+    quantity: int
+    unit_price_cents: int
+    credited_cents: int
+    cargo_units: int
+    company_balance_cents: int
+    journal_trade_id: int
+    journal_ship_entry_id: int
+    order_id: int
+    deal_id: int
+
+
+def verify_settlement(result, expected: SaleRequest) -> SaleSettlement:
+    """Verify a recorded water sale against independent IDs from the recorded run.
+
+    Runtime IDs only identify the objects in that run. This does not establish
+    their identity in another game process or after a reload.
+    """
+    require(isinstance(expected, SaleRequest), 'an independent SaleRequest is required')
+    return _verify_recording(result, expected)[0]
+
+
+def _verify_recording(result, expected=None):
     sale = result['native_water_sale']
     require(result.get('success') is True and sale.get('status') == 'CONFIRMED',
             'recording has no confirmed outcome')
@@ -51,6 +94,12 @@ def verify(result):
 
     quantity = int(attempted['quantity'])
     price = int(attempted['price_ct'])
+    if expected is not None:
+        require(int(ship, 16) == expected.ship_id, 'recorded ship differs from requested sale')
+        require(int(station, 16) == expected.station_id, 'recorded station differs from requested sale')
+        require(quantity == expected.quantity, 'recorded quantity differs from requested sale')
+        require(price == expected.unit_price_cents, 'recorded unit price differs from requested sale')
+
     opening_water = int(attempted['water'])
     opening_company = int(attempted['money_ct'])
     opening_faction = int(attempted['ship_ct'])
@@ -105,17 +154,40 @@ def verify(result):
             'journal buyer or seller differs from the completion event')
     require(ware == 'water' and int(units) == quantity and int(unit_price) == price
             and int(money) == credit, 'journal ware, quantity, price or signed credit differs')
-    return (f'Verified {quantity} {ware} from ship {ship} to station {station}. '
-            f'Order {order["order"]}, deal {deal}, journal trade {trade_id}, ship entry {entry}. '
-            f'Company credit +{credit} cents. Quoted total {price * quantity} cents.')
+    settlement = SaleSettlement(
+        ship_id=int(ship, 16), station_id=int(station, 16), ware=ware, quantity=quantity,
+        unit_price_cents=price, credited_cents=credit, cargo_units=int(final['water']),
+        company_balance_cents=int(final['company_ct']), journal_trade_id=int(trade_id),
+        journal_ship_entry_id=int(entry), order_id=int(order['order'], 16), deal_id=int(deal, 16),
+    )
+    summary = (f'Verified {quantity} {ware} from ship {ship} to station {station}. '
+               f'Order {order["order"]}, deal {deal}, journal trade {trade_id}, ship entry {entry}. '
+               f'Company credit +{credit} cents. Quoted total {price * quantity} cents.')
+    return settlement, summary
+
+
+def verify(result):
+    return _verify_recording(result)[1]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('result', type=Path, help='recorded native diagnostic result.json')
+    parser.add_argument('--ship-id', type=lambda value: int(value, 0), help='expected runtime ship ID')
+    parser.add_argument('--station-id', type=lambda value: int(value, 0), help='expected runtime station ID')
+    parser.add_argument('--ware', help='expected ware (water)')
+    parser.add_argument('--quantity', type=int, help='expected positive sale quantity')
+    parser.add_argument('--unit-price-cents', type=int, help='expected unit price in cents')
     args = parser.parse_args()
+    expected = (args.ship_id, args.station_id, args.ware, args.quantity, args.unit_price_cents)
+    if any(value is not None for value in expected) and any(value is None for value in expected):
+        parser.error('expected sale requires --ship-id, --station-id, --ware, --quantity and --unit-price-cents')
     try:
-        summary = verify(json.loads(args.result.read_text(encoding='utf-8')))
+        result = json.loads(args.result.read_text(encoding='utf-8'))
+        if args.ship_id is None:
+            summary = verify(result)
+        else:
+            summary = json.dumps(asdict(verify_settlement(result, SaleRequest(*expected))), sort_keys=True)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, InvalidOperation) as error:
         parser.exit(1, f'Sale evidence rejected: {error}\n')
     print(summary)
