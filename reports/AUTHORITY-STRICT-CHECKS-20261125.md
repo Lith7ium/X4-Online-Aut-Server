@@ -105,3 +105,17 @@ directory was named `release-5d5a680ec6ef`. A development copy on
 no original release archive or release manifest for comparison. The named
 commit was unavailable from either checked upstream repository. The twelve
 reference-dependent cases remain open.
+
+## Registered NPC alignment and boarding witness at `1f6fb7b6`
+
+One official Bazzite run at `1f6fb7b6c441e54dcbf931e2fee8a63e76d068b6`
+discovered 5,847 tests on Python 3.13.18. All 5,822 executed tests
+passed, including both worker cases that errored in earlier full runs.
+The 25 skipped test IDs and reasons matched `494b470b` exactly. The
+default strict runner exited 1 on those skips. Thirteen have separate
+Windows results. The other twelve still need their original references.
+
+The run used the same 19 verified prerequisites, fresh Zig caches,
+CPUs 8–15 and nice priority +10. The suite took 1,036.873 seconds.
+Full log SHA-256 was
+`b6c93f52dcf7ff1dad424c4bf6560c656c2d053997c2bd768729d95d6f6e7f4c`.

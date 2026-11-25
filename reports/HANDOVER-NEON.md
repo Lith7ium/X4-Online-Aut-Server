@@ -492,18 +492,12 @@ journal. The sale used a disposable world and did not exercise a remote
 pilot's trade menu or a save. An earlier one-unit sale has an unknown
 outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
 
-At `494b470b` the official strict Linux run discovered 5,809 tests.
-5,783 passed, one errored and 25 were skipped. Exit code was 1. The
-failure occurred during the UDP ownership check before the tested
-cleanup path. The two kernel-table rows referred to one inode. The
-previous suite's sole failing case passed in this run. The ownership
-check now resamples one ambiguous table snapshot and still requires
-a unique fresh match and the correct process file descriptor. Twelve
-focused cases passed after that change. A new full pass remains open.
-Thirteen skipped cases require Windows and twelve need original local
-reference files. Cobalt passed the four remaining Windows dependency
-checks at `1ad21866`. All thirteen cases have a recorded native Windows
-pass across two revisions.
+At `1f6fb7b6` the official Linux suite discovered 5,847 tests. All 5,822
+executed tests passed, including the two worker cases affected by UDP
+ownership checks in previous runs. The strict runner exited 1 because
+25 cases were skipped. Thirteen have native Windows passes across two
+revisions. Eleven need the original X4 UI or FFI references and one needs
+the original released lane tool. These twelve cases remain unverified.
 [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time
