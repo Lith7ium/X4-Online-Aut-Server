@@ -10,7 +10,7 @@ PAGE_SIZE = 8
 MAX_OFFERS = 4096
 _MAX_UNITS = (1 << 31) - 1
 _REQUEST_FIELDS = {'view_id', 'sector', 'station_code', 'offset'}
-_OFFER_FIELDS = {'side', 'ware', 'price_cents', 'amount', 'min_amount', 'cargo_units', 'free_units'}
+_OFFER_FIELDS = {'side', 'ware', 'price_cents', 'amount', 'min_amount', 'cargo_units', 'free_units', 'tradeable'}
 
 
 def _integer(value, minimum, maximum):
@@ -34,7 +34,7 @@ def view_request(value):
 
 def _offer(value):
     if (type(value) is not dict or set(value) != _OFFER_FIELDS
-            or value['side'] not in ('buy', 'sell')
+            or value['side'] not in ('buy', 'sell') or type(value['tradeable']) is not bool
             or not _text(value['ware'], '[a-z][a-z0-9_]{0,127}')
             or not _integer(value['price_cents'], 1, MAX_INTEGER)
             or not all(_integer(value[key], 0, _MAX_UNITS)

@@ -143,6 +143,7 @@ class CompanyPurchaseTests(unittest.TestCase):
         case.setUp()
         case.control._company_purchases = True
         case.control._company_undock = True
+        case.control._company_trade_view = True
         session = case.control._session
         session._company_ship_reader = lambda _checkpoint: CompanyShipCatalogue('d' * 32, (
             CompanyShip(7, '[0x123]', PURCHASE['sector'], 'Company ship', 'WRN-302'),

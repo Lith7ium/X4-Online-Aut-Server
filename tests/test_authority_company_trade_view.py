@@ -9,7 +9,7 @@ def request(token='a', offset=0):
 
 
 def market_offer(ware):
-    return dict(side='buy', ware=ware, price_cents=5848, amount=100, min_amount=1,
+    return dict(side='buy', tradeable=True, ware=ware, price_cents=5848, amount=100, min_amount=1,
                 cargo_units=4, free_units=21)
 
 
