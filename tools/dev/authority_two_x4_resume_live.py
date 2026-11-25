@@ -76,6 +76,17 @@ class Participant(LocalParticipantControl):
             original = f'authority_participant_lease="{self.lease}"'
             if text.count(original) != 1: raise ValueError('client lease missing or repeated')
             text = text.replace(original, 'authority_participant_lease="redacted"')
+            if ',authority_company_motion=' in text:
+                text, count = re.subn(
+                    r',authority_company_motion=\{port=[0-9]+,lease="[0-9a-f]{32}",'
+                    r'generation="[0-9a-f]{32}",nonce="[0-9a-f]{32}",index=[0-9]+'
+                    r'(?:,observed_npc_index=[0-9]+,observed_npc_code="[A-Z0-9]{3}-[A-Z0-9]{3}"'
+                    r'(?:,registered_npc_hold_trial=true(?:,registered_npc_alignment_trial=true)?)?'
+                    r'|(?:,playback_index=[0-9]+)?'
+                    r'(?:,cockpit_radar_playback=true,cockpit_max_pilots=[1-3])?)'
+                    r'\}(?=[,}])', '', text)
+                if count != 1 or ',authority_company_motion=' in text:
+                    raise ValueError('unexpected Company motion lease configuration')
             if ',authority_company_purchase=' in text:
                 text, count = re.subn(
                     r',authority_company_purchase=\{epoch="[0-9a-f]{32}",index=[0-9]+,'

@@ -10,7 +10,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools/dev'))
 import authority_two_x4_resume_live as experiment
-from authority.client_seat_overlay import company_purchase_config
+from authority.client_seat_overlay import company_motion_config, company_purchase_config
+from authority.company_motion_source import CompanyMotionSource
 from authority.company_purchase_source import CompanyPurchaseSource
 
 
@@ -56,9 +57,9 @@ class ParticipantTest(unittest.TestCase):
             with self.assertRaises(ValueError): experiment.run(SimpleNamespace(out=Path(directory)))
             self.assertEqual(path.read_text(), 'original')
 
-    def write_owned_config(self, path, purchase_settings):
+    def write_owned_config(self, path, settings):
         path.write_text('return {authority_participant_lease="' + self.participant.lease
-                        + '"' + purchase_settings + ',keep=1}\n', encoding='ascii')
+                        + '"' + settings + ',keep=1}\n', encoding='ascii')
         identity = path.stat()
         self.participant.config = path
         self.participant.config_identity = (identity.st_dev, identity.st_ino)
@@ -106,6 +107,57 @@ class ParticipantTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, '^unexpected Company purchase lease configuration$'):
                         self.participant.redact()
                     self.assertEqual(hashlib.sha256(path.read_bytes()).digest(), digest)
+
+    def test_redacts_staged_motion_settings_alongside_sale_and_undock(self):
+        observed = {'observed_npc': (943, 'MFQ-419')}
+        variants = (
+            {},
+            observed,
+            dict(observed, registered_npc_hold_trial=True),
+            dict(observed, registered_npc_hold_trial=True, registered_npc_alignment_trial=True),
+            {'playback_index': 943},
+            {'cockpit_radar_playback': True},
+            {'playback_index': 943, 'cockpit_radar_playback': True},
+        )
+        registry = {'epoch': '26a1a365c66788aa06f0aeb9e18ff62e', 'operational_bits': '1' * 1073}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.lua'
+            sale_source = CompanyPurchaseSource(trade_view=True, sales=True, undock=True)
+            try:
+                purchase = company_purchase_config(sale_source, 1073, registry)
+            finally:
+                sale_source.close()
+            for options in variants:
+                with self.subTest(options=options):
+                    source = CompanyMotionSource(**options)
+                    try:
+                        motion = company_motion_config(source, 1073, registry)
+                    finally:
+                        source.close()
+                    self.write_owned_config(path, motion + purchase)
+                    self.participant.redact()
+                    self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
+
+    def test_malformed_motion_blocks_leave_config_untouched(self):
+        base = (',authority_company_motion={port=3100,lease="' + 'a' * 32
+                + '",generation="' + 'b' * 32 + '",nonce="' + 'c' * 32 + '",index=1073')
+        invalid = {
+            'unknown field': base + ',unknown=true}',
+            'unpaired observer': base + ',observed_npc_index=943}',
+            'unpaired radar': base + ',cockpit_radar_playback=true}',
+            'alignment without hold': base + ',observed_npc_index=943,observed_npc_code="MFQ-419"'
+                                             ',registered_npc_alignment_trial=true}',
+            'duplicate table': base + '}' + base + '}',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.lua'
+            for reason, settings in invalid.items():
+                with self.subTest(reason=reason):
+                    self.write_owned_config(path, settings)
+                    before = path.read_bytes()
+                    with self.assertRaisesRegex(ValueError, '^unexpected Company motion lease configuration$'):
+                        self.participant.redact()
+                    self.assertTrue(path.read_bytes() == before)
 
     def test_redacts_fleet_lease_after_shutdown(self):
         fleet = ',authority_company_fleet={epoch="' + 'a' * 32 + '",port=3100,lease="' + 'b' * 32 + '"}'
