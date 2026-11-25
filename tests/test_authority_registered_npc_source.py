@@ -100,7 +100,7 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.source = RegisteredNpcSource(target(), clock=lambda: self.now)
         self.addCleanup(self.source.close)
         self.source.attach(self.service, lambda: self.unreserved)
-        if Path('/proc/self/exe').exists():
+        if sys.platform.startswith('linux'):
             image = Path('/proc/self/exe').stat()
             ticks = int(Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19])
             identity = dict(pid=os.getpid(), start_ticks=ticks, exe_dev=image.st_dev, exe_ino=image.st_ino)
