@@ -595,7 +595,7 @@ class TCPControlTest(unittest.TestCase):
 
     def test_unix_socket_is_refused_before_session_mutation(self):
         if not hasattr(socket, 'socketpair'): self.skipTest('socketpair unavailable')
-        a, b = socket.socketpair()
+        a, b = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
         try:
             with self.assertRaises(ValueError): self.owner.adopt(a)
             self.assertEqual(self.world.session.players, ())

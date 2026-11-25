@@ -105,7 +105,7 @@ class JobDescriptorWire(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.receive_descriptor(server,'a'*32,'b'*32,True,lambda _:True,time.monotonic()+2,lambda:True)
         client.close()
-        client,server=socket.socketpair()
+        client,server=socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
         with self.assertRaises(ValueError):m.send_descriptor(client,descriptor(),time.monotonic()+2,lambda:True)
         server.close()
 
