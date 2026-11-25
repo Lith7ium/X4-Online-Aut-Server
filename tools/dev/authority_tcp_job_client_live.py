@@ -92,19 +92,58 @@ def socket_owner(peer, destination, process, *, diagnostic=None):
     rows6 = _udp_table(proc / 'net/udp6', 32)
     peer_endpoint = _proc_ipv4_endpoint(peer)
     destination_endpoint = _proc_ipv4_endpoint(destination)
-    peer_rows = [row for row in rows
-                 if row[1] == peer_endpoint and row[2] == destination_endpoint]
-    if len(peer_rows) != 1:
-        summary = f'matches={len(peer_rows)}'
-        if peer_rows:
-            summary += f', distinct_inodes={len({row[9] for row in peer_rows})}'
-        return reject(f'connected IPv4 flow count differs from one ({summary})')
-    inode = peer_rows[0][9]
     source_port = f'{peer[1]:04X}'
-    if any(row[1].rsplit(':', 1)[1] == source_port and row[9] != inode for row in rows):
-        return reject('competing IPv4 source port')
-    if any(row[1].rsplit(':', 1)[1] == source_port for row in rows6):
-        return reject('competing IPv6 source port')
+
+    def matching_rows(table):
+        return [row for row in table if row[1:3] == [peer_endpoint, destination_endpoint]]
+
+    def row_identity(row):
+        # Include state, UID and the kernel pointer column when supplied.
+        # Queue counters, reference counts and drops are live measurements.
+        return row[1:4], row[7], row[9], row[11:12]
+
+    def conflicts(ipv4, ipv6, expected):
+        inode = expected[9]
+        identity = row_identity(expected)
+        for row in ipv4:
+            if row[9] == inode and row_identity(row) != identity:
+                return 'conflicting IPv4 rows for socket inode'
+            if row[9] != inode and row[1].rsplit(':', 1)[1] == source_port:
+                return 'competing IPv4 source port'
+        if any(row[1].rsplit(':', 1)[1] == source_port for row in ipv6):
+            return 'competing IPv6 source port'
+        if any(row[9] == inode for row in ipv6):
+            return 'socket inode appeared in both UDP tables'
+
+    peer_rows = matching_rows(rows)
+    if not peer_rows:
+        return reject('connected IPv4 flow count differs from one (matches=0)')
+    inodes = {row[9] for row in peer_rows}
+    if len(inodes) != 1:
+        return reject('connected IPv4 flow count differs from one '
+                      f'(matches={len(peer_rows)}, distinct_inodes={len(inodes)})')
+    expected = peer_rows[0]
+    inode = expected[9]
+    if inode == '0':
+        return reject('connected IPv4 flow has no socket inode')
+    reason = conflicts(rows, rows6, expected)
+    if reason:
+        return reject(reason)
+    if len(peer_rows) > 1:
+        # An inode is not a permanent socket ID. Re-read both namespace tables
+        # once and require a single unambiguous entry for the same candidate.
+        check_process(process)
+        fresh_rows = _udp_table(proc / 'net/udp', 8)
+        fresh_rows6 = _udp_table(proc / 'net/udp6', 32)
+        fresh_matches = matching_rows(fresh_rows)
+        if len(fresh_matches) != 1:
+            return reject('connected IPv4 flow remained ambiguous on repeat sample '
+                          f'(matches={len(fresh_matches)}, distinct_inodes={len({row[9] for row in fresh_matches})})')
+        if row_identity(fresh_matches[0]) != row_identity(expected):
+            return reject('connected IPv4 flow identity changed on repeat sample')
+        reason = conflicts(fresh_rows, fresh_rows6, expected)
+        if reason:
+            return reject(reason)
     wanted = 'socket:[' + inode + ']'
     found = []
     for fd in (proc / 'fd').iterdir():

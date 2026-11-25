@@ -145,31 +145,49 @@ class UDPSocketOwnerTest(unittest.TestCase):
                                       self.identity, diagnostic=reasons.append))
         self.assertEqual(reasons, ['connected IPv4 flow count differs from one (matches=0)'])
 
-    def test_duplicate_connected_flow_reports_match_and_distinct_inode_counts(self):
+    def test_duplicate_flow_requires_one_fresh_owned_row_in_two_full_samples_at_most(self):
         original = ownership._udp_table
         peer_endpoint = ownership._proc_ipv4_endpoint(self.peer.getsockname())
         destination_endpoint = ownership._proc_ipv4_endpoint(self.receiver.getsockname())
+        proc = Path('/proc') / str(self.identity['pid']) / 'net'
+        ipv4, ipv6 = original(proc / 'udp', 8), original(proc / 'udp6', 32)
+        row, = [item for item in ipv4 if item[1:3] == [peer_endpoint, destination_endpoint]]
+        different_inode = row.copy()
+        different_inode[9] = str(int(row[9]) + 1)
+        changed_queue = row.copy()
+        changed_queue[4] = '00000000:00000400' if row[4] != '00000000:00000400' else '00000000:00000000'
+        changed_pointer = row.copy()
+        changed_pointer[11] = '0000000000000001' if row[11] != '0000000000000001' else '0000000000000000'
+        changed_remote = row.copy()
+        changed_remote[2] = '0100007F:0001'
+        contender = changed_remote.copy()
+        contender[9] = different_inode[9]
 
-        def duplicate_match(path, address_length):
-            rows = original(path, address_length)
-            if path.name != 'udp':
-                return rows
-            matches = [row for row in rows
-                       if row[1] == peer_endpoint and row[2] == destination_endpoint]
-            self.assertEqual(len(matches), 1)
-            duplicate = matches[0].copy()
-            if distinct_inodes == 2:
-                duplicate[9] = str(int(duplicate[9]) + 1)
-            return rows + [duplicate]
-
-        for distinct_inodes in (1, 2):
-            with self.subTest(distinct_inodes=distinct_inodes):
+        cases = (
+            ('identical repeat', [ipv4 + [row.copy()], ipv4], True, None),
+            ('different counters', [ipv4 + [changed_queue], ipv4], True, None),
+            ('persistent duplicates', [ipv4 + [row.copy()], ipv4 + [row.copy()]], False,
+             'connected IPv4 flow remained ambiguous on repeat sample (matches=2, distinct_inodes=1)'),
+            ('different initial inodes', [ipv4 + [different_inode]], False,
+             'connected IPv4 flow count differs from one (matches=2, distinct_inodes=2)'),
+            ('second matching inode on repeat', [ipv4 + [row], ipv4 + [different_inode]], False,
+             'connected IPv4 flow remained ambiguous on repeat sample (matches=2, distinct_inodes=2)'),
+            ('replacement inode', [ipv4 + [row], [different_inode if item is row else item for item in ipv4]], False,
+             'connected IPv4 flow identity changed on repeat sample'),
+            ('different pointer', [ipv4 + [changed_pointer]], False, 'conflicting IPv4 rows for socket inode'),
+            ('different remote', [ipv4 + [changed_remote]], False, 'conflicting IPv4 rows for socket inode'),
+            ('initial competitor on another remote', [ipv4 + [row, contender]], False, 'competing IPv4 source port'),
+            ('new competitor on repeat', [ipv4 + [row], ipv4 + [contender]], False, 'competing IPv4 source port'),
+        )
+        for label, samples, expected, reason in cases:
+            with self.subTest(label=label):
                 reasons = []
-                with patch.object(ownership, '_udp_table', side_effect=duplicate_match):
-                    self.assertFalse(self.owner(diagnostic=reasons.append))
-                self.assertEqual(reasons, [
-                    f'connected IPv4 flow count differs from one (matches=2, distinct_inodes={distinct_inodes})',
-                ])
+                reads = [table for sample in samples for table in (sample, ipv6)]
+                with patch.object(ownership, '_udp_table', side_effect=reads) as table:
+                    self.assertIs(self.owner(diagnostic=reasons.append), expected)
+                self.assertEqual([call.args for call in table.call_args_list],
+                                 [(proc / 'udp', 8), (proc / 'udp6', 32)] * len(samples))
+                self.assertEqual(reasons, [reason] if reason else [])
 
     def test_duplicate_owned_descriptor_has_a_static_diagnostic(self):
         duplicate = os.dup(self.peer.fileno())
