@@ -80,11 +80,15 @@
      <set_value name="$resolved_mode" exact="'none'"/>
      <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted and md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch and md.X4AuthorityShipRegistry.State.$last == $args.$count and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container and @player.sector.isclass.sector">
       <set_value name="$target" exact="null"/>
+      <set_value name="$indexed" exact="$args.$target_index? and $args.$target_index ge 1 and $args.$target_index le md.X4AuthorityShipRegistry.State.$last and $args.$target_index == ($args.$target_index)i and $args.$target_index != $args.$own"/>
       <do_if value="$mode == 'hud' or $mode == 'hudmap'">
        <set_value name="$target" exact="@player.target"/>
+       <do_if value="$indexed and $target != @md.X4AuthorityShipRegistry.State.$ships.{$args.$target_index}">
+        <set_value name="$mode" exact="'radar'"/>
+       </do_if>
       </do_if>
-      <do_elseif value="$mode == 'radar'">
-       <do_if value="$args.$target_index? and $args.$target_index ge 1 and $args.$target_index le md.X4AuthorityShipRegistry.State.$last and $args.$target_index == ($args.$target_index)i and $args.$target_index != $args.$own">
+      <do_if value="$mode == 'radar'">
+       <do_if value="$indexed">
         <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$target_index}"/>
        </do_if>
        <do_else>
@@ -103,7 +107,7 @@
          </do_if>
         </do_for_each>
        </do_else>
-      </do_elseif>
+      </do_if>
       <do_if value="@$target.isclass.ship and $target.isoperational and $target.owner == faction.player and $target != player.ship and $target != player.occupiedship and $target != player.controlled and $target != player.container and not $target.dock.exists and not $target.isinternallystored and not $target.pilot.exists and not $target.assignedpilot.exists">
        <do_if value="@$target.sector.isclass.sector and $target.sector == player.sector and $target.attention ge attention.visible and $target.isphysicsready">
         <set_value name="$withinradar" exact="$mode == 'hud' or (@player.controlled.currentradarrange gt 0m and $target.distanceto.{player.controlled} le player.controlled.currentradarrange)"/>

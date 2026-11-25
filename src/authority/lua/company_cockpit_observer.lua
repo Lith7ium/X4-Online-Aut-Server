@@ -41,6 +41,7 @@ end
 function M.new(pinned, own_index, engine)
     local epoch, nonce, count = pinned.epoch, pinned.nonce, pinned.issued_count
     assert(token(epoch) and token(nonce) and index_in(count, MAX_INDEX) and index_in(own_index, count))
+    local target_index = engine.target_index
     local pending, observed, last, next_poll
     local sequence = 0
     local closed = false
@@ -73,12 +74,16 @@ function M.new(pinned, own_index, engine)
             local expired = now >= observed.deadline
             local still_valid = false
             if not expired and probe ~= nil then
-                if probe.mode == 'radar' then
-                    still_valid = (engine.validate_actor == nil)
-                        or (pcall(engine.validate_actor, observed.hull) and engine.validate_actor(observed.hull) == true)
-                else
-                    -- Seamless hud <-> radar handoff when the same Company ship remains eligible.
-                    still_valid = same_hull(observed.hull, probe)
+                -- Keep an indexed radar binding while the HUD points elsewhere.
+                if probe.mode ~= 'radar' and same_hull(observed.hull, probe) then
+                    still_valid = true
+                elseif probe.mode == 'radar' or target_index ~= nil then
+                    if engine.validate_actor then
+                        local ok, valid = pcall(engine.validate_actor, observed.hull)
+                        still_valid = ok and valid == true
+                    else
+                        still_valid = probe.mode == 'radar'
+                    end
                 end
             end
             if not still_valid then observed = nil end
@@ -96,11 +101,13 @@ function M.new(pinned, own_index, engine)
         local id, actual_epoch, status, index_text, actor_text, sector, code, rmode =
             row:match('^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
         local index = tonumber(index_text)
+        local mode_matches = rmode == request.probe.mode
+            or (target_index ~= nil and rmode == 'radar')
         local actor_id = actor_text and engine.parse_actor(actor_text) or nil
         if id ~= request.id or actual_epoch ~= epoch or status ~= 'OBSERVED'
                 or not index_in(index, count) or index == own_index or tostring(index) ~= index_text
                 or not valid_sector(sector) or not valid_code(code) or not actor_id
-                or rmode ~= request.probe.mode then
+                or (target_index ~= nil and index ~= target_index) or not mode_matches then
             observed = nil
             return
         end
@@ -137,7 +144,7 @@ function M.new(pinned, own_index, engine)
             pending = {id = id, probe = probe, deadline = now + FRESHNESS}
             local ok, issued = pcall(engine.issue, {
                 request_id = id, epoch = epoch, count = count, own = own_index,
-                mode = probe.mode, target_index = probe.target_index,
+                mode = probe.mode, target_index = target_index,
             })
             if not ok or issued ~= true then pending, observed = nil, nil end
         end
@@ -592,11 +599,12 @@ function M.new_x4(pinned, own_index, registry_ready, options)
         local hull = h.probe_hud(cockpit, map_open)
         if hull then return hull end
         if radar_fallback then
-            return {mode = 'radar', target_index = target_index}
+            return {mode = 'radar'}
         end
         return nil
     end
     return M.new(pinned, own_index, {
+        target_index = radar_fallback and target_index or nil,
         clock = options.clock or GetCurRealTime,
         probe = probe,
         parse_actor = h.resolve.parse_hex,

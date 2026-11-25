@@ -8,7 +8,7 @@ Covers:
      motion_buffer.lua + motion_playback.lua:
        - Selected HUD target playback with velocity & delayed later-update readbacks (elapsed > 0).
        - Seamless hud -> radar transition (target unlocked while nearby on radar) and untargeted
-         radar-only discovery from scratch (including when targeting an unrelated non-Company ship).
+         radar-only discovery and continued playback with an unrelated Company HUD target.
        - Independent map slot unaffected by cockpit target/radar transitions.
        - Local own-ship control invariant (own cockpit actor is never written).
        - Five-second sample-loss prediction cutoff with zero post-cutoff writes.
@@ -148,8 +148,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
 
             local own_actor = 100
             local remote_actor = 200
-            local npc_actor = 300
-            local map_actor = 400
+            local map_actor, idle_actor = 400, 500
             local sector_a, sector_b, zone_a, zone_own = 10, 20, 30, 31
             local own_index, remote_index, map_index = 1073, 1074, 2050
             local pinned = {epoch = epoch, issued_count = 5048, nonce = ('d'):rep(32)}
@@ -191,8 +190,8 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                         return 'player', true, st.remote_distance <= st.radar_range, false, false, false, nil, nil, false
                     end
                 end
-                if id == tostring(npc_actor) then
-                    return 'argon', true, true, false, false, false, 'pilot', 'pilot', true
+                if id == tostring(idle_actor) then
+                    return 'player', true, true, false, false, false, nil, nil, false
                 end
                 return nil
             end
@@ -211,13 +210,18 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             end
             AddUITriggeredEvent = function(screen, control, args)
                 assert(screen == 'X4AuthorityCompanyCockpitObserver' and control == 'Read')
-                local ok_ship = (st.remote_distance <= st.radar_range)
-                if args.mode == 'hud' and st.hud_target ~= remote_actor then ok_ship = false end
+                assert(args.target_index == remote_index, 'explicit index must reach MD in every mode')
+                st.requested_mode = args.mode
+                local mode = args.mode
+                if (mode == 'hud' or mode == 'hudmap') and st.hud_target ~= remote_actor then
+                    mode = 'radar'
+                end
+                local ok_ship = mode == 'hud' or st.remote_distance <= st.radar_range
                 local reply
                 if ok_ship then
                     reply = table.concat({
                         args.request_id, epoch, 'OBSERVED', tostring(remote_index),
-                        ('0x%x'):format(remote_actor), 'cluster_06_sector002_macro', 'KHI-630', args.mode,
+                        ('0x%x'):format(remote_actor), 'cluster_06_sector002_macro', 'KHI-630', mode,
                     }, '|')
                 else
                     reply = table.concat({args.request_id, epoch, 'UNAVAILABLE', '0', '0', '0', '0', 'none'}, '|')
@@ -242,11 +246,11 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                     IsExternalTargetMode = function() return false end,
                     IsExternalViewActive = function() return false end,
                     IsValidComponent = function(id) return id ~= 0 end,
-                    IsComponentOperational = function(id) return id == own_actor or id == remote_actor or id == npc_actor end,
+                    IsComponentOperational = function(id) return id == own_actor or id == remote_actor or id == idle_actor end,
                     IsComponentClass = function(id, cls)
                         if cls == 'sector' then return id == sector_a or id == sector_b end
                         if cls == 'zone' then return id == zone_a or id == zone_own end
-                        return id == own_actor or id == remote_actor or id == npc_actor
+                        return id == own_actor or id == remote_actor or id == idle_actor
                     end,
                     GetPlayerControlledShipID = function() return own_actor end,
                     GetPlayerOccupiedShipID = function() return own_actor end,
@@ -257,10 +261,10 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                     end,
                     GetObjectIDCode = function(id)
                         if id == remote_actor then return 'KHI-630' end
-                        if id == npc_actor then return 'NPC-999' end
+                        if id == idle_actor then return 'IDL-500' end
                         return 'HVC-420'
                     end,
-                    GetComponentScreenPosition = function() return {onScreen = st.remote_on_screen} end,
+                    GetComponentScreenPosition = function(id) return {onScreen = id ~= remote_actor or st.remote_on_screen} end,
                     GetDistanceBetween = function() return st.remote_distance end,
                     GetObjectPositionInSector = function(id) return st.poses[id] end,
                     GetZoneAt = function() return zone_a end,
@@ -360,11 +364,13 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             local x_after_hud = st.poses[remote_actor].x
             assert(x_after_hud > 1006, 'expected HUD target movement')
 
-            -- 2. Unlock target (no HUD lock, then lock unrelated NPC!) + open map independently -> seamless radar mode!
-            st.hud_target = nil
-            st.remote_on_screen = false
+            -- Preserve the configured HUD ship through map opening, then clear its HUD lock.
             st.map_open = true
             Menus[1].shown = true
+            step(0.16); step(0.05)
+            assert(cockpit:mode() == 'hudmap' and latest_cockpit_serial() == hud_serial)
+            st.hud_target = nil
+            st.remote_on_screen = false
             step(0.16); step(0.05)
             assert(cockpit:mode() == 'radar', 'expected seamless fallback to radar mode without HUD lock')
             assert(latest_cockpit_serial() == hud_serial, 'seamless hud->radar must not churn cockpit serial!')
@@ -375,13 +381,17 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             end
             assert(saw_map_view, 'independent map view must subscribe alongside cockpit radar playback')
 
-            -- Lock unrelated NPC ship while remote pilot stays on radar -> still stays on radar!
-            st.hud_target = npc_actor
+            -- An eligible but idle Company HUD target cannot divert indexed playback.
+            st.map_open = false
+            Menus[1].shown = false
+            st.hud_target = idle_actor
             for seq = 6, 9 do
                 deliver(seq, 1000 + seq * 4, 20, gen1, hud_serial)
                 step(0.1); step(0.1)
             end
-            assert(cockpit:mode() == 'radar')
+            assert(st.requested_mode == 'hud', 'idle ship must be a valid HUD candidate')
+            assert(cockpit:mode() == 'radar' and cockpit:current().index == remote_index)
+            assert(latest_cockpit_serial() == hud_serial, 'unrelated Company target must leave the route intact')
             local x_after_radar = st.poses[remote_actor].x
             assert(x_after_radar > x_after_hud + 10, 'expected continuous radar playback without HUD lock')
 
@@ -439,6 +449,14 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             end
             assert(st.poses[remote_actor].x > align_x + 10)
             assert(st.poses[own_actor].x == 0 and st.poses[own_actor].y == 0 and st.poses[own_actor].z == 0)
+
+            -- The old sample may not be applied once the configured ship leaves radar.
+            st.remote_distance = st.radar_range + 1
+            local before_out_of_range = #st.writes
+            deliver(7, st.poses[remote_actor].x + 3, 20, gen2, hud_serial)
+            step(0.2); step(0.1)
+            assert(cockpit:current() == nil)
+            assert(latest_cockpit_serial() ~= hud_serial and #st.writes == before_out_of_range)
 
             stream:close()
             local cstats = ctrl:stats()
