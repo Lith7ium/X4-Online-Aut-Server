@@ -429,8 +429,8 @@ Use matching provider and pilot builds of the NPC trial and an identified
 operational NPC in the confirmed vanilla save. Both launchers need its
 registry index and display code. In the HVC-420 cold-rejoin fixture,
 index 943 is the Antigone freighter MFQ-419. These identifiers belong to
-that world. At `3e005330` the Linux cockpit confirmed one pose. Continuous
-movement and a rendered position change have yet to be verified.
+that world. At `24284592` the Linux cockpit confirmed 18 server poses over
+20 seconds. Velocity and physical playback on this path remain unverified.
 
 - Add `--base-game-only --company-motion --observe-registered-npc 943 MFQ-419`
   to the pinned Linux provider and Linux pilot commands.

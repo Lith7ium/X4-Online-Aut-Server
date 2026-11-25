@@ -68,8 +68,10 @@ After the guard was corrected, the stock radar observer for HVC-420 confirmed
 one exact provider pose for the Antigone freighter MFQ-419 in two independent
 runs. At `3e005330` the second native capture took 2.199 s and arrived after
 the two-second source lifetime. The maximum Python polling gap was 131 ms.
-No nonzero rate or rendered movement was observed. The next work is on the
-GPU-free provider capture cadence. The initial ZIPs predate these fixes.
+With the 640×360 software profile at `24284592`, the cockpit confirmed 18
+server poses spanning 17.65 km. All 18 matched the provider. The captured
+intervals still precluded velocity. The next work is on capture cadence,
+followed by physical playback. The initial ZIPs predate these fixes.
 [Native NPC observations and checkpoints](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
 The regular Docked trade window at `abf70d48` received current server

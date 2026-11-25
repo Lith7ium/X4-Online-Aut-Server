@@ -16,6 +16,7 @@ copy of the freighter or measure where X4 rendered it.
 | `5d2299f3` | Resolved the NPC after load. The motion guard rejected the running world before publication. | A nonempty view and 272 own-flight acknowledgements. Zero NPC poses. | `checkpoint-a69fd5e1661d41a18fc0137fff549907` |
 | `1e8b5157` | Published the first pose. The source retired with `source_expired`. | Native radar saw MFQ-419 at 13,364 m with a 40,000 m range. Confirmed one identical pose and no velocity. | `checkpoint-00228a267c5a45ce8222b6903e403b92` |
 | `3e005330` | Captured the second pose 2.199 s after the first. The source had expired 182 ms earlier. | Confirmed sequence 1 with matching actor binding and pose. | `checkpoint-c607719d2dd8470cb7fb984c79af31aa` |
+| `24284592` | Published 25 native positions. No velocity met the rate interval. | 18 exact confirmations, 7 distinct positions, 17.65 km displacement. | `checkpoint-5208c84259934e7fbcb9d6e31abdf62f` |
 
 In the first run the provider checked the identifier for a pending join
 offer after resume. That identifier expires by design. The corrected
@@ -47,3 +48,32 @@ before the freighter exited the sector. Its rate calculation accepts at most
 one second between poses. This measurement locates the bottleneck on the
 capture side for this run. The new final save SHA-256 was
 `b1cb46f15266182a3106e4616738d35ccdaa4eb7b4c58e610c5b106977df2c07`.
+
+## Reduced software rendering cost
+
+The fourth provider used the unattended graphics preset and a matching
+640×360 Xvfb viewport. Its pilot continued using the ordinary graphics profile.
+During 20.146 s of server captures, the stock cockpit confirmed 18 poses
+over the authenticated motion connection, including seven distinct positions.
+All confirmed positions, sequences, sector, identity, generation, game times,
+capture times and null velocities matched the provider. X4's cockpit radar
+first saw the freighter at 13,366 m and later reported a sector loss.
+This verifies that changing server positions can reach a second instance
+through genuine radar interest. The pilot had no playback writer.
+
+Successive captures confirmed by the cockpit were 1.044–1.918 s apart.
+The second took 640 ms from previous capture to dispatch and a further
+1,277 ms waiting for the MD reply. Dispatch itself took 0.192 ms and the
+pose was read 0.152 ms after the reply. The CPU provider eventually
+expired the source 2.032 s after its last capture. The normal final
+checkpoint SHA-256 was
+`ad051ecbb828856f8a8a0ec7231a1b5b86988b7713b713ed8ada6db0c8708413`.
+
+During a 12.33 s sample immediately after admission, the provider X4 process
+used 4.68 logical CPU cores on average and peaked at 6.78 GiB RSS / 6.70 GiB PSS.
+The concurrent cockpit used 2.30 cores and 3.56 GiB RSS / 3.49 GiB PSS.
+The busiest continuously observed provider thread was a Mesa llvmpipe worker
+at 0.56 core. Both X4 processes ran on the same Ryzen 7 7800X3D with
+overlapping CPU affinities. These measurements cover this scene and the
+two X4 processes. They are insufficient to size a dedicated rental server
+or establish its performance with four pilots.
