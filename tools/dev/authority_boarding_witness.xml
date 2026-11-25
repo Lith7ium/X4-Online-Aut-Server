@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Explicit single-operation diagnostic for a disposable provider; observation only. -->
+<mdscript name="X4AuthorityBoardingWitness" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Arm" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityBoardingWitness'" control="'Arm'"/></conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <set_value name="$target" exact="@$args.$target"/>
+    <set_value name="$index" exact="@$args.$index"/>
+    <set_value name="$epoch" exact="@$args.$epoch"/>
+    <set_value name="$company" exact="@$args.$company_indices"/>
+    <set_value name="$armed" exact="false"/>
+    <do_if value="@$target.isoperational and $target.isclass.ship and $target.macro.id == @$args.$macro and $target.trueowner != faction.player and @$company.count ge 1 and $company.count le 8 and $index ge 1 and $index == ($index)i and @md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == $epoch and @md.X4AuthorityShipRegistry.State.$ships.{$index} == $target and @md.X4AuthorityShipRegistry.State.$byship.{$target} == $index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == $epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{$index} == $target and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{$target} == $index">
+     <set_value name="$macro" exact="$target.macro.id"/>
+     <set_value name="$owner" exact="$target.trueowner"/>
+     <set_value name="$armed" exact="true"/>
+     <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|ARM|%s|%s|%s|%s|%s'.[$epoch,$index,$target,$macro,$owner.id]"/>
+    </do_if>
+   </actions>
+   <cues>
+    <cue name="Expire">
+     <delay exact="20min"/>
+     <actions><set_value name="Arm.$armed" exact="false"/></actions>
+    </cue>
+    <cue name="Start">
+     <conditions>
+      <event_boarding_operation_started/>
+      <check_value value="Arm.$armed and @event.param.boardee == Arm.$target"/>
+     </conditions>
+     <actions>
+      <set_value name="Arm.$operation" exact="event.param"/>
+      <set_value name="Arm.$started" exact="false"/>
+      <do_if value="@md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == Arm.$epoch and @md.X4AuthorityShipRegistry.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityShipRegistry.State.$byship.{Arm.$target} == Arm.$index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == Arm.$epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{Arm.$target} == Arm.$index and @$operation.boardee.isoperational and $operation.boardee.macro.id == Arm.$macro and $operation.boardee.trueowner == Arm.$owner and $operation.owner == faction.player and $operation.attackers.count ge 1 and $operation.attackers.count le 8">
+       <set_value name="Arm.$started" exact="true"/>
+       <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|START|%s|%s|%s'.[$operation,Arm.$target,$operation.attackers.count]"/>
+       <do_for_each name="$attacker" in="$operation.attackers">
+        <do_if value="@$attacker.isoperational and $attacker.isclass.ship and $attacker.trueowner == faction.player and $attacker != Arm.$target">
+         <set_value name="$attacker_index" exact="@md.X4AuthorityShipRegistry.State.$byship.{$attacker}"/>
+         <do_for_each name="$company_index" in="Arm.$company">
+          <do_if value="$attacker_index == $company_index and @md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == Arm.$epoch and @md.X4AuthorityShipRegistry.State.$ships.{$attacker_index} == $attacker and @md.X4AuthorityShipRegistry.State.$byship.{$attacker} == $attacker_index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == Arm.$epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{$attacker_index} == $attacker and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{$attacker} == $attacker_index">
+           <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|COMPANY|%s|%s|%s|%s'.[$operation,Arm.$target,$attacker_index,$attacker]"/>
+           <break/>
+          </do_if>
+         </do_for_each>
+        </do_if>
+       </do_for_each>
+      </do_if>
+     </actions>
+     <cues>
+      <cue name="Boarded">
+       <conditions>
+        <event_object_signalled object="Arm.$target" param="'boarded'" param2="faction.player"/>
+        <check_value value="Arm.$armed and Arm.$started"/>
+       </conditions>
+       <actions>
+        <do_if value="@md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == Arm.$epoch and @md.X4AuthorityShipRegistry.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityShipRegistry.State.$byship.{Arm.$target} == Arm.$index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == Arm.$epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{Arm.$target} == Arm.$index and @$target.isoperational and $target.macro.id == $macro">
+         <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|BOARDED|%s|%s|%s'.[$operation,$target,faction.player.id]"/>
+        </do_if>
+       </actions>
+       <cues>
+        <cue name="Readback">
+         <delay exact="1s"/>
+         <actions>
+          <do_if value="@md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == Arm.$epoch and @md.X4AuthorityShipRegistry.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityShipRegistry.State.$byship.{Arm.$target} == Arm.$index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == Arm.$epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{Arm.$target} == Arm.$index and Arm.$armed and @$target.isoperational and $target.macro.id == $macro and $target.trueowner == faction.player">
+           <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|READBACK|%s|%s|%s|%s'.[$operation,$target,$macro,faction.player.id]"/>
+          </do_if>
+         </actions>
+        </cue>
+       </cues>
+      </cue>
+      <cue name="TrueOwner">
+       <conditions>
+        <event_object_changed_true_owner object="Arm.$target" owner="faction.player" previous="Arm.$owner"/>
+        <check_value value="Arm.$armed and Arm.$started"/>
+       </conditions>
+       <actions>
+        <do_if value="@md.X4AuthorityShipRegistry.State.$faulted == false and @md.X4AuthorityShipRegistry.State.$epoch == Arm.$epoch and @md.X4AuthorityShipRegistry.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityShipRegistry.State.$byship.{Arm.$target} == Arm.$index and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$format == 3 and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$sealed == true and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$faulted == false and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$epoch == Arm.$epoch and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$ships.{Arm.$index} == Arm.$target and @md.X4AuthorityRegistryAvailabilitySnapshot.State.$byship.{Arm.$target} == Arm.$index and @$target.isoperational and $target.macro.id == $macro">
+         <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|OWNER|%s|%s|%s|%s'.[$operation,$target,Arm.$owner.id,faction.player.id]"/>
+        </do_if>
+       </actions>
+      </cue>
+      <cue name="Removed">
+       <conditions>
+        <event_boarding_operation_removed operation="Arm.$operation"/>
+        <check_value value="Arm.$armed and Arm.$started"/>
+       </conditions>
+       <actions>
+        <debug_text text="'[X4LAN] AUTH_BOARDING_WITNESS|REMOVED|%s|%s'.[$operation,$target]"/>
+       </actions>
+      </cue>
+     </cues>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>
