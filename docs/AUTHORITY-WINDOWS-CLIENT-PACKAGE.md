@@ -86,11 +86,22 @@ by its trusted builder. The [fixture guide](../tools/dev/AUTHORITY-WINDOWS-FIXTU
 covers the current-source DLL build, connection file, and retained artifacts.
 
 
-For servers with company motion enabled, add `-CompanyMotion` to the same
-PowerShell invocation. This opens the terminal ship selection and uses the
-separate stream through the same pinned TLS endpoint once the ship is admitted.
-With matching server and player builds, target a company ship in the cockpit
-or select a rendered company ship on the open map. Both views can stay active
+For an internal base-game flight with visible remote cockpit movement, use a
+matching package and a server with Company motion enabled.
+
+```powershell
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -BaseGameOnly -CompanyMotion -CompanyCockpitPlayback
+```
+
+Select a free ship at the terminal prompt. The same command applies to the
+two- and four-Pulsar worlds. Automatic cockpit playback prioritizes
+the HUD target and fills up to three slots with nearby eligible Company
+ships on radar. An idle ship can take a slot ahead of a more distant pilot.
+After admission, motion uses a separate stream through the pinned TLS endpoint.
+Target a Company ship in the cockpit or select a rendered Company ship on
+the open map. Both views can stay active
 while the map shows another sector. The player result records sent movement
 counts and a `company_observer` section with native confirmations by view.
 A confirmation identifies the remote pilot's sample and the local hull that
@@ -156,24 +167,22 @@ hull. Verifying visible motion also requires a later read of its actual pose.
 
 ### Two-pilot cockpit playback
 
-Use the matching player package and the provider's private base-game Pulsar
-seed. Add the following to the normal Windows launcher invocation:
+Use this invocation with the original two-Pulsar seed to select KHI-630
+(1074) and follow the other pilot in HVC-420 (1073). For the four-Pulsar
+world or another checkpoint, use the two pilots' indices from the offered
+ship list.
 
 ```powershell
--BaseGameOnly -CompanyMotion -CompanyShipIndex 1074 -CompanyCockpitPlaybackIndex 1073
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -BaseGameOnly -CompanyMotion -CompanyShipIndex 1074 -CompanyCockpitPlaybackIndex 1073
 ```
 
-This selects KHI-630 and follows the other pilot in HVC-420. Use the offered
-registry indices for other checkpoints. Start with both ships near their saved
-positions in the same sector. Target the other pilot on the HUD, then clear
-the target once movement is visible and check that playback continues within
-radar range. The map remains separately selectable. The game log records
-`AUTH_COMPANY_COCKPIT_READBACK` with the active HUD or radar mode. On Linux, use
-`--base-game-only --company-motion --company-ship-index 1073
---company-cockpit-playback-index 1074`. To follow up to three visible other
-Company pilots in one cockpit without fixing one index, pass
-`-CompanyCockpitPlayback` (Windows) or `--company-cockpit-playback` (Linux)
-with `-CompanyMotion` / `--company-motion`. If the other pilot disconnects during
+Start with both ships near their saved positions in the same sector. Target
+the other pilot on the HUD, then clear the target once movement is visible
+and check that playback continues within radar range. The map remains
+separately selectable. The game log records `AUTH_COMPANY_COCKPIT_READBACK`
+with the active HUD or radar mode. If the other pilot disconnects during
 steady flight, check that the visible ship stops receiving corrections within
 five real seconds of the last usable sample. Two-machine validation is pending.
 
@@ -188,8 +197,8 @@ no eligible pair of positions or no reported velocity for that measurement.
 
 Use an isolated world and matching playback-capable packages. Get both pilots
 into the same sector and within cockpit sensor range. The observer flying
-WOO-831 can add `-CompanyHullPlaybackIndex 7354` to the `-CompanyMotion`
-invocation above, then select WRN-302 in the cockpit HUD. For other saves,
+WOO-831 uses `-CompanyMotion -CompanyHullPlaybackIndex 7354` as the motion
+and playback options, then selects WRN-302 in the cockpit HUD. For other saves,
 use the registry index offered for the other pilot's company ship.
 
 The trial follows that existing ship and reads its position back on a

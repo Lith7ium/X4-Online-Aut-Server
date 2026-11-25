@@ -331,16 +331,25 @@ display. Use a different output path for each player:
 
 ```sh
 tools/run_authority_client.sh --base-game-only --company-motion \
+  --company-cockpit-playback \
   --connection-file /path/to/connection.json \
   --game '/path/to/X4 Foundations' --out .local/player-run-01
 ```
 
-Keep the connection file owner-readable only (`chmod 600`). Select a free ship
-at the prompt, or use `--company-ship-index` to name one explicitly. In the base-game
-starting world, choose the two Pulsar Vanguards HVC-420 (1073) and KHI-630
-(1074), one per pilot. Both start in Black Hole Sun V. The matching Windows
-starter uses `-BaseGameOnly -CompanyMotion`. For a later session, use the
-ship list from the checkpoint the server offers.
+On Windows, run the matching player package from PowerShell.
+
+```powershell
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -BaseGameOnly -CompanyMotion -CompanyCockpitPlayback
+```
+
+On Linux, keep the connection file owner-readable only (`chmod 600`). Use
+the ship prompt on either platform to select a free ship from the server's
+checkpoint. The same commands apply to the two- and four-Pulsar worlds.
+Automatic cockpit playback prioritizes the HUD target and fills up to three
+slots with nearby eligible Company ships on radar. An idle ship can take a
+slot ahead of a more distant pilot.
 
 The Linux launcher allows up to an hour to connect and join. Once admitted,
 close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
@@ -356,31 +365,32 @@ same hull again. On exit, `company_observer.slots.cockpit` and
 `company_observer.slots.map` in the player result give the counts and last
 confirmed sample for each view. Each slot also retains
 `last_nonzero_velocity_confirmed` after a later stationary sample arrives.
-This stage reads the local hull. See the
+For the separate relay-only test, see the
 [two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
 
 ### Two-pilot cockpit playback
 
-Use matching player packages and the provider's private base-game Pulsar seed.
-Add these options to the Linux command above:
+For a controlled test, use the following commands with the original two-Pulsar
+seed. Linux selects HVC-420 (1073) and follows KHI-630 (1074). Windows selects
+KHI-630 and follows HVC-420. For the four-Pulsar world or another checkpoint,
+use two distinct indices from the offered ship list.
 
 ```sh
---company-ship-index 1073 --company-cockpit-playback-index 1074
+tools/run_authority_client.sh --base-game-only --company-motion \
+  --connection-file /path/to/connection.json \
+  --game '/path/to/X4 Foundations' --out .local/player-run-02 \
+  --company-ship-index 1073 --company-cockpit-playback-index 1074
 ```
 
-The Windows pilot uses `-BaseGameOnly -CompanyMotion -CompanyShipIndex 1074
--CompanyCockpitPlaybackIndex 1073` with the usual connection and game options.
-Each cockpit follows the specified other pilot. For a later checkpoint, use
-the two indices shown in the offered ship list.
+```powershell
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -BaseGameOnly -CompanyMotion -CompanyShipIndex 1074 -CompanyCockpitPlaybackIndex 1073
+```
 
-To follow up to three Company ships in one cockpit, pass
-`--company-cockpit-playback` on Linux or `-CompanyCockpitPlayback` on Windows
-alongside the Company motion option. The cockpit gives the selected HUD target
-priority, then fills the available slots with nearby eligible ships on radar.
-A nearby idle Company ship can take a slot ahead of a more distant pilot.
-The observer currently requires an empty NPC helm and no assigned captain on
+The cockpit observer requires an empty NPC helm and no assigned captain on
 each observed ship. Map interest and the five-second motion timeout operate
-independently of the other cockpit slots.
+independently of cockpit playback.
 
 1. Join both cockpits and wait for the server to resume. Keep both ships in the
    same sector, within radar range, and near their starting positions.
