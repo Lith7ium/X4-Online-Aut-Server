@@ -18,7 +18,8 @@ local function index_in(value, count)
 end
 
 local function valid_code(value)
-    return type(value) == 'string' and #value <= 32 and value:match('^[A-Z0-9]+%-%d+$') ~= nil
+    return type(value) == 'string'
+        and value:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$') ~= nil
 end
 
 local function valid_sector(value)

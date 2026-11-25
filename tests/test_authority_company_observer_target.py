@@ -45,8 +45,8 @@ local sector_b = resolve.parse_hex('0x20000000000050')
 local map_id = ffi.new('UniverseID', 9)
 local zero = ffi.new('uint64_t', 0)
 local actor_text = '0x20000000000019'
-local sector_macro, code = 'cluster_06_sector002_macro', 'WRN-302'
-local map_sector, map_code = 'cluster_01_sector001_macro', 'ZRV-341'
+local sector_macro, code = 'cluster_06_sector002_macro', 'NEW-1A2'
+local map_sector, map_code = 'cluster_01_sector001_macro', 'ZRV-3B1'
 local rendered, selected = {remote, other}, {other}
 local change_selection_on_fill = false
 local by_decimal = {}
@@ -149,6 +149,18 @@ assert(current.epoch == epoch and current.sector_macro == sector_macro and curre
 current.index = -1
 assert(not observer:matches(epoch, sector_macro, 7354, '0x19', code))
 assert(observer:current().index == 7354)
+
+local canonical_code = code
+for _, malformed in ipairs({'NE-123', 'NEWW-123', 'NEW-12', 'NEW-1234'}) do
+    code = malformed
+    local before = requests
+    assert(observer:current() == nil)
+    observer:tick()
+    assert(requests == before)
+end
+code = canonical_code
+now = now + .16
+inspect_and_accept()
 
 for _, block in ipairs({
     function(disable) hud = not disable end,

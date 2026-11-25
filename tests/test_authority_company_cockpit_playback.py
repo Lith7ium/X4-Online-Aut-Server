@@ -252,9 +252,9 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                     issue=function(args) request=args; return issue end,
                     on_withdrawal=function(reason) reasons[#reasons+1]=reason end,
                 })
-                local function reply(status)
+                local function reply(status, code)
                     register(nil, table.concat({request.request_id,epoch,status,2,'22',
-                        target.sector_macro,target.code,'radar'}, '|'))
+                        target.sector_macro,code or target.code,'radar'}, '|'))
                 end
                 local function establish()
                     now=now+.2
@@ -277,6 +277,12 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 reader:tick()
                 assert(#reasons==0)
                 issue=true
+                for _, malformed in ipairs({'NE-123', 'NEWW-123', 'NEW-12', 'NEW-1234'}) do
+                    now=now+.2
+                    reader:tick()
+                    reply('OBSERVED', malformed)
+                    assert(reader:current()==nil and #reasons==0)
+                end
                 establish()
                 fault('expired', function() now=now+.46 end)
                 establish()
@@ -419,7 +425,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 if ok_ship then
                     reply = table.concat({
                         args.request_id, epoch, 'OBSERVED', tostring(remote_index),
-                        ('0x%x'):format(remote_actor), 'cluster_06_sector002_macro', 'KHI-630', mode,
+                        ('0x%x'):format(remote_actor), 'cluster_06_sector002_macro', 'NEW-1A2', mode,
                     }, '|')
                 else
                     reply = table.concat({args.request_id, epoch, 'UNAVAILABLE', '0', '0', '0', '0', 'none'}, '|')
@@ -458,7 +464,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                         return id == own_actor and zone_own or zone_a
                     end,
                     GetObjectIDCode = function(id)
-                        if id == remote_actor then return 'KHI-630' end
+                        if id == remote_actor then return 'NEW-1A2' end
                         if id == idle_actor then return 'IDL-500' end
                         return 'HVC-420'
                     end,
