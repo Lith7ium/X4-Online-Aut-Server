@@ -219,6 +219,13 @@ engine getters agreed on the target, attacker and marine count. This
 was a disposable, unsaved provider trial. A pilot's menu click, boarding
 pods and capture remain open. [Boarding evidence](AUTHORITY-BOARDING-BASELINE-20261125.md#native-start-through-stock-exports)
 
+The provider also transferred BBS-493 to another sector with its saved
+idle captain. One headless pilot supplied poses on the regular movement
+connection. X4 and the marked departure save agreed on the target
+position, captain and default Wait order. A cockpit gate flight and
+taking over a ship with pending fleet orders remain open.
+[Captained sector transfer](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#cross-sector-transfer-with-the-saved-idle-captain)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
