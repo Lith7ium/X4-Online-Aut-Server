@@ -25,6 +25,7 @@ function M.new(o)
   (integer(c.saved_baseline_limit) and type(c.saved_baseline_guard)=='function'))
  assert(integer(c.max_tracks) and c.max_tracks<=1000000 and integer(c.scan_budget) and c.scan_budget<=1024)
  assert(finite(c.interval) and c.interval>0 and c.interval<=60 and finite(c.timeout) and c.timeout>0 and c.timeout<=120)
+ assert(c.interval_from_start==nil or type(c.interval_from_start)=='boolean')
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
@@ -136,7 +137,7 @@ function M.new(o)
      local reader=assert(c.reader_factory(entry.row,entry.actor,request))
      tick_detail=nil
      assert(checked_binding(entry))
-     pending={entry=entry,reader=reader,request=request,deadline=last_clock+c.timeout}
+     pending={entry=entry,reader=reader,request=request,started_at=last_clock,deadline=last_clock+c.timeout}
      state='pending';assert(reader_ok(reader,'start') and check());break
     end
    end
@@ -149,6 +150,10 @@ function M.new(o)
   return true
  end
  function api:expected_request()return state=='pending' and pending.request or nil end
+ local function next_due()
+  -- The registered NPC can count time waiting for the descriptor toward the interval.
+  return (c.interval_from_start and pending.started_at or last_clock)+c.interval
+ end
  local response_faults={response_type=true,response_mismatch=true,descriptor_unavailable=true,
   descriptor_invalid=true,transit_rejected=true,actor_changed=true,sector_id=true,
   snapshot_callback=true,snapshot_invalid=true,capture_clock_invalid=true,orientation_invalid=true}
@@ -186,7 +191,7 @@ function M.new(o)
     else error('unexpected descriptor withdrawal') end
     assert(check() and checked_binding(e) and state=='pending')
     e.previous=nil
-    e.next_due=last_clock+c.interval
+    e.next_due=next_due()
     pending=nil;state='ready';gap=withdrawal
     return
    end
@@ -228,7 +233,7 @@ function M.new(o)
    -- Legacy samples suppress duplicate game times after a baseline reset.
    -- Real-time samples instead retain both capture-clock progression fences.
    if not c.real_time_motion and not previous and e.last_emitted_time and t==e.last_emitted_time then
-    e.next_due=last_clock+c.interval;pending=nil;state='ready';result=nil;return
+    e.next_due=next_due();pending=nil;state='ready';result=nil;return
    end
    local rate_interval_seconds=nil
    if previous then
@@ -261,7 +266,7 @@ function M.new(o)
      e.previous={sector=sample.sector_macro,local_sector_key=sample.local_sector_key,time=t,last_time=t,
       x=sample.x,y=sample.y,z=sample.z,orientation=copy_orientation(sample.orientation)}
     end
-    e.next_due=last_clock+c.interval;pending=nil;state='ready';result=nil;return
+    e.next_due=next_due();pending=nil;state='ready';result=nil;return
    end
    -- The receiver has only seen the last emitted sector, not suppressed reads.
    if e.sent_sector and e.sent_sector~=sample.sector_macro then velocity=nil;angular_rate=nil end
@@ -284,7 +289,7 @@ function M.new(o)
    e.sequence=e.sequence+1
    e.sent_sector=sample.sector_macro
    e.sent_local_sector_key=sample.local_sector_key
-   e.next_due=last_clock+c.interval
+   e.next_due=next_due()
    if not previous or previous.sector~=sample.sector_macro or
       previous.local_sector_key~=sample.local_sector_key or rate_interval_seconds>=c.min_dt then
     e.previous={capture_time=capture_time,sector=sample.sector_macro,

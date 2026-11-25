@@ -14,6 +14,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
     local save_path = cfg.save_path:gsub('/+$', '')
     local prefix = 'N|' .. cfg.lease .. '|' .. cfg.generation .. '|'
     local stopped, lookup, sampler = false, nil, nil
+    local ticking = false
     local wanted, runtime_ref
     local reported_rate = false
     local cadence = {updates=0}
@@ -30,14 +31,15 @@ function M.new_x4(cfg, net, clock, registry_ready)
     local function trace_capture(sample, reply_at)
         if not cadence then return '' end
         local start, dispatched = cadence.tick_started, cadence.tick_completed
-        local suffix = ('|updates=%d|max_update_gap_ms=%s|capture_to_dispatch_ms=%s|dispatch_tick_ms=%s|md_reply_wait_ms=%s|reply_to_capture_ms=%s'):format(
+        local suffix = ('|updates=%d|max_update_gap_ms=%s|capture_to_dispatch_ms=%s|dispatch_tick_ms=%s|md_reply_wait_ms=%s|reply_to_capture_ms=%s|dispatch_from=%s'):format(
             cadence.updates, elapsed_ms(0, cadence.max_gap), elapsed_ms(cadence.last_capture, start),
-            elapsed_ms(start, dispatched), elapsed_ms(dispatched, reply_at), elapsed_ms(reply_at, sample.capture_time))
+            elapsed_ms(start, dispatched), elapsed_ms(dispatched, reply_at), elapsed_ms(reply_at, sample.capture_time),
+            cadence.dispatch_from or '-')
         if sample.sequence == 2 then
             cadence = nil
         else
             cadence.updates, cadence.max_gap, cadence.last_capture = 0, nil, sample.capture_time
-            cadence.tick_started, cadence.tick_completed = nil, nil
+            cadence.tick_started, cadence.tick_completed, cadence.dispatch_from = nil, nil, nil
         end
         return suffix
     end
@@ -108,6 +110,27 @@ function M.new_x4(cfg, net, clock, registry_ready)
         end
     end
 
+    local function tick_sampler(origin)
+        if stopped or ticking then return end
+        local started_at = cadence and trace_time()
+        local was_pending = started_at and sampler:expected_request()
+        if started_at and origin == 'update' then
+            cadence.updates = cadence.updates + 1
+            if cadence.last_update and started_at >= cadence.last_update then
+                cadence.max_gap = math.max(cadence.max_gap or 0, started_at - cadence.last_update)
+            end
+            cadence.last_update = started_at
+        end
+        ticking = true
+        local ok, accepted = pcall(sampler.tick, sampler)
+        ticking = false
+        if not ok or accepted ~= true then
+            stop('sampler_tick_failed')
+        elseif started_at and not was_pending and sampler:expected_request() then
+            cadence.tick_started, cadence.tick_completed, cadence.dispatch_from = started_at, trace_time(), origin
+        end
+    end
+
     assert(RegisterEvent('X4AuthorityJobDescriptorProbe.Result', function(_, reply)
         if stopped or type(reply) ~= 'string' then return end
         local request = lookup and lookup:expected_request()
@@ -126,10 +149,16 @@ function M.new_x4(cfg, net, clock, registry_ready)
         end
         request = sampler and sampler:expected_request()
         if not request or reply:sub(1, #request + 1) ~= request .. '|' then return end
+        -- An inline reply during a dispatch cannot reenter the sampler.
+        if ticking then stop('sampler_event'); return end
         local reply_at = cadence and trace_time()
         local ok, accepted, sample = pcall(sampler.event, sampler, reply)
         if not ok or accepted ~= true then stop('sample_refused'); return end
-        if sample and not pcall(deliver, sample, reply_at) then stop('sample_send_failed') end
+        if not sample then return end
+        if not pcall(deliver, sample, reply_at) then stop('sample_send_failed'); return end
+        -- The accepted request has returned to ready. Try at most one new
+        -- descriptor now, with the ordinary interval and identity checks.
+        tick_sampler('reply')
     end) ~= false)
 
     local function advance()
@@ -163,7 +192,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
             sampler = assert(X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER.new_x4({
                 enabled=true, epoch=cfg.epoch, generation=cfg.generation, nonce=cfg.nonce,
                 max_tracks=1, scan_budget=1, interval=.10, timeout=1.5, min_dt=.02, max_dt=1,
-                real_time_motion=true, capture_clock=clock, expected_save_path=save_path,
+                interval_from_start=true, real_time_motion=true, capture_clock=clock, expected_save_path=save_path,
                 guard=guard, binding_guard=function() return false end,
                 saved_baseline_limit=cfg.count, saved_baseline_guard=local_binding,
                 descriptor=X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE, resolve=resolve,
@@ -171,22 +200,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
             }))
             assert(sampler:register({epoch=cfg.epoch, index=cfg.index, classification='saved_baseline'}, wanted))
         end
-        -- Sample only the existing update and matching MD callback. This
-        -- stops measuring after the second successful send.
-        local started_at = cadence and trace_time()
-        local was_pending = started_at and sampler:expected_request()
-        if started_at then
-            cadence.updates = cadence.updates + 1
-            if cadence.last_update and started_at >= cadence.last_update then
-                cadence.max_gap = math.max(cadence.max_gap or 0, started_at - cadence.last_update)
-            end
-            cadence.last_update = started_at
-        end
-        if sampler:tick() ~= true then
-            stop('sampler_tick_failed')
-        elseif started_at and not was_pending and sampler:expected_request() then
-            cadence.tick_started, cadence.tick_completed = started_at, trace_time()
-        end
+        tick_sampler('update')
     end
 
     return function()

@@ -5,6 +5,7 @@ local function rig(options)
  local x
  x=assert(mod.new({enabled=true,epoch=epoch,generation=generation,nonce=nonce,max_tracks=10,scan_budget=2,
   recover_expired_pending=options.recover_expired_pending,diagnostics=options.diagnostics,
+  interval_from_start=options.interval_from_start,
   interval=.1,timeout=2,min_dt=.02,max_dt=1,include_orientation=options.include_orientation,real_time_motion=options.real_time_motion,clock=function()return clock end,
   guard=function()return healthy end,actor_key=function(a)return tostring(a)end,
   binding_guard=function(row,actor)return actor==row.index+40 end,
@@ -27,9 +28,19 @@ local function rig(options)
  local function sample(sector,t,pos,local_sector_key,yaw,capture_time,capture_before)
   values[#values+1]={sector,t,pos,local_sector_key,yaw,capture_time,capture_before};clock=clock+.2
   assert(x:tick());local req=x:expected_request();assert(req)
+  clock=clock+(options.reply_delay or 0)
   local ok,result=x:event(req..'|response');assert(ok);if result then outputs[#outputs+1]=result end
  end
  return x,register,sample,outputs,faults,function(v)clock=v end,function(v)healthy=v end
+end
+-- The default waits a whole interval after completion. The opt-in counts
+-- time in flight toward the interval and still uses one pending request.
+for _,mode in ipairs({'default','start'}) do
+ local from_start=mode=='start' and true or nil
+ local x,add,sample,_,_,clock=rig({interval_from_start=from_start,reply_delay=.19})
+ assert(add(1));sample('sector_a',100,0)
+ clock(.40);assert(x:tick() and (x:expected_request()~=nil)==(mode=='start'))
+ clock(.50);assert(x:tick() and x:expected_request())
 end
 -- Full pose follows the short Euler arc and resets both rates across frames.
 do

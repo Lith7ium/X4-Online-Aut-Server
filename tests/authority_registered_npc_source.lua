@@ -5,16 +5,18 @@ local resolve = dofile('tools/dev/authority_registry_resolve_string.lua')
 local actor, captain = resolve.parse_hex('0x201'), resolve.parse_hex('0x202')
 local sector, zero = resolve.parse_hex('0x302'), ffi.new('UniverseID', 0)
 local epoch, code, owner = ('a'):rep(32), 'ABC-401', 'argon'
-local handler, request, messages, logs
+local handler, request, requests, messages, logs
 local live_code, live_owner, now, host_time, paused = code, owner, 0, 999.95, false
-local x, inline_sample = 100, false
+local x, inline_sample, after_sample = 100, false, nil
 
-local function reply()
+local function reply(actor_hex)
     assert(request)
     local id = request
     request = nil
-    handler(nil, table.concat({id, epoch, '40', 'ok', '0x201', 'ship_s_macro', owner,
-        '0x302', 'sector_a'}, '|'))
+    local row = table.concat({id, epoch, '40', 'ok', actor_hex or '0x201', 'ship_s_macro', owner,
+        '0x302', 'sector_a'}, '|')
+    handler(nil, row)
+    return row
 end
 
 ConvertStringToLuaID = function(id) return ffi.new('uint64_t', tonumber(id)) end
@@ -33,6 +35,7 @@ AddUITriggeredEvent = function(screen, action, args)
     assert(args.epoch == epoch and args.index == 40 and request == nil)
     request = args.request_id
     if request:sub(1, 1) == 'f' then
+        requests = requests + 1
         host_time = host_time + .001
         if inline_sample then reply() end
     end
@@ -62,11 +65,15 @@ dofile('src/authority/lua/source_motion_sampler.lua')
 local source = dofile('tools/dev/authority_registered_npc_source.lua')
 
 local function boot()
-    messages, logs, request = {}, {}, nil
+    messages, logs, request, requests = {}, {}, nil, 0
     local tick = source.new_x4({epoch=epoch, index=40, code=code, owner=owner, count=100,
         actor='0x101', save_path='/isolated/45841/save', lease=('d'):rep(32), generation=('e'):rep(32),
         nonce=('f'):rep(32), lookup_nonce=('b'):rep(32)},
-        {send=function(_, row) messages[#messages + 1] = row; return true end},
+        {send=function(_, row)
+            messages[#messages + 1] = row
+            if after_sample and row:find('|SAMPLE3|', 1, true) then after_sample() end
+            return true
+        end},
         function() return host_time end, function() return true end)
     tick()
     reply()
@@ -86,7 +93,8 @@ local function delayed_reply()
     reply()
 end
 local function next_sample()
-    now = now + .09
+    assert(request == nil) -- An early reply must not dispatch again inline.
+    now = now + .04
     tick()
     assert(request == nil)
     now = now + .02
@@ -97,7 +105,8 @@ host_time = 1000
 delayed_reply()
 assert(#messages == 1 and messages[1]:find('|SAMPLE3|%x+|40|1|ABC%-401|argon|0x201|sector_a|500|1000|100|200|300|%-|%-|%-$'))
 assert(logs[2]:find('SENT|seq=1|capture=1000|velocity=absent|updates=2|max_update_gap_ms=50.000'
-    .. '|capture_to_dispatch_ms=-|dispatch_tick_ms=1.000|md_reply_wait_ms=49.000|reply_to_capture_ms=0.000', 1, true))
+    .. '|capture_to_dispatch_ms=-|dispatch_tick_ms=1.000|md_reply_wait_ms=49.000|reply_to_capture_ms=0.000'
+    .. '|dispatch_from=update', 1, true))
 host_time = 1000.004
 next_sample()
 -- Pose 2 is still sent when its capture interval is too short for velocity.
@@ -105,7 +114,8 @@ host_time, x = 1000.01, 101
 delayed_reply()
 assert(#messages == 2 and messages[2]:find('|500|1000%.01|101|200|300|%-|%-|%-$'))
 assert(logs[3]:find('SENT|seq=2|capture=1000.01|velocity=absent|updates=3|max_update_gap_ms=6.000'
-    .. '|capture_to_dispatch_ms=4.000|dispatch_tick_ms=1.000|md_reply_wait_ms=5.000|reply_to_capture_ms=0.000', 1, true))
+    .. '|capture_to_dispatch_ms=4.000|dispatch_tick_ms=1.000|md_reply_wait_ms=5.000|reply_to_capture_ms=0.000'
+    .. '|dispatch_from=update', 1, true))
 next_sample()
 host_time, x = 1000.5, 110
 delayed_reply()
@@ -121,10 +131,53 @@ tick(); tick()
 assert(#messages == 5 and messages[5]:find('|END|paused$'))
 assert(#logs == 5)
 
--- A truly inline MD reply would fail at once, unlike the native run's later sector loss.
-paused, inline_sample = false, true
+-- A delayed, accepted MD event starts one new read without waiting for any
+-- onUpdate. A duplicate reply is ignored and each new request needs its own reply.
+paused, host_time, x = false, 2000, 100
+tick = boot()
+now, host_time = now + .2, 2000.2
+local first_reply = reply()
+assert(request and requests == 2 and #messages == 1)
+handler(nil, first_reply)
+assert(request and requests == 2 and #messages == 1)
+now, host_time, x = now + .25, 2000.45, 105
+reply()
+assert(request and requests == 3 and #messages == 2 and messages[2]:find('|105|200|300|20|0|0$'))
+assert(logs[3]:find('|updates=0|max_update_gap_ms=-|capture_to_dispatch_ms=0.000'
+    .. '|dispatch_tick_ms=1.000|md_reply_wait_ms=249.000|reply_to_capture_ms=0.000|dispatch_from=reply', 1, true))
+tick()
+assert(request and requests == 3 and #messages == 2)
+reply('0x999')
+assert(request == nil and requests == 3 and #messages == 3)
+assert(messages[3]:find('|END|sampler_sample_reader_response_actor_changed$'))
+
+-- The follow-up rechecks live identity even after the previous reply was accepted.
 boot()
-assert(#messages == 1 and messages[1]:find('|END|sampler_event$'))
+after_sample = function() live_owner = 'teladi' end
+now, host_time = now + .15, host_time + .15
+reply()
+assert(request == nil and requests == 1 and #messages == 2 and messages[2]:find('|END|owner_mismatch$'))
+after_sample, live_owner = nil, owner
+
+-- A response arriving after the original pending deadline does not sample or dispatch.
+boot()
+now = now + 1.6
+reply()
+assert(request == nil and requests == 1 and #messages == 1 and messages[1]:find('|END|sampler_sample$'))
+
+-- A truly inline MD reply would fail at once, unlike the native run's later sector loss.
+inline_sample = true
+boot()
+assert(requests == 1 and #messages == 1 and messages[1]:find('|END|sampler_event$'))
+
+-- The same reentrancy fence applies when the inline callback occurs during a
+-- direct follow-up dispatched from a valid, delayed response.
+inline_sample = false
+boot()
+inline_sample = true
+now, host_time = now + .15, host_time + .15
+reply()
+assert(request == nil and requests == 2 and #messages == 2 and messages[2]:find('|END|sampler_event$'))
 
 inline_sample, live_code = false, 'ABC-402'
 boot()
