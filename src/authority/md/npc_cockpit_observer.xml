@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Opt-in read-only registered-NPC interest observer (verified cockpit radar or stock map).
+     Strictly complements company_cockpit_observer.xml: accepts ONLY operational undocked
+     non-player AI-piloted ships enrolled in X4AuthorityShipRegistry, never player-owned ships. -->
+<mdscript name="X4AuthorityNpcCockpitObserver" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Read" instantiate="true">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityNpcCockpitObserver'" control="'Read'"/>
+   </conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <set_value name="$mode" exact="@$args.$mode"/>
+    <set_value name="$canobserve" exact="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last?
+            and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
+            and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship?
+            and md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch
+            and $args.$count ge 1 and $args.$count == ($args.$count)i and md.X4AuthorityShipRegistry.State.$last ge $args.$count
+            and @player.controlled.isclass.ship and player.controlled == player.occupiedship
+            and player.controlled == player.container and @player.sector.isclass.sector"/>
+    <set_value name="$observed" exact="null"/>
+    <set_value name="$obs_reg" exact="0"/>
+    <set_value name="$obs_mode" exact="''"/>
+    <set_value name="$obs_dist" exact="-1"/>
+    <set_value name="$obs_radar" exact="if @player.controlled.currentradarrange gt 0m then player.controlled.currentradarrange else 0m"/>
+    <do_if value="$canobserve and $args.$target_index? and $args.$target_index ge 1 and $args.$target_index le $args.$count and $args.$target_index == ($args.$target_index)i and $args.$target_index != $args.$own">
+     <set_value name="$reg" exact="$args.$target_index"/>
+     <set_value name="$cand" exact="@md.X4AuthorityShipRegistry.State.$ships.{$reg}"/>
+     <do_if value="@$cand.isclass.ship and $cand.isoperational and $cand.owner != faction.player and @$cand.pilot.exists and $cand != player.ship and $cand != player.occupiedship and $cand != player.controlled and $cand != player.container and not $cand.dock.exists and not $cand.isinternallystored and @$cand.sector.isclass.sector and @md.X4AuthorityShipRegistry.State.$byship.{$cand} == $reg">
+      <do_if value="$mode == 'radar' or $mode == 'hud'">
+       <do_if value="$cand.sector == player.sector and $cand.attention ge attention.visible and $cand.isphysicsready and $obs_radar gt 0m">
+        <set_value name="$dist" exact="$cand.distanceto.{player.controlled}"/>
+        <do_if value="$dist le $obs_radar">
+         <set_value name="$observed" exact="$cand"/>
+         <set_value name="$obs_reg" exact="$reg"/>
+         <set_value name="$obs_mode" exact="$mode"/>
+         <set_value name="$obs_dist" exact="$dist"/>
+        </do_if>
+       </do_if>
+      </do_if>
+      <do_elseif value="$mode == 'map'">
+       <set_value name="$observed" exact="$cand"/>
+       <set_value name="$obs_reg" exact="$reg"/>
+       <set_value name="$obs_mode" exact="'map'"/>
+       <set_value name="$obs_dist" exact="if $cand.sector == player.sector then $cand.distanceto.{player.controlled} else -1"/>
+      </do_elseif>
+     </do_if>
+    </do_if>
+    <do_if value="$observed != null">
+     <raise_lua_event name="'X4AuthorityNpcCockpitObserver.Result'" param="'%s|%s|OBSERVED|%s|%s|%s|%s|%s|%s|%s'.[$args.$request_id,$args.$epoch,$obs_reg,$observed,$observed.sector.macro.id,$observed.idcode,$obs_mode,$obs_dist,$obs_radar]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityNpcCockpitObserver.Result'" param="'%s|%s|NONE|0|-|-|-|-|-|%s'.[@$args.$request_id,@$args.$epoch,$obs_radar]"/>
+    </do_else>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

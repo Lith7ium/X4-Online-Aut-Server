@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable opt-in MD probe for single-session live native Windows registered-NPC test.
+     Never auto-runs: every cue requires an explicit correlated UI-triggered event. -->
+<mdscript name="X4AuthorityRegisteredNpcLive" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this">
+   <actions>
+    <set_value name="$owned_ship" exact="null"/>
+    <set_value name="$owned_wait" exact="null"/>
+   </actions>
+  </cue>
+
+  <!-- Populate X4AuthorityShipRegistry across player.galaxy, spawn & enroll:
+       1) one unrelated visible uncrewed ship U 650 m ahead of player.controlled,
+       2) one in-radar registered Argon AI-piloted NPC replica R at (1500, 0, 1500) (~2,121 m,
+          strictly within player.controlled.currentradarrange), holding Wait + constantvel=0
+          on R ONLY,
+       and return up to 48 untouched live AI-piloted non-player NPC candidates S in player.sector. -->
+  <cue name="Setup" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityRegisteredNpcLive'" control="'Setup'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$epoch" exact="@$r.$epoch"/>
+    <do_if value="$r.$request_id? and $epoch? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @player.controlled.isclass.ship and @player.sector.isclass.sector">
+     <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="0"/>
+
+     <!-- Unrelated visible uncrewed ship U: 650 m ahead of player.controlled. -->
+     <create_ship name="$unrelated" macro="macro.ship_arg_s_fighter_03_a_macro" sector="player.sector" seed="8601">
+      <owner exact="faction.player" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <position object="player.controlled" x="0m" y="0m" z="650m"/>
+      <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+     </create_ship>
+
+     <!-- In-radar registered Argon AI-piloted NPC replica R: ~2,121 m ahead-right within radar. -->
+     <create_ship name="$replica" macro="macro.ship_arg_m_trans_container_02_a_macro" sector="player.sector" seed="8602">
+      <owner exact="faction.argon" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <pilot><select faction="faction.argon" tags="tag.pilot"/></pilot>
+      <position object="player.controlled" x="1500m" y="0m" z="1500m"/>
+      <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+     </create_ship>
+
+     <!-- Hold R stationary so local AI does not fight authoritative playback writes. -->
+     <do_if value="@$replica.isoperational">
+      <create_order object="$replica" id="'Wait'" immediate="true" name="State.$owned_wait">
+       <param name="timeout" value="180s"/>
+       <param name="skipalignment" value="true"/>
+       <param name="fidget" value="false"/>
+       <param name="noattackresponse" value="true"/>
+      </create_order>
+      <set_value name="State.$owned_ship" exact="$replica"/>
+      <set_object_velocity object="$replica" constantvel="true">
+       <linear value="vector.[0m, 0m, 0m]"/>
+      </set_object_velocity>
+     </do_if>
+
+     <find_ship name="$all" space="player.galaxy" multiple="true"/>
+     <set_value name="$count" exact="0"/>
+     <set_value name="$cands" exact="''"/>
+     <set_value name="$cand_n" exact="0"/>
+     <set_value name="$radar" exact="if @player.controlled.currentradarrange gt 0m then player.controlled.currentradarrange else 40000m"/>
+     <do_all exact="$all.count" counter="$i">
+      <set_value name="$s" exact="$all.{$i}"/>
+      <do_if value="@$s.isoperational and $s.isclass.ship">
+       <set_value name="$count" exact="$count + 1"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$ships.{$count}" exact="$s"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$s}" exact="$count"/>
+       <do_if value="$cand_n lt 48 and $s != $replica and $s != $unrelated and $s != player.controlled and $s != player.ship and $s != player.occupiedship and $s != player.container and $s.owner != faction.player and @$s.pilot.exists and not $s.dock.exists and not $s.isinternallystored and @$s.sector == player.sector and @$s.parent.isclass.zone">
+        <set_value name="$cand_n" exact="$cand_n + 1"/>
+        <do_if value="$cands != ''">
+         <set_value name="$cands" exact="$cands + ';'"/>
+        </do_if>
+        <set_value name="$cands" exact="$cands + '%s,%s,%s,%s,%s,%s'.[$count,$s,$s.idcode,$s.owner.id,$s.macro.id,$s.distanceto.{player.controlled}]"/>
+       </do_if>
+      </do_if>
+     </do_all>
+     <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="$count"/>
+     <set_value name="$own_idx" exact="@md.X4AuthorityShipRegistry.State.$byship.{player.controlled}"/>
+     <set_value name="$unrel_idx" exact="@md.X4AuthorityShipRegistry.State.$byship.{$unrelated}"/>
+     <set_value name="$rep_idx" exact="@md.X4AuthorityShipRegistry.State.$byship.{$replica}"/>
+     <do_if value="$own_idx and $unrel_idx and $rep_idx and @$replica.isoperational and @$replica.pilot.exists and $replica.owner != faction.player and @$unrelated.isoperational and $unrelated.owner == faction.player and not @$unrelated.pilot.exists">
+      <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|Ready|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$count,$own_idx,player.controlled,player.controlled.idcode,player.sector.macro.id,$unrel_idx,$unrelated,$unrelated.idcode,$unrelated.distanceto.{player.controlled},$rep_idx,$replica,$replica.idcode,$replica.owner.id,$replica.distanceto.{player.controlled},$radar,$cands]"/>
+     </do_if>
+     <do_else>
+      <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|Refused|setup_verify_failed'.[$r.$request_id]"/>
+     </do_else>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|Refused|setup_args'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <!-- Independent correlated post-run readback of own, replica NPC R, and unrelated ship U. -->
+  <cue name="FinalReadback" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityRegisteredNpcLive'" control="'FinalReadback'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$ok" exact="false"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted">
+     <set_value name="$own" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$own_index}"/>
+     <set_value name="$rep" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$replica_index}"/>
+     <set_value name="$unrel" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$unrelated_index}"/>
+     <do_if value="@$own == player.controlled and @$rep.isoperational and $rep.owner != faction.player and @$rep.pilot.exists and @md.X4AuthorityShipRegistry.State.$byship.{$rep} == $r.$replica_index and @$unrel.isoperational and $unrel.owner == faction.player and not @$unrel.pilot.exists and @md.X4AuthorityShipRegistry.State.$byship.{$unrel} == $r.$unrelated_index">
+      <set_value name="$ok" exact="true"/>
+      <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|FinalReadback|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$r.$request_id,$r.$own_index,$own,$own.idcode,$r.$replica_index,$rep,$rep.idcode,$rep.owner.id,$rep.sector.macro.id,$rep.distanceto.{$own},$r.$unrelated_index,$unrel,$unrel.idcode]"/>
+     </do_if>
+    </do_if>
+    <do_if value="not $ok">
+     <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|Refused|final_readback_guard'.[@$r.$request_id]"/>
+    </do_if>
+   </actions>
+  </cue>
+
+  <!-- Release owned Wait order and constantvel cleanly before exit. -->
+  <cue name="Release" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityRegisteredNpcLive'" control="'Release'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <do_if value="@State.$owned_ship.exists and State.$owned_ship.isoperational">
+     <set_object_velocity object="State.$owned_ship" constantvel="false"/>
+     <do_if value="@State.$owned_wait.exists">
+      <cancel_order order="State.$owned_wait"/>
+     </do_if>
+    </do_if>
+    <set_value name="State.$owned_wait" exact="null"/>
+    <set_value name="State.$owned_ship" exact="null"/>
+    <raise_lua_event name="'X4AuthorityRegisteredNpcLive.Result'" param="'%s|Released'.[@$r.$request_id]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
