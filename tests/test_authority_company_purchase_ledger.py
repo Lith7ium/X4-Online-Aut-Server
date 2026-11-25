@@ -27,6 +27,46 @@ class CompanyPurchaseLedgerTests(unittest.TestCase):
         self.addCleanup(ledger.close)
         return ledger
 
+    def test_sale_reservation_and_actual_credit_survive_restore(self):
+        sale = dict(sale_id='5'*32, sector='cluster_43_sector001_macro', station_code='CTD-093',
+                    ware='water', quantity=2, price_cents=3473)
+        credited = dict(sale, outcome='confirmed', ship_code='WRN-302', credited_cents=6900,
+                        company_balance_cents=937000, cargo_units=10)
+        ledger = self.open()
+        self.assertIsNone(ledger.reserve_sale(*SHIP, sale))
+        self.assertEqual(ledger.reserve_sale(*SHIP, sale)['outcome'], 'unknown')
+        with self.assertRaises(ValueError):
+            ledger.record_sale_result(*SHIP, dict(credited, quantity=1))
+        with self.assertRaises(ValueError):
+            ledger.record_sale_result(*SHIP, dict(credited, ship_code='WRN-303'))
+        self.assertEqual(ledger.record_sale_result(*SHIP, credited), credited)
+        self.assertEqual(ledger.record_sale_result(*SHIP, credited), credited)
+        with self.assertRaises(ValueError):
+            ledger.record_sale_result(*SHIP, dict(credited, credited_cents=6946))
+        interrupted = dict(sale, sale_id='6'*32)
+        self.assertIsNone(ledger.reserve_sale(*SHIP, interrupted))
+        reference = ledger.checkpoint(self.checkpoint)
+        restored = self.open()
+        self.assertTrue(restored.restore(self.checkpoint, reference))
+        self.assertEqual(restored.reserve_sale(*SHIP, sale), credited)
+        self.assertEqual(restored.reserve_sale(*SHIP, interrupted), dict(interrupted, outcome='unknown'))
+        self.assertEqual(restored.reserve_sale(73, 'WRN-303', sale)['reason'], 'request_replayed')
+        self.assertEqual(restored.reserve_sale(*SHIP, dict(sale, price_cents=3000))['reason'], 'request_replayed')
+        with self.assertRaisesRegex(ValueError, 'fresh'):
+            ledger.restore(self.checkpoint, reference)
+
+    def test_sale_on_a_restored_purchase_only_snapshot(self):
+        original = self.open()
+        original._db.execute('DROP TABLE sales')
+        original.begin(*SHIP, PURCHASE)
+        reference = original.checkpoint(self.checkpoint)
+        restored = self.open()
+        self.assertTrue(restored.restore(self.checkpoint, reference))
+        sale = dict(sale_id='7'*32, sector='sector_1', station_code='CTD-093',
+                    ware='water', quantity=2, price_cents=3473)
+        self.assertIsNone(restored.reserve_sale(*SHIP, sale))
+        self.assertFalse(restored.begin(*SHIP, PURCHASE))
+
     def test_two_matching_fresh_statements_survive_snapshot_and_cursor(self):
         ledger = self.open()
         self.assertTrue(ledger.begin(*SHIP, PURCHASE))

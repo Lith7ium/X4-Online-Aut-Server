@@ -12,6 +12,7 @@ import tempfile
 
 from .checkpoints import CHUNK
 from .company_purchase_control import purchase_receipt, purchase_value, _statement_value
+from .company_trade_messages import sale_receipt, sale_value
 
 PURCHASE_LEDGER_NAME = 'company-purchases.sqlite3'
 _TOKEN = re.compile(r'[0-9a-f]{32}')
@@ -36,6 +37,15 @@ CREATE TABLE IF NOT EXISTS challenges (
     challenge TEXT NOT NULL,
     PRIMARY KEY (purchase_id, challenge)
 );
+"""
+_SALES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sales (
+    id TEXT PRIMARY KEY,
+    ship_index INTEGER NOT NULL,
+    ship_code TEXT NOT NULL,
+    request TEXT NOT NULL,
+    native_receipt TEXT
+)
 """
 
 
@@ -131,6 +141,7 @@ class CompanyPurchaseLedger:
         try:
             self._db.executescript(_SCHEMA)
             with self._db:
+                self._db.execute(_SALES_SCHEMA)
                 self._db.execute("INSERT OR IGNORE INTO metadata VALUES ('registry_epoch',?)",
                                  (registry_epoch,))
                 if _metadata(self._db).get('registry_epoch') != registry_epoch:
@@ -151,6 +162,44 @@ class CompanyPurchaseLedger:
                 "VALUES (?,?,?,?,'begun')",
                 (purchase['purchase_id'], ship_index, ship_code, _json(purchase)))
         return result.rowcount == 1
+
+    def reserve_sale(self, ship_index, ship_code, sale):
+        """Return None for a new reservation, or the disposition of an existing ID."""
+        _binding(ship_index, ship_code)
+        sale = sale_value(sale)
+        encoded = _json(sale)
+        with self._db:
+            reservation = self._db.execute(
+                'INSERT INTO sales (id, ship_index, ship_code, request) VALUES (?, ?, ?, ?) '
+                'ON CONFLICT(id) DO NOTHING', (sale['sale_id'], ship_index, ship_code, encoded))
+            if reservation.rowcount == 1:
+                return None
+            index, code, request, receipt = self._db.execute(
+                'SELECT ship_index, ship_code, request, native_receipt FROM sales WHERE id=?',
+                (sale['sale_id'],)).fetchone()
+            if (index, code, request) != (ship_index, ship_code, encoded):
+                return dict(sale, outcome='refused', reason='request_replayed')
+            if receipt is None:
+                return dict(sale, outcome='unknown')
+            return sale_receipt(json.loads(receipt))
+
+    def record_sale_result(self, ship_index, ship_code, receipt):
+        """Keep X4's observed outcome with the exact basket reserved before dispatch."""
+        _binding(ship_index, ship_code)
+        receipt = sale_receipt(receipt)
+        if receipt['outcome'] == 'confirmed' and receipt['ship_code'] != ship_code:
+            raise ValueError('sale receipt names another ship')
+        encoded = _json(receipt)
+        with self._db:
+            row = self._db.execute(
+                'SELECT request, native_receipt FROM sales WHERE id=? AND ship_index=? AND ship_code=?',
+                (receipt['sale_id'], ship_index, ship_code)).fetchone()
+            if row is None or any(receipt[key] != value for key, value in json.loads(row[0]).items()):
+                raise ValueError('sale receipt does not match the reservation')
+            if row[1] is not None and row[1] != encoded:
+                raise ValueError('sale already has a different native result')
+            self._db.execute('UPDATE sales SET native_receipt=? WHERE id=?', (encoded, receipt['sale_id']))
+        return receipt
 
     def finish(self, purchase_id, receipt):
         _id(purchase_id)
@@ -266,11 +315,14 @@ class CompanyPurchaseLedger:
         source = verify_purchase_ledger(checkpoint, reference, registry_epoch=self.registry_epoch)
         if source is None:
             return False
-        if self._db.execute('SELECT 1 FROM purchases LIMIT 1').fetchone() is not None:
+        if (self._db.execute('SELECT 1 FROM purchases LIMIT 1').fetchone() is not None
+                or self._db.execute('SELECT 1 FROM sales LIMIT 1').fetchone() is not None):
             raise ValueError('restore requires a fresh company purchase ledger')
         with closing(_open_snapshot(source)) as snapshot:
             snapshot.backup(self._db)
         with self._db:
+            # Purchase-only checkpoints predate the sale journal.
+            self._db.execute(_SALES_SCHEMA)
             self._db.execute("DELETE FROM metadata WHERE key IN ('checkpoint_id','checkpoint_sha256')")
             self._db.execute("UPDATE purchases SET status='pending' WHERE status='begun'")
         return True
