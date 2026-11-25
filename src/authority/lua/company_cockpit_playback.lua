@@ -53,8 +53,6 @@ function M.new(options)
         alignments = 0,
         generation_rejections = 0,
         refusals_over_50m = 0,
-        active_index = nil,
-        active_generation = nil,
     }
 
     local function watermark_key(index, generation)
@@ -177,21 +175,16 @@ function M.new(options)
         end
     end
 
-    local function bind_controller(observed, serial, generation)
-        binding = {
-            slot = slot_name, serial = serial, epoch = observed.epoch, index = observed.index,
-            actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
-            generation = generation,
-        }
-        session = options.adapter:bind(binding)
-        if not session then
-            options.fault('native_binding')
-            return false
-        end
+    local function accept_binding(verified)
+        binding = verified
+        active_index = verified.index
+        active_generation = verified.generation
+    end
+
+    local function new_controller(verified, active_session)
         stats.binds = stats.binds + 1
-        local active_session = session
-        controller = assert(factory.new({
-            enabled = true, own_index = own_index, binding = binding,
+        return assert(factory.new({
+            enabled = true, own_index = own_index, binding = verified,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
@@ -211,7 +204,6 @@ function M.new(options)
                 options.fault(reason, uncertain, stage)
             end,
         }))
-        return true
     end
 
     local ctrl = {}
@@ -246,8 +238,6 @@ function M.new(options)
                 if active_index == prev_index then
                     active_index = nil
                     active_generation = nil
-                    stats.active_index = nil
-                    stats.active_generation = nil
                 end
                 emit('withdrawn', {index = prev_index})
             end
@@ -265,8 +255,8 @@ function M.new(options)
             stop_track()
             if matches_active then
                 active_generation = nil
-                stats.active_generation = nil
             end
+            binding = nil
             reacquire_by_index[observed.index] = true
             emit('generation_revoked', {index = observed.index, generation = generation})
         end
@@ -352,27 +342,17 @@ function M.new(options)
             binding = nil
             active_index = nil
             active_generation = nil
-            stats.active_index = nil
-            stats.active_generation = nil
         end
 
         -- Strict generation check: never mix poses across two active grants without prior END/retirement.
-        if active_index == ship_index and active_generation ~= nil and sample.generation ~= active_generation then
-            if controller then
-                stats.generation_rejections = stats.generation_rejections + 1
-                emit('generation_mismatch', {
-                    index = ship_index, expected = active_generation, actual = sample.generation,
-                })
-                return false, 'generation_mismatch'
-            end
-            active_generation = sample.generation
-            stats.active_generation = active_generation
-            reacquire_by_index[ship_index] = true
-        elseif active_generation == nil then
-            active_index = ship_index
-            active_generation = sample.generation
-            stats.active_index = active_index
-            stats.active_generation = active_generation
+        local replacing_generation = active_index == ship_index and active_generation ~= nil
+            and sample.generation ~= active_generation
+        if replacing_generation and (controller or pending_align) then
+            stats.generation_rejections = stats.generation_rejections + 1
+            emit('generation_mismatch', {
+                index = ship_index, expected = active_generation, actual = sample.generation,
+            })
+            return false, 'generation_mismatch'
         end
 
         if pending_align then return true, 'alignment_pending' end
@@ -410,8 +390,8 @@ function M.new(options)
                 return false, 'read_failed'
             end
             local gap = dist3({x = sample.x, y = sample.y, z = sample.z}, actual)
+            local align_allowed = reacquire_by_index[ship_index] == true or replacing_generation
             if gap > MAX_STEP then
-                local align_allowed = reacquire_by_index[ship_index] == true
                 if not align_allowed or not allow_reacquire_align or type(temp_session.align) ~= 'function' then
                     temp_session:close()
                     stats.refusals_over_50m = stats.refusals_over_50m + 1
@@ -422,14 +402,15 @@ function M.new(options)
                 end
                 -- Strictly ONE authorized post-loss/post-withdrawal alignment per episode for this ship.
                 reacquire_by_index[ship_index] = false
-                binding = probe_binding
-                session = temp_session
-                local ok_align = session:align({x = sample.x, y = sample.y, z = sample.z})
+                local ok_align = temp_session:align({x = sample.x, y = sample.y, z = sample.z})
                 if ok_align ~= true then
-                    stop_track()
+                    temp_session:close()
+                    binding, active_index, active_generation = nil, nil, nil
                     options.fault('alignment_failed')
                     return false, 'alignment_failed'
                 end
+                accept_binding(probe_binding)
+                session = temp_session
                 stats.alignments = stats.alignments + 1
                 stats.reacquisitions = stats.reacquisitions + 1
                 pending_align = {
@@ -450,18 +431,25 @@ function M.new(options)
                 })
                 return true, 'aligned'
             end
-            temp_session:close()
             if not sample.real_velocity then
+                temp_session:close()
+                accept_binding(probe_binding)
                 last_by_index_gen[wkey] = {
                     sequence = sample.sequence, capture_time = sample.capture_time,
                     source_time = sample.source_time, arrival = arrival,
                 }
                 return true, 'baseline_recorded'
             end
-            if not bind_controller(observed, serial, sample.generation) then
-                return false, 'native_binding'
+            local candidate = new_controller(probe_binding, temp_session)
+            local ok, reason = candidate:push(probe_binding, sample, arrival)
+            if not ok then
+                candidate:stop()
+                temp_session:close()
+                return false, reason
             end
-            if reacquire_by_index[ship_index] == true then
+            accept_binding(probe_binding)
+            controller, session = candidate, temp_session
+            if align_allowed then
                 stats.reacquisitions = stats.reacquisitions + 1
                 emit('reacquired_direct', {
                     index = ship_index, dist = gap, sequence = sample.sequence,
@@ -469,16 +457,14 @@ function M.new(options)
                 })
             end
             reacquire_by_index[ship_index] = false
-        end
-
-        if not sample.real_velocity then
+        elseif not sample.real_velocity then
             return true, 'waiting_for_velocity'
-        end
-
-        local ok, reason = controller:push(binding, sample, arrival)
-        if not ok then
-            retire(reason or controller:state())
-            return false, reason
+        else
+            local ok, reason = controller:push(binding, sample, arrival)
+            if not ok then
+                retire(reason or controller:state())
+                return false, reason
+            end
         end
         last_by_index_gen[wkey] = {
             sequence = sample.sequence, capture_time = sample.capture_time,

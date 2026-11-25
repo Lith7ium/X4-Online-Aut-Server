@@ -129,6 +129,85 @@ class CompanyCockpitOptInConfigTests(unittest.TestCase):
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')
 class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
+    def test_only_accepted_playback_authorizes_alignment_after_end(self):
+        lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        lua.globals()._ROOT = str(ROOT).replace('\\', '/')
+        lua.execute(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
+            dofile(root .. 'motion_playback.lua')
+            dofile(root .. 'company_hull_playback.lua')
+            local module = dofile(root .. 'company_cockpit_playback.lua')
+            local epoch, first, second, third = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32), ('d'):rep(32)
+            local binding = {epoch = epoch, sector_macro = 'sector_a', index = 2,
+                             actor = '0x20', code = 'ABC-002'}
+
+            local function scenario(initial_bind, initial_x, expected_reason)
+                local now, position, alignments, alignment_readbacks = 10, 0, 0, 0
+                local can_bind = initial_bind
+                local function move(_, pose) position = pose.x; return true end
+                local adapter = {bind = function()
+                    if not can_bind then return nil end
+                    return {
+                        guard = function() return true end,
+                        read = function() return {x = position, y = 0, z = 0} end,
+                        write = move,
+                        align = function(self, pose)
+                            alignments = alignments + 1
+                            return move(self, pose)
+                        end,
+                        close = function() end,
+                    }
+                end}
+                local ctrl = module.new({
+                    enabled = true, own_index = 1, allow_reacquire_align = true, adapter = adapter,
+                    clock = function() return now end, game = function() return now end,
+                    paused = function() return false end, fault = function() end,
+                    record = function(event)
+                        if event.kind == 'alignment_readback' then
+                            assert(event.generation == second)
+                            alignment_readbacks = alignment_readbacks + 1
+                        end
+                        return true
+                    end,
+                })
+                local function push(generation, sequence, x)
+                    return ctrl:sample(binding, 1, {
+                        version = 3, epoch = epoch, generation = generation, sector_macro = binding.sector_macro,
+                        index = binding.index, sequence = sequence, x = x, y = 0, z = 0,
+                        source_time = now, capture_time = now, real_velocity = {x = 10, y = 0, z = 0},
+                    }, now)
+                end
+                local ok, reason = push(first, 1, initial_x)
+                if expected_reason then
+                    assert(not ok and reason == expected_reason, tostring(reason))
+                else
+                    assert(ok, tostring(reason))
+                end
+                ctrl:end_track(binding, 1, first)
+                can_bind, now = true, now + 0.1
+
+                ok, reason = push(second, 1, 120)
+                if expected_reason then
+                    assert(not ok and reason == 'correction_out_of_bounds', tostring(reason))
+                    assert(alignments == 0 and position == 0)
+                else
+                    assert(ok and reason == 'aligned', tostring(reason))
+                    assert(alignments == 1 and alignment_readbacks == 0)
+                    ok, reason = push(third, 1, 200)
+                    assert(not ok and reason == 'generation_mismatch', tostring(reason))
+                    now = now + 0.1
+                    ctrl:tick(now)
+                    assert(alignments == 1 and alignment_readbacks == 1 and position == 120)
+                end
+                ctrl:close()
+            end
+
+            scenario(false, 1, 'native_binding')
+            scenario(true, 120, 'correction_out_of_bounds')
+            scenario(true, 1, nil)
+        """)
+
     def test_x4_log_restarts_displacement_and_throttle_at_new_binding(self):
         lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
         lua.globals()._ROOT = str(ROOT).replace('\\', '/')
