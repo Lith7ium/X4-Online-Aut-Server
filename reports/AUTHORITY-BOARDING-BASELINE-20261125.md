@@ -39,6 +39,28 @@ owner. This baseline used static inspection. Native signal delivery, the
 captain's state immediately after victory, checkpoint recovery and remote
 participant attribution remain unverified.
 
+## Saved marine transport for the first operation
+
+An isolated GPU-free Linux provider at `063d3033` loaded a copy of
+`checkpoint-39a02fb17cc24fad896b3b578f9fdd08`. It created one vanilla
+Argon M transporter, ARU-541, with a Company NPC captain and eight marines.
+It was 18,544 m from ZNG-430 in `cluster_06_sector001_macro`.
+ZNG-430 occupied registry index 1666. Its displayed faction was Antigone
+and its true owner was Scale Plate. The fixture checked the target and its
+assigned captain before and after creating the transport.
+
+The regular checkpoint completed and the provider exited. An independent
+read of the saved components found the transport, its captain and eight
+crew members with the marine role. ZNG-430 retained its registry
+association and Scale Plate ownership. The transport had no index at
+creation or in the sealed 5,048-entry registry. It still needs an
+association before a boarding witness can attribute an operation to it.
+Boarding eligibility and operation outcome remain open.
+
+Checkpoint `checkpoint-bf225d9dab2e4f9c8da03240e8b75ad1` has SHA-256
+`b80e43e31242758bdd1b422d157c87b46a3c327399fcc58d810957763feb1bd4`.
+The private provider result is in `.local/native-boarding-crew-seed/run-01/server/result.json`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |

@@ -401,8 +401,10 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   callbacks against KHI-630. Its registry identity and HVC-420's last-attacker
   identity matched the pilot's offered checkpoint. The provider retained
   the ships' starting health. [Registered-pilot volley](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md)
-  Shared damage across machines and boarding remain open. The stock
-  boarding script identifies the captured ship before ownership changes.
+  Shared damage across machines and boarding remain open. A confirmed
+  disposable world now contains ARU-541 with its Company captain and
+  eight saved marines near the registered Scale Plate target ZNG-430.
+  ARU-541 still needs a registry association for a boarding witness.
   [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
