@@ -69,9 +69,11 @@ one exact provider pose for the Antigone freighter MFQ-419 in two independent
 runs. At `3e005330` the second native capture took 2.199 s and arrived after
 the two-second source lifetime. The maximum Python polling gap was 131 ms.
 With the 640×360 software profile at `24284592`, the cockpit confirmed 18
-server poses spanning 17.65 km. All 18 matched the provider. The captured
-intervals still precluded velocity. The next work is on capture cadence,
-followed by physical playback. The initial ZIPs predate these fixes.
+server poses spanning 17.65 km. All 18 matched the provider. At `0a4c4e08` each position still had its own
+registry check. Faster dispatch delivered 35 positions over 18.67 km,
+including a nonzero velocity of 1,146.46 m/s. Five low-attention position
+jumps exceeded the existing finite-difference rate bound. The four-nonzero
+acceptance and physical playback are open. The initial ZIPs predate these fixes.
 [Native NPC observations and checkpoints](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
 The regular Docked trade window at `abf70d48` received current server

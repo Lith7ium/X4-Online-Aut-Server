@@ -17,6 +17,7 @@ copy of the freighter or measure where X4 rendered it.
 | `1e8b5157` | Published the first pose. The source retired with `source_expired`. | Native radar saw MFQ-419 at 13,364 m with a 40,000 m range. Confirmed one identical pose and no velocity. | `checkpoint-00228a267c5a45ce8222b6903e403b92` |
 | `3e005330` | Captured the second pose 2.199 s after the first. The source had expired 182 ms earlier. | Confirmed sequence 1 with matching actor binding and pose. | `checkpoint-c607719d2dd8470cb7fb984c79af31aa` |
 | `24284592` | Published 25 native positions. No velocity met the rate interval. | 18 exact confirmations, 7 distinct positions, 17.65 km displacement. | `checkpoint-5208c84259934e7fbcb9d6e31abdf62f` |
+| `0a4c4e08` | 48 native poses, 40 with a real-time rate, including two nonzero vectors. | 35 confirmations spanning 18.67 km. One nonzero rate reached the cockpit. | `checkpoint-66b943f469274265b0c9e45028768774` |
 
 In the first run the provider checked the identifier for a pending join
 offer after resume. That identifier expires by design. The corrected
@@ -77,3 +78,26 @@ at 0.56 core. Both X4 processes ran on the same Ryzen 7 7800X3D with
 overlapping CPU affinities. These measurements cover this scene and the
 two X4 processes. They are insufficient to size a dedicated rental server
 or establish its performance with four pilots.
+
+## Per-position registry checks and velocity
+
+At `0a4c4e08` the sampler can start its next eligible registry request
+directly after the previous reply. Every capture still has a separate
+forward and reverse registry check. Between the first two poses, the
+new dispatch began 0.255 ms after the first capture, and its MD reply
+arrived about 680 ms later. The 48 captures were 0.542–1.278 s apart.
+
+All 35 native cockpit receipts matched their original provider captures,
+including positions, rates and both clocks. Twenty-eight contained a
+velocity. One was nonzero at (1117.540, 2.709, −255.852) m/s. The other
+nonzero provider rate belonged to sequence 44, after the cockpit's last
+visible sequence 35. Five native position jumps since the prior capture
+would have implied 5,517–6,841 m/s along X. The existing 5,000 m/s/axis
+limit suppressed those derivatives. This trial has not shown the four
+different positions with nonzero velocity required by the internal test.
+No cockpit position writer or physical smoothing was active.
+
+HVC-420's cockpit stopped acknowledging the freighter after its stock radar
+lost the sector. The provider paused and saved after HVC-420 left, and the
+saved marker and byte hash agreed. Final checkpoint SHA-256 was
+`f27e93322df588eaa27d19ae1f06d2cfc518f603f1a7195c778c6a5318b9e5e4`.
