@@ -29,6 +29,10 @@ local function canonical_decimal(field, minimum, maximum)
     if number and number <= maximum then return number end
 end
 
+local function is_sale_id(value)
+    return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
+end
+
 local function decode_notice(row)
     if #row ~= 7 or #row[3] ~= 32 or not row[3]:match('^[0-9a-f]+$')
             or #row[4] > 128 or not row[4]:match('^[a-z][a-z0-9_]*$')
@@ -81,7 +85,7 @@ local function market_client(options, prefix)
                 if #row[5] <= 64 and row[5]:match('^[a-z][a-z0-9_]*$') then fail() end
                 return
             end
-            if #row ~= 7 or row[4] ~= 'observed' then return end
+            if (#row ~= 7 and (not options.sales or #row ~= 8)) or row[4] ~= 'observed' then return end
             local balance = canonical_decimal(row[5], 0, max_exact_integer)
             local total = canonical_decimal(row[6], view.offset, 4096)
             local count = canonical_decimal(row[7], 0, 8)
@@ -90,7 +94,13 @@ local function market_client(options, prefix)
                 fail()
                 return
             end
+            if row[8] and (not is_sale_id(row[8]) or view.offset + count ~= total
+                    or (view.sale_id and view.sale_id ~= row[8])) then
+                fail()
+                return
+            end
             view.total, view.balance, view.count = total, balance, count
+            view.sale_id = row[8]
         elseif row[1] == 'MARKET_ROW' and #row == 12 then
             local index = canonical_decimal(row[4], 1, 8)
             local side, ware = row[5], row[6]
@@ -134,6 +144,24 @@ local function market_client(options, prefix)
         view.page_deadline = options.clock() + 8
     end
 
+    function api:take_sale(intent)
+        if not view or view.status ~= 'observed' or not view.sale_id or options.clock() >= view.deadline
+                or view.sector ~= intent.sector or view.station ~= intent.station_code then return end
+        local match
+        for _, offer in ipairs(view.rows) do
+            if offer.side == 'sell' and offer.tradeable and offer.ware == intent.ware
+                    and offer.price_cents == intent.price_cents then
+                if match then return end
+                match = offer
+            end
+        end
+        if not match or intent.quantity < math.max(1, match.min_amount)
+                or intent.quantity > math.min(65535, match.amount, match.cargo_units) then return end
+        local sale_id = view.sale_id
+        view.sale_id = nil
+        return sale_id, view.id
+    end
+
     function api:tick()
         if not view or view.status ~= 'pending' then return end
         local now = options.clock()
@@ -152,6 +180,7 @@ end
 
 function M.new(options)
     local pending, sequence, next_send = nil, 0, 0
+    local pending_sale, next_sale_send
     local running = false
     local last_notice_serial, last_notice_packet = 0, nil
     local next_notice_poll, next_notice_read = 0, 0
@@ -161,7 +190,7 @@ function M.new(options)
     api.market = market
 
     function api:request(intent, settle, displayed_total_cents)
-        if not running or pending or sequence >= max_order_integer or not options.available()
+        if not running or pending or pending_sale or sequence >= max_order_integer or not options.available()
                 or #intent.sector > 128 or not intent.sector:match('^[A-Za-z0-9_]+$')
                 or not intent.station_code:match(ship_code) or #intent.ware > 128
                 or not intent.ware:match('^[a-z][a-z0-9_]*$') then return false end
@@ -173,6 +202,48 @@ function M.new(options)
         pending = {intent = intent, settle = settle, packet = packet}
         next_send = 0
         return true
+    end
+
+    if options.sales and market then
+        function api:request_sale(intent, settle)
+            if not running or pending or pending_sale or not options.available()
+                    or type(intent) ~= 'table' or type(settle) ~= 'function'
+                    or type(intent.ship_code) ~= 'string' or not intent.ship_code:match(ship_code)
+                    or type(intent.quantity) ~= 'number' or intent.quantity % 1 ~= 0
+                    or type(intent.price_cents) ~= 'number' or intent.price_cents % 1 ~= 0
+                    or intent.price_cents < 1 or intent.price_cents > max_order_integer then return false end
+            local sale_id, view_id = market:take_sale(intent)
+            if not sale_id then return false end
+            local value = {sale_id=sale_id, sector=intent.sector, station_code=intent.station_code, ware=intent.ware,
+                quantity=intent.quantity, price_cents=intent.price_cents, ship_code=intent.ship_code}
+            local packet = prefix .. table.concat({'SALE', sale_id, view_id, value.sector, value.station_code,
+                value.ware, value.quantity, value.price_cents, value.ship_code}, '|')
+            pending_sale, next_sale_send = {intent=value, settle=settle, packet=packet}, 0
+            return true, sale_id
+        end
+    end
+
+    local function handle_sale(row)
+        local intent = pending_sale.intent
+        if row[2] ~= intent.sale_id or row[3] ~= intent.ship_code then return end
+        local outcome = row[4]
+        if outcome == 'confirmed' and #row == 7 then
+            local credit = canonical_decimal(row[5], 1, max_exact_integer)
+            local balance = canonical_decimal(row[6], 0, max_exact_integer)
+            local cargo = canonical_decimal(row[7], 0, max_order_integer)
+            if not credit or not balance or not cargo then return end
+            intent.credited_cents, intent.company_balance_cents, intent.cargo_units = credit, balance, cargo
+        elseif outcome == 'refused' and #row == 6 and row[5] == 'price_changed' then
+            local price = canonical_decimal(row[6], 1, max_order_integer)
+            if not price or price == intent.price_cents then return end
+            intent.reason, intent.current_price_cents = 'price_changed', price
+        elseif #row ~= 4 or (outcome ~= 'refused' and outcome ~= 'unknown') then
+            return
+        end
+        intent.outcome = outcome
+        local settle = pending_sale.settle
+        pending_sale = nil
+        settle(intent)
     end
 
     function api:set_running(value)
@@ -212,6 +283,8 @@ function M.new(options)
                     options.undock_result(row)
                 elseif row[1] == 'NOTICE' and options.recovered_notice and running and options.available() then
                     handle_notice(packet, row)
+                elseif pending_sale and row[1] == 'SALE_RECEIPT' then
+                    handle_sale(row)
                 elseif pending and row[1] == 'RECEIPT' and row[2] == tostring(sequence) then
                     local receipt = {outcome = row[3]}
                     for key, value in pairs(pending.intent) do receipt[key] = value end
@@ -261,6 +334,10 @@ function M.new(options)
             next_notice_poll = now + 4
             options.net:send(prefix .. 'NOTICE_POLL')
         end
+        if pending_sale and running and options.available() and now >= next_sale_send then
+            next_sale_send = now + 0.25
+            options.net:send(pending_sale.packet)
+        end
         if pending and running and options.available() and now >= next_send then
             next_send = now + (pending.awaiting_statement and 1 or 0.25)
             options.net:send(pending.packet)
@@ -288,7 +365,7 @@ function M.new_x4(config, pinned, udp)
             and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor()) == selected
     end
     local options = {net = net, lease = config.lease, clock = udp.monotonic, available = available,
-        trade_view = config.trade_view == true}
+        trade_view = config.trade_view == true, sales = config.sales == true}
     options.recovered_notice = function(notice)
         return X4LAN_COMPANY_TRADE_CAPTURE.show_recovered_purchase(notice)
     end
@@ -329,6 +406,9 @@ function M.new_x4(config, pinned, udp)
         if not map then return false end
         local capture = assert(X4LAN_COMPANY_TRADE_CAPTURE.install_x4({
             enabled = true, menu = map, ship = actor, dynamic_station = true, market = source.market,
+            request_sale = source.request_sale and function(intent, settle)
+                return source:request_sale(intent, settle)
+            end,
             request = function(intent, settle, displayed_total_cents)
                 return source:request(intent, settle, displayed_total_cents)
             end,

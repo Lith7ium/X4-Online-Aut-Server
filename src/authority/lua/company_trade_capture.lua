@@ -124,7 +124,12 @@ function M.install(o)
                     ship_code = receipt.ship_code, ware = intent.ware, cargo_units = receipt.cargo_units})
             elseif receipt.outcome == 'refused' then
                 phase = 'ready'
-                o.notice('sale_refused')
+                local price = receipt.current_price_cents
+                if receipt.reason == 'price_changed' and positive_integer(price) and price ~= intent.price_cents then
+                    o.notice('sale_refused', nil, {price_cents=intent.price_cents, current_price_cents=price})
+                else
+                    o.notice('sale_refused')
+                end
             else
                 o.notice('sale_uncertain')
             end
@@ -422,6 +427,10 @@ function M.install_x4(o)
             end
         elseif status == 'pilot_reported' then
             text = 'Company purchase recorded from your report: ' .. format_credits(settled_total_cents) .. '.'
+        elseif status == 'sale_refused' and details then
+            text = 'Company sale refused. Unit price changed from ' .. format_credits(details.price_cents)
+                .. ' to ' .. format_credits(details.current_price_cents)
+                .. '. Reopen the stock offer and confirm the new price.'
         elseif status == 'refused' and details then
             text = 'Company purchase refused. Unit price changed from ' .. format_credits(details.price_cents)
                 .. ' to ' .. format_credits(details.current_price_cents) .. '.'

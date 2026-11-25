@@ -208,6 +208,16 @@ if sale_mode then
     buy, sell = reopen()
     menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -2)
     menu.buttonConfirmTrade()
+    if arg[2] == 'price_changed' then
+        local refusal = receipt(sale_requests[3], 2)
+        refusal.outcome, refusal.reason, refusal.current_price_cents = 'refused', 'price_changed', 3501
+        settle_sale(refusal)
+        assert(notices[#notices].status == 'sale_refused')
+        assert(notices[#notices].snapshot.price_cents == 3473 and notices[#notices].snapshot.current_price_cents == 3501)
+        menu.buttonConfirmTrade()
+        assert(notices[#notices].status == 'already_attempted' and #sale_requests == 3)
+        return
+    end
     local wrong = receipt(sale_requests[3], 2)
     if arg[2] == 'wrong_price' then
         wrong.price_cents = 3472

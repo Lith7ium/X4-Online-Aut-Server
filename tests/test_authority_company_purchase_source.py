@@ -234,6 +234,77 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.assertEqual(set(self.source.control_callbacks(SimpleNamespace(_company_purchase_statement_version=1))),
                          {'company_purchase_exchange', 'company_purchase_statement', 'company_purchase_statement_result'})
 
+    def test_sale_is_minted_by_admitted_market_view_and_receipt_is_exact(self):
+        from authority.client_seat_overlay import company_purchase_config
+
+        with self.assertRaises(ValueError):
+            CompanyPurchaseSource(sales=True)
+        source = CompanyPurchaseSource(expected_epoch='a' * 32, trade_view=True, sales=True)
+        self.addCleanup(source.close)
+        registry = {'epoch': 'a' * 32}
+        settings = company_purchase_config(source, 7354, registry)
+        self.assertIn('sales=true', settings)
+        self.client.connect(source.socket.getsockname())
+        source.bind_validator(lambda peer: self.peer_valid and peer == self.client.getsockname())
+        lease = source._lease
+        prefix = f'T|{lease}|'
+
+        def send(payload):
+            self.client.send((prefix + payload).encode('ascii'))
+
+        def offer(serial):
+            view = f'{lease[:24]}{serial:08x}'
+            send(f'MARKET|{view}|sector|CTD-093|0')
+            request = source.market_exchange(None)
+            self.assertIsNotNone(request)
+            source.market_exchange(dict(request, outcome='observed', company_balance_cents=930100,
+                total_offers=1, offers=[dict(side='sell', ware='water', price_cents=3473, amount=60,
+                    min_amount=2, cargo_units=12, free_units=0, tradeable=True)]))
+            header = self.receive()
+            self.assertEqual(header[:7], ['MARKET_PAGE', view, '0', 'observed', '930100', '1', '1'])
+            sale_id = header[7]
+            self.assertRegex(sale_id, r'^[0-9a-f]{32}$')
+            self.assertEqual(self.receive()[4:8], ['sell', 'water', '3473', '60'])
+            return view, sale_id
+
+        view, sale_id = offer(1)
+        packet = f'SALE|{sale_id}|{view}|sector|CTD-093|water|2|3473|WRN-302'
+        send(packet.replace('|water|2|', '|water|13|'))
+        send(packet.replace('|3473|', '|3474|'))
+        self.assertIsNone(source.sale_exchange(None))
+        self.peer_valid = False
+        send(packet)
+        self.assertIsNone(source.sale_exchange(None))
+        self.peer_valid = True
+        # Closing the view can arrive before a retransmission of its confirmed order.
+        send(f'MARKET_CLOSE|{view}')
+        send(packet)
+        expected = dict(sale_id=sale_id, sector='sector', station_code='CTD-093',
+                        ware='water', quantity=2, price_cents=3473)
+        self.assertEqual(source.sale_exchange(None), expected)
+        send(packet)
+        self.assertEqual(source.sale_exchange(None), expected)
+        receipt = dict(expected, outcome='confirmed', credited_cents=6900, company_balance_cents=937000,
+                       cargo_units=0, ship_code='WRN-302')
+        for incompatible in (dict(quantity=3), dict(ship_code='BAD-001'), dict(cargo_units=-1)):
+            self.assertEqual(source.sale_exchange({**receipt, **incompatible}), expected)
+        self.assertIsNone(source.sale_exchange(receipt))
+        answer = ['SALE_RECEIPT', sale_id, 'WRN-302', 'confirmed', '6900', '937000', '0']
+        self.assertEqual(self.receive(), answer)
+        send(packet)
+        self.assertIsNone(source.sale_exchange(None))
+        self.assertEqual(self.receive(), answer)
+
+        view, new_id = offer(2)
+        self.assertNotEqual(sale_id, new_id)
+        packet = f'SALE|{new_id}|{view}|sector|CTD-093|water|2|3473|WRN-302'
+        send(packet)
+        expected['sale_id'] = new_id
+        self.assertEqual(source.sale_exchange(None), expected)
+        refusal = dict(expected, outcome='refused', reason='price_changed', current_price_cents=3501)
+        self.assertIsNone(source.sale_exchange(refusal))
+        self.assertEqual(self.receive(), ['SALE_RECEIPT', new_id, 'WRN-302', 'refused', 'price_changed', '3501'])
+
     @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_native_queue_requires_admission_and_matches_one_receipt(self):
         root = Path(__file__).resolve().parents[1]

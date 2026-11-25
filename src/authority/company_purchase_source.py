@@ -1,4 +1,4 @@
-"""One pending cockpit purchase on the existing owned-client loopback boundary."""
+"""Cockpit trades on the existing owned-client loopback boundary."""
 import re
 import secrets
 import socket
@@ -14,6 +14,10 @@ _MAX_EXACT = 9007199254740991
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 _WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
+_SALE_ID = re.compile(r'[0-9a-f]{32}')
+_SALE_NUMBER = re.compile(r'[1-9][0-9]{0,9}')
+_SALE_MAX_UNITS = 65535
+_SALE_VIEW_TTL = 90
 _MARKET_KEYS = ('view_id', 'sector', 'station_code', 'offset')
 _MARKET_PAGE_SIZE = 8
 _MARKET_MAX_OFFERS = 4096
@@ -37,12 +41,16 @@ def _amount(value, low, high):
 class CompanyPurchaseSource:
     """Exchange bounded IPC messages on the owner thread without waiting for X4."""
 
-    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None, undock=False, trade_view=False):
+    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None,
+                 undock=False, trade_view=False, sales=False):
         if type(undock) is not bool:
             raise ValueError('invalid Company undock test flag')
         if type(trade_view) is not bool:
             raise ValueError('invalid Company trade view flag')
-        self.undock, self.trade_view = undock, trade_view
+        if type(sales) is not bool or (sales and not trade_view):
+            raise ValueError('Company sales require an enabled Company trade view')
+        self.undock, self.trade_view, self.sales = undock, trade_view, sales
+        self._sale_view = self._sale_intent = self._sale_answer = self._sale_ship = None
         self._market_serial = 0
         self._market_request = self._market_packets = None
         self._undock_nonce = secrets.token_hex(16) if undock else None
@@ -91,6 +99,8 @@ class CompanyPurchaseSource:
         config = {'epoch': epoch, 'index': index, 'port': self._socket.getsockname()[1], 'lease': self._lease}
         if self.trade_view:
             config['trade_view'] = True
+        if self.sales:
+            config['sales'] = True
         if self.undock:
             config.update(undock_nonce=self._undock_nonce, undock_request=self._undock_request)
         return config
@@ -231,6 +241,9 @@ class CompanyPurchaseSource:
               or any(request[k] != self._market_request[k] for k in _MARKET_KEYS[:-1])
               or offset != self._market_request['offset'] + _MARKET_PAGE_SIZE):
             return
+        if self.sales and serial > self._market_serial:
+            self._sale_view = dict(view_id=view_id, sector=sector, station_code=station, offers={},
+                                   sale_id=None, used=False, expires=time.monotonic() + _SALE_VIEW_TTL)
         self._peer = peer
         self._market_serial, self._market_request, self._market_packets = serial, request, None
 
@@ -259,6 +272,10 @@ class CompanyPurchaseSource:
                          ('side', 'ware', 'price_cents', 'amount', 'min_amount', 'cargo_units', 'free_units')),
                          '1' if offer['tradeable'] else '0']
                         for index, offer in enumerate(offers, 1)]
+                if self.sales:
+                    sale_id = self._record_sale_page(page)
+                    if sale_id is not None:
+                        header.append(sale_id)
                 contents = [header, *rows]
             else:
                 contents = [['MARKET_PAGE', *prefix, outcome, page['reason']]]
@@ -267,6 +284,100 @@ class CompanyPurchaseSource:
         # Keep the authoritative observation alive while this window owns it.
         # A later offset advances the same view; CLOSE or a new ID retires it.
         return dict(request)
+
+    def _record_sale_page(self, page):
+        view = self._sale_view
+        if view is None or time.monotonic() >= view['expires']:
+            return None
+        for offer in page['offers']:
+            if offer['side'] == 'sell' and offer['tradeable']:
+                key = offer['ware'], offer['price_cents']
+                # Ambiguous duplicate bids are not independently selectable.
+                view['offers'][key] = (None if key in view['offers'] else
+                                       (max(1, offer['min_amount']),
+                                        min(_SALE_MAX_UNITS, offer['amount'], offer['cargo_units'])))
+        if page['offset'] + len(page['offers']) == page['total_offers']:
+            view['sale_id'] = secrets.token_hex(16)
+            return view['sale_id']
+        return None
+
+    def _send_sale_answer(self):
+        if self._sale_answer is not None and self._validator(self._peer) is True:
+            try:
+                self._socket.sendto(self._sale_answer, self._peer)
+            except BlockingIOError:
+                pass  # The same local request ID retrieves the retained result.
+
+    def _receive_sale(self, row, peer):
+        if not self.sales or len(row) != 8:
+            return
+        sale_id, view_id, sector, station, ware, quantity, price, ship = row
+        if (not _SALE_ID.fullmatch(sale_id) or not _SALE_ID.fullmatch(view_id)
+                or not _SECTOR.fullmatch(sector) or not _CODE.fullmatch(station)
+                or not _WARE.fullmatch(ware) or not _CODE.fullmatch(ship)
+                or not _SALE_NUMBER.fullmatch(quantity) or not _SALE_NUMBER.fullmatch(price)
+                or self._validator(peer) is not True):
+            return
+        quantity, price = int(quantity), int(price)
+        intent = dict(sale_id=sale_id, sector=sector, station_code=station, ware=ware,
+                      quantity=quantity, price_cents=price)
+        if self._sale_intent is not None:
+            if self._sale_intent['sale_id'] == sale_id:
+                if intent == self._sale_intent and ship == self._sale_ship:
+                    self._send_sale_answer()
+                return
+            if self._sale_answer is None:
+                return
+        view = self._sale_view
+        if (view is None or view['used'] or time.monotonic() >= view['expires']
+                or int(view_id[24:], 16) != self._market_serial
+                or (view_id, sector, station, sale_id) !=
+                   (view['view_id'], view['sector'], view['station_code'], view['sale_id'])
+                or price > _MAX_INTEGER or (self._intent is not None and self._answer is None)):
+            return
+        limits = view['offers'].get((ware, price))
+        if limits is None or not limits[0] <= quantity <= limits[1]:
+            return
+        view['used'] = True
+        self._peer, self._sale_intent, self._sale_ship, self._sale_answer = peer, intent, ship, None
+
+    def sale_exchange(self, receipt_or_none):
+        """Return the active sale value to the bound poll or deliver its terminal receipt."""
+        self._owner()
+        if not self.sales or self._validator is None:
+            raise RuntimeError('Company sale IPC is not enabled and bound')
+        self._receive()
+        intent = self._sale_intent
+        if (intent is None or self._sale_answer is not None or self._validator(self._peer) is not True):
+            return None
+        receipt = receipt_or_none
+        if (type(receipt) is not dict or any(type(receipt.get(key)) is not type(value) or receipt[key] != value
+                                             for key, value in intent.items())):
+            return dict(intent)
+        outcome = receipt.get('outcome')
+        ship = receipt.get('ship_code')
+        if ship is not None and ship != self._sale_ship:
+            return dict(intent)
+        if outcome == 'confirmed' and ship == self._sale_ship:
+            try:
+                fields = [_amount(receipt.get('credited_cents'), 1, _MAX_EXACT),
+                          _amount(receipt.get('company_balance_cents'), 0, _MAX_EXACT),
+                          _amount(receipt.get('cargo_units'), 0, _MAX_INTEGER)]
+            except ValueError:
+                return dict(intent)
+        elif outcome == 'refused' and receipt.get('reason') == 'price_changed':
+            price = receipt.get('current_price_cents')
+            if type(price) is not int or not 1 <= price <= _MAX_INTEGER or price == intent['price_cents']:
+                return dict(intent)
+            fields = ['price_changed', str(price)]
+        elif outcome in ('refused', 'unknown'):
+            fields = []
+        else:
+            return dict(intent)
+        self._sale_answer = self._prefix + '|'.join(
+            ('SALE_RECEIPT', intent['sale_id'], self._sale_ship, outcome, *fields)).encode('ascii')
+        self._send_sale_answer()
+        return None
 
     def _receive(self):
         for _ in range(16):
@@ -290,6 +401,9 @@ class CompanyPurchaseSource:
                 continue
             if fields[0] in ('MARKET', 'MARKET_CLOSE'):
                 self._receive_market(fields, peer)
+                continue
+            if fields[0] == 'SALE':
+                self._receive_sale(fields[1:], peer)
                 continue
             if fields[0] == 'UNDOCK':
                 self._receive_undock(fields[1:], peer)
@@ -316,6 +430,7 @@ class CompanyPurchaseSource:
                     self._send_receipt()
                 continue
             if (sequence != self._sequence + 1 or self._awaiting_statement
+                    or (self._sale_intent is not None and self._sale_answer is None)
                     or (self._intent is not None and self._answer is None)):
                 continue
             purchase = {'purchase_id': secrets.token_hex(16), **intent}

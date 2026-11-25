@@ -202,3 +202,57 @@ assert(view.status == 'unavailable' and reopened.id ~= view.id and reopened.stat
 market_message('MARKET_PAGE', reopened.id, 0, 'refused|dock_mismatch')
 market_source:tick()
 assert(reopened.status == 'unavailable' and reopened.rows == nil)
+
+-- Only the admitted, selected trade window can consume its minted sale ID.
+local sale_in, sale_out, sale_receipts = {}, {}, {}
+local sale_source = module.new({net = {
+    send = function(_, value) sale_out[#sale_out + 1] = value end,
+    receive = function() return table.remove(sale_in, 1) end,
+}, lease = lease, clock = function() return now end, available = function() return available end,
+    trade_view = true, sales = true})
+local sale_terms = {sector=station.sector, station_code=station.station_code, ware='water',
+    quantity=2, price_cents=3473, ship_code='WRN-302'}
+local function receive_sale(result) sale_receipts[#sale_receipts+1] = result end
+assert(market_source.request_sale == nil and not sale_source:request_sale(sale_terms, receive_sale))
+sale_source:set_running(true)
+local function offer_sale(id)
+    local view = assert(sale_source.market:open(station))
+    sale_source:tick()
+    sale_in = {prefix .. 'MARKET_PAGE|' .. view.id .. '|0|observed|930100|1|1|' .. id,
+               prefix .. 'MARKET_ROW|' .. view.id .. '|0|1|sell|water|3473|60|2|12|0|1'}
+    sale_source:tick()
+    assert(view.status == 'observed')
+    return view
+end
+local sale_id = ('c'):rep(32)
+local sale_view = offer_sale(sale_id)
+sale_terms.quantity = 13
+assert(not sale_source:request_sale(sale_terms, receive_sale))
+sale_terms.quantity = 2
+local ok, id = sale_source:request_sale(sale_terms, receive_sale)
+assert(ok and id == sale_id and not sale_source:request_sale(sale_terms, receive_sale))
+sale_source.market:close()
+sale_source:tick()
+local packet = prefix .. 'SALE|' .. sale_id .. '|' .. sale_view.id .. '|' .. sale_terms.sector
+    .. '|' .. sale_terms.station_code .. '|water|2|3473|WRN-302'
+assert(sale_out[#sale_out] == packet)
+now = now + .5
+sale_source:tick()
+assert(sale_out[#sale_out] == packet and sale_out[#sale_out-1] == packet)
+sale_in = {prefix .. 'SALE_RECEIPT|' .. ('d'):rep(32) .. '|WRN-302|confirmed|6900|937000|10',
+           prefix .. 'SALE_RECEIPT|' .. sale_id .. '|BAD-001|confirmed|6900|937000|10',
+           prefix .. 'SALE_RECEIPT|' .. sale_id .. '|WRN-302|confirmed|6900|937000|-1'}
+sale_source:tick()
+assert(#sale_receipts == 0 and not sale_source:request_sale(sale_terms, receive_sale))
+sale_in = {prefix .. 'SALE_RECEIPT|' .. sale_id .. '|WRN-302|confirmed|6900|937000|0'}
+sale_source:tick()
+assert(#sale_receipts == 1 and sale_receipts[1].credited_cents == 6900 and sale_receipts[1].cargo_units == 0)
+assert(not sale_source:request_sale(sale_terms, receive_sale))
+local second_id = ('e'):rep(32)
+offer_sale(second_id)
+ok, id = sale_source:request_sale(sale_terms, receive_sale)
+assert(ok and id == second_id)
+sale_in = {prefix .. 'SALE_RECEIPT|' .. second_id .. '|WRN-302|refused|price_changed|3501'}
+sale_source:tick()
+assert(#sale_receipts == 2 and sale_receipts[2].outcome == 'refused'
+    and sale_receipts[2].price_cents == 3473 and sale_receipts[2].current_price_cents == 3501)
