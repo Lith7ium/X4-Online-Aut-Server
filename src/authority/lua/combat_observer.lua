@@ -57,7 +57,7 @@ local function fmt_opt(v)
     return tostring(v)
 end
 
--- Parse one pipe-delimited X4AuthorityCombatObserver.Event payload (39 fields).
+-- Parse the 39 original fields and the optional observed registry epoch.
 function M.parse_event(payload)
     if type(payload) ~= 'string' then return nil end
     local p = split(payload, '|')
@@ -65,6 +65,8 @@ function M.parse_event(payload)
     local seq = num(p[1])
     local age = num(p[3])
     if not seq or not age then return nil end
+    local epoch = p[40]
+    if epoch and (#epoch > 64 or not epoch:match('^[A-Za-z0-9_-]+$')) then epoch = nil end
     return {
         seq = seq,
         kind = p[2],
@@ -105,6 +107,7 @@ function M.parse_event(payload)
         maxhull = num(p[37]) or -1,
         hullpct = num(p[38]) or -1,
         collided = flag(p[39]),
+        registry_epoch = epoch,
     }
 end
 

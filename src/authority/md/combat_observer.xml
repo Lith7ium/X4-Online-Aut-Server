@@ -25,11 +25,12 @@
    <cues>
     <library name="ReadRegistryState" purpose="include_actions">
      <actions>
-      <set_value name="$reg_ready" exact="State.$epoch != ''
+      <set_value name="$reg_ready" exact="State.$armed and State.$epoch != ''
           and md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
           and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
           and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$ships?
           and md.X4AuthorityShipRegistry.State.$byship?"/>
+      <set_value name="$registry_epoch" exact="if $reg_ready then md.X4AuthorityShipRegistry.State.$epoch else ''"/>
      </actions>
     </library>
 
@@ -171,6 +172,9 @@
       </do_if>
 
       <set_value name="$payload" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$seq,$kind,$age_s,$v_str,$v_label,$v_code,$v_owner,$v_reg,$v_ctrl,$v_occ,$ea_str,$ea_label,$ea_code,$ea_owner,$ea_reg,$ea_ctrl,$ea_isship,$ea_pilot,$la_str,$la_label,$la_code,$la_owner,$la_reg,$la_ctrl,$la_isship,$last_att_time,$c_str,$is_root,$c_macro,$p2_str,$p3_str,$amount,$shield,$maxshield,$shieldpct,$hull,$maxhull,$hullpct,$collided]"/>
+      <do_if value="$reg_ready">
+       <set_value name="$payload" exact="'%s|%s'.[$payload,$registry_epoch]"/>
+      </do_if>
       <debug_text text="'[X4LAN] AUTH_COMBAT_OBS ' + $payload"/>
       <raise_lua_event name="'X4AuthorityCombatObserver.Event'" param="$payload"/>
      </actions>
@@ -194,8 +198,13 @@
       <set_value name="State.$watch_player_ship" exact="@$a.$watch_player_ship == true"/>
       <set_value name="State.$watch_player_owned" exact="@$a.$watch_player_owned == true"/>
       <set_value name="State.$armed" exact="true"/>
-      <debug_text text="'[X4LAN] AUTH_COMBAT_OBS_CTRL action=Arm epoch=%s player_ship=%s player_owned=%s'.[State.$epoch,State.$watch_player_ship,State.$watch_player_owned]"/>
-      <raise_lua_event name="'X4AuthorityCombatObserver.Status'" param="'%s|Armed|%s'.[@$a.$request_id,State.$epoch]"/>
+      <include_actions ref="ReadRegistryState"/>
+      <debug_text text="'[X4LAN] AUTH_COMBAT_OBS_CTRL action=Arm epoch=%s player_ship=%s player_owned=%s registry_epoch=%s'.[State.$epoch,State.$watch_player_ship,State.$watch_player_owned,$registry_epoch]"/>
+      <set_value name="$status" exact="'%s|Armed|%s'.[@$a.$request_id,State.$epoch]"/>
+      <do_if value="$reg_ready">
+       <set_value name="$status" exact="'%s|%s'.[$status,$registry_epoch]"/>
+      </do_if>
+      <raise_lua_event name="'X4AuthorityCombatObserver.Status'" param="$status"/>
      </actions>
     </cue>
 

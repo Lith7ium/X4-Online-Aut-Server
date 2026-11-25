@@ -97,6 +97,7 @@ class CombatEvent:
     hullpct: float
     collided: bool
     phase: str = 'unlabelled'
+    registry_epoch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ def _opt_float(raw: str | None) -> float | None:
 
 
 def parse_md_event(payload: str, *, phase: str = 'unlabelled') -> CombatEvent | None:
+    """Parse the native record with its optional observed registry epoch in field 40."""
     parts = payload.strip().split('|')
     if len(parts) < 39:
         return None
@@ -184,6 +186,7 @@ def parse_md_event(payload: str, *, phase: str = 'unlabelled') -> CombatEvent | 
         age = float(parts[2])
     except ValueError:
         return None
+    registry_epoch = parts[39] if len(parts) > 39 else ''
     return CombatEvent(
         seq=seq,
         kind=parts[1],
@@ -225,6 +228,7 @@ def parse_md_event(payload: str, *, phase: str = 'unlabelled') -> CombatEvent | 
         hullpct=_float(parts[37], -1.0),
         collided=parts[38] == '1',
         phase=phase,
+        registry_epoch=registry_epoch if re.fullmatch(r'[A-Za-z0-9_-]{1,64}', registry_epoch) else None,
     )
 
 

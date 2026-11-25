@@ -1,6 +1,10 @@
 """Offline static, LuaJIT 2.1, and parser tests for read-only combat observation."""
+from dataclasses import replace
+import gzip
+import hashlib
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from xml.etree import ElementTree as ET
 
@@ -15,6 +19,9 @@ from authority.combat_observation import (
     validate_lua_read_only,
     validate_md_read_only,
 )
+from authority.checkpoints import Checkpoint
+from test_authority_registry_availability_evidence import EPOCH, RUN, build_xml
+from tools.dev.authority_combat_hit_evidence import resolve_hit
 
 MD_PATH = ROOT / 'src' / 'authority' / 'md' / 'combat_observer.xml'
 LUA_PATH = ROOT / 'src' / 'authority' / 'lua' / 'combat_observer.lua'
@@ -48,6 +55,30 @@ def _sample_event_line(
         shield, maxshield, shieldpct, hull, maxhull, hullpct, collided,
     ]
     return '|'.join(str(x) for x in fields)
+
+
+class CheckpointDamageEvidenceTests(unittest.TestCase):
+    def test_live_indices_and_codes_must_agree_with_the_same_save_epoch(self):
+        ships = ('<component class="ship_s" id="[0x101]" owner="player" code="HVC-420"/>'
+                 '<component class="ship_s" id="[0x102]" owner="xenon" code="VLY-685"/>')
+        compressed = gzip.compress(build_xml((1, 1), definitions=ships))
+        # Runtime actor handles may differ from the saved component IDs.
+        payload = _sample_event_line(8, 'shield_damaged', 10.0, victim='0x456', v_owner='xenon',
+                                     last_att='0x789')
+        event = parse_md_event(payload + '|' + EPOCH)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'save.xml.gz'
+            path.write_bytes(compressed)
+            checkpoint = Checkpoint('checkpoint-' + 'a' * 32, path, hashlib.sha256(compressed).hexdigest(),
+                                    len(compressed), RUN)
+            report = resolve_hit(checkpoint, event)
+            self.assertEqual(report['victim'], {'code': 'VLY-685', 'index': 2})
+            self.assertEqual(report['last_attacker'], {'code': 'HVC-420', 'index': 1})
+            self.assertIsNone(report['event_attacker'])
+            for mismatch in (replace(event, registry_epoch=None), replace(event, registry_epoch='other'),
+                             replace(event, victim_code='HVC-420'), replace(event, last_att_reg=3)):
+                with self.subTest(mismatch=mismatch), self.assertRaises(ValueError):
+                    resolve_hit(checkpoint, mismatch)
 
 
 class CombatObservationContractTests(unittest.TestCase):
@@ -87,8 +118,11 @@ class CombatObservationContractTests(unittest.TestCase):
         for field in ('epoch', 'last', 'ships', 'byship', 'faulted'):
             self.assertIn(f'md.X4AuthorityShipRegistry.State.${field}?', ready)
         self.assertIn("State.$epoch != ''", ready)
+        self.assertIn('State.$armed and', ready)
         self.assertIn('md.X4AuthorityShipRegistry.State.$epoch == State.$epoch', ready)
         self.assertIn('not md.X4AuthorityShipRegistry.State.$faulted', ready)
+        epoch = root.find(".//library[@name='ReadRegistryState']/actions/set_value[@name='$registry_epoch']")
+        self.assertEqual(epoch.get('exact'), "if $reg_ready then md.X4AuthorityShipRegistry.State.$epoch else ''")
 
         lookup = root.find(".//library[@name='ResolveRegistryBinding']/actions")
         self.assertEqual(lookup.find("set_value[@name='$registered_index']").get('exact'), '0')
@@ -108,13 +142,21 @@ class CombatObservationContractTests(unittest.TestCase):
         self.assertEqual(binding.find("set_value[@name='$registered_index']").get('exact'), '$candidate_index')
 
         emit = root.find(".//library[@name='Emit']/actions")
+        self.assertIsNotNone(emit.find("include_actions[@ref='ReadRegistryState']"))
         for actor, output in (('victim', 'v_reg'), ('ev_att', 'ea_reg'), ('last_att', 'la_reg')):
             role = emit.find(f"do_if[@value='@${actor}.exists']")
             self.assertEqual(role.find("set_value[@name='$lookup_ship']").get('exact'), f'${actor}')
             self.assertIsNotNone(role.find("include_actions[@ref='ResolveRegistryBinding']"))
             self.assertEqual(role.find(f"set_value[@name='${output}']").get('exact'), '$registered_index')
             self.assertEqual(emit.find(f"set_value[@name='${output}']").get('exact'), '0')
+        payload = emit.find("do_if[@value='$reg_ready']/set_value[@name='$payload']")
+        self.assertEqual(payload.get('exact'), "'%s|%s'.[$payload,$registry_epoch]")
         self.assertIsNotNone(emit.find("raise_lua_event[@param='$payload']"))
+
+        arm = root.find(".//cue[@name='Arm']/actions")
+        self.assertIsNotNone(arm.find("include_actions[@ref='ReadRegistryState']"))
+        status = arm.find("do_if[@value='$reg_ready']/set_value[@name='$status']")
+        self.assertEqual(status.get('exact'), "'%s|%s'.[$status,$registry_epoch]")
 
         watch = root.find(".//cue[@name='Watch']/actions/do_if[@value='State.$armed']")
         self.assertIsNotNone(watch.find("include_actions[@ref='ReadRegistryState']"))
@@ -124,6 +166,17 @@ class CombatObservationContractTests(unittest.TestCase):
 
 
 class CombatObservationLuaJitTests(unittest.TestCase):
+    def test_lua_registry_epoch_is_optional(self):
+        lua = _load_luajit_runtime()
+        mod = lua.execute(LUA_PATH.read_text(encoding='utf-8'))
+        payload = _sample_event_line(1, 'shield_damaged', 20.0)
+        for suffix, epoch in (('', None), ('|', None), ('|bad epoch', None), ('|observed-epoch_1', 'observed-epoch_1')):
+            with self.subTest(suffix=suffix):
+                event = mod.parse_event(payload + suffix)
+                self.assertEqual(event.registry_epoch, epoch)
+                self.assertEqual(event.victim_reg, 2)
+                self.assertEqual(event.last_att_reg, 1)
+
     def test_luajit_parse_classify_readback_and_weapon_profile(self):
         lua = _load_luajit_runtime()
         mod = lua.execute(LUA_PATH.read_text(encoding='utf-8'))
@@ -218,6 +271,21 @@ class CombatObservationLuaJitTests(unittest.TestCase):
 
 
 class CombatObservationAnalyzerTests(unittest.TestCase):
+    def test_log_registry_epoch_comes_from_the_observation(self):
+        prefix = '[X4LAN] AUTH_COMBAT_OBS '
+        payload = _sample_event_line(1, 'shield_damaged', 20.0)
+        lines = [
+            '[X4LAN] AUTH_COMBAT_OBS_CTRL action=Arm epoch=requested registry_epoch=observed-epoch_1',
+            prefix + payload + '|observed-epoch_1',
+            prefix + payload,
+            prefix + payload + '|',
+            prefix + payload + '|bad epoch',
+            prefix + payload + '|' + 'a' * 65,
+        ]
+        events, _ = parse_log('\n'.join(lines))
+        self.assertEqual([event.registry_epoch for event in events], ['observed-epoch_1', None, None, None, None])
+        self.assertEqual((events[0].victim_reg, events[0].ev_att_reg, events[0].last_att_reg), (2, 0, 1))
+
     def test_parse_log_and_summarize_phases(self):
         lines = [
             '[X4LAN] AUTH_COMBAT_PHASE phase=ff_shield_only',
