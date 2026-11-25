@@ -132,6 +132,19 @@ position to 0.017 m median error in game time. This makes the pilot a
 candidate source for visible NPC movement. Authority transfer is open.
 [20:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795633226619129) · [Simultaneous trajectories](AUTHORITY-REGISTERED-NPC-PAIR-LINUX-20261125.md)
 
+One stock sale now has a receipt and a saved result across two Linux X4
+instances. WRN-302 sold two water to CTD-093 through a single stock
+confirmation over loopback TLS. The Company received 69 Cr, the station
+gained two water and the pilot saw the new balance and cargo on reopening
+the menu. The last-pilot save contains exactly one sale and the six prior
+purchases. The issuing pilot's launcher reported a local config cleanup
+error after the sale. The corrected cleanup at `df53039d` passed on a
+private copy of the exact staged config. The verified trading run used
+`f74edbfe`. The private archives in `.local/flight-build-f74edbfe`
+correspond to that earlier revision and include the cleanup defect.
+Windows and WAN sale acceptance are pending.
+[Sale receipt, ship journal and final save](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#sale-through-the-admitted-linux-pilots-stock-trade-menu) · [21:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795636827290579)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
