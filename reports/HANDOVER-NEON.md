@@ -93,6 +93,12 @@ still needs the operator. Neon is parked until the weekly reset on
 Astra owns its former fleet work.
 [18:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795626039051069)
 
+At 19:00 Cobalt confirmed that his Windows system also lacks the original
+x4-re references and released lane tool. The corresponding twelve tests
+remain open. His WAN flight is waiting for the operator. Astra is checking
+X4's native ship velocity and the temporary cockpit-side NPC order.
+[19:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795629624674239)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
