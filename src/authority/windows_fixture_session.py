@@ -110,7 +110,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         windows_dll, dll_sha256, deadline, keepalive_interval,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
-                        company_hull_playback_index=None, on_stage=None, company_purchases=False,
+                        company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False,
                         play_until_exit=False, cockpit_radar_playback=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
@@ -152,6 +152,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('company motion requires a seat selection and its own transport')
     if type(play_until_exit) is not bool or (play_until_exit and (select_ship is None or motion_request is not None)):
         raise ValueError('open-ended play requires a Company pilot')
+    if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
+        raise ValueError('Company undock test requires Company purchases')
     if type(company_purchases) is not bool or (company_purchases and (select_ship is None or not require_registry_snapshot)):
         raise ValueError('Company purchases require a verified selected seat')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
@@ -192,7 +194,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_motion:
                     owner.request_ship_motion()
                 if company_purchases:
-                    purchase_epoch = owner.enable_company_purchases()
+                    purchase_epoch = (owner.enable_company_purchases(undock=True) if company_undock_test
+                                      else owner.enable_company_purchases())
                 download = owner.download(workspace.download_dir)
                 staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
                 if time.monotonic() >= deadline or workspace.guard() is not True:
@@ -231,7 +234,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_purchases:
                     from .company_purchase_source import CompanyPurchaseSource
                     purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
-                                                            server_fingerprint=server_fingerprint)
+                                                            server_fingerprint=server_fingerprint, undock=company_undock_test)
                     source_options['company_purchase'] = purchase_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],

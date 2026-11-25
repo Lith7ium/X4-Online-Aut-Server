@@ -48,14 +48,17 @@ function M.new(options)
         running = value == true
     end
 
+
     function api:tick()
-        if not pending then return end
+        if not pending and not options.undock_result then return end
         for _ = 1, 8 do
             local packet = options.net:receive()
             if not packet then break end
             if #packet <= 512 and packet:sub(1, #prefix) == prefix then
                 local row = fields(packet:sub(#prefix + 1))
-                if row[1] == 'RECEIPT' and row[2] == tostring(sequence) then
+                if row[1] == 'UNDOCK_RESULT' and options.undock_result then
+                    options.undock_result(row)
+                elseif pending and row[1] == 'RECEIPT' and row[2] == tostring(sequence) then
                     local receipt = {outcome = row[3]}
                     for key, value in pairs(pending.intent) do receipt[key] = value end
                     if row[3] == 'confirmed' and #row == 7 then
@@ -99,7 +102,7 @@ function M.new(options)
             end
         end
         local now = options.clock()
-        if running and options.available() and now >= next_send then
+        if pending and running and options.available() and now >= next_send then
             next_send = now + (pending.awaiting_statement and 1 or 0.25)
             options.net:send(pending.packet)
         end
@@ -120,12 +123,29 @@ function M.new_x4(config, pinned, udp)
     ffi.cdef[[bool IsGamePaused(void); bool IsPlayerValid(void); UniverseID GetPlayerControlledShipID(void);]]
     local C = ffi.C
     local net = assert(udp.open('127.0.0.1', config.port))
-    local source = M.new({net = net, lease = config.lease, clock = udp.monotonic,
-        available = function()
-            return selected and C.IsPlayerValid() and not C.IsGamePaused()
-                and C.GetPlayerControlledShipID() == selected
-                and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor()) == selected
-        end})
+    local function available()
+        return selected and C.IsPlayerValid() and not C.IsGamePaused()
+            and C.GetPlayerControlledShipID() == selected
+            and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor()) == selected
+    end
+    local options = {net = net, lease = config.lease, clock = udp.monotonic, available = available}
+    local undock
+    if config.undock_nonce then
+        undock = assert(X4LAN_COMPANY_UNDOCK_HOLD.new_ipc(config, net, udp.monotonic, available))
+        options.undock_result = function(row) undock:result(row) end
+    end
+    local source = M.new(options)
+    if undock then
+        local set_running, tick = source.set_running, source.tick
+        function source:set_running(value)
+            set_running(self, value)
+            undock:set_running(value)
+        end
+        function source:tick()
+            tick(self)
+            undock:tick(seat)
+        end
+    end
     function source:prepare_seat()
         if selected then return true end
         local actor = seat and X4LAN_RESOLVE_STRING.parse_hex(seat:controlled_actor())

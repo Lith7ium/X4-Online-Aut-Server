@@ -157,6 +157,8 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertNotIn('authority_identity_phase', (target / 'ui/config.lua').read_text())
         self.assertIn('ui/company_trade_capture.lua', manifest)
         self.assertIn('ui/company_purchase_source.lua', manifest)
+        self.assertNotIn('ui/company_undock_hold.lua', manifest)
+        self.assertNotIn('md/company_client_undock.xml', manifest)
         paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
         self.assertNotIn('ui/authority_identity_probe.lua', paths)
         self.assertLess(paths.index('ui/client_seat.lua'),
@@ -176,6 +178,30 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
         root = Path(__file__).resolve().parents[1]
         subprocess.run(['luajit', 'tests/authority_client_seat.lua'], cwd=root, check=True)
+
+    def test_explicit_undock_overlay_orders_hook_before_participant_and_stages_lock_cue(self):
+        from authority.company_purchase_source import CompanyPurchaseSource
+
+        status = ('ready', '1' * 32, 2, '2' * 64)
+        snapshot = {
+            'format': 3, 'source_registry_checked': True, 'epoch': status[1],
+            'evidence_scope': 'saved checkpoint bytes only', 'run_id': 'e' * 32,
+            'issued_count': 2, 'mapping_sha256': status[3],
+            'availability_bits': '11', 'operational_bits': '11',
+            'available_count': 2, 'unavailable_count': 0, 'operational_count': 2,
+        }
+        source = CompanyPurchaseSource(expected_epoch=status[1], undock=True)
+        self.addCleanup(source.close)
+        manifest = self.install(registry_status=status, registry_nonce='3' * 32,
+                                registry_snapshot=snapshot, seat_index=2, company_purchase=source)
+        self.assertIn('md/company_client_undock.xml', manifest)
+        target = self.view / 'extensions/x4_lan_lab'
+        paths = [item.attrib['name'] for item in ET.parse(target / 'ui.xml').iter('file')]
+        self.assertLess(paths.index('ui/company_undock_hold.lua'),
+                        paths.index('ui/authority_two_x4_participant_probe.lua'))
+        settings = (target / 'ui/config.lua').read_text()
+        self.assertIn('undock_nonce=', settings)
+        self.assertIn('undock_request=', settings)
 
     def test_incomplete_registry_options_leave_no_overlay(self):
         for changes in ({'registry_nonce': '3' * 32},

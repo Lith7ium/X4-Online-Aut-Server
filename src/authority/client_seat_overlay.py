@@ -10,6 +10,18 @@ COMPANY_PURCHASE_UI = {
     for name in ('company_trade_capture', 'company_purchase_source')
 }
 
+COMPANY_UNDOCK_UI = {'company_undock_hold.lua': 'src/authority/lua/company_undock_hold.lua'}
+COMPANY_UNDOCK_MD = {'company_client_undock.xml': 'src/authority/md/company_client_undock.xml'}
+
+
+def company_purchase_ui(source):
+    return COMPANY_PURCHASE_UI | COMPANY_UNDOCK_UI if source.undock else COMPANY_PURCHASE_UI
+
+
+def company_purchase_md(source):
+    return COMPANY_UNDOCK_MD if source.undock else {}
+
+
 COMPANY_MOTION_UI = {
     'replica_motion_binding.lua': 'src/authority/lua/replica_motion_binding.lua',
     'authority_job_descriptor_probe.lua': 'tools/dev/authority_job_descriptor_probe.lua',

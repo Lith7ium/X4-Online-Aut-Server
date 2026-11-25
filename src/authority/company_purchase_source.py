@@ -13,6 +13,15 @@ _MAX_EXACT = 9007199254740991
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 _WARE = re.compile(r'[a-z][a-z0-9_]{0,127}')
+_UNDOCK_KEYS = ('request_id', 'sector', 'station_code', 'bay_seed', 'bay_macro', 'dockarea_macro')
+
+
+def _valid_undock_berth(sector, station, seed, bay, area):
+    if (not _SECTOR.fullmatch(sector) or not _CODE.fullmatch(station)
+            or not re.fullmatch(r'-?[1-9][0-9]{0,19}', seed)
+            or not _WARE.fullmatch(bay) or not _WARE.fullmatch(area)):
+        return False
+    return -(2**63) <= int(seed) <= 2**64 - 1
 
 
 def _amount(value, low, high):
@@ -24,7 +33,13 @@ def _amount(value, low, high):
 class CompanyPurchaseSource:
     """Exchange bounded IPC messages on the owner thread without waiting for X4."""
 
-    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None):
+    def __init__(self, *, expected_epoch=None, server_fingerprint=None, state_dir=None, undock=False):
+        if type(undock) is not bool:
+            raise ValueError('invalid Company undock test flag')
+        self.undock = undock
+        self._undock_nonce = secrets.token_hex(16) if undock else None
+        self._undock_request = secrets.token_hex(16) if undock else None
+        self._undock_intent = self._undock_answer = None
         self._expected_epoch = expected_epoch
         self._server_fingerprint, self._state_dir = server_fingerprint, state_dir
         self._statements = self._displayed_total = None
@@ -62,7 +77,10 @@ class CompanyPurchaseSource:
             self._statements = CompanyPurchaseStatements(self._server_fingerprint, epoch, index,
                                                           state_dir=self._state_dir)
         self._registry = (epoch, index)
-        return {'epoch': epoch, 'index': index, 'port': self._socket.getsockname()[1], 'lease': self._lease}
+        config = {'epoch': epoch, 'index': index, 'port': self._socket.getsockname()[1], 'lease': self._lease}
+        if self.undock:
+            config.update(undock_nonce=self._undock_nonce, undock_request=self._undock_request)
+        return config
 
     def bind_validator(self, validate_peer):
         self._owner()
@@ -107,6 +125,24 @@ class CompanyPurchaseSource:
             except BlockingIOError:
                 pass  # The native owner repeats the same pending local request.
 
+    def _send_undock(self):
+        if self._undock_answer is not None and self._peer is not None and self._validator(self._peer) is True:
+            try:
+                self._socket.sendto(self._undock_answer, self._peer)
+            except BlockingIOError:
+                pass
+
+    def _receive_undock(self, fields, peer):
+        if (not self.undock or len(fields) != len(_UNDOCK_KEYS)
+                or fields[0] != self._undock_request or not _valid_undock_berth(*fields[1:])
+                or self._validator(peer) is not True):
+            return
+        value = dict(zip(_UNDOCK_KEYS, fields))
+        if self._undock_intent is None:
+            self._undock_intent, self._peer = value, peer
+        if self._undock_intent == value:
+            self._send_undock()
+
     def _receive(self):
         for _ in range(16):
             try:
@@ -121,9 +157,15 @@ class CompanyPurchaseSource:
                     or peer[0] != '127.0.0.1' or self._peer not in (None, peer)):
                 continue
             try:
-                sequence, sector, station, ware, quantity, price, total = packet[len(self._prefix):].decode('ascii').split('|')
-            except (ValueError, UnicodeError):
+                fields = packet[len(self._prefix):].decode('ascii').split('|')
+            except UnicodeError:
                 continue
+            if fields[0] == 'UNDOCK':
+                self._receive_undock(fields[1:], peer)
+                continue
+            if len(fields) != 7:
+                continue
+            sequence, sector, station, ware, quantity, price, total = fields
             if (not _SECTOR.fullmatch(sector) or not _CODE.fullmatch(station) or not _WARE.fullmatch(ware)
                     or not all(re.fullmatch(r'[1-9][0-9]{0,9}', value) for value in (sequence, quantity, price))):
                 continue
@@ -165,9 +207,30 @@ class CompanyPurchaseSource:
             return dict(self._intent)
         return None
 
+    def undock_exchange(self, receipt_or_none):
+        self._owner()
+        if not self.undock or self._validator is None:
+            raise RuntimeError('Company undock IPC is not enabled and bound')
+        self._receive()
+        if (self._undock_intent is not None and self._undock_answer is None
+                and type(receipt_or_none) is dict and all(
+                    receipt_or_none.get(key) == value for key, value in self._undock_intent.items())):
+            outcome = receipt_or_none.get('outcome')
+            if outcome not in ('confirmed', 'refused', 'unknown'):
+                raise ValueError('invalid Company undock outcome')
+            echo = [self._undock_intent[key] for key in _UNDOCK_KEYS]
+            self._undock_answer = self._prefix + '|'.join(('UNDOCK_RESULT', outcome, *echo)).encode('ascii')
+            self._send_undock()
+        if (self._undock_intent is not None and self._undock_answer is None
+                and self._validator(self._peer) is True):
+            return dict(self._undock_intent)
+        return None
+
     def control_callbacks(self, owner):
         self._owner()
         callbacks = {'company_purchase_exchange': self.exchange}
+        if self.undock:
+            callbacks['company_undock_exchange'] = self.undock_exchange
         version = getattr(owner, '_company_purchase_statement_version', None)
         if self._statements is not None and type(version) is int and version == 1:
             callbacks.update(company_purchase_statement=self.statement,

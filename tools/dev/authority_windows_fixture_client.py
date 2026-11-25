@@ -61,6 +61,8 @@ def parser():
                         help='choose a company ship and use the separate authenticated motion channel')
     result.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
+    result.add_argument('--company-undock-test', action='store_true',
+                        help='isolated test: require authority confirmation before stock undock')
     playback = result.add_mutually_exclusive_group()
     playback.add_argument('--company-cockpit-playback', action='store_true',
                           help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
@@ -93,6 +95,9 @@ def parser():
 def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
+    undock_test = getattr(args, 'company_undock_test', False)
+    if undock_test and not args.company_purchases:
+        raise ValueError('--company-undock-test requires --company-purchases')
     company_pilot = (args.choose_company_ship or args.company_motion or args.company_purchases or
                      args.company_ship_index is not None)
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
@@ -141,6 +146,8 @@ def run(args, *, on_stage=None):
     motion_options = {'company_motion': True} if args.company_motion else {}
     if args.company_purchases:
         motion_options['company_purchases'] = True
+    if undock_test:
+        motion_options['company_undock_test'] = True
     if playback_index is not None:
         motion_options['company_hull_playback_index'] = playback_index
     if cockpit_radar_playback:

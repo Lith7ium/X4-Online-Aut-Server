@@ -33,6 +33,39 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
     def receive(self):
         return self.client.recv(512).decode().split('|')[2:]
 
+    def test_opt_in_undock_on_owned_purchase_ipc(self):
+        self.assertNotIn('company_undock_exchange', self.source.control_callbacks(None))
+        self.assertNotIn('undock_nonce', self.settings)
+        with self.assertRaises(RuntimeError):
+            self.source.undock_exchange(None)
+
+        source = CompanyPurchaseSource(undock=True)
+        self.addCleanup(source.close)
+        config = source.configure('a' * 32, 7354)
+        self.client.connect(('127.0.0.1', config['port']))
+        source.bind_validator(lambda peer: self.peer_valid and peer == self.client.getsockname())
+        exchange = source.control_callbacks(None)['company_undock_exchange']
+        intent = dict(request_id=config['undock_request'], sector='cluster_01_sector001_macro',
+                      station_code='BIM-169', bay_seed='507326418098681806',
+                      bay_macro='bay_macro', dockarea_macro='area_macro')
+        packet = f"T|{config['lease']}|UNDOCK|" + '|'.join(intent.values())
+        self.peer_valid = False
+        self.client.send(packet.encode())
+        self.assertIsNone(exchange(None))
+        self.peer_valid = True
+        self.client.send(packet.replace(intent['bay_seed'], '18446744073709551616').encode())
+        self.assertIsNone(exchange(None))
+        self.client.send(packet.encode())
+        self.assertEqual(exchange(None), intent)
+        self.assertEqual(exchange(dict(intent, bay_seed='9', outcome='confirmed')), intent)
+        self.send(1, lease=config['lease'])
+        self.assertIsNotNone(source.exchange(None))
+        self.assertIsNone(exchange(dict(intent, outcome='confirmed')))
+        self.assertEqual(self.receive(), ['UNDOCK_RESULT', 'confirmed', *intent.values()])
+        self.client.send(packet.encode())
+        self.assertIsNone(exchange(None))
+        self.assertEqual(self.receive(), ['UNDOCK_RESULT', 'confirmed', *intent.values()])
+
     def test_pending_retry_and_late_duplicate_remain_bound(self):
         self.send(1, lease='f' * 32)
         self.send(1, ware='Water')

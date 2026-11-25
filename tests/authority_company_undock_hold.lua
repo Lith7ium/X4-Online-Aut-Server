@@ -138,3 +138,69 @@ assert(f.api:confirm(grant))
 f:read()
 f.commands[2][2](false)
 assert(f.api:state() == 'failed' and #f.stock == 0 and not f.api:confirm(grant))
+
+-- Exercise the actual native IPC adapter through two correlated MD answers.
+local nonce = ('d'):rep(32)
+local events, native, packets = {}, {}, {}
+local permit, application_clock, replayed = true, 1, 0
+local berth = {sector = 'sector_a', station_code = 'BIM-169', bay_seed = '507326418098681806',
+    bay_macro = 'bay_macro', dockarea_macro = 'area_macro', external = true, occupied_by_ship = true}
+local menu = {buttonUndock = function() replayed = replayed + 1 end,
+    isUndockButtonActive = function() return permit end}
+local seat = {
+    controlled_actor = function() return '0x1234' end,
+    read_occupied_berth = function(_, reply) reply(berth); return true end,
+}
+function RegisterEvent(name, callback)
+    events[name] = callback
+    return true
+end
+function AddUITriggeredEvent(screen, action, args)
+    assert(screen == 'X4AuthorityClientUndock' and action == 'Change')
+    assert(args.nonce == nonce and args.request_id == rid and args.epoch == epoch and args.index == 7354)
+    assert(args.actor == '0x1234' and args.bay_seed == berth.bay_seed and args.sector == berth.sector)
+    native[#native + 1] = args.action
+    return true
+end
+function DebugError() end
+hold.install_x4 = function(options)
+    options.menu = menu
+    options.permission = menu.isUndockButtonActive
+    options.menu_context = function() return true end
+    return hold.install(options)
+end
+
+local ipc = hold.new_ipc({lease = 'lease', undock_nonce = nonce, undock_request = rid,
+    epoch = epoch, index = 7354}, {send = function(_, packet) packets[#packets + 1] = packet end},
+    function() return application_clock end, function() return true end)
+local stock_row = menu.buttonUndock
+ipc:tick(nil)
+assert(stock_row ~= menu.buttonUndock and #native == 0)
+ipc:set_running(true)
+ipc:tick(seat)
+assert(native[1] == 'set')
+local answer = events['X4AuthorityClientUndock.Result']
+answer(nil, ('e'):rep(32) .. '|set|ok')
+menu.buttonUndock()
+assert(#packets == 0 and replayed == 0)
+permit = false
+answer(nil, nonce .. '|set|ok')
+menu.buttonUndock()
+menu.buttonUndock()
+ipc:tick(seat)
+assert(packets[1] == 'T|lease|UNDOCK|' .. rid .. '|sector_a|BIM-169|507326418098681806|bay_macro|area_macro')
+ipc:tick(seat)
+assert(#packets == 1)
+application_clock = 1.25
+ipc:tick(seat)
+assert(#packets == 2 and packets[1] == packets[2])
+local receipt = {'UNDOCK_RESULT', 'confirmed', rid, 'sector_a', 'BIM-169', '2', 'bay_macro', 'area_macro'}
+ipc:result(receipt)
+assert(#native == 1)
+receipt[6] = berth.bay_seed
+ipc:result(receipt)
+assert(native[2] == 'release' and replayed == 0)
+permit = true
+answer(nil, nonce .. '|release|ok')
+answer(nil, nonce .. '|release|ok')
+assert(replayed == 1 and #native == 2)

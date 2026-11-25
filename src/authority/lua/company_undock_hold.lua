@@ -66,7 +66,7 @@ function M.install(options)
             if not current(operation) or operation.phase ~= phase then return end
             local berth = berth_from_seat(snapshot)
             if not berth or (operation.berth and not same_berth(operation.berth, berth)) then
-                operation.phase = 'failed'
+                if phase == 'arming' then active = nil else operation.phase = 'failed' end
                 return
             end
             operation.berth = berth
@@ -213,6 +213,101 @@ function M.install_x4(options)
                 and menu.currentcontainer ~= 0 and C.GetContextByClass(ship, 'container', false) == menu.currentcontainer
         end,
     })
+end
+
+-- Use the already owned Company purchase UDP socket. The first hold marker
+-- and request ID are private, generated independently by the Python owner.
+function M.new_ipc(config, net, clock, available)
+    assert(token(config.undock_nonce) and token(config.undock_request))
+    local screen = 'X4AuthorityClientUndock'
+    local prefix = 'T|' .. config.lease .. '|'
+    local running, controller, pending, change = false, nil, nil, nil
+    local next_send, selected_seat = 0, nil
+    local api = {}
+    local seat_proxy = {
+        controlled_actor = function() return selected_seat and selected_seat:controlled_actor() end,
+        read_occupied_berth = function(_, callback)
+            return selected_seat and selected_seat:read_occupied_berth(callback)
+        end,
+    }
+
+    local function live()
+        return running and available()
+    end
+
+    assert(RegisterEvent(screen .. '.Result', function(_, row)
+        if not change or type(row) ~= 'string' then return end
+        local expected = config.undock_nonce .. '|' .. change.action .. '|'
+        if row ~= expected .. 'ok' and row ~= expected .. 'refused' then return end
+        local action, settled = change.action, change.callback
+        change = nil
+        if live() then
+            local accepted = row == expected .. 'ok'
+            if accepted then
+                DebugError('[X4LAN] AUTH_COMPANY_UNDOCK_HOLD ' .. (action == 'set' and 'set' or 'released'))
+            end
+            settled(accepted)
+        end
+    end) ~= false)
+
+    function api:set_running(value)
+        running = value == true
+        if not running and controller and controller:state() ~= 'idle' then
+            controller:stop()
+            pending, change = nil, nil
+        end
+    end
+
+    function api:result(row)
+        if not pending or not live() or #row ~= 8 or row[3] ~= pending.request_id then return end
+        local result = {outcome = row[2], request_id = row[3]}
+        for i, key in ipairs(berth_keys) do
+            if row[3 + i] ~= pending[key] then return end
+            result[key] = row[3 + i]
+        end
+        if result.outcome == 'confirmed' then
+            controller:confirm(result)
+        elseif result.outcome ~= 'refused' and result.outcome ~= 'unknown' then
+            return
+        end
+        pending = nil
+    end
+
+    function api:tick(seat)
+        selected_seat = seat
+        if not controller then
+            controller = M.install_x4({
+                enabled = true, seat = seat_proxy, epoch = config.epoch, ship_index = config.index,
+                admission = function() return live() and config.undock_nonce or nil end,
+                request_id = function() return config.undock_request end,
+                hold = function(action, binding, fn)
+                    if not live() or change or binding.admission ~= config.undock_nonce then return false end
+                    local args = {action = action, nonce = config.undock_nonce, request_id = config.undock_request,
+                        epoch = binding.epoch, index = binding.ship_index, actor = binding.actor}
+                    for _, key in ipairs(berth_keys) do args[key] = binding.berth[key] end
+                    change = {action = action, callback = fn}
+                    if AddUITriggeredEvent(screen, 'Change', args) == false then change = nil; return false end
+                    return true
+                end,
+                request = function(request)
+                    if not live() or pending then return false end
+                    pending, next_send = request, 0
+                    return true
+                end,
+            })
+        end
+        if not controller or not live() then return end
+        controller:tick()
+        if controller:state() == 'idle' then controller:arm() end
+        local now = clock()
+        if pending and controller:state() == 'pending' and now >= next_send then
+            next_send = now + 0.25
+            local parts = {'UNDOCK', pending.request_id}
+            for _, key in ipairs(berth_keys) do parts[#parts + 1] = pending[key] end
+            net:send(prefix .. table.concat(parts, '|'))
+        end
+    end
+    return api
 end
 
 X4LAN_COMPANY_UNDOCK_HOLD = M

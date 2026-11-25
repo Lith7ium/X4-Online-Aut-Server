@@ -27,6 +27,8 @@ def main(argv=None):
                         help='opt into the server’s separate authenticated company motion channel')
     parser.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
+    parser.add_argument('--company-undock-test', action='store_true',
+                        help='isolated test: require authority confirmation before stock undock')
     playback = parser.add_mutually_exclusive_group()
     playback.add_argument('--company-cockpit-playback', action='store_true',
                           help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
@@ -37,6 +39,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
+    if args.company_undock_test and not args.company_purchases:
+        parser.error('--company-undock-test requires --company-purchases')
     if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
         parser.error('--company-ship-index must be between 1 and 200000')
     cockpit_radar_playback = args.company_cockpit_playback or args.company_cockpit_playback_index is not None
@@ -68,6 +72,8 @@ def main(argv=None):
         motion_options = {'company_motion': True} if args.company_motion else {}
         if args.company_purchases:
             motion_options['company_purchases'] = True
+        if args.company_undock_test:
+            motion_options['company_undock_test'] = True
         if playback_index is not None:
             motion_options['company_hull_playback_index'] = playback_index
         if cockpit_radar_playback:

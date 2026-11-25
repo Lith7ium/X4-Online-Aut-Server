@@ -25,8 +25,8 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
-    COMPANY_MOTION_UI, COMPANY_PURCHASE_UI, company_motion_config, company_motion_md, company_motion_ui,
-    company_purchase_config, export_motion_buffer, extend_seat_gate,
+    COMPANY_MOTION_UI, company_motion_config, company_motion_md, company_motion_ui,
+    company_purchase_config, company_purchase_md, company_purchase_ui, export_motion_buffer, extend_seat_gate,
 )
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
@@ -248,9 +248,11 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     if company_purchase is not None:
         config = config[:-2] + company_purchase_config(company_purchase, seat_index, full_registry) + '}\n'
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
-        ui_files[insertion:insertion] = ['ui/' + name for name in COMPANY_PURCHASE_UI]
-        for name, source in COMPANY_PURCHASE_UI.items():
-            files['ui/' + name] = _source(ROOT / source, 1024 * 1024)
+        purchase_ui = company_purchase_ui(company_purchase)
+        ui_files[insertion:insertion] = ['ui/' + name for name in purchase_ui]
+        for folder, sources in (('ui', purchase_ui), ('md', company_purchase_md(company_purchase))):
+            for name, source in sources.items():
+                files[folder + '/' + name] = _source(ROOT / source, 1024 * 1024)
     if company_motion is not None:
         config = config[:-2] + company_motion_config(company_motion, seat_index, full_registry) + '}\n'
         ui_sources = company_motion_ui(company_motion)

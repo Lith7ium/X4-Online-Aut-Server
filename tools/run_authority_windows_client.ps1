@@ -14,12 +14,16 @@ param(
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
     [switch] $CompanyPurchases,
+    [switch] $CompanyUndockTest,
     [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CompanyUndockTest -and -not $CompanyPurchases) {
+    throw '-CompanyUndockTest requires -CompanyPurchases'
+}
 if ($ChooseCompanyShip -and $PSBoundParameters.ContainsKey('CompanyShipIndex')) {
     throw 'Choose either an interactive ship prompt or a fixed company ship index.'
 }
@@ -138,6 +142,9 @@ if ($CompanyMotion) {
 }
 if ($CompanyPurchases) {
     $clientArgs += '--company-purchases'
+}
+if ($CompanyUndockTest) {
+    $clientArgs += '--company-undock-test'
 }
 & $Python $client @clientArgs
 exit $LASTEXITCODE
