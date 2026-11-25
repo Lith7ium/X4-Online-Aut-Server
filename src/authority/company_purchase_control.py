@@ -7,7 +7,7 @@ import time
 
 from .company_command_window import CompanyCommandWindow
 from .company_fleet_orders import fleet_order, fleet_receipt
-from .company_trade_messages import PURCHASE_FIELDS, purchase_receipt, purchase_value
+from .company_trade_messages import PURCHASE_FIELDS, purchase_receipt, purchase_value, sale_receipt, sale_value
 from .company_trade_view import view_page, view_request
 from .company_undock_messages import UndockWindow
 from .experimental_tcp_participants import ExperimentalTCPParticipants, ParticipantGuardFailure
@@ -104,6 +104,7 @@ class _PurchaseWindow:
         self.seen = set()
         self.challenges = OrderedDict()
         self.undock = UndockWindow()
+        self.sale = CompanyCommandWindow(sale_value, sale_receipt, 'sale_id')
         self.fleet = CompanyCommandWindow(
             lambda value: fleet_order(value, version=fleet_version),
             lambda value: fleet_receipt(value, version=fleet_version), 'order_id')
@@ -148,9 +149,11 @@ class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
     def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *,
-                 undock_exchange=None, trade_view_exchange=None, fleet_exchange=None, fleet_version=1):
+                 undock_exchange=None, trade_view_exchange=None, fleet_exchange=None, fleet_version=1,
+                 sale_exchange=None):
         _envelope(epoch, handle, attempt, ship_index, 1)
-        callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange, fleet_exchange)
+        callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange,
+                     fleet_exchange, sale_exchange)
         if all(value is None for value in callbacks) or any(
                 value is not None and not callable(value) for value in callbacks):
             raise ValueError('invalid company purchase callbacks')
@@ -158,6 +161,7 @@ class ClientPurchaseControl:
         self.exchange = exchange
         self.undock_exchange = undock_exchange
         self.fleet_exchange = fleet_exchange
+        self.sale_exchange = sale_exchange
         self.trade_view_exchange = trade_view_exchange
         self.statement = statement
         self.statement_result = statement_result
@@ -172,6 +176,9 @@ class ClientPurchaseControl:
         if kind == 'company_fleet_poll':
             return self._reply_order(command, envelope, check, self.window.fleet, self.fleet_exchange,
                                      'company_fleet_result', 'order')
+        if kind == 'company_sale_poll':
+            return self._reply_order(command, envelope, check, self.window.sale, self.sale_exchange,
+                                     'company_sale_result', 'sale')
         if type(command) is dict and command.get('kind') == _STATEMENT:
             return self._reply_statement(command, envelope, check)
         if type(command) is dict and command.get('kind') == _STATEMENT_DELIVERY:
@@ -302,11 +309,20 @@ def poll_company_fleet(participants, handle, attempt_id, ship_index, receipt=Non
                                'fleet', 'order', 'fleet_order_version')
 
 
+def poll_company_sale(participants, handle, attempt_id, ship_index, receipt=None, *, guard=None):
+    """Poll a sale on the admitted pilot's negotiated control connection."""
+    return _poll_company_order(participants, handle, attempt_id, ship_index, receipt, guard,
+                               'sale', 'sale', 'sale_version')
+
+
 def _poll_company_order(participants, handle, attempt_id, ship_index, receipt, guard,
                         service, payload, version_field):
     def prepare(peer, window, reservation, envelope):
         commands = getattr(window, service)
         checked = commands.receipt(receipt)
+        if (service == 'sale' and checked is not None and checked['outcome'] == 'confirmed'
+                and checked['ship_code'] != reservation.code):
+            raise ValueError('company sale receipt names a different ship')
 
         def advance(request):
             commands.advance(request)

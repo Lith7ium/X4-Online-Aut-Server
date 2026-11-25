@@ -76,7 +76,7 @@ class TCPControlTest(unittest.TestCase):
         request = {'version': 1, 'kind': kind, 'attempt_id': offer.attempt_id, **fields}
         return json.dumps(request).encode('ascii') + b'\n'
 
-    def test_fleet_order_negotiation_is_opt_in_and_reset_with_the_offer(self):
+    def test_fleet_and_sale_negotiation_is_opt_in_and_reset_with_the_offer(self):
         self.owner.close()
         self.read_company_ships.return_value = CompanyShipCatalogue('d' * 32, (
             CompanyShip(7, '[0x345]', 'sector_01_macro', 'Scout', 'ABC-123'),
@@ -84,7 +84,7 @@ class TCPControlTest(unittest.TestCase):
         self.session = TrustedMarkerLoadSession(self.world, enabled=True, require_company_ship=True,
                                                 company_ship_reader=self.read_company_ships)
         self.owner = ExperimentalTCPControl(self.session, enabled=True, company_purchases=True,
-                                            company_fleet_orders=True)
+                                            company_fleet_orders=True, company_trade_view=True, company_sales=True)
         client = self.connect()
         self.ready_world()
         peer = next(iter(self.owner._peers.values()))
@@ -101,15 +101,19 @@ class TCPControlTest(unittest.TestCase):
                         ship_index=7, registry_epoch='d' * 32, statement_version=1)
         self.assertEqual(json.loads(self.output(client)), expected)
         self.assertNotIn('fleet_order_version', peer)
+        self.assertNotIn('sale_version', peer)
 
         next_offer = self.offer(client).offer
-        enable(next_offer, fleet_order_version=1)
+        enable(next_offer, fleet_order_version=1, trade_view_version=1, sale_version=1)
         self.assertEqual(json.loads(self.output(client)),
-                         dict(expected, attempt_id=next_offer.attempt_id, fleet_order_version=1))
+                         dict(expected, attempt_id=next_offer.attempt_id, fleet_order_version=1,
+                              trade_view_version=1, sale_version=1))
         self.assertEqual(peer['fleet_order_version'], 1)
+        self.assertEqual(peer['sale_version'], 1)
 
         last = self.offer(client).offer
         self.assertNotIn('fleet_order_version', peer)
+        self.assertNotIn('sale_version', peer)
         enable(last, fleet_order_version=True)
         self.assertEqual(client.recv(1), b'')
 

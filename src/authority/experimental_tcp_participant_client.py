@@ -41,7 +41,7 @@ class ExperimentalTCPParticipantClient:
     def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None, company_purchase_exchange=None,
                  company_purchase_attempt=None, company_purchase_ship_index=None, company_purchase_statement=None,
                  company_purchase_statement_result=None, company_undock_exchange=None, company_trade_view_exchange=None,
-                 company_fleet_exchange=None, company_fleet_version=1):
+                 company_fleet_exchange=None, company_fleet_version=1, company_sale_exchange=None):
         validate_participant_connection(conn, controller, enabled=enabled,
                                         epoch=epoch, handle=handle, timeout=timeout)
         if type(company_fleet_version) is not int or company_fleet_version not in (1, 2) or (
@@ -51,13 +51,15 @@ class ExperimentalTCPParticipantClient:
         if any(value is not None for value in (company_purchase_exchange, company_purchase_attempt,
                                                 company_purchase_ship_index, company_purchase_statement,
                                                 company_purchase_statement_result, company_undock_exchange,
-                                                company_trade_view_exchange, company_fleet_exchange)):
+                                                company_trade_view_exchange, company_fleet_exchange,
+                                                company_sale_exchange)):
             from .company_purchase_control import ClientPurchaseControl
             self._company_purchase = ClientPurchaseControl(
                 epoch, handle, company_purchase_attempt, company_purchase_ship_index,
                 company_purchase_exchange, company_purchase_statement, company_purchase_statement_result,
                 undock_exchange=company_undock_exchange, trade_view_exchange=company_trade_view_exchange,
-                fleet_exchange=company_fleet_exchange, fleet_version=company_fleet_version)
+                fleet_exchange=company_fleet_exchange, fleet_version=company_fleet_version,
+                sale_exchange=company_sale_exchange)
         conn.setblocking(False)
         self._conn, self._controller, self._epoch, self._handle = conn, controller, epoch, handle
         self._timeout = float(timeout)
@@ -128,7 +130,7 @@ class ExperimentalTCPParticipantClient:
             return self._authority_motion_pull(command)
         if type(command) is dict and command.get('kind') in (
                 'company_purchase_poll', 'company_purchase_statement', 'company_purchase_statement_delivery',
-                'company_undock_poll', 'company_trade_poll', 'company_fleet_poll'):
+                'company_undock_poll', 'company_trade_poll', 'company_fleet_poll', 'company_sale_poll'):
             if self._company_purchase is None:
                 raise ValueError('company purchase polling is disabled')
             self._out = self._company_purchase.reply(command, self._quiet)

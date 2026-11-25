@@ -51,6 +51,7 @@ class ExperimentalClientOwner:
         self._company_undock_enabled = False
         self._company_trade_view_version = None
         self._company_fleet_order_version = None
+        self._company_sales = False
         self._thread = threading.current_thread()
         self._phase = 'loading'
         self._motion_port = motion_port
@@ -116,6 +117,7 @@ class ExperimentalClientOwner:
             self._company_undock_enabled = False
             self._company_trade_view_version = None
             self._company_fleet_order_version = None
+            self._company_sales = False
             return self._offer
 
     def list_company_ships(self) -> tuple[dict, ...]:
@@ -135,7 +137,7 @@ class ExperimentalClientOwner:
         return result
 
     def enable_company_purchases(self, *, undock=False, trade_view=False, fleet_orders=False,
-                                 fleet_order_version=1):
+                                 fleet_order_version=1, sales=False):
         """Enable authenticated purchase polls for the ship chosen on this offer."""
         with self._operation('loading'):
             if type(fleet_orders) is not bool:
@@ -144,11 +146,16 @@ class ExperimentalClientOwner:
                     fleet_order_version == 2 and not fleet_orders):
                 raise ValueError('invalid Company fleet order version')
             capabilities = {'fleet_orders': True} if fleet_orders else {}
+            if type(sales) is not bool or (sales and not trade_view):
+                raise ValueError('Company sales require an authenticated market view')
+            if sales:
+                capabilities['sales'] = True
             if fleet_order_version == 2:
                 capabilities['fleet_order_version'] = 2
             epoch = self._load.enable_company_purchases(undock=undock, trade_view=trade_view, **capabilities)
             self._company_fleet_order_version = fleet_order_version if fleet_orders else None
             self._company_trade_view_version = 1 if trade_view else None
+            self._company_sales = sales
             self._company_undock_enabled = undock
             self._company_purchases_enabled = True
             self._company_purchase_statement_version = 1
@@ -198,7 +205,7 @@ class ExperimentalClientOwner:
                  authority_grant=None, authority_guard=None, pull_authority_motion=None,
                  apply_motion=None, on_stage=None, company_purchase_exchange=None,
                  company_purchase_statement=None, company_purchase_statement_result=None, company_undock_exchange=None,
-                 company_trade_view_exchange=None, company_fleet_exchange=None):
+                 company_trade_view_exchange=None, company_fleet_exchange=None, company_sale_exchange=None):
         """Claim the observed load and transfer its socket to one participant.
 
         The caller establishes that the observations and controller belong to
@@ -259,6 +266,12 @@ class ExperimentalClientOwner:
                     purchase_options['company_fleet_version'] = 2
             elif company_fleet_exchange is not None:
                 raise ValueError('Company fleet order callback requires negotiated control')
+            if getattr(self, '_company_sales', False):
+                if not callable(company_sale_exchange):
+                    raise ValueError('negotiated Company sales require a sale callback')
+                purchase_options['company_sale_exchange'] = company_sale_exchange
+            elif company_sale_exchange is not None:
+                raise ValueError('Company sale callback requires negotiated control')
             checked_grant = None
             if any(value is not None for value in
                    (authority_grant, authority_guard, pull_authority_motion)):

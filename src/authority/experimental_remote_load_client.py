@@ -297,19 +297,23 @@ class ExperimentalRemoteLoadClient:
             return ship
 
     def enable_company_purchases(self, *, undock=False, trade_view=False, fleet_orders=False,
-                                 fleet_order_version=1):
+                                 fleet_order_version=1, sales=False):
         """Negotiate the server-poll extension on this pilot's existing control socket."""
         with self._operation('offered'):
             if self._chosen_ship_index is None:
                 raise ValueError('purchase control requires a chosen company ship')
-            if any(type(enabled) is not bool for enabled in (undock, trade_view, fleet_orders)):
+            if any(type(enabled) is not bool for enabled in (undock, trade_view, fleet_orders, sales)):
                 raise ValueError('invalid Company trading capabilities')
+            if sales and not trade_view:
+                raise ValueError('Company sales require an authenticated market view')
             if type(fleet_order_version) is not int or fleet_order_version not in (1, 2) or (
                     fleet_order_version == 2 and not fleet_orders):
                 raise ValueError('invalid Company fleet order version')
             versions = {'statement_version': 1}
             if trade_view:
                 versions['trade_view_version'] = 1
+            if sales:
+                versions['sale_version'] = 1
             if fleet_orders:
                 versions['fleet_order_version'] = fleet_order_version
             if undock:

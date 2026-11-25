@@ -7,7 +7,7 @@ import unittest
 import test_authority_experimental_tcp_participants as fixtures
 from authority.company_purchase_control import (
     ClientPurchaseControl, CompanyPurchasePeerLost, poll_company_purchase, poll_company_undock, purchase_receipt,
-    deliver_company_purchase_statement_result, poll_company_fleet, request_company_purchase_statement,
+    deliver_company_purchase_statement_result, poll_company_fleet, poll_company_sale, request_company_purchase_statement,
 )
 from authority.company_undock_messages import UndockWindow, undock_receipt, undock_request
 from authority.company_ships import CompanyShip, CompanyShipCatalogue
@@ -145,6 +145,7 @@ class CompanyPurchaseTests(unittest.TestCase):
         case.control._company_undock = True
         case.control._company_trade_view = True
         case.control._company_fleet_orders = True
+        case.control._company_sales = True
         session = case.control._session
         session._company_ship_reader = lambda _checkpoint: CompanyShipCatalogue('d' * 32, (
             CompanyShip(7, '[0x123]', PURCHASE['sector'], 'Company ship', 'WRN-302'),
@@ -174,7 +175,7 @@ class CompanyPurchaseTests(unittest.TestCase):
                              ship_index)
             if ship_index == 7:
                 enable = dict(choose, kind='enable_company_purchases', statement_version=1, undock_version=1,
-                              trade_view_version=1, fleet_order_version=1)
+                              trade_view_version=1, fleet_order_version=1, sale_version=1)
                 self.assertEqual(json.loads(exchange(client, json.dumps(enable).encode())), dict(
                     enable, kind='company_purchases_enabled', registry_epoch='d' * 32))
             self.assertEqual(json.loads(exchange(client, encode_load_claim(claim_for(offer))))['kind'], 'accepted')
@@ -202,6 +203,13 @@ class CompanyPurchaseTests(unittest.TestCase):
         order = dict(order_id='e' * 32, ship_index=17, ship_code='NPC-001',
                      sector='sector_1', x=1200.125, y=-20, z=0)
         order_receipts = []
+        sale = dict(sale_id='5' * 32, sector='cluster_43_sector001_macro', station_code='CTD-093',
+                    ware='water', quantity=2, price_cents=3473)
+        sale_receipts = []
+
+        def sale_exchange(receipt):
+            sale_receipts.append(receipt)
+            return sale if len(sale_receipts) == 1 else None
 
         def fleet_exchange(receipt):
             order_receipts.append(receipt)
@@ -233,6 +241,7 @@ class CompanyPurchaseTests(unittest.TestCase):
                         company_purchase_statement=statement if index == 7 else None,
                         company_purchase_statement_result=statement_result if index == 7 else None,
                         company_fleet_exchange=fleet_exchange if index == 7 else None,
+                        company_sale_exchange=sale_exchange if index == 7 else None,
                         company_undock_exchange=undock_exchange if index == 7 else None,
                         company_trade_view_exchange=trade_view_exchange if index == 7 else None)
                     started.set()
@@ -322,6 +331,18 @@ class CompanyPurchaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             poll_company_fleet(*args, accepted)
         self.assertEqual(order_receipts, [None, accepted])
+        self.assertEqual(poll_company_sale(*args, guard=guard), sale)
+        credited = dict(sale, outcome='confirmed', ship_code='WRN-302', credited_cents=6900,
+                        company_balance_cents=937000, cargo_units=10)
+        for change in ({'ship_code': 'WRN-303'}, {'price_cents': 3472}, {'sale_id': '6' * 32}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                poll_company_sale(*args, dict(credited, **change))
+        with self.assertRaises(ValueError):
+            poll_company_sale(case.participants, other_offer.connection_handle, other_offer.attempt_id, 8)
+        self.assertIsNone(poll_company_sale(*args, credited))
+        with self.assertRaises(ValueError):
+            poll_company_sale(*args, credited)
+        self.assertEqual(sale_receipts, [None, credited])
         self.assertEqual(deliveries, [REPORTED])
         with self.assertRaises(ValueError):
             deliver_company_purchase_statement_result(*args, CONFIRMED)
