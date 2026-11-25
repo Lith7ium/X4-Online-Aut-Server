@@ -169,9 +169,9 @@ function M.install(o)
             return
         end
         if ship ~= o.ship or (not dynamic_station and station ~= o.station) then
-            if request_sale and type(data.orders) == 'table' then
-                for id, quantity in pairs(data.orders) do
-                    if type(id) == 'number' and id < 0 and type(quantity) == 'number' and quantity > 0 then
+            if o.market_ui and type(data.orders) == 'table' then
+                for offer_id in pairs(data.orders) do
+                    if type(offer_id) == 'number' and offer_id < 0 then
                         o.notice('stale_identity')
                         return
                     end

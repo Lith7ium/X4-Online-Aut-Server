@@ -121,23 +121,38 @@ menu.initTradeContextData()
 assert(#data.offers == 0 and not ui:order(data))
 view.status = 'observed'
 ui:tick()
-if sale_mode then
-    local capture = dofile('src/authority/lua/company_trade_capture.lua')
-    local function notice(status, amount, snapshot)
-        notices[#notices+1] = {status=status, amount=amount, snapshot=snapshot}
+local capture = dofile('src/authority/lua/company_trade_capture.lua')
+local function notice(status, amount, snapshot)
+    notices[#notices+1] = {status=status, amount=amount, snapshot=snapshot}
+end
+menu.name = 'MapMenu'
+menu.buttonConfirmTrade = function()
+    for id in pairs(menu.contextMenuData.orders) do
+        assert(id > 0, 'Company offer reached local stock confirmation')
     end
-    menu.name = 'MapMenu'
-    menu.buttonConfirmTrade = function() error('sale must never go through local stock confirmation') end
-    local purchases = 0
-    assert(capture.install({enabled=true, menu=menu, market_ui=ui, dynamic_station=true,
-        ship=7354, ship_code='WRN-302', identity=identity, read_dock=read_dock,
-        request=function(intent)
-            assert(intent.ware == 'water' and intent.quantity == 2 and intent.price_cents == 5848 and not intent.side)
-            purchases = purchases + 1
-            return true
-        end,
-        request_sale=request_sale, notice=notice, decode_offer_id=identity, offer_station=identity}))
+    return 'stock'
+end
+local purchases = 0
+assert(capture.install({enabled=true, menu=menu, market_ui=ui, dynamic_station=true,
+    ship=7354, ship_code='WRN-302', identity=identity, read_dock=read_dock,
+    request=function(intent)
+        assert(intent.ware == 'water' and intent.quantity == 2 and intent.price_cents == 5848 and not intent.side)
+        purchases = purchases + 1
+        return true
+    end,
+    request_sale=request_sale, notice=notice, decode_offer_id=identity, offer_station=identity}))
 
+local company_offer = data.offers[1]
+menu.slidercellShipCargo(company_offer.id, nil, 'water', 0, 2)
+assert(data.orders[company_offer.id] == -2)
+data.currentShip = 89
+menu.buttonConfirmTrade()
+assert(notices[#notices].status == 'stale_identity' and purchases == 0 and #sale_requests == 0)
+data.orders = {[17] = -2}
+assert(menu.buttonConfirmTrade() == 'stock')
+data.currentShip, data.orders = 7354, {}
+
+if sale_mode then
     local function check_dock()
         data.immediate, data.immediateObject = true, 7354
         return unpack(data.offers)
