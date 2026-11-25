@@ -12,6 +12,17 @@ local function owner()
         clock = function() return c.now end,
         guard = function() return c.paused end,
         register = function(callback) c.callback = callback; return true end,
+        register_berth = function(callback)
+            assert(not c.berth_callback)
+            c.berth_callback = callback
+            return true
+        end,
+        issue_berth = function(args)
+            assert(args.nonce == pinned.nonce and args.epoch == pinned.epoch
+                and args.count == pinned.issued_count and args.index == index and args.actor == actor)
+            c.berth_args = args
+            return true
+        end,
         issue = function(args)
             assert(args.epoch == pinned.epoch and args.count == pinned.issued_count and args.index == index)
             c.requests[#c.requests + 1] = args
@@ -28,6 +39,50 @@ local function owner()
         c.callback(nil, prefix .. action .. '|' .. status .. '|' .. (id or actor) .. '|player')
     end
     return probe, c
+end
+
+do
+    local probe, c = owner()
+    local received, calls
+    calls = 0
+    local function read(berth)
+        calls = calls + 1
+        received = berth
+    end
+    assert(not probe:read_occupied_berth(read) and not c.berth_callback)
+    c.controlled = true
+    assert(probe:tick())
+    c.answer('inspect', 'CONTROLLED')
+    assert(probe:tick() and probe:ready())
+    c.paused = false
+
+    local function reply(request, seed, reply_actor)
+        c.berth_callback(nil, prefix .. request .. '|' .. (reply_actor or actor)
+            .. '|cluster_01_sector001_macro|BIM-169|' .. seed .. '|external_bay_macro|dockarea_macro')
+    end
+    assert(probe:read_occupied_berth(read) and c.berth_args.request == 1)
+    assert(probe:read_occupied_berth(read) and c.berth_args.request == 2)
+    reply(1, '9007199254740993')
+    reply(2, '9007199254740993', '0x1')
+    assert(calls == 0)
+    reply(2, '18446744073709551615')
+    assert(calls == 1 and received.bay_seed == '18446744073709551615'
+        and received.sector == 'cluster_01_sector001_macro' and received.station_code == 'BIM-169'
+        and received.bay_macro == 'external_bay_macro' and received.dockarea_macro == 'dockarea_macro'
+        and received.external and received.occupied_by_ship and not received.actor)
+    assert(probe:read_occupied_berth(read))
+    reply(3, '18446744073709551616')
+    assert(calls == 2 and not received)
+    assert(probe:read_occupied_berth(read))
+    reply(4, '-9223372036854775808')
+    assert(calls == 3 and received.bay_seed == '-9223372036854775808')
+    assert(probe:read_occupied_berth(read))
+    c.berth_callback(nil, prefix .. '5|' .. actor .. '|UNAVAILABLE')
+    assert(calls == 4 and not received)
+    assert(probe:read_occupied_berth(read))
+    c.controlled = false
+    reply(6, '9007199254740993')
+    assert(calls == 5 and not received and not probe:read_occupied_berth(read) and #c.faults == 0)
 end
 
 do

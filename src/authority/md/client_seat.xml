@@ -70,5 +70,36 @@
     <raise_lua_event name="'X4AuthorityClientSeat.Result'" param="'%s|%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$index,$action,$result,$actor,$owner]"/>
    </actions>
   </cue>
+  <cue name="OccupiedBerth" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityClientSeat'" control="'ReadOccupiedBerth'"/>
+   </conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <set_value name="$receipt" exact="'UNAVAILABLE'"/>
+    <do_if value="@md.X4AuthorityShipRegistry.State.$epoch == @$args.$epoch
+        and @md.X4AuthorityShipRegistry.State.$last == @$args.$count
+        and @md.X4AuthorityShipRegistry.State.$faulted == false
+        and @$args.$index ge 1 and $args.$index le md.X4AuthorityShipRegistry.State.$last
+        and ($args.$index)i == $args.$index">
+     <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$index}"/>
+     <do_if value="@$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player
+         and $ship.trueowner == faction.player and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $args.$index
+         and '%s'.[$ship] == @$args.$actor and $ship == player.controlled
+         and $ship == player.occupiedship and $ship == player.container and not $ship.isinternallystored">
+      <set_value name="$bay" exact="@$ship.dock"/>
+      <set_value name="$station" exact="@$bay.container"/>
+      <do_if value="@$bay.isclass.dockingbay and $bay.external and not $bay.isstorage
+          and $bay.dockstate == dockstate.default and $bay.istradingallowed
+          and @$bay.dockarea.isclass.dockarea and $bay.docked.count == 1 and $bay.docked.{1} == $ship
+          and @$station.isclass.station and $station.isoperational and @$station.sector.isclass.sector
+          and $ship.sector == $station.sector">
+       <set_value name="$receipt" exact="'%s|%s|%s|%s|%s'.[$station.sector.macro.id,$station.idcode,$bay.seed,$bay.macro.id,$bay.dockarea.macro.id]"/>
+      </do_if>
+     </do_if>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityClientSeat.OccupiedBerth'" param="'%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$args.$index,$args.$request,$args.$actor,$receipt]"/>
+   </actions>
+  </cue>
  </cues>
 </mdscript>

@@ -9,11 +9,25 @@ local REFUSALS = {
     ACTION_INVALID = true,
 }
 
+local function berth_identity(row)
+    local sector, station, seed, bay, area = row:match(
+        '^([A-Za-z0-9_]+)|([A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9])|(-?[1-9]%d*)|([a-z][a-z0-9_]*)|([a-z][a-z0-9_]*)$')
+    if not sector or #sector > 128 or #bay > 128 or #area > 128 then return nil end
+    -- A seed is a native largeint. Keep it exact across Lua/JSON boundaries.
+    local negative = seed:sub(1, 1) == '-'
+    local magnitude = negative and seed:sub(2) or seed
+    local limit = negative and '9223372036854775808' or '18446744073709551615'
+    if #magnitude > #limit or (#magnitude == #limit and magnitude > limit) then return nil end
+    return {sector = sector, station_code = station, bay_seed = seed, bay_macro = bay,
+        dockarea_macro = area, external = true, occupied_by_ship = true}
+end
+
 function M.new(options)
     local pinned, index = options.pinned, options.index
     local prefix = pinned.nonce .. '|' .. pinned.epoch .. '|' .. index .. '|'
     local state, pending, target = 'inspect', nil, nil
     local deadline, last_time, target_owner
+    local berth_registered, berth_request, berth_pending = false, 0, nil
     local api = {}
 
     local function fail(reason)
@@ -99,6 +113,39 @@ function M.new(options)
         if ok and refusal == nil then return target end
     end
 
+    -- Request a local snapshot of this occupied cockpit's physical trade bay.
+    -- The latest request supersedes any unanswered read. No purchase IPC is used.
+    function api:read_occupied_berth(callback)
+        local actor = self:controlled_actor()
+        if not actor or type(callback) ~= 'function' or not options.register_berth
+                or berth_request >= 2147483647 then return false end
+        if not berth_registered then
+            local ok, registered = pcall(options.register_berth, function(_, row)
+                local read = berth_pending
+                if not read or type(row) ~= 'string' or #row > 512
+                        or row:sub(1, #read.prefix) ~= read.prefix then return end
+                berth_pending = nil
+                if self:controlled_actor() ~= read.actor then
+                    read.callback(nil)
+                else
+                    read.callback(berth_identity(row:sub(#read.prefix + 1)))
+                end
+            end)
+            if not ok or registered ~= true then return false end
+            berth_registered = true
+        end
+        berth_request = berth_request + 1
+        berth_pending = {prefix = prefix .. berth_request .. '|' .. actor .. '|',
+            actor = actor, callback = callback}
+        local ok, issued = pcall(options.issue_berth, {nonce = pinned.nonce, epoch = pinned.epoch,
+            count = pinned.issued_count, index = index, request = berth_request, actor = actor})
+        if not ok or issued ~= true then
+            berth_pending = nil
+            return false
+        end
+        return true
+    end
+
     local ok, registered = pcall(options.register, function(_, row) api:event(row) end)
     if not ok or registered ~= true then
         fail('REGISTRATION_FAILED')
@@ -126,6 +173,10 @@ function M.new_x4(pinned, index, registry, on_fault)
             return RegisterEvent(SCREEN .. '.Result', callback) ~= false
         end,
         issue = function(args) return AddUITriggeredEvent(SCREEN, 'Seat', args) ~= false end,
+        register_berth = function(callback)
+            return RegisterEvent(SCREEN .. '.OccupiedBerth', callback) ~= false
+        end,
+        issue_berth = function(args) return AddUITriggeredEvent(SCREEN, 'ReadOccupiedBerth', args) ~= false end,
         inspect = function(actor, owner, controlled)
             local id = X4LAN_RESOLVE_STRING.parse_hex(actor)
             if not id or not C.IsValidComponent(id) or not C.IsComponentClass(id, 'ship')
