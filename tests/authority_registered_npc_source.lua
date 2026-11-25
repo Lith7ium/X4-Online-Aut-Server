@@ -1,12 +1,21 @@
--- The actual saved-baseline resolver receives a correlated synthetic native descriptor.
+-- Drive the production resolver, sampler and descriptor with simulated X4 APIs.
 local ffi = require('ffi')
 ffi.cdef('typedef uint64_t UniverseID;')
 local resolve = dofile('tools/dev/authority_registry_resolve_string.lua')
-local old, actor, captain = resolve.parse_hex('0x101'), resolve.parse_hex('0x201'), resolve.parse_hex('0x202')
+local actor, captain = resolve.parse_hex('0x201'), resolve.parse_hex('0x202')
 local sector, zero = resolve.parse_hex('0x302'), ffi.new('UniverseID', 0)
 local epoch, code, owner = ('a'):rep(32), 'ABC-401', 'argon'
-local handler, request, registered, messages, logs
-local live_code, live_owner, now, paused = code, owner, 0, false
+local handler, request, messages, logs
+local live_code, live_owner, now, host_time, paused = code, owner, 0, 1000, false
+local x, inline_sample = 100, false
+
+local function reply()
+    assert(request)
+    local id = request
+    request = nil
+    handler(nil, table.concat({id, epoch, '40', 'ok', '0x201', 'ship_s_macro', owner,
+        '0x302', 'sector_a'}, '|'))
+end
 
 ConvertStringToLuaID = function(id) return ffi.new('uint64_t', tonumber(id)) end
 ConvertIDTo64Bit = function(id) return id end
@@ -21,15 +30,16 @@ GetCurRealTime = function() return now end
 RegisterEvent = function(event, callback) assert(event == 'X4AuthorityJobDescriptorProbe.Result'); handler = callback end
 AddUITriggeredEvent = function(screen, action, args)
     assert(screen == 'X4AuthorityJobDescriptorProbe' and action == 'Read')
-    assert(args.epoch == epoch and args.index == 40)
+    assert(args.epoch == epoch and args.index == 40 and request == nil)
     request = args.request_id
+    if inline_sample and request:sub(1, 1) == 'f' then reply() end
 end
 DebugError = function(row) logs[#logs + 1] = row end
 
 package.loaded.ffi = {typeof=ffi.typeof, new=ffi.new, cdef=function() end, NULL=ffi.NULL,
     string=function(value) return value end, C={
         IsPlayerValid=function() return true end, IsGamePaused=function() return paused end,
-        GetSaveFolderPath=function() return '/isolated/save/' end,
+        GetSaveFolderPath=function() return '/isolated/45841/save/' end,
         IsValidComponent=function(id) return id == actor or id == sector or id == captain end,
         IsComponentOperational=function(id) return id == actor end,
         IsComponentClass=function(id, class)
@@ -39,49 +49,79 @@ package.loaded.ffi = {typeof=ffi.typeof, new=ffi.new, cdef=function() end, NULL=
         GetObjectIDCode=function(id) assert(id == actor); return live_code end,
         GetContextByClass=function(id) assert(id == actor); return sector end,
         GetPlayerControlledShipID=function() return zero end, GetPlayerOccupiedShipID=function() return zero end,
+        GetCurrentGameTime=function() return 500 end,
+        GetObjectPositionInSector=function(id) assert(id == actor); return {x=x, y=200, z=300} end,
     },
 }
 dofile('src/authority/lua/saved_baseline_source_bootstrap.lua')
-X4LAN_AUTHORITY_JOB_DESCRIPTOR_PROBE = {}
-X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER = {new_x4=function(config)
-    return {
-        register=function(_, row, id)
-            assert(id == actor and id ~= old and config.saved_baseline_guard(row, id))
-            registered = id
-            return true
-        end,
-        tick=function() return true end,
-    }
-end}
+dofile('tools/dev/authority_job_descriptor_probe.lua')
+dofile('src/authority/lua/source_motion_sampler.lua')
 local source = dofile('tools/dev/authority_registered_npc_source.lua')
 
 local function boot()
-    messages, logs, registered, request = {}, {}, nil, nil
+    messages, logs, request = {}, {}, nil
     local tick = source.new_x4({epoch=epoch, index=40, code=code, owner=owner, count=100,
-        actor='0x101', save_path='/isolated/save', lease=('d'):rep(32), generation=('e'):rep(32),
+        actor='0x101', save_path='/isolated/45841/save', lease=('d'):rep(32), generation=('e'):rep(32),
         nonce=('f'):rep(32), lookup_nonce=('b'):rep(32)},
         {send=function(_, row) messages[#messages + 1] = row; return true end},
-        GetCurRealTime, function() return true end)
+        function() return host_time end, function() return true end)
     tick()
-    assert(request ~= nil)
-    handler(nil, table.concat({request, epoch, '40', 'ok', '0x201', 'ship_s_macro', 'argon',
-        '0x302', 'sector_a'}, '|'))
+    reply()
     now = now + .15
     tick()
     return tick
 end
 
 local tick = boot()
-assert(registered == actor and #messages == 0)
+assert(request and #messages == 0)
 assert(#logs == 1 and logs[1]:find('|ABC%-401|argon|0x201$'))
+
+-- MD replies on later frames. V3 must continue even at a repeated game time.
+local function delayed_reply()
+    now = now + .05
+    tick()
+    reply()
+end
+local function next_sample()
+    now = now + .09
+    tick()
+    assert(request == nil)
+    now = now + .02
+    tick()
+    assert(request)
+end
+delayed_reply()
+assert(#messages == 1 and messages[1]:find('|SAMPLE3|%x+|40|1|ABC%-401|argon|0x201|sector_a|500|1000|100|200|300|%-|%-|%-$'))
+assert(logs[2]:find('SENT|seq=1|capture=1000|velocity=absent', 1, true))
+next_sample()
+-- Pose 2 is still sent when its capture interval is too short for velocity.
+host_time, x = 1000.01, 101
+delayed_reply()
+assert(#messages == 2 and messages[2]:find('|500|1000%.01|101|200|300|%-|%-|%-$'))
+assert(logs[3]:find('SENT|seq=2|capture=1000.01|velocity=absent', 1, true))
+next_sample()
+host_time, x = 1000.5, 110
+delayed_reply()
+assert(#messages == 3 and messages[3]:find('|500|1000%.5|110|200|300|20|0|0$'))
+assert(logs[4]:find('SENT|seq=3|capture=1000.5|velocity=present', 1, true))
+next_sample()
+host_time, x = 1000.75, 115
+delayed_reply()
+assert(#messages == 4 and #logs == 4)
+
 paused = true
 tick(); tick()
-assert(#messages == 1 and messages[1]:find('|END|paused$'))
-assert(#logs == 2)
+assert(#messages == 5 and messages[5]:find('|END|paused$'))
+assert(#logs == 5)
 
-paused, live_code = false, 'ABC-402'
+-- A truly inline MD reply would fail at once, unlike the native run's later sector loss.
+paused, inline_sample = false, true
 boot()
-assert(not registered and #messages == 1 and messages[1]:find('|END|code_mismatch$'))
+assert(#messages == 1 and messages[1]:find('|END|sampler_event$'))
+
+inline_sample, live_code = false, 'ABC-402'
+boot()
+assert(request == nil and #messages == 1 and messages[1]:find('|END|code_mismatch$'))
 live_code, live_owner = code, 'teladi'
 boot()
-assert(not registered and #messages == 1 and messages[1]:find('|END|owner_mismatch$'))
+assert(request == nil and #messages == 1 and messages[1]:find('|END|owner_mismatch$'))

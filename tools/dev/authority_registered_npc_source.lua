@@ -15,6 +15,7 @@ function M.new_x4(cfg, net, clock, registry_ready)
     local prefix = 'N|' .. cfg.lease .. '|' .. cfg.generation .. '|'
     local stopped, lookup, sampler = false, nil, nil
     local wanted, runtime_ref
+    local reported_rate = false
 
     local function stop(reason)
         if not stopped then
@@ -69,7 +70,15 @@ function M.new_x4(cfg, net, clock, registry_ready)
             format('%.17g', sample.capture_time), format('%.17g', sample.x), format('%.17g', sample.y),
             format('%.17g', sample.z), velocity and format('%.17g', velocity.x) or '-',
             velocity and format('%.17g', velocity.y) or '-', velocity and format('%.17g', velocity.z) or '-'}
-        if net:send(prefix .. table.concat(fields, '|')) ~= true then stop('source_send_failed') end
+        if net:send(prefix .. table.concat(fields, '|')) ~= true then
+            stop('source_send_failed')
+            return
+        end
+        if sample.sequence <= 2 or (velocity and not reported_rate) then
+            reported_rate = reported_rate or velocity ~= nil
+            pcall(DebugError, ('[X4LAN] AUTH_REGISTERED_NPC_SOURCE SENT|seq=%s|capture=%s|velocity=%s'):format(
+                fields[4], fields[10], velocity and 'present' or 'absent'))
+        end
     end
 
     assert(RegisterEvent('X4AuthorityJobDescriptorProbe.Result', function(_, reply)
