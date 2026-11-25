@@ -432,10 +432,11 @@ Orders use the pilot's authenticated control connection.
 
 1. At the helm, select one registered, undocked Company ship with an NPC
    captain. All pilots share command of ships available for reservation.
-2. Right-click a point in the selected ship's sector. Your own cockpit may
-   be in another sector.
-3. In the interaction menu, choose whether to keep or clear existing orders,
-   then choose **Fly and Wait**. Keeping orders appends the new destination.
+2. Choose **Keep** or **Clear** in X4's order queue setting. The next
+   context action uses the effective choice shown by X4.
+3. Right-click a point in the selected ship's sector and choose **Fly and
+   Wait**. Your own cockpit may be in another sector. Keeping orders appends
+   the new destination.
    Clearing replaces orders X4 allows the player to cancel. Critical orders
    stay in the queue. Use a plain map point and the context menu. Group orders,
    priority commands, queue loops and the map shortcut are outside this trial.
