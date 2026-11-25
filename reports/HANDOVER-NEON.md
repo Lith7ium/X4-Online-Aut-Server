@@ -8,6 +8,12 @@ BBS-493 at (30000, 100000, 55000) m in the destination sector.
 The ship kept its registry index and its original NPC captain.
 [Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
 
+The separate ordinary jump-gate fixture stopped during staging between
+ZGH-239 and NEL-546. The provider loaded the source and inspected all
+5,048 registry entries. The staging cue returned no route receipt.
+No starting checkpoint was published and no pilot flew this route.
+[Ordinary gate staging](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#ordinary-jump-gate-staging-attempt)
+
 The ordinary boarding menu now has a native positive control. On a
 disposable provider the test activated the enabled Start Operation button
 once. X4 confirmed eight marines and exactly one attacker, ARU-541,
