@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src'))
 
 
-from authority_client_options import _read_settings, prompt_company_ship, read_connection_settings
+from authority_client_options import _read_settings, read_connection_settings, terminal_company_ship_selector
 from authority.experimental_remote_load_client import SessionFull
 
 
@@ -131,7 +131,8 @@ def run(args, *, on_stage=None):
     from authority.windows_fixture_session import run_fixture_session
     from authority.windows_fixture_workspace import WindowsFixtureWorkspace
 
-    select_ship = prompt_company_ship if args.choose_company_ship or args.company_motion or args.company_purchases else None
+    select_ship = (terminal_company_ship_selector
+                   if args.choose_company_ship or args.company_motion or args.company_purchases else None)
     if args.company_ship_index is not None:
         if not 1 <= args.company_ship_index <= 200000:
             raise ValueError('company ship index outside the registry range')

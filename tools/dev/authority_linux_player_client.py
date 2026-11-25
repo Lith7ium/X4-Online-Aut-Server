@@ -8,7 +8,7 @@ import sys
 import authority_client_native as native
 from authority.company_motion_source import validate_playback_index
 from authority.experimental_remote_load_client import SessionFull
-from authority_client_options import prompt_company_ship, read_connection_settings
+from authority_client_options import read_connection_settings, terminal_company_ship_selector
 
 
 def main(argv=None):
@@ -68,7 +68,7 @@ def main(argv=None):
     args.expected_content_sha256 = None
     try:
         settings = read_connection_settings(args.connection_file, require_private=True)
-        selector = prompt_company_ship if args.company_ship_index is None else selected_index
+        selector = terminal_company_ship_selector if args.company_ship_index is None else selected_index
         motion_options = {'company_motion': True} if args.company_motion else {}
         if args.company_purchases:
             motion_options['company_purchases'] = True

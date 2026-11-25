@@ -8,6 +8,8 @@ import stat
 import sys
 from threading import Thread
 
+from authority.company_ship_selection import CompanyShipSelector
+
 
 def _unique_fields(pairs):
     result = {}
@@ -93,3 +95,10 @@ def prompt_company_ship(ships, keepalive):
         value = line.strip()
         if re.fullmatch(r'[0-9]{1,6}', value) and int(value) in indices:
             return int(value)
+
+
+def _report_company_ship_choice(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+terminal_company_ship_selector = CompanyShipSelector(prompt_company_ship, _report_company_ship_choice)

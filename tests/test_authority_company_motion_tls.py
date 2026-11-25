@@ -1007,12 +1007,19 @@ class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
             reply = await link[1](offer_request())
             self.assertEqual(reply['kind'], 'marked_offer')
             offers.append(decode_bound_offer(json.dumps(reply).encode()).offer)
+        # Two independent connections request the same ship before either sees the outcome.
+        requested_indices = (100, 100, 102, 103)
+        choices = await asyncio.gather(*(choose(link, offer, index)
+            for link, offer, index in zip(winners, offers, requested_indices)))
+        self.assertCountEqual([choice['kind'] for choice in choices[:2]],
+                              ['company_ship_chosen', 'company_ship_unavailable'])
         seats = {}
-        for index, link, offer in zip(sorted(indices), winners, offers):
-            if index == 101:
-                duplicate = await choose(link, offer, 100)
-                self.assertEqual(duplicate['kind'], 'company_ship_unavailable')
-            self.assertEqual((await choose(link, offer, index))['kind'], 'company_ship_chosen')
+        for link, offer, index, choice in zip(winners, offers, requested_indices, choices):
+            if choice['kind'] == 'company_ship_unavailable':
+                self.assertEqual(index, 100)
+                index = 101
+                choice = await choose(link, offer, index)
+            self.assertEqual(choice['kind'], 'company_ship_chosen')
             seats[index] = (link, offer)
         grants = {index: await admit(link, offer) for index, (link, offer) in seats.items()}
         self.assertEqual({row['index'] for row in grants.values()}, indices)

@@ -6,13 +6,15 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     'fixture_cli', ROOT / 'tools/dev/authority_windows_fixture_client.py')
 cli = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cli)
+
+from authority.company_ship_selection import CompanyShipChoiceDenied, reserve_company_ship
 
 
 class FixtureCliTests(unittest.TestCase):
@@ -135,6 +137,35 @@ class FixtureCliTests(unittest.TestCase):
             self.assertEqual(cli.main(arguments), 1)
         self.assertEqual(stderr.getvalue(), 'Session Full\n')
         self.assertEqual(stdout.getvalue(), '')
+
+    def test_terminal_selector_explains_lost_choice_and_prompts_again(self):
+        first = dict(ship_index=7, code='ABC-123', name='Scout', sector_macro='sector_01_macro')
+        second = dict(ship_index=8, code='DEF-456', name='Courier', sector_macro='sector_01_macro')
+        owner = Mock()
+        owner.list_company_ships.side_effect = [(first, second), (second,)]
+        owner.choose_company_ship.side_effect = [CompanyShipChoiceDenied('company_ship_unavailable'), second]
+        with (patch('builtins.input', side_effect=['7', '8']),
+              contextlib.redirect_stderr(io.StringIO()) as stderr):
+            self.assertEqual(reserve_company_ship(owner, cli.terminal_company_ship_selector), 8)
+        listing = stderr.getvalue()
+        first_prompt = listing.index('Available company ships')
+        rejection = listing.index('Company ship 7 is no longer available.')
+        second_prompt = listing.index('Available company ships', first_prompt + 1)
+        self.assertLess(rejection, second_prompt)
+        self.assertNotIn('ABC-123', listing[second_prompt:])
+        self.assertIn('DEF-456', listing[second_prompt:])
+
+    def test_terminal_selector_explains_empty_catalogue_without_prompting(self):
+        owner = Mock()
+        owner.list_company_ships.return_value = ()
+        with (patch('builtins.input') as read,
+              contextlib.redirect_stderr(io.StringIO()) as stderr):
+            with self.assertRaisesRegex(CompanyShipChoiceDenied, '^no_free_company_ships$'):
+                reserve_company_ship(owner, cli.terminal_company_ship_selector)
+        self.assertEqual(stderr.getvalue(),
+                         'No company ships are free. Try joining again when one is available.\n')
+        read.assert_not_called()
+        owner.choose_company_ship.assert_not_called()
 
     def test_final_failure_preserves_live_confirmations(self):
         arguments = ['--connection-file', str(self.connection), '--game', str(self.root / 'game'),
