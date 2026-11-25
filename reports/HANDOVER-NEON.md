@@ -12,6 +12,16 @@ the operator. At 15:00 Neon took the registered NPC receive/playback check
 on Windows and Quartz took a native stock “Fly and Wait” trial.
 [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795615284533159)
 
+At 16:00 Neon reported that a native Windows cockpit received 90 of 90
+recorded NPC samples with velocity. The observer used a development
+adapter. Its target was outside radar range. Neon now owns live NPC
+sampling, interest-filtered playback, withdrawal and reacquisition on a
+separate branch. Cobalt retains the actual Windows/Fedora Internet flight.
+Molander reported that Quartz has exhausted its budget, with an estimated
+return on 2 December. The native fleet-order trial is unassigned.
+[Windows NPC experiment](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/ed9ebb7277dfa7bea79b8ecb7463fa63c27e7b60/reports/AUTHORITY-WINDOWS-NPC-RECEIVE-PLAYBACK-20261125.md) ·
+[16:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795618874995979)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
@@ -281,7 +291,7 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
-- **Quartz** traced the stock map's “Fly and Wait” command to an NPC-captained
+- **Quartz** (currently unavailable) traced the stock map's “Fly and Wait” command to an NPC-captained
   Company ship. A single native order and its arrival are the next test.
   [Stock fleet order trace](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/d21fbfee/reports/AUTHORITY-COMPANY-FLY-AND-WAIT-SOURCE-20261125.md)
 - **Astra** owns server and client integration. A pilot can board a reserved
