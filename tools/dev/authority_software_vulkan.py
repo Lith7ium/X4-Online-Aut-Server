@@ -5,7 +5,14 @@ import subprocess
 from pathlib import Path
 
 
-def constrain(command, *, display, authorization, icd):
+def display_namespace(hostname):
+    """Select the same local X11 identity that was written to private Xauthority."""
+    if not isinstance(hostname, str) or re.fullmatch(r'x4-private-[a-f0-9]{16}', hostname) is None:
+        raise ValueError('invalid private X11 hostname')
+    return ['--unshare-uts', '--hostname', hostname, '--unsetenv', 'XAUTHLOCALHOSTNAME']
+
+
+def constrain(command, *, display, authorization, icd, display_hostname=None):
     """Keep Steam shared memory and mount only the chosen X11 pathname."""
     number = re.fullmatch(r':([0-9]+)(?:\.0)?', display)
     if number is None:
@@ -25,8 +32,9 @@ def constrain(command, *, display, authorization, icd):
         '--ro-bind', str(authorization), str(authorization),
     ]
     boundary = result.index('--')
+    identity = [] if display_hostname is None else display_namespace(display_hostname)
     result[boundary:boundary] = [
-        '--setenv', 'VK_DRIVER_FILES', str(icd), '--setenv', 'VK_ICD_FILENAMES', str(icd),
+        *identity, '--setenv', 'VK_DRIVER_FILES', str(icd), '--setenv', 'VK_ICD_FILENAMES', str(icd),
         '--setenv', 'SDL_VIDEODRIVER', 'x11',
     ]
     return result

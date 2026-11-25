@@ -18,6 +18,7 @@ import time
 import authority_recovered_remote_load_pair_live as combined
 import authority_recovery_tcp_join_live as recovery
 import authority_recovery_registry_witness as witness
+from authority_software_vulkan import display_namespace
 from authority.marker_evidence import verify_saved_marker
 from authority.experimental_tcp_client_authority_motion import grant_value
 from authority_helper_lifecycle import OwnedHelper
@@ -832,6 +833,11 @@ def run_one(participant, *, args, out, game, home, uid, steam, auth, user,
         sector_watch.poll()
     command = base.load.readonly_save_command(case, game, binds, lock, args.display, auth, user, args.seed, target)
     pos = command.index('--die-with-parent')
+    hostname = getattr(args, 'display_hostname', None)
+    if hostname is not None:
+        identity = display_namespace(hostname)
+        command[pos:pos] = identity
+        pos += len(identity)
     for path in protected:
         command[pos:pos] = ['--ro-bind', str(path), str(path)]; pos += 3
     proc, started = base.spawn_owned_gated(command, client_out/'process.log', processes)

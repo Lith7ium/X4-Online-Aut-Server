@@ -24,7 +24,7 @@ class ProviderParkingTest(unittest.TestCase):
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
                 patch.object(provider, 'lavapipe_icd', return_value=icd),
-                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth'))) as display,
+                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth', 'x4-private-aabbccddeeff0011'))) as display,
                 patch.object(provider.supervisor, 'main', return_value=0) as run,
             ):
                 self.assertEqual(provider.main([*ARGS, '--park-server-avatar', mode]), 0)
@@ -34,6 +34,7 @@ class ProviderParkingTest(unittest.TestCase):
                 self.assertEqual(flags[flags.index('--display') + 1], ':99')
                 self.assertEqual(flags[flags.index('--software-vulkan-icd') + 1], str(icd))
                 self.assertEqual(provider.os.environ['XAUTHORITY'], '/private/auth')
+                self.assertEqual(run.call_args.kwargs, {'display_hostname': 'x4-private-aabbccddeeff0011'})
                 self.assertFalse(any(flag.startswith('--tls-') for flag in flags))
 
     def test_parking_rejects_hosting_options_before_starting_the_display(self):
@@ -68,7 +69,7 @@ class ProviderParkingTest(unittest.TestCase):
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
                 patch.object(provider, 'lavapipe_icd', return_value=Path(__file__)),
-                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth'))),
+                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth', 'x4-private-aabbccddeeff0011'))),
                 patch.object(provider.supervisor, 'main', return_value=0) as run,
             ):
                 self.assertEqual(provider.main([*ARGS, *options]), 0)
@@ -84,7 +85,7 @@ class ProviderParkingTest(unittest.TestCase):
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
                 patch.object(provider, 'lavapipe_icd', return_value=Path(__file__)),
-                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth'))),
+                patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth', 'x4-private-aabbccddeeff0011'))),
                 patch.object(provider.supervisor, 'run', return_value={'success': True}) as run,
                 redirect_stdout(StringIO()),
             ):

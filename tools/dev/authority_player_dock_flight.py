@@ -133,7 +133,8 @@ def run(args):
         launch = original_command(case, game, binds, lock, display, auth, username, seed, target)
         pos = launch.index('--die-with-parent')
         launch[pos:pos] = ['--ro-bind', str(target.parent), str(target.parent)]
-        launch = software_vulkan.constrain(launch, display=display, authorization=auth, icd=args.vulkan_icd)
+        launch = software_vulkan.constrain(launch, display=display, authorization=auth,
+                                           icd=args.vulkan_icd, display_hostname=getattr(args, 'display_hostname', None))
         software_vulkan.verify(launch, args.out / 'software-vulkan.log')
         return launch
 
@@ -172,8 +173,9 @@ def main(argv=None):
         parser.error('private Xvfb, xauth, xdpyinfo and lavapipe are required')
     args.vulkan_icd = icd.resolve(strict=True)
     try:
-        with private_display(*tools) as (display, auth):
+        with private_display(*tools) as (display, auth, hostname):
             args.display = display
+            args.display_hostname = hostname
             with patch.dict(os.environ, {'DISPLAY': display, 'XAUTHORITY': str(auth)}):
                 result = run(args)
     except (OSError, ValueError, RuntimeError) as error:

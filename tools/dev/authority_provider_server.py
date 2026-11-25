@@ -12,12 +12,13 @@ import sys
 import tempfile
 
 import authority_recovered_loopback_server as supervisor
+from authority_software_vulkan import display_namespace
 from linux_gate_live import lavapipe_icd
 
 
-def authorize(tool, path, display, cookie):
+def authorize(tool, path, hostname, display, cookie):
     subprocess.run([tool, '-q', '-f', str(path)], text=True,
-                   input=f'add {display} MIT-MAGIC-COOKIE-1 {cookie}\n',
+                   input=f'add {hostname}/unix{display} MIT-MAGIC-COOKIE-1 {cookie}\n',
                    capture_output=True, timeout=5, check=True)
 
 
@@ -27,9 +28,10 @@ def private_display(xvfb, xauth, xdpyinfo):
         authorization = Path(directory) / 'authority'
         authorization.touch(mode=0o600, exist_ok=False)
         cookie = secrets.token_hex(16)
+        hostname = 'x4-private-' + secrets.token_hex(8)
         # Xvfb loads the cookie regardless of the record's display number.
-        # The client-side record for the allocated display is added below.
-        authorize(xauth, authorization, ':9999', cookie)
+        # The local-family entry for the allocated display is added below.
+        authorize(xauth, authorization, hostname, ':9999', cookie)
         ready, notify = os.pipe()
         process = None
         try:
@@ -51,14 +53,15 @@ def private_display(xvfb, xauth, xdpyinfo):
             if not number.isdigit() or process.poll() is not None:
                 raise RuntimeError('Xvfb failed to initialize')
             display = ':' + number.decode('ascii')
-            authorize(xauth, authorization, display, cookie)
+            authorize(xauth, authorization, hostname, display, cookie)
             environment = dict(os.environ, DISPLAY=display, XAUTHORITY=str(authorization))
-            subprocess.run([xdpyinfo], env=environment, capture_output=True, check=True, timeout=5)
+            probe = ['bwrap', '--ro-bind', '/', '/', *display_namespace(hostname), '--', xdpyinfo]
+            subprocess.run(probe, env=environment, capture_output=True, check=True, timeout=5)
             # Reject a display that also accepts clients without the private cookie.
             environment['XAUTHORITY'] = str(authorization.parent / 'missing')
-            if subprocess.run([xdpyinfo], env=environment, capture_output=True, timeout=5).returncode == 0:
+            if subprocess.run(probe, env=environment, capture_output=True, timeout=5).returncode == 0:
                 raise RuntimeError('Xvfb accepts connections without the private cookie')
-            yield display, authorization
+            yield display, authorization, hostname
         finally:
             os.close(ready)
             if process.poll() is None:
@@ -179,14 +182,14 @@ def main(argv=None):
 
     signal.signal(signal.SIGTERM, interrupt)
     try:
-        with private_display(xvfb, xauth, xdpyinfo) as (display, authorization):
+        with private_display(xvfb, xauth, xdpyinfo) as (display, authorization, hostname):
             os.environ['DISPLAY'] = display
             os.environ['XAUTHORITY'] = str(authorization)
             return supervisor.main([
                 *server_flags, '--game', str(args.game), '--store', str(args.store),
                 '--out', str(args.out), '--display', display, '--timeout', str(args.timeout),
                 '--software-vulkan-icd', str(icd.resolve(strict=True)),
-            ])
+            ], display_hostname=hostname)
     except KeyboardInterrupt:
         return 130
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

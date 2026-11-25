@@ -1302,7 +1302,8 @@ def run(args):
         if software_icd is not None:
             import authority_software_vulkan as software_vulkan
             command = software_vulkan.constrain(command, display=args.display, authorization=auth,
-                                                icd=software_icd)
+                                                icd=software_icd,
+                                                display_hostname=getattr(args, 'display_hostname', None))
             software_vulkan.verify(command, out/'software-vulkan.log')
         proc, started = owned.spawn_owned_gated(command, out/'process.log', processes)
         identity = None
@@ -2224,7 +2225,7 @@ def run(args):
     return result
 
 
-def main(argv=None):
+def main(argv=None, *, display_hostname=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--game',type=Path,required=True); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--store',type=Path,default=source.DEFAULT_STORE)
@@ -2314,7 +2315,9 @@ def main(argv=None):
                         help='start two overlapping private Linux diagnostic clients before serving other peers')
     diagnostic_options.add_argument('--diagnostic-clients', type=int, choices=(2,),
                         help='start two sequential private Linux diagnostic clients before serving other peers')
-    try: result=run(parser.parse_args(argv))
+    args = parser.parse_args(argv)
+    args.display_hostname = display_hostname
+    try: result=run(args)
     except (OSError,ValueError,RuntimeError) as error: parser.exit(1,'REFUSED: '+str(error)+'\n')
     print(json.dumps(result,indent=2)); return 0 if result['success'] else 1
 

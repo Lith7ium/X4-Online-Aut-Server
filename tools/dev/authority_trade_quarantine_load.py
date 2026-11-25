@@ -131,7 +131,7 @@ def run(args):
     def command(case, game, binds, lock, display, auth, username, seed, target):
         launch = original_command(case, game, binds, lock, display, auth, username, seed, target)
         launch = software_vulkan.constrain(launch, display=display, authorization=auth,
-                                           icd=args.vulkan_icd)
+                                           icd=args.vulkan_icd, display_hostname=getattr(args, 'display_hostname', None))
         software_vulkan.verify(launch, args.out / 'software-vulkan.log')
         return launch
 
@@ -163,8 +163,9 @@ def main(argv=None):
         parser.error('private Xvfb, xauth, xdpyinfo, lavapipe and exact SHA-256/marker required')
     args.vulkan_icd = icd.resolve(strict=True)
     try:
-        with private_display(*tools) as (display, auth):
+        with private_display(*tools) as (display, auth, hostname):
             args.display = display
+            args.display_hostname = hostname
             with patch.dict(os.environ, {'DISPLAY': display, 'XAUTHORITY': str(auth)}):
                 result = run(args)
     except (OSError, ValueError, RuntimeError) as error:

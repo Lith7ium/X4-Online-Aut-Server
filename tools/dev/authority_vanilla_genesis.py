@@ -80,7 +80,7 @@ def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce):
     return [path for path in lab.rglob('*') if path.is_file()] + [profile/'config.xml', profile/'content.xml']
 
 
-def run(game, out, display, auth, timeout, seed, *, software_rendered=True):
+def run(game, out, display, auth, timeout, seed, *, software_rendered=True, display_hostname=None):
     import authority_vanilla_pair as pair
     game = game.resolve(strict=True)
     out = snapshot.output_path(out)
@@ -113,7 +113,8 @@ def run(game, out, display, auth, timeout, seed, *, software_rendered=True):
             cmd[boundary:boundary] = [part for path in files for part in ('--ro-bind', str(path), str(path))]
             bridge.acquire_lock_with_handlers(handlers, lockbox, user.pw_uid, user.pw_gid)
             if software_rendered:
-                cmd = software.constrain(cmd, display=display, authorization=auth, icd=live.lavapipe_icd())
+                cmd = software.constrain(cmd, display=display, authorization=auth, icd=live.lavapipe_icd(),
+                                         display_hostname=display_hostname)
                 software.verify(cmd, out/'software-vulkan.log')
             proc, started = owned.spawn_owned_gated(cmd, out/'process.log', processes)
             deadline = time.monotonic() + timeout
@@ -212,8 +213,8 @@ def main():
             parser.error('desktop rendering requires readable Xauthority')
         result = run(args.game, args.out, display, auth, args.timeout, args.seed, software_rendered=False)
     else:
-        with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth):
-            result = run(args.game, args.out, display, auth, args.timeout, args.seed)
+        with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth, hostname):
+            result = run(args.game, args.out, display, auth, args.timeout, args.seed, display_hostname=hostname)
     print(json.dumps(result, indent=2))
     return 0 if result['success'] else 1
 
