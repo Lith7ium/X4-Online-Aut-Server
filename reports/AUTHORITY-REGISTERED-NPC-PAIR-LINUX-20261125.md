@@ -160,3 +160,24 @@ remain to be tested.
 All 51 native receipts matched. The disposable client saved no new world.
 The provider confirmed the final marker and SHA-256
 `3cbf3252978fbc9f8ec121ca5866d4d9e1d5cc0619ca7120556159fd3a9181a4`.
+
+### One-step velocity prediction against native low-attention positions
+
+The alignment run also retained 48 native MD velocity/basis samples from
+MFQ-419. All 48 had a corresponding provider publication and pilot receipt.
+For each adjacent pair we projected the **earlier** velocity into sector
+axes and advanced the earlier MD position by the elapsed **game** seconds.
+The elapsed times were 0.515–1.000 s. The reference endpoint was the next
+native MD position. The projected velocities were never sent to the pilot.
+
+| Adjacent positions | Within 50 m | Median error | 90th percentile | Maximum |
+| --- | ---: | ---: | ---: | ---: |
+| All | 0/47 | 623 m | 2,493 m | 3,221 m |
+| Unchanged | 0/39 | 616 m | 695 m | 1,133 m |
+| Changed | 0/8 | 2,495 m | 3,221 m | 3,221 m |
+
+Percentiles use nearest rank. The shortest error on a changed step was
+157 m. The velocity gave a plausible direction over several kilometres,
+but advancing it continuously did not predict the next low-attention
+sample within the existing 50 m correction budget. A cockpit-side native
+trajectory in high attention still needs separate measurement.
