@@ -1,5 +1,37 @@
 # Authoritative fork team handover
 
+## 26 November 2026
+
+A fresh GPU-free X4 process loaded the last-pilot checkpoint after the
+sector transfer. Before any pilot joined, two native readbacks placed
+BBS-493 at (30000, 100000, 55000) m in the destination sector.
+The ship kept its registry index and its original NPC captain.
+[Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
+
+In a fresh GPU-free provider, the eight marines on ARU-541 launched in
+two pods against the fully armed ZNG-430. The stock operation progressed
+to infiltration, then X4 reported failure. Scale Plate retained the ship.
+Pod attachment and the cause of failure are unknown. This trial started
+on the provider. [Boarding timeline](AUTHORITY-BOARDING-BASELINE-20261125.md#native-follow-up-at-the-highest-stock-thresholds)
+
+Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. The
+integrated Linux suite found seven errors in a shared test fixture.
+After the fix, all 29 cases in the four affected modules passed.
+The last full Linux run still has 25 skips. Cobalt owns the native
+Windows trade and NPC fixture checks and the operator's Internet flight.
+[Strict run and coverage gaps](AUTHORITY-STRICT-CHECKS-20261125.md) ·
+[00:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795647665602239)
+
+Matching private operator packages for `6d4062fd` are in
+`.local/flight-build-6d4062fd/`. All 176 files common to the Linux
+and Windows archives matched byte for byte. These packages include the
+retained-captain sector transfer and the trade-window corrections.
+
+| Package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Linux server and pilot | 1,633,013 | `f3313234de2c4f2a4efb324f0e5fc2d242004711b6c7777d61fbe391ec37e06b` |
+| Windows pilot | 3,111,185 | `2a3f3d8531fc977c9a190b5039d9cc7e81f1c6bd68e1c804e0f41e4ceb05a6d7` |
+
 ## 25 November 2026
 
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
