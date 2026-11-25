@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable fixture only. The trigger adds crew and issues no ship order. -->
+<mdscript name="X4AuthorityBoardingCrewSeed" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="CreateOnce" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityBoardingCrewSeed'" control="'Create'"/></conditions>
+   <actions>
+    <set_value name="$request" exact="event.param3"/>
+    <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{1666}"/>
+    <set_value name="$status" exact="'TARGET_REFUSED'"/>
+    <do_if value="player.module == 'custom_creative' and not @md.X4AuthorityShipRegistry.State.$faulted and @$request.$epoch == @md.X4AuthorityShipRegistry.State.$epoch and @$target.isclass.ship_l and $target.isoperational and $target.idcode == 'ZNG-430' and $target.macro.id == 'ship_tel_l_destroyer_02_a_macro' and $target.trueowner == faction.scaleplate and @$target.pilot.isclass.npc and $target.pilot != player.entity and @$target.sector.macro.id == 'cluster_06_sector001_macro' and @md.X4AuthorityShipRegistry.State.$byship.{$target} == 1666">
+     <set_value name="$sector" exact="$target.sector"/>
+     <set_value name="$targetpilot" exact="$target.pilot"/>
+     <set_value name="$status" exact="'SHIP_REFUSED'"/>
+     <create_ship name="$ship" macro="macro.ship_arg_m_trans_container_01_a_macro" sector="$sector" seed="8627">
+      <owner exact="faction.player" overridenpc="true"/>
+      <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+      <pilot><select race="race.argon" tags="tag.aipilot"/></pilot>
+      <safepos object="$target" x="18km" y="2km" z="4km"/>
+     </create_ship>
+     <do_if value="@$ship.isoperational and $ship.isclass.ship_m and $ship != $target and $ship.sector == $sector and $ship.owner == faction.player and $ship.trueowner == faction.player and @$ship.pilot.isclass.npc and $ship.pilot != player.entity and $ship.pilot.owner == faction.player">
+      <set_value name="$status" exact="'CREW_REFUSED'"/>
+      <do_all exact="8">
+       <create_npc_template name="$marine" object="$ship" macro="macro.character_argon_female_pilot_01_macro" role="entityrole.marine"/>
+      </do_all>
+      <set_value name="$marines" exact="0"/>
+      <do_for_each name="$person" in="$ship.people.list">
+       <do_if value="$ship.people.{$person}.role == entityrole.marine">
+        <set_value name="$marines" exact="1" operation="add"/>
+       </do_if>
+      </do_for_each>
+      <set_value name="$distance" exact="$ship.distanceto.{$target} / 1m"/>
+      <set_value name="$seedindex" exact="@md.X4AuthorityShipRegistry.State.$byship.{$ship}"/>
+      <do_if value="$marines == 8 and $ship.people.count == 8 and $distance ge 12000 and $distance le 30000 and $target.trueowner == faction.scaleplate and $target.pilot == $targetpilot and $target.sector == $sector">
+       <set_value name="$status" exact="'READY'"/>
+       <debug_text text="'[X4LAN] AUTH_BOARDING_CREW_SEED %s|READY|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$request.$nonce,$ship.idcode,$ship.macro.id,$ship.owner.id,$ship.pilot,$ship.people.count,$marines,(if $seedindex then $seedindex else 0),$target.idcode,$target.macro.id,$target.owner.id,$target.trueowner.id,$target.pilot,$sector.macro.id,$distance,1666,$request.$epoch]"/>
+      </do_if>
+     </do_if>
+    </do_if>
+    <do_if value="$status != 'READY'">
+     <debug_text text="'[X4LAN] AUTH_BOARDING_CREW_SEED %s|%s'.[$request.$nonce,$status]"/>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityBoardingCrewSeed.Result'" param="'%s|%s'.[$request.$nonce,$status]"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>
