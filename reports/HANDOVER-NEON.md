@@ -404,7 +404,10 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   Shared damage across machines and boarding remain open. A confirmed
   disposable world now contains ARU-541 with its Company captain and
   eight saved marines near the registered Scale Plate target ZNG-430.
-  ARU-541 still needs a registry association for a boarding witness.
+  A cold Linux provider resolved ARU-541 at temporary registry index 5049.
+  With the avatar in another sector, the stock menu queries found Board
+  selectable, the target capturable and all eight marines assignable.
+  Persisting the new index and starting an operation are still open.
   [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)

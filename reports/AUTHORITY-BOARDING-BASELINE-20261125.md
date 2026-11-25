@@ -61,6 +61,28 @@ Checkpoint `checkpoint-bf225d9dab2e4f9c8da03240e8b75ad1` has SHA-256
 `b80e43e31242758bdd1b422d157c87b46a3c327399fcc58d810957763feb1bd4`.
 The private provider result is in `.local/native-boarding-crew-seed/run-01/server/result.json`.
 
+## Can the parked server avatar select these marines?
+
+At `6eaf62ae` a fresh Linux X4 process loaded that checkpoint. The server
+avatar was aboard UPV-940 in the adjacent sector, as recorded in the
+source save. The regular registry Enroll assigned ARU-541 index 5049 in
+memory. The subsequent correlated Resolve returned the same X4 object.
+MD independently found its captain and eight marines. ZNG-430 still
+occupied index 1666. The distance between the ships was 18,544 m.
+
+The same process read the stock map menu's getters. X4 reported Board as
+selectable for ARU-541 and ZNG-430 as capturable. It counted eight marines,
+44 places on the target and boarding resistance 558. The initial allocation
+limit was eight. The two ships shared a sector and each was in a different
+sector from the avatar. These observations cover selection eligibility;
+boarding start, combat resolution and takeover are still untested.
+
+The earlier run at `a9d3a211` reached the same in-memory registry result
+but the engine rejected a C integer passed to Lua's GetComponentData.
+The corrected adapter checks the conversion back to the original runtime
+ID before each reference is used. Neither run saved the in-memory
+enrollment. The original 5,048 entries remain the last sealed registry.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
