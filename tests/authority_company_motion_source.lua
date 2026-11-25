@@ -125,11 +125,12 @@ DebugError = function(line) lines[#lines + 1] = line end
 RegisterEvent = function() return true end
 X4LAN_REPLICA_MOTION_BINDING = {normalize_profile_save_path = function(path) return path end}
 X4LAN_AUTHORITY_SOURCE_MOTION_SAMPLER = {new_x4 = function(options) return options end}
+local make_source = source.new
 source.new = function(options) native_options = options; return {} end
 source.new_x4({port = 1, lease = 'test', generation = generation, nonce = nonce, index = index},
               '/private/save', {epoch = epoch, issued_count = index}, {open = function() return {} end})
 local config = native_options.make_sampler(actor, function() return true end)
-assert(config.diagnostics == true and config.recover_expired_pending == true)
+assert(config.diagnostics and config.recover_expired_pending and config.allow_superhighway_gap)
 local prefix = '[X4LAN] AUTH_COMPANY_MOTION_SOURCE_FAILED '
 for _, reason in ipairs({'register', 'tick', 'sample', 'event', 'reset', 'close', 'discard_pending',
                          'sample_dock_values', 'register_actor_key', 'reset_id_roundtrip',
@@ -169,3 +170,108 @@ assert(config.normalize_save_path(current_path) == windows_path)
 assert(config.normalize_save_path('C:/Users/Player/45857/save') == nil)
 current_path = 'C:/Users/Other/45858/save'
 assert(not native_options.available())
+
+-- Exercise the real correlated descriptor, sampler, and Company owner.
+local descriptor = dofile('tools/dev/authority_job_descriptor_probe.lua')
+local function transit_case(response, allow_gap, return_to_origin)
+    local now, current_actor, x = 1, actor, 10
+    local issued, sent, failed = {}, {}, {}
+    local client = make_source({
+        epoch = epoch, index = index,
+        actor = function() return current_actor end,
+        available = function() return true end,
+        send = function(payload) sent[#sent + 1] = payload end,
+        make_sampler = function(id, guard)
+            return sampler.new({
+                enabled = true, epoch = epoch, generation = generation, nonce = nonce,
+                max_tracks = 1, scan_budget = 1, interval = .10, timeout = 1,
+                min_dt = .02, max_dt = 1, real_time_motion = true,
+                allow_superhighway_gap = allow_gap,
+                clock = function() return now end, guard = guard, actor_key = tostring,
+                binding_guard = function() return false end, saved_baseline_limit = index,
+                saved_baseline_guard = function(row, value)
+                    return row.index == index and value == id and current_actor == id
+                end,
+                reader_factory = function(row, value, rid)
+                    return descriptor.new({
+                        enabled = true, epoch = epoch, request_id = rid, timeout = 1,
+                        row = row, actor = value, saved_baseline = index,
+                        allow_superhighway_gap = allow_gap, guard = guard,
+                        include_local_sector = true, include_capture_time = true,
+                        capture_clock = function() return now end,
+                        clock = function() return now end, game_time = function() return now end,
+                        actor_key = tostring, hex_key = function(hex) return tostring(tonumber(hex)) end,
+                        issue = function(_, _, args)
+                            assert(args.allow_superhighway_gap == (allow_gap and true or nil))
+                            issued[#issued + 1] = args.request_id
+                            return true
+                        end,
+                        snapshot = function(_, sector)
+                            return {sector_local = tostring(tonumber(sector)), x = x, y = 0, z = 0,
+                                game_before = now, game_after = now,
+                                capture_before = now, capture_after = now}
+                        end,
+                    })
+                end,
+                fault = function(reason) failed[#failed + 1] = reason end,
+            })
+        end,
+    })
+    local function reply(t, result, response_epoch, response_index)
+        now = t
+        client:tick()
+        client:event(table.concat({assert(issued[#issued]), response_epoch or epoch,
+            response_index or index, result}, '|'))
+    end
+    local old = 'ok|0x2cc|ship_macro|owner|0x111|sector_a'
+    local new = return_to_origin and old or 'ok|0x2cc|ship_macro|owner|0x112|sector_b'
+    local result_sector = return_to_origin and 'sector_a' or 'sector_b'
+    client:set_running(true)
+    reply(1, old)
+    x = 12
+    reply(1.2, old)
+    assert(sent[2]:match('|2|sector_a.*|10%.?[%d]*|0|0|$'))
+    if response then
+        now = 1.4
+        client:tick()
+        local rid = issued[#issued]
+        if response == 'binding' then current_actor = actor + 1 end
+        local packet = table.concat({rid, response == 'epoch' and generation or epoch,
+            response == 'index' and index + 1 or index, ({
+                binding = 'transit|0x2cc', epoch = 'transit|0x2cc', index = 'transit|0x2cc',
+            })[response] or response}, '|')
+        client:event(packet)
+        assert(#failed == 1 and sent[3] == 'GAP')
+        current_actor = actor
+        reply(2, new)
+        assert(#issued == 3 and #sent == 3)
+        return
+    end
+
+    reply(1.4, 'transit|0x2cc')
+    assert(sent[3] == 'GAP' and #issued == 3)
+    local stale = issued[3]
+    now = 1.45
+    client:tick()
+    assert(#issued == 3)
+    reply(1.6, 'transit|0x2cc')
+    assert(#sent == 3 and #issued == 4)
+    now = 1.8
+    client:tick()
+    client:event(stale .. '|' .. epoch .. '|' .. index .. '|transit|0x2cc')
+    assert(#sent == 3 and #issued == 5)
+    x = 700
+    reply(1.8, new)
+    assert(#failed == 0 and sent[4]:match('|3|' .. result_sector .. '.*|%-|%-|%-|$'))
+    x = 702
+    reply(2, new)
+    assert(sent[5]:match('|4|' .. result_sector .. '.*|10%.?[%d]*|0|0|$'))
+end
+
+transit_case(nil, true)
+transit_case(nil, true, true)
+for _, response in ipairs({'unavailable', 'transit|0x2cd', 'transit|0x2cc|junk',
+                            'transit0x2cc', 'binding', 'epoch', 'index'}) do
+    transit_case(response, true)
+end
+transit_case('transit|0x2cc', false)

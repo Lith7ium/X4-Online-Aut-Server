@@ -10,6 +10,11 @@
     <do_if value="@$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and @$ship.sector.isclass.sector and $ship.macro and $ship.owner and $ship.sector.macro">
      <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|ok|%s|%s|%s|%s|%s'.[$v.$request_id,$v.$epoch,$index,$ship,$ship.macro.id,$ship.owner.id,$ship.sector,$ship.sector.macro.id]"/>
     </do_if>
+    <!-- A superhighway corridor can temporarily have no sector. Only the
+         selected Company sender requests this distinct, pose-free response. -->
+    <do_elseif value="@$v.$allow_superhighway_gap == true and @$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index and $ship == player.controlled and $ship.pilot == player.entity and not @$ship.sector.isclass.sector and @$ship.macro and $ship.owner == faction.player and $ship.trueowner == faction.player and @$ship.zone.issuperhighway">
+     <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|transit|%s'.[$v.$request_id,$v.$epoch,$index,$ship]"/>
+    </do_elseif>
     <do_else>
      <raise_lua_event name="'X4AuthorityJobDescriptorProbe.Result'" param="'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"/>
      <!-- Diagnostic rechecks are point observations, not the original failure. -->

@@ -11,6 +11,7 @@ local function name(s) return type(s)=='string' and #s>=1 and #s<=128 and s:matc
 function M.new(o)
  if type(o)~='table' or o.enabled~=true then return nil,'disabled' end
  assert(token(o.epoch) and token(o.request_id) and finite(o.timeout) and o.timeout>0 and o.timeout<=120)
+ assert(o.allow_superhighway_gap==nil or type(o.allow_superhighway_gap)=='boolean')
  assert(o.include_local_sector==nil or type(o.include_local_sector)=='boolean')
  assert(o.include_orientation==nil or type(o.include_orientation)=='boolean')
  assert(o.include_capture_time==nil or type(o.include_capture_time)=='boolean')
@@ -55,7 +56,9 @@ function M.new(o)
   query_game=game;state='waiting';generation={};deadline=last+o.timeout
   if not finite(deadline) then return fail('deadline') end
   if not check() then return false end
-  local sent,accepted=call(o.issue,SCREEN,'Read',{epoch=o.epoch,index=o.row.index,request_id=o.request_id})
+  local args={epoch=o.epoch,index=o.row.index,request_id=o.request_id}
+  if o.allow_superhighway_gap then args.allow_superhighway_gap=true end
+  local sent,accepted=call(o.issue,SCREEN,'Read',args)
   if not sent then return false end
   if accepted~=true then return fail('dispatch') end
   return check()
@@ -65,7 +68,20 @@ function M.new(o)
   if not check() then return false end
   if type(value)~='string' or #value>768 then return fail('response_type') end
   local rid,epoch,index,status,rest=value:match('^([0-9a-f]+)|([0-9a-f]+)|([0-9]+)|([a-z]+)|?(.*)$')
-  if rid~=o.request_id or epoch~=o.epoch or index~=string.format('%.0f',o.row.index) or status~='ok' then return fail('response_mismatch') end
+  if rid~=o.request_id or epoch~=o.epoch or index~=string.format('%.0f',o.row.index) then return fail('response_mismatch') end
+  if status=='transit' and o.allow_superhighway_gap then
+   local actor=value:match('^[0-9a-f]+|[0-9a-f]+|[0-9]+|transit|(0[xX][0-9a-fA-F]+)$')
+   if not actor then return fail('descriptor_invalid') end
+   local ok,key=call(o.hex_key,actor)
+   if not ok then return false end
+   local verified,current=call(o.actor_key,o.actor)
+   if not verified then return false end
+   if key~=actor_key or current~=actor_key then return fail('actor_changed') end
+   if not check() then return false end
+   state='done';deadline=nil
+   return true,nil,'superhighway_transit'
+  end
+  if status~='ok' then return fail('response_mismatch') end
   local actor,macro,owner,sector,sector_macro=rest:match('^(0[xX][0-9a-fA-F]+)|([^|]+)|([^|]+)|(0[xX][0-9a-fA-F]+)|([^|]+)$')
   if not actor or not sector or not name(macro) or not name(owner) or not name(sector_macro) then return fail('descriptor_invalid') end
   local ok,key=call(o.hex_key,actor);if not ok then return false end

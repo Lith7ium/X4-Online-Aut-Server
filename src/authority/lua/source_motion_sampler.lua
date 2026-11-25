@@ -28,6 +28,7 @@ function M.new(o)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ assert(c.allow_superhighway_gap==nil or type(c.allow_superhighway_gap)=='boolean')
  assert(c.recover_expired_pending==nil or type(c.recover_expired_pending)=='boolean')
  assert(not (c.real_time_motion and c.include_orientation))
  local state,busy='ready',false
@@ -121,10 +122,17 @@ function M.new(o)
  function api:event(value)
   if busy or state~='pending' or type(value)~='string' or value:sub(1,32)~=pending.request or value:sub(33,33)~='|' then return fail('event')end
   busy=true
-  local result
+  local result,gap
   local ok,err=pcall(function()
    assert(check());local e=pending.entry;assert(checked_binding(e))
-   local accepted,sample=pending.reader:response(value)
+   local accepted,sample,withdrawal=pending.reader:response(value)
+   if c.allow_superhighway_gap and accepted==true and sample==nil and withdrawal=='superhighway_transit' then
+    assert(check() and checked_binding(e) and state=='pending')
+    e.previous=nil
+    e.next_due=last_clock+c.interval
+    pending=nil;state='ready';gap=withdrawal
+    return
+   end
    assert(accepted==true and type(sample)=='table' and getmetatable(sample)==nil and sample.epoch==c.epoch and sample.index==e.row.index
     and sample.sequence==e.row.sequence and sample.descriptor_atomic==false and sample.sector_identity_proven==false
     and name(sample.sector_macro) and type(sample.local_sector_key)=='string' and sample.local_sector_key:match('^[1-9]%d*$')
@@ -227,7 +235,7 @@ function M.new(o)
    else previous.last_time=t end
    pending=nil;state='ready'
   end)
-  busy=false;if not ok then return finish_failure('sample',err)end;return true,result
+  busy=false;if not ok then return finish_failure('sample',err)end;return true,result,gap
  end
  function api:state()return state end
  function api:discard_pending()
@@ -315,6 +323,7 @@ function M.new_x4(c)
    row=row,actor=actor,expected_save_path=c.expected_save_path,normalize_save_path=c.normalize_save_path,
    guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
    include_capture_time=c.real_time_motion,capture_clock=c.capture_clock,
+   allow_superhighway_gap=c.allow_superhighway_gap,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})
  end
  return M.new(opts)

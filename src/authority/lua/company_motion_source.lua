@@ -20,7 +20,7 @@ end
 
 function M.new(options)
     local running, active, reset, failed = false, false, false, false
-    local sampler, actor
+    local sampler, actor, in_transit
     local observer = options.observer
     local api = {}
 
@@ -38,6 +38,13 @@ function M.new(options)
     local function sample_outcome(ok, gap)
         if not ok then
             failed = true
+        elseif gap == 'superhighway_transit' then
+            if not in_transit then
+                in_transit = true
+                options.send('GAP')
+                if options.superhighway_gap then options.superhighway_gap() end
+            end
+            return false
         elseif gap == 'pending_timeout' then
             if options.pending_timeout then options.pending_timeout() end
         else
@@ -70,6 +77,7 @@ function M.new(options)
         end
         local ok, sample, gap = sampler:event(row)
         if not sample_outcome(ok, gap) or not sample then return end
+        in_transit = false
         local rate = sample.real_velocity
         local function number(value) return string.format('%.17g', value) end
         options.send(table.concat({
@@ -178,6 +186,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({
         observer = observer, observer_fault = observer_fault,
+        superhighway_gap = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP superhighway_transit') end,
         pending_timeout = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP pending_timeout') end,
         epoch = pinned.epoch, index = config.index, available = available, actor = actor,
         send = function(payload) net:send(prefix .. payload) end,
@@ -187,6 +196,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 nonce = config.nonce, max_tracks = 1, scan_budget = 1,
                 interval = .10, timeout = 1, min_dt = .02, max_dt = 1,
                 real_time_motion = true, capture_clock = udp.monotonic, recover_expired_pending = true,
+                allow_superhighway_gap = true,
                 expected_save_path = expected, normalize_save_path = normalize,
                 guard = guard, binding_guard = function() return false end,
                 saved_baseline_limit = pinned.issued_count,

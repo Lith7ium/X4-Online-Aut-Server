@@ -31,7 +31,17 @@ class JobDescriptorTest(unittest.TestCase):
         self.assertIn('@$ship.isoperational', predicates)
         self.assertIn('|ok|', ship_gate.find('raise_lua_event').get('param'))
         branches = list(registry_gate)
-        unavailable = branches[branches.index(ship_gate) + 1]
+        transit, unavailable = branches[branches.index(ship_gate) + 1:]
+        self.assertEqual(transit.tag, 'do_elseif')
+        for term in ('@$v.$allow_superhighway_gap == true', '@$ship.isoperational',
+                     '$ship.isclass.ship', '@md.X4AuthorityShipRegistry.State.$byship.{$ship} == $index',
+                     '$ship == player.controlled', '$ship.pilot == player.entity',
+                     'not @$ship.sector.isclass.sector', '@$ship.macro',
+                     '$ship.owner == faction.player', '$ship.trueowner == faction.player',
+                     '@$ship.zone.issuperhighway'):
+            self.assertIn(term, transit.get('value').split(' and '))
+        self.assertEqual(transit.find('raise_lua_event').get('param'),
+                         "'%s|%s|%s|transit|%s'.[$v.$request_id,$v.$epoch,$index,$ship]")
         self.assertEqual(unavailable.tag, 'do_else')
         self.assertEqual(unavailable.find('raise_lua_event').get('param'),
             "'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]")
@@ -39,8 +49,8 @@ class JobDescriptorTest(unittest.TestCase):
     def test_unavailable_diagnostics_are_static_rechecks_after_unchanged_responses(self):
         root = ET.parse(ROOT/'tools/dev/authority_job_descriptor_probe.xml').getroot()
         responses = list(root.iter('raise_lua_event'))
-        self.assertEqual(len(responses), 3)
-        self.assertEqual([node.get('param') for node in responses[1:]],
+        self.assertEqual(len(responses), 4)
+        self.assertEqual([node.get('param') for node in responses[2:]],
             ["'%s|%s|%s|unavailable'.[$v.$request_id,$v.$epoch,$index]"] * 2)
         expected = {
             'ship_missing', 'ship_not_operational', 'not_ship', 'reverse_mismatch', 'sector_invalid',
