@@ -1,6 +1,8 @@
 """Run isolated fixture scripts and compile overlay sources with pinned LuaJIT."""
 
 import os
+from pathlib import Path
+import sys
 from unittest import SkipTest
 
 
@@ -26,3 +28,7 @@ def compile_fixture(source, output):
     lua = _fixture_runtime()
     chunk = lua.compile(source.read_bytes(), name=os.fsencode(f'@{source}'))
     output.write_bytes(lua.eval(b'string.dump')(chunk, True))
+
+
+if __name__ == '__main__':
+    run_fixture(Path(sys.argv[1]), *sys.argv[2:])

@@ -94,9 +94,9 @@ class CompanyMotionSourceTest(unittest.TestCase):
                                       'first_local_own_pose_validated'])
 
     def test_selected_sampler_only_captures_after_resume_and_resets_rates(self):
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
-        subprocess.run(['luajit', 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
+        luajit = shutil.which('luajit')
+        runner = [luajit] if luajit else [sys.executable, 'tests/run_fixture_lua.py']
+        subprocess.run([*runner, 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
 
     def test_auto_cockpit_roster_retries_on_the_owned_udp_peer_without_subscribing(self):
         source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_max_pilots=1)

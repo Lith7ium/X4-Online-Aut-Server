@@ -19,6 +19,7 @@ from authority.save_transfer import SaveOffers
 from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
 from authority.world import WorldCoordinator
+from authority_socket_pair import non_ipv4_connected_pair
 from test_authority_trusted_marker_load_session import FakeEngine, FakeService, claim_for
 
 
@@ -593,9 +594,8 @@ class TCPControlTest(unittest.TestCase):
         self.assertEqual(first.recv(1), b'')
         self.assertEqual(second.recv(1), b'')
 
-    def test_unix_socket_is_refused_before_session_mutation(self):
-        if not hasattr(socket, 'socketpair'): self.skipTest('socketpair unavailable')
-        a, b = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
+    def test_non_ipv4_socket_is_refused_before_session_mutation(self):
+        a, b = non_ipv4_connected_pair()
         try:
             with self.assertRaises(ValueError): self.owner.adopt(a)
             self.assertEqual(self.world.session.players, ())

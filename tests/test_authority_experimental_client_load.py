@@ -68,11 +68,13 @@ class ClientLoadTest(unittest.TestCase):
         with self.assertRaises(ValueError): client.make_claim(self.attempt)
         with self.assertRaises(ValueError): client.make_claim(self.attempt)
 
-    def test_replaced_file_and_symlink_refused(self):
+    def test_replaced_file_is_refused(self):
         self.loaded(); self.client.observe_pause(self.attempt, True)
         replacement = self.root / 'replacement'; replacement.write_bytes(self.path.read_bytes())
         replacement.replace(self.path)
         with self.assertRaises(ValueError): self.client.make_claim(self.attempt)
+
+    def test_symlink_is_refused(self):
         link = self.root / 'link'
         try:
             link.symlink_to(self.path)
@@ -80,8 +82,7 @@ class ClientLoadTest(unittest.TestCase):
             if getattr(error, 'winerror', None) != 1314:
                 raise
             self.skipTest('creating symlinks needs Developer Mode or admin rights on Windows')
-        client = ExperimentalClientLoad(enabled=True, offer=self.offer, expected_marker=self.marker)
-        with self.assertRaises(ValueError): client.verify_staged(link)
+        with self.assertRaises(ValueError): self.client.verify_staged(link)
 
     def test_close_fences_and_disabled_is_refused(self):
         with self.assertRaises(ValueError):

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests')]
 from authority.experimental_tls_tunnel import create_server_context, relay_connected_client, relay_connected_server
+from authority_socket_pair import non_ipv4_connected_pair
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY
 
 
@@ -171,7 +172,7 @@ class ConnectedTunnelTests(unittest.IsolatedAsyncioTestCase):
                     second_peer.close()
 
     async def test_invalid_socket_closes_both_owned_sockets(self):
-        raw, peer = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
+        raw, peer = non_ipv4_connected_pair()
         tls, other = connected_pair()
         try:
             with self.assertRaises(ValueError):

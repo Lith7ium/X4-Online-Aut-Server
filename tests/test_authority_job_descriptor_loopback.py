@@ -8,6 +8,8 @@ import threading
 import time
 import unittest
 
+from authority_socket_pair import non_ipv4_connected_pair
+
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools/dev'))
 spec=importlib.util.spec_from_file_location('job_descriptor_wire',ROOT/'tools/dev/authority_job_descriptor_loopback.py')
@@ -100,12 +102,12 @@ class JobDescriptorWire(unittest.TestCase):
                 with self.assertRaises(ValueError):m.send_descriptor(client,descriptor(),time.monotonic()+2,lambda:True)
                 thread.join(2);self.assertFalse(thread.is_alive())
 
-    def test_bad_expected_sequence_or_unix_socket_rejected(self):
+    def test_bad_expected_sequence_or_non_ipv4_socket_rejected(self):
         client,server=pair()
         with self.assertRaises(ValueError):
             m.receive_descriptor(server,'a'*32,'b'*32,True,lambda _:True,time.monotonic()+2,lambda:True)
         client.close()
-        client,server=socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
+        client,server=non_ipv4_connected_pair()
         with self.assertRaises(ValueError):m.send_descriptor(client,descriptor(),time.monotonic()+2,lambda:True)
         server.close()
 

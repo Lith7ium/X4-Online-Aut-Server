@@ -2,7 +2,6 @@
 from dataclasses import replace
 import gzip
 import hashlib
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -166,7 +165,6 @@ class CombatObservationContractTests(unittest.TestCase):
                          '$registered_ship')
 
 
-@unittest.skipUnless(importlib.util.find_spec('lupa') is not None, 'needs lupa (LuaJIT runtime)')
 class CombatObservationLuaJitTests(unittest.TestCase):
     def test_lua_registry_epoch_is_optional(self):
         lua = _load_luajit_runtime()

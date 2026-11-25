@@ -8,6 +8,8 @@ import time
 import unittest
 from unittest import mock
 
+from authority_socket_pair import non_ipv4_connected_pair
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('descriptor_loopback', ROOT / 'tools/dev/authority_descriptor_loopback.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -165,8 +167,8 @@ class Loopback(unittest.TestCase):
                 with self.assertRaises(ValueError): m.send_descriptor(client, desc(), time.monotonic()+2, lambda: True)
                 thread.join(2); self.assertFalse(thread.is_alive())
 
-    def test_no_unix_socket_or_nonbool_guard(self):
-        client, server = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
+    def test_no_non_ipv4_socket_or_nonbool_guard(self):
+        client, server = non_ipv4_connected_pair()
         with self.assertRaises(ValueError): m.send_descriptor(client, desc(), time.monotonic()+2, lambda: True)
         server.close()
         client, server = pair()
