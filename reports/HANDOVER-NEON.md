@@ -190,7 +190,17 @@ Lith7ium approved revoking a pilot whose control connection closes during
 resume. The Company provider at `96bb4851` releases that pilot's reservation
 and movement grant. Remaining pilots confirm the same transition. If the
 last pilot leaves, the normal pause and save follow. Local TCP regressions
-covered a surviving pilot, an empty session and fresh admission.
+covered a surviving pilot, an empty session and fresh admission. A
+native GPU-free X4 run then saved after a deliberate disconnect before
+the first resume receipt. The same provider offered that exact save and
+HVC-420 to a fresh connection. At `11f10348` the TCP checks also cover
+a partial resume frame and two remaining pilots in a four-pilot session.
+The updated private Linux kit is
+`.local/flight-build-11f10348/X4-Authority-Linux-11f10348.tar.gz`
+(1,539,196 bytes, SHA-256
+`f5c2f0acbe7f798ab2617569327491ee0e538f7f62307feb5ec7274c9839cda1`).
+It has not been deployed to Fedora. The client wire format is unchanged.
+[Control loss during native resume](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#confirmed-control-loss-during-native-resume)
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot

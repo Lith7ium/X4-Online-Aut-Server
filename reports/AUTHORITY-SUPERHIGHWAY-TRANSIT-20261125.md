@@ -69,6 +69,41 @@ connectivity were outside this test. The private verification result
 `.local/two-pilot-cold-rejoin/run-02/verification.json` has SHA-256
 `922aa2a27cd738a60b1f9e96211c3a7f61889ade7be61bd712599c9aedb65e51`.
 
+## Confirmed control loss during native resume
+
+The original rejoin diagnostic stopped its control connection when its private
+recorder requested a motion acknowledgement before any had arrived. At
+`b418a409` that exposed a provider fault after the engine had resumed. The
+provider made a compensating pause but did not publish a departure save.
+
+A deliberate reproduction on the Company provider at `96bb4851` closed
+the admitted Linux pilot's control socket just after it received resume
+request 1 and before native dispatch or any receipt. It used the same
+two-pilot departure source and a separate private profile on Bazzite.
+The same CPU Vulkan X4 process paused, saved, and remained available.
+The fresh confirmed save had game age 563.894 s, up from 562.952 s.
+Confirmation was observed 94.124 wall seconds after the socket closed,
+including the full save and registry checks on this host.
+
+The next authenticated connection received that exact checkpoint and could
+reserve HVC-420 again under a fresh handle. It stopped at ship selection.
+The independently parsed save retained both registered ships and 5,048
+issued identities. The pilot and provider shut down with no owned processes
+remaining. This used one native cockpit and pinned loopback TLS.
+
+| Evidence | Value |
+| --- | --- |
+| Confirmed checkpoint | `checkpoint-5c24bcfedb94445f9168121f5c791b76` |
+| Save SHA-256 | `d751935442376566ab97ac8e40acf4a86f6ac7ab312c5b1e3b96ba01347a9fb1` |
+| Marker read from the saved XML | `b9fc128a7ae5b6835ce0baf6d8788c1c` |
+| Private `.local/two-pilot-cold-rejoin/run-03/verified.json` SHA-256 | `333536db97f5651b386abd654194ad92cf57765f4391349ff5d420cf218c27d0` |
+
+At `11f10348` the same policy also covers loss during a partial resume
+request or receipt. A four-connection TCP regression closed two pilots'
+connections during one resume. The other two continued, received one
+resume each, and their subsequent departures produced one new save.
+These tests used local TCP peers and a test engine.
+
 ## Interrupted sender with two admitted pilots
 
 At `7ae7a5a0` two ordinary Linux cockpits joined the GPU-free Bazzite
