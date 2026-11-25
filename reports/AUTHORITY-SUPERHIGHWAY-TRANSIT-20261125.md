@@ -24,8 +24,50 @@ The verified checkpoint was `checkpoint-04007b4314214624a09ce825893fc160`,
 save SHA-256 `82fcded5ce876e812a2700ebf0c7dc322af60a77bcbf02e34e9f14205412df90`.
 The private evidence `.local/native-authority-transit-pair-md-readback/native-01/verified.json`
 has SHA-256 `2ad59ab75bb0b2f5ce4c91437dfab25df1c73f407d625045d92739a8d588d137`.
-This checkpoint was inspected offline. Cold recovery was exercised separately
-in the earlier one-pilot flight.
+
+## Native HVC-420 rejoin after the two-pilot departure
+
+At `b418a409`, a fresh GPU-free provider restored a verified copy of the
+two-pilot departure checkpoint. One regular Linux pilot joined through pinned
+loopback TLS on Bazzite and took the helm of HVC-420 (registry index 1073)
+in a fresh base-game profile. The provider ran the Company motion relay with
+position writing disabled. Provider X4 reported the restored marker
+`79da2ab15eea6e3aeb46221bc17a94f1`. Client X4 reported the new offer's marker
+`2a877d6c04b546b0b7b758708197979c` and confirmed actual control of ship 1073.
+
+The first native HVC sample arrived at game age 562.981 s in Black Hole
+Sun IV (`cluster_06_sector001_macro`) at (168051.171875, 1049.878052,
+−5185.678711) m, 0.384 mm from the offered save position. Its first returned
+acknowledgement was sequence 2. All nine acknowledgements received by the
+pilot had the same position, and the eight samples carrying velocity
+reported zero. The provider accepted ten samples through sequence 11 and
+recorded zero position change. The pilot left cooperatively without flight
+input. The provider paused and confirmed the new departure save. Both
+processes exited with no owned processes remaining.
+
+| Verified save | Checkpoint | Game age, s | Save SHA-256 |
+| --- | --- | ---: | --- |
+| Two-pilot departure restored by the provider | `checkpoint-04007b4314214624a09ce825893fc160` | 562.952 | `82fcded5ce876e812a2700ebf0c7dc322af60a77bcbf02e34e9f14205412df90` |
+| Fresh offer loaded by the returning pilot | `checkpoint-caf20d2b5fd645968e97a2d80018900b` | 562.952 | `bb541ebb85d811d7bc83bb68adc3e9f47e817ccd9198e89788881a45ba3ca863` |
+| Confirmed after the rejoin pilot left | `checkpoint-39a02fb17cc24fad896b3b578f9fdd08` | 568.114 | `972b596cebcac38396321477287b84e5bf8da0a4b60ec705717be061257f6c01` |
+
+Independent save parsing found the same indices, ship codes, sectors and
+positions for HVC-420 and KHI-630 across all three saves, with 0 m change in
+either saved position. The registry epoch and issued count of 5,048 were
+unchanged. Between the source and fresh offer, the saved component ID
+changed at all 5,046 available indices. The code, class, macro and owner
+were identical at every index. The two unavailable indices (49 and
+2430) stayed unbound. The mapping digest hashes each index and its saved
+component ID, which accounts for the digest change. All 5,046 component
+IDs stayed the same from the offer to the final save. The offer
+preserved the source game age. The next departure save advanced game
+time by 5.162 s.
+
+The rejoin covered one cockpit. KHI-630's persistence was checked in the
+saved bytes. Simultaneous cold rejoin, further flight, Windows and Internet
+connectivity were outside this test. The private verification result
+`.local/two-pilot-cold-rejoin/run-02/verification.json` has SHA-256
+`922aa2a27cd738a60b1f9e96211c3a7f61889ade7be61bd712599c9aedb65e51`.
 
 ## Interrupted sender with two admitted pilots
 

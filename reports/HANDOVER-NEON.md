@@ -69,6 +69,19 @@ with its nonzero yaw, pitch and roll preserved at each readback.
 | X4-Authority-Linux-2ad3fc46.tar.gz | 1,530,979 | `8f08a2b1f5bf1fe4b11c44a217e1d462f751d7629d7597ddba9004e7b4fccee1` |
 | X4-Authority-Windows-2ad3fc46.zip | 2,893,154 | `1a1cd0f00833aa9ad099198057464b3362826385c372533e8c41fcb37118afab` |
 
+For the subsequent writer-enabled sector-crossing test, the matching
+`b418a409` packages are in `.local/flight-build-b418a409` on Bazzite.
+Both archives contain the sender and radar code used in the successful
+Linux crossing. The Linux archive also contains the four-second provider
+readback change. The Windows ZIP includes the same verified network DLL.
+These packages have been built and inspected locally. Fedora run-03 and
+Cobalt's assigned fixed-index comparison still use their earlier builds.
+
+| Sector-crossing package | Bytes | SHA-256 |
+| --- | ---: | --- |
+| X4-Authority-Linux-b418a409.tar.gz | 1,538,674 | `a013427e4d6799590a723cffba084a38fed6ce428cefd4a81f1cb0013a5bd0ca` |
+| X4-Authority-Windows-b418a409.zip | 2,916,818 | `4b9b38948d5e4709ca7158b2f917c93b07a1e9b58e4fc0ccb600df523993c8cf` |
+
 Cobalt can reproduce the Windows ZIP from this fork using the DLL in
 the previously shared package. In PowerShell, from the repository root,
 set `$dll` to the extracted `network\x4lan_net_64.dll` path and run
@@ -164,6 +177,20 @@ passage at `1d0c4e4b`. The provider transferred HVC once, saved on last exit
 and both ships were independently verified within 0.6 mm of their paused
 positions. The longest successful readback in that flight was 1.599 s.
 [Native flight and authority transfer](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md)
+
+At `b418a409` a fresh GPU-free Linux server and a regular Linux cockpit
+loaded the two-pilot departure. HVC-420's first cockpit position in
+Black Hole Sun IV was 0.384 mm from the offered save. Both ships kept
+their saved positions through this second departure. All 5,046 available
+registry entries kept their ship code, class, macro and owner across the
+restart, although X4 reassigned their saved component IDs.
+[Cold rejoin and registry comparison](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#native-hvc-420-rejoin-after-the-two-pilot-departure)
+
+Lith7ium approved revoking a pilot whose control connection closes during
+resume. The Company provider at `96bb4851` releases that pilot's reservation
+and movement grant. Remaining pilots confirm the same transition. If the
+last pilot leaves, the normal pause and save follow. Local TCP regressions
+covered a surviving pilot, an empty session and fresh admission.
 
 - **Cobalt** owns the Windows-to-Fedora flight check when the Windows operator returns. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
