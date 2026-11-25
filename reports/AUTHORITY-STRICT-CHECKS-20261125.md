@@ -1,5 +1,27 @@
 # Strict development checks on 25 November 2026
 
+## 26 November, integrated Windows repairs and Linux regression
+
+Cobalt ran three affected modules on Windows 11 with CPython 3.11.9 at
+`12604514`. In each of three runs, 37 of 39 passed and two skipped
+(POSIX staging and a fixture requiring the LuaJIT executable). The
+provider tests used a simulated socket-owner check on Windows. The fork
+requires the real procfs check on Linux. [Cobalt's result](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795644032861319)
+
+The unmodified official Linux runner at `f0605562` discovered 5,888
+tests. Of 5,863 executed, 5,856 passed and seven errored during test
+setup. All seven shared a participant fixture that had started requiring
+disconnect options from callers that use its defaults. The 25 skips
+matched the list at `04f409f6` exactly. The runner exited 1 after
+1,039.569 seconds of test execution. Its complete log has SHA-256
+`b57d4fe771a8e0589585be2f4d95479b01349d6f1bfa72274b2bb23608a2fc00`.
+
+Commit `6d4062fd` restored the two fixture defaults. All four affected
+modules, including the fixture itself and all seven cases above, passed
+in a separate 29-test run (11.065 seconds, exit 0). The targeted log
+has SHA-256 `ba7a29b41708e27fca4867f5a013b2f2188d67ef9b68e0ae1dad2df58cb4736a`.
+The official full-suite result above applies to `f0605562`.
+
 The unmodified `tools/dev/check.py` discovered 5,729 tests at `8ff69b2d412a56e740479368c64fd2361743bb28`. On native Bazzite with Python 3.13.18, 5,704 passed, zero failed and 25 were skipped. The command exited 1 because every skip is refused by default. Test execution took 1,030 seconds. The run used the recorded stock reference data and the restored original census witness with SHA-256 `006b07a39be4cff6a3fac7555b26d40ffe834594304c231dd659b23bfdc85349`. The previous twelve census errors did not recur. Full log SHA-256 was `091b1e726cbd611aeb34350c9d9a704350d9e8d1cff94cacfd3b226693835f4c`.
 
 | Outstanding checks | Count | Required input |
