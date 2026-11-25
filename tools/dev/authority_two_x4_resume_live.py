@@ -79,7 +79,9 @@ class Participant(LocalParticipantControl):
             if ',authority_company_purchase=' in text:
                 text, count = re.subn(
                     r',authority_company_purchase=\{epoch="[0-9a-f]{32}",index=[0-9]+,'
-                    r'port=[0-9]+,lease="[0-9a-f]{32}"\}', '', text)
+                    r'port=[0-9]+,lease="[0-9a-f]{32}"(?:,trade_view=true)?'
+                    r'(?:,undock_nonce="[0-9a-f]{32}",undock_request="[0-9a-f]{32}")?'
+                    r'\}(?=[,}])', '', text)
                 if count != 1 or ',authority_company_purchase=' in text:
                     raise ValueError('unexpected Company purchase lease configuration')
             data = text.encode('ascii')
