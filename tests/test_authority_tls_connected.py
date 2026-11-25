@@ -171,7 +171,7 @@ class ConnectedTunnelTests(unittest.IsolatedAsyncioTestCase):
                     second_peer.close()
 
     async def test_invalid_socket_closes_both_owned_sockets(self):
-        raw, peer = socket.socketpair()
+        raw, peer = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
         tls, other = connected_pair()
         try:
             with self.assertRaises(ValueError):

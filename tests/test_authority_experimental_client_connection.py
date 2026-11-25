@@ -4,6 +4,7 @@ import contextlib
 import io
 import tempfile
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,9 @@ from authority import experimental_client_connection as subject
 from authority.experimental_tls_tunnel import create_server_context, start_server
 import test_authority_experimental_local_host as host_fixture
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
+
+# tools/dev/authority_client_native.py is the Linux-only client and imports pwd.
+HAS_PWD = importlib.util.find_spec('pwd') is not None
 
 
 class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +96,7 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.world.session.players, ())
         self.assertEqual(self.fixture.world.session.ready_players, ())
 
+    @unittest.skipUnless(HAS_PWD, 'authority_client_native is the Linux-only client (needs pwd)')
     async def test_native_staging_real_tls_simulated_load_activation_and_cleanup(self):
         from authority import experimental_client_session as session
         sys.path.insert(0, str(ROOT/'tools/dev'))
@@ -127,6 +132,7 @@ class IndependentStageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fixture.world.session.ready_players, ())
         self.assertEqual(self.fixture.world.session.players, ())
 
+    @unittest.skipUnless(HAS_PWD, 'authority_client_native is the Linux-only client (needs pwd)')
     async def test_native_staging_metadata_change_rejected_at_real_owner_claim(self):
         from authority import experimental_client_session as session
         sys.path.insert(0, str(ROOT/'tools/dev'))

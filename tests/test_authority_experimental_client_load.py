@@ -73,7 +73,13 @@ class ClientLoadTest(unittest.TestCase):
         replacement = self.root / 'replacement'; replacement.write_bytes(self.path.read_bytes())
         replacement.replace(self.path)
         with self.assertRaises(ValueError): self.client.make_claim(self.attempt)
-        link = self.root / 'link'; link.symlink_to(self.path)
+        link = self.root / 'link'
+        try:
+            link.symlink_to(self.path)
+        except OSError as error:
+            if getattr(error, 'winerror', None) != 1314:
+                raise
+            self.skipTest('creating symlinks needs Developer Mode or admin rights on Windows')
         client = ExperimentalClientLoad(enabled=True, offer=self.offer, expected_marker=self.marker)
         with self.assertRaises(ValueError): client.verify_staged(link)
 

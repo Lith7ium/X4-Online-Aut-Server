@@ -166,7 +166,7 @@ class Loopback(unittest.TestCase):
                 thread.join(2); self.assertFalse(thread.is_alive())
 
     def test_no_unix_socket_or_nonbool_guard(self):
-        client, server = socket.socketpair()
+        client, server = socket.socketpair(socket.AF_UNIX if hasattr(socket, 'AF_UNIX') else socket.AF_INET6)
         with self.assertRaises(ValueError): m.send_descriptor(client, desc(), time.monotonic()+2, lambda: True)
         server.close()
         client, server = pair()

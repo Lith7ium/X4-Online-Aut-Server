@@ -44,7 +44,9 @@ class TransferDeadlineTests(unittest.TestCase):
                         if stop.wait(.025):
                             return
                         conn.sendall(bytes([byte]))
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The client hung up at its deadline. Linux reports EPIPE/ECONNRESET
+                # on the next send; Windows reports WSAECONNABORTED (10053).
                 pass
             except OSError as error:
                 errors.append(error)

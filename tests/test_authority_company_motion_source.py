@@ -1,5 +1,6 @@
 """Loopback IPC and real Lua sampler with synthetic selected-seat observations."""
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -93,6 +94,8 @@ class CompanyMotionSourceTest(unittest.TestCase):
                                       'first_local_own_pose_validated'])
 
     def test_selected_sampler_only_captures_after_resume_and_resets_rates(self):
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         subprocess.run(['luajit', 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
 
     def test_auto_cockpit_roster_retries_on_the_owned_udp_peer_without_subscribing(self):

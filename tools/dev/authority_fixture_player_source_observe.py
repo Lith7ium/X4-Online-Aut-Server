@@ -11,7 +11,6 @@ this helper is not a reusable production-session lifecycle.
 """
 import copy
 import math
-import select
 import time
 
 from authority.experimental_tcp_client_authority_motion import ExperimentalTCPClientAuthorityMotion, grant_value
@@ -280,7 +279,7 @@ def observe(*, host, world, grants, verify, deadline, operation_timeout=30, enab
                     check()
                 if any(needs_sample(handle) for handle in handles):
                     check()
-                    select.select([], [], [], min(.05, max(0, deadline - time.monotonic())))
+                    time.sleep(min(.05, max(0, deadline - time.monotonic())))
                     check()
             return resume_baseline
         collect_samples()

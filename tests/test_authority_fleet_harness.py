@@ -28,6 +28,7 @@ def records():
 
 
 class FleetEvidenceTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'the fleet daemon reads its config from an inherited fd (pass_fds is POSIX-only)')
     def test_sealed_daemon_package_private_pipe_and_udp(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); package=root/'authority'; package.mkdir()
