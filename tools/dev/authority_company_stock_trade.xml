@@ -5,6 +5,59 @@
     <cue name="State">
       <actions><set_value name="$attempted" exact="false"/></actions>
       <cues>
+        <!-- X4 applies reset_cue after the current actions finish. The child
+             arms the monitor only after it actually returns to waiting. -->
+        <cue name="PreparePurchase" instantiate="true" namespace="this">
+          <conditions><event_ui_triggered screen="'X4AuthorityCompanyStockTrade'" control="'Prepare'"/></conditions>
+          <actions>
+            <set_value name="$args" exact="event.param3"/>
+            <set_value name="$request" exact="@$args.$request_id"/>
+            <set_value name="$lease" exact="@$args.$provider_lease"/>
+            <set_value name="$status" exact="'invalid_registry'"/>
+            <do_if value="typeof $request == datatype.string and $request and typeof $lease == datatype.string
+                and $lease and @$args.$live_request == true and @$args.$epoch == @md.X4AuthorityShipRegistry.State.$epoch
+                and @md.X4AuthorityShipRegistry.State.$faulted == false">
+              <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$ship_index}"/>
+              <set_value name="$bay" exact="@$ship.dock"/>
+              <set_value name="$station" exact="@$bay.container"/>
+              <set_value name="$ware" exact="@ware.{$args.$ware}"/>
+              <set_value name="$status" exact="if typeof $ware == datatype.ware then 'dock_mismatch' else 'request_binding_invalid'"/>
+              <do_if value="@$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player
+                  and $ship.trueowner == faction.player and @$station.isclass.station and $station.isoperational
+                  and @$bay.isclass.dockingbay and $bay.external and not $bay.isstorage and typeof $ware == datatype.ware">
+                <reset_cue cue="Monitor"/>
+                <set_value name="State.$monitor_ready" exact="null"/>
+                <set_value name="State.$purchase" exact="table[
+                    $request=$request, $provider_lease=$lease, $epoch=$args.$epoch, $ship=$ship,
+                    $bay=$bay, $station=$station, $ware=$ware, $live=true
+                ]"/>
+                <set_value name="$arm_timeout" exact="player.age + 3s"/>
+                <set_value name="$prepared" exact="true"/>
+              </do_if>
+            </do_if>
+            <do_if value="not @$prepared">
+              <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|%s|0'.[$request,$status]"/>
+              <cancel_cue cue="this"/>
+            </do_if>
+          </actions>
+          <cues>
+            <cue name="ArmPreparedMonitor" checkinterval="100ms">
+              <conditions>
+                <check_value value="@$prepared and (@Monitor.state == cuestate.waiting or player.age ge $arm_timeout)"/>
+              </conditions>
+              <actions>
+                <do_if value="@State.$purchase.$request == $request and @State.$purchase.$provider_lease == $lease">
+                  <do_if value="@Monitor.state == cuestate.waiting">
+                    <signal_cue_instantly cue="Monitor" param="$request"/>
+                  </do_if>
+                  <do_else>
+                    <raise_lua_event name="'X4AuthorityCompanyStockTrade.Result'" param="'%s|provider_limit|0'.[$request]"/>
+                  </do_else>
+                </do_if>
+              </actions>
+            </cue>
+          </cues>
+        </cue>
         <cue name="Request" instantiate="true" namespace="this">
           <conditions>
             <check_any>
@@ -61,6 +114,12 @@
                 <do_elseif value="$live and (if $provider_lease == @State.$live_lease
                     then @$v.$previous_confirmed != @State.$live_request or @State.$live_completed != true or $request == @State.$live_request
                     else @$v.$previous_confirmed != '-')">
+                  <set_value name="$status" exact="'provider_limit'"/>
+                </do_elseif>
+                <do_elseif value="$live and (@State.$monitor_ready != $request
+                    or @State.$purchase.$request != $request or @State.$purchase.$provider_lease != $provider_lease
+                    or @State.$purchase.$epoch != $v.$epoch or @State.$purchase.$ship != $ship
+                    or @State.$purchase.$bay != $bay or @State.$purchase.$station != $station or @State.$purchase.$ware != $ware)">
                   <set_value name="$status" exact="'provider_limit'"/>
                 </do_elseif>
                 <do_elseif value="event.param2 == 'Buy' and not $live and (@State.$attempted or @State.$refused)">
@@ -123,10 +182,6 @@
                           <set_value name="$status" exact="'price_changed'"/>
                         </do_if>
                         <do_else>
-                          <!-- The Monitor path exists in earlier checkpoints. Reset only
-                               its cue tree, never the X4 order queue. -->
-                          <reset_cue cue="Monitor"/>
-                          <set_value name="State.$monitor_ready" exact="null"/>
                           <set_value name="State.$purchase" exact="table[
                             $request=$request, $epoch=$v.$epoch, $trial=$trial, $quantity=$quantity,
                             $quote_time=if $fixed then $fresh_quote_time else State.$quoted_at,
@@ -138,7 +193,9 @@
                             $before_player_money=player.money, $before_faction_has_account=faction.player.hasownaccount,
                             $before_faction_money=if faction.player.hasownaccount then (faction.player.money / 1ct)L else 'unknown'
                           ]"/>
-                          <signal_cue_instantly cue="Monitor" param="$request"/>
+                          <do_if value="not $live">
+                            <signal_cue_instantly cue="Monitor" param="$request"/>
+                          </do_if>
                           <do_if value="@State.$monitor_ready == $request">
                             <do_if value="$live">
                               <set_value name="State.$live_lease" exact="$provider_lease"/>
@@ -172,7 +229,12 @@
         <cue name="Monitor">
           <conditions><event_cue_signalled/></conditions>
           <actions>
-            <set_value name="State.$monitor_ready" exact="event.param"/>
+            <do_if value="@State.$purchase.$request == event.param">
+              <set_value name="State.$monitor_ready" exact="event.param"/>
+              <do_if value="@State.$purchase.$live">
+                <raise_lua_event name="'X4AuthorityCompanyStockTrade.Armed'" param="event.param"/>
+              </do_if>
+            </do_if>
           </actions>
           <cues>
             <cue name="Completed" namespace="this">

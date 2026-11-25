@@ -11,6 +11,7 @@ package.loaded.ffi = ffi
 
 local callbacks, dispatched = {}, {}
 local completion, ledger_read_at, entry
+local preparation, advance_reset, reset_applied
 local previous, previous_deal, previous_observed
 local balance, order_checks = 1000000, 0
 local screen = 'X4AuthorityCompanyStockTrade'
@@ -27,7 +28,18 @@ function DebugError(_) end
 local function event(name, row) callbacks[screen .. '.' .. name](nil, row) end
 
 function AddUITriggeredEvent(name, action, request)
-    assert(name == screen and action == 'Buy')
+    assert(name == screen)
+    if action == 'Prepare' then
+        assert(not preparation and not reset_applied)
+        preparation = request.request_id
+        -- X4 resets only after the current action block. An old callback is
+        -- deliberately emitted while the new reset is still pending.
+        if previous then event('Armed', previous) end
+        advance_reset = 3
+        return true
+    end
+    assert(action == 'Buy' and reset_applied == request.request_id)
+    reset_applied = nil
     assert(request.live_request and request.fixed_request and request.provider_lease == lease)
     assert(request.ship_index == 7354 and request.ship_code == 'WRN-302')
     assert(request.sector == 'cluster_01_sector001_macro' and request.station_code == 'BIM-169')
@@ -108,7 +120,13 @@ X4LAN_AUTHORITY_TRADE_LEDGER = {
 local tick = module.new(lease, net)
 for frame = 1, 3000 do
     real_time = frame / 200
-    if completion then
+    if preparation then
+        advance_reset = advance_reset - 1
+        if advance_reset == 0 then
+            reset_applied, preparation = preparation, nil
+            event('Armed', reset_applied)
+        end
+    elseif completion then
         local fn = completion
         completion = nil
         fn()

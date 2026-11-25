@@ -1,4 +1,4 @@
-local game_time = 10
+local game_time, real_time = 10, 10
 package.loaded.ffi = {C={GetCurrentGameTime=function() return game_time end}}
 local module = dofile('tools/dev/authority_native_purchase.lua')
 local callbacks, packets = {}, {}
@@ -8,13 +8,17 @@ local screen = 'X4AuthorityCompanyStockTrade'
 local processed = {}
 
 function RegisterEvent(name, callback) callbacks[name] = callback end
-function GetCurRealTime() return game_time end
+function GetCurRealTime() return real_time end
 function DebugError(_) end
 
 local function event(name, row) callbacks[screen .. '.' .. name](nil, row) end
 
 function AddUITriggeredEvent(name, action, request)
-    assert(name == screen and action == 'Buy')
+    assert(name == screen)
+    if action == 'Prepare' then
+        return true
+    end
+    assert(action == 'Buy')
     assert(request.trial == 'live_purchase' and request.fixed_request and request.live_request)
     assert(request.epoch == epoch and request.provider_lease == lease and request.previous_confirmed == '-')
     assert(request.ship_index == 1073 and request.ship_code == 'HVC-42A')
@@ -58,12 +62,28 @@ local function buy(id, quantity, cents)
 end
 
 local first, second, third = string.rep('a', 32), string.rep('b', 32), string.rep('c', 32)
+local timed_out = string.rep('d', 32)
+buy(timed_out, 13, 2000)
+assert(not processed[timed_out])
+real_time = 16
+event('Armed', timed_out)
+tick(false)
+assert(not processed[timed_out])
+assert(packets[#packets - 1]:match('|provider_limit|0$') and packets[#packets]:match('|DONE$'))
 buy(first, 65536, 2000)
 assert(not processed[first])
 buy(first, 13, 2000)
+assert(not processed[first])
+event('Armed', first)
+tick(false)
 assert(processed[first] and packets[#packets]:match('|DONE$'))
 buy(first, 13, 2100)
 buy(second, 13, 2100)
+event('Armed', first)
+tick(false)
+assert(not processed[second])
+event('Armed', second)
+tick(false)
 assert(processed[second])
 game_time = 11
 event('Observed', second .. '|2100|13|0|0|0|-27300|1|1')

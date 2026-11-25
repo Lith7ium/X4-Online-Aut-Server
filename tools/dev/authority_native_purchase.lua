@@ -43,6 +43,12 @@ function M.new(lease, net)
         return active and type(row) == 'string' and row:match('^([^|]+)') == active.id
     end
 
+    RegisterEvent(screen .. '.Armed', function(_, row)
+        if active and active.preparing and not active.start and row == active.id then
+            active.armed = true
+        end
+    end)
+
     RegisterEvent(screen .. '.Bound', function(_, row)
         if not matches(row) or active.ship then return end
         active.ship, active.station = row:match('^[^|]+|READY|([^|]+)|([^|]+)|')
@@ -107,7 +113,16 @@ function M.new(lease, net)
         }
     end
 
-    local function dispatch(real_time)
+    local function prepare(real_time)
+        if active.preparing then
+            -- The MD callback is the readiness proof. Count neither the
+            -- deferred reset nor its preparation time in the journal window.
+            if real_time >= active.arm_deadline then
+                emit('RESULT|' .. active.id .. '|provider_limit|0')
+                finish()
+            end
+            return
+        end
         local request = active.request
         if completed and request.epoch == completed.epoch and request.ship_index == completed.index
                 and request.ship_code == completed.code then
@@ -123,9 +138,17 @@ function M.new(lease, net)
                 return
             end
         end
-        -- Start the journal window only when the Buy event is dispatched.
+        active.preparing, active.arm_deadline = true, real_time + 5
+        local ok, result = pcall(AddUITriggeredEvent, screen, 'Prepare', request)
+        if (not ok or result == false) and active then
+            emit('RESULT|' .. active.id .. '|provider_limit|0')
+            finish()
+        end
+    end
+
+    local function dispatch()
         active.start = C.GetCurrentGameTime()
-        local ok, result = pcall(AddUITriggeredEvent, screen, 'Buy', request)
+        local ok, result = pcall(AddUITriggeredEvent, screen, 'Buy', active.request)
         if (not ok or result == false) and active then
             attempted = active.id
             emit('RESULT|' .. id .. '|dispatch_uncertain|0')
@@ -176,7 +199,13 @@ function M.new(lease, net)
         end
         if paused then return end
         receive(real_time)
-        if active and not active.start then dispatch(real_time) end
+        if active and not active.start then
+            if active.armed and real_time < active.arm_deadline then
+                dispatch()
+            else
+                prepare(real_time)
+            end
+        end
         if active and active.submitted then journal() end
     end
 end

@@ -290,31 +290,22 @@ class NativePurchaseProviderTests(unittest.TestCase):
         arm = next(node for node in request.iter('do_if')
                    if node.get('value') == '@State.$monitor_ready == $request')
         self.assertEqual(list(arm.iter('create_trade_order')), buys)
-        branch = next(node for node in request.iter() if arm in list(node))
-        children = list(branch)
-        reset, clear, snapshot, signal, allowed, refused = children
-        self.assertEqual((reset.tag, reset.get('cue')), ('reset_cue', 'Monitor'))
-        self.assertEqual(clear.attrib, {'name': 'State.$monitor_ready', 'exact': 'null'})
-        self.assertEqual(snapshot.get('name'), 'State.$purchase')
-        self.assertEqual(signal.attrib, {'cue': 'Monitor', 'param': '$request'})
-        self.assertIs(allowed, arm)
-        self.assertEqual(list(refused.iter('create_trade_order')), [])
-        self.assertIn("'provider_limit'", [node.get('exact') for node in refused.iter('set_value')])
-        self.assertEqual(monitor.find('./actions/set_value').attrib,
-                         {'name': 'State.$monitor_ready', 'exact': 'event.param'})
-        for action in ('dock', 'spawn_docked', 'teleport_player', 'assign_pilot', 'set_object_position'):
-            self.assertEqual(list(root.iter(action)), [])
+        self.assertIsNone(request.find('.//reset_cue'))
 
-        entry = request.find(".//do_if[@value='$live_dock or $fixture_dock']")
-        binding = entry.find('do_if')
-        for identity in ('$sector', '$station_code', '$ship_code'):
-            self.assertIn(identity, binding.get('value'))
-        captain_required = entry.find("./do_elseif/set_value[@exact=\"'captain_required'\"]/..")
-        self.assertIn('not @$ship.assignedaipilot.exists', captain_required.get('value'))
-        self.assertEqual([node.tag for node in captain_required], ['set_value'])
-        idle = next(guard for guard in entry.findall('do_elseif') if '$ship.orders.count' in guard.get('value'))
-        self.assertIn('$ship.pilot != $ship.assignedaipilot', idle.get('value'))
-        self.assertLess(ordered.index(binding), ordered.index(captain_required))
-        self.assertLess(ordered.index(captain_required), ordered.index(idle))
-        self.assertLess(ordered.index(idle), ordered.index(next(root.iter('find_sell_offer'))))
-        self.assertEqual(list(root.iter('create_trade_computer')), [])
+        stage = root.find("./cues/cue[@name='State']/cues/cue[@name='PreparePurchase']")
+        reset = stage.find('./actions//reset_cue')
+        self.assertEqual((reset.tag, reset.get('cue')), ('reset_cue', 'Monitor'))
+        self.assertIsNone(stage.find('./actions//signal_cue_instantly'))
+        continuation = stage.find("./cues/cue[@name='ArmPreparedMonitor']")
+        self.assertIn('@Monitor.state == cuestate.waiting',
+                      continuation.find('./conditions/check_value').get('value'))
+        self.assertEqual(continuation.find('./actions//signal_cue_instantly').attrib,
+                         {'cue': 'Monitor', 'param': '$request'})
+        self.assertEqual(list(stage.iter('create_trade_order')), [])
+
+        acknowledged = monitor.find('./actions/do_if')
+        self.assertEqual(acknowledged.get('value'), '@State.$purchase.$request == event.param')
+        self.assertEqual(acknowledged.find('./set_value').attrib,
+                         {'name': 'State.$monitor_ready', 'exact': 'event.param'})
+        self.assertEqual(acknowledged.find('.//raise_lua_event').attrib,
+                         {'name': "'X4AuthorityCompanyStockTrade.Armed'", 'param': 'event.param'})
