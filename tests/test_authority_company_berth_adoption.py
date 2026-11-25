@@ -60,8 +60,11 @@ class BerthAdoptionCue(unittest.TestCase):
         choose = self.script.find(".//library[@name='ChooseBerth']/actions")
         self.assertEqual(list(choose)[0].attrib, {'name': '$Status', 'exact': "'ship_busy'"})
         self.assertEqual(list(choose)[1].attrib, {'name': '$Captain', 'exact': '@$Ship.assignedaipilot'})
-        self.assertEqual(list(choose)[2].attrib, {'ref': 'CheckIdleShip'})
-        self.assertEqual(list(choose)[3].attrib, {'value': '$IdleShip'})
+        self.assertEqual(list(choose)[2].attrib, {
+            'name': '$HadCaptain', 'exact': 'if @$Captain.exists then true else false',
+        })
+        self.assertEqual(list(choose)[3].attrib, {'ref': 'CheckIdleShip'})
+        self.assertEqual(list(choose)[4].attrib, {'value': '$IdleShip'})
 
         idle = self.script.find(".//library[@name='CheckIdleShip']/actions/set_value")
         terms = ' '.join(idle.attrib['exact'].split())
@@ -70,8 +73,8 @@ class BerthAdoptionCue(unittest.TestCase):
             'not $Ship.tradeorders.count', 'not @$Ship.tradecomputer.exists',
             'not $Ship.commander', 'not $Ship.subordinates.count',
             "(not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait')",
-            '(not $Captain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)',
-            '@$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy',
+            '(not $HadCaptain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)',
+            '($HadCaptain and @$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy',
             '$Ship.assignedaipilot == $Captain and $Ship.pilot == $Captain',
             '$Captain.assignedcontrolled == $Ship and $Captain.ship == $Ship',
             '$Captain.hascontext.{$Ship}',
@@ -80,6 +83,7 @@ class BerthAdoptionCue(unittest.TestCase):
 
     def test_changed_or_busy_captain_leaves_deferred_readback_unconfirmed(self):
         self.assertEqual(len(self.script.findall(".//set_value[@name='$Captain']")), 1)
+        self.assertEqual(len(self.script.findall(".//set_value[@name='$HadCaptain']")), 1)
         readback = self.script.find(".//cue[@name='Readback']/actions")
         self.assertEqual(list(readback)[0].attrib, {'name': '$Status', 'exact': "'readback_failed'"})
         self.assertEqual(list(readback)[1].attrib, {'ref': 'CheckIdleShip'})

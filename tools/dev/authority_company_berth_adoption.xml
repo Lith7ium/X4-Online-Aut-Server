@@ -148,6 +148,7 @@
       <actions>
         <set_value name="$Status" exact="'ship_busy'"/>
         <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+        <set_value name="$HadCaptain" exact="if @$Captain.exists then true else false"/>
         <include_actions ref="CheckIdleShip"/>
         <do_if value="$IdleShip">
           <do_if value="@$Ship.dock">
@@ -205,13 +206,13 @@
 
     <library name="CheckIdleShip" purpose="include_actions">
       <actions>
-        <!-- Keep the original captain handle for deferred readback. -->
+        <!-- Keep the original crew state even if the captain handle expires. -->
         <set_value name="$IdleShip" exact="@$Ship.isclass.ship and not $Ship.isinternallystored
                     and not $Ship.orders.count and not $Ship.tradeorders.count and not @$Ship.tradecomputer.exists
                     and not $Ship.commander and not $Ship.subordinates.count
                     and (not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait')
-                    and ((not $Captain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)
-                         or (@$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy
+                    and ((not $HadCaptain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)
+                         or ($HadCaptain and @$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy
                              and $Ship.assignedaipilot == $Captain and $Ship.pilot == $Captain
                              and $Captain.assignedcontrolled == $Ship and $Captain.ship == $Ship
                              and $Captain.hascontext.{$Ship}))"/>
