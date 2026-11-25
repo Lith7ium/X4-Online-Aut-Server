@@ -116,3 +116,23 @@ isolated run. The logs do not establish why the next update was late.
 The source save retained its SHA-256 and no owned process remained.
 Private result-file SHA-256
 `a812af0148717e925915f222d81831aa19aa4f9a16bc17995b95fcde73d06c17`.
+
+## Hardware renderer comparison
+
+A private Gamescope headless display passed the authenticated XCB
+preflight inside the exact game namespace. Xauthority was required,
+the original game and source save mounted read-only, and the client
+could access only the discrete GPU's render node. The stock Vulkan
+test completed 120 frames on the AMD Radeon RX 7900 XTX (RADV NAVI31).
+This is a render-path measurement from the test program.
+
+The single X4 launch stopped during Steam initialization. The existing
+process ownership guard detected multiple X4 executable identities in
+the owned group and aborted. X4 did not create its engine log, so the
+game's renderer and the positions of all three ships remain
+unverified in the hardware configuration. There was no second game
+launch and no Internet participant.
+
+The supervisor recorded no remaining owned processes. The original
+save retained its SHA-256. Private result-file SHA-256
+`ceb122b577e108a7bbbe679091aa3ba398005172e442f5fbcae7775b43b01a54`.
