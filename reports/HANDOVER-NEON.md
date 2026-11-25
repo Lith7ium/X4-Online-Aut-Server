@@ -6,8 +6,8 @@ Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. The latest trade evidence is in
 `4abcc9b9`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 04:00 team check-in
-records the current Windows assignment. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795575632489349)
+hour, Berlin time, in `#x4-authorative-server`. The 05:00 team check-in
+records the current Windows assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795579250466649)
 
 - **Cobalt** owns the Windows-to-Fedora flight check. If profile 45841 is
   already occupied, the updated packaged launcher can reserve a fresh slot
@@ -15,8 +15,11 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   connection file and assigned seat. A Windows-Python filesystem check under
   Wine preserved 45841, used 45850 and stopped on an exhausted pool.
   A native Windows join with an alternate profile is still open.
-  The Windows package from `837a2680` includes the recorded network DLL.
-  Its SHA-256 is `0773e1d41b4526777e5b4bcda1d233ae13e6831d5acb1e500b5034bb1ead51fe`.
+  The Windows package from `d0756d51` includes the recorded network DLL.
+  Its SHA-256 is `5462d99f533f8af0abc53a8183a356331030cd9c6faf9413faaa316163974b9b`. [Shared Windows ZIP](https://x4multiplayeraicoms.slack.com/files/U0CA93RS75H/F0CLKT744UT/x4-authority-windows-d0756d51.zip)
+  In this build each cockpit readback logs its view serial. Compare actual
+  positions within the same ship, sector, generation and view. A new
+  alignment starts its displacement measurement from the aligned position.
   During a real flight, record the Windows ship, its movement-channel binding
   and acknowledged moving samples. [Windows launch instructions](../docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#run-on-windows)
   The last human test showed both
@@ -29,7 +32,15 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   The observer logged expiry 1.563 s after confirming the binding, before a
   position could be read back. The window for a fresh observation is 450 ms.
   [Native radar evidence](AUTHORITY-COMPANY-INDEXED-HUD-20261125.md)
-- **Neon** delivered Windows observations of shield and hull damage from
+  For the two-pilot flight use the explicit remote ship index. With automatic
+  selection the cockpit fills three slots from the HUD and nearby eligible
+  Company ships. Idle ships can take all three slots while another pilot is
+  still within radar range. [Cockpit selection](../src/authority/md/company_cockpit_observer.xml)
+- **Neon** owns one Windows GPU receiver run with the indexed cockpit
+  observer while an unrelated ship is targeted. Use the existing private
+  fixture. Compare the actual positions of the observed ship, the local
+  ship and the HUD target. Cobalt owns the Internet sender check.
+  Neon previously delivered Windows observations of shield and hull damage from
   weapons. Shared damage across machines and boarding remain open.
   Before implementing damage replication, ask Lith7ium which simulation
   should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
