@@ -178,3 +178,38 @@ open(sixth, 6)
 observe(sixth)
 send('READ', sixth, '0')
 assert(sent[#sent] == 'MARKET_PAGE|' .. lease .. '|' .. sixth .. '|0|buy,water,5848,80,1,4,21,1')
+
+-- The installed stock deployable inventory enumerates these five independent
+-- classes by ware; the count for another ware must not leak into the offer.
+local C = {}
+for _, name in ipairs({'Satellites', 'NavBeacons', 'ResourceProbes', 'LaserTowers', 'Mines'}) do
+    C['GetNumAll' .. name] = function(actor)
+        assert(actor == ship)
+        return name == 'Satellites' and 2 or 0
+    end
+end
+C.GetAllSatellites = function(rows, count, actor)
+    assert(count == 2 and actor == ship)
+    rows[0].ware, rows[0].amount = 'satellite_mk1', 7
+    rows[1].ware, rows[1].amount = 'satellite_mk2', 3
+    return 2
+end
+C.GetFreeDeployableStorageAfterTradeOrders = function(actor)
+    assert(actor == ship)
+    return 10
+end
+package.loaded.ffi = setmetatable({C = C}, {__index = ffi})
+tick = survey.new(lease, net, function() return now end)
+package.loaded.ffi = ffi
+offers = {
+    {id = 1, ware = 'satellite_mk2', price = 120, amount = 25, minamount = 1,
+        isselloffer = true, ammotypename = 'deployable'},
+    {id = 7, ware = 'resourceprobe_01', price = 80, amount = 15, minamount = 1,
+        isselloffer = true, ammotypename = 'deployable'},
+}
+local seventh = string.rep('3', 32)
+open(seventh, 7)
+observe(seventh)
+send('READ', seventh, '0')
+assert(sent[#sent] == 'MARKET_PAGE|' .. lease .. '|' .. seventh
+    .. '|0|buy,resourceprobe_01,8000,15,1,0,10,1|buy,satellite_mk2,12000,25,1,3,10,1')

@@ -22,10 +22,17 @@ local function cents(value)
     if amount > 0 and math.abs(amount - scaled) <= 1e-7 then return amount end
 end
 
+local inventory_lists = {
+    missile = {'Missiles'},
+    countermeasure = {'Countermeasures'},
+    deployable = {'Satellites', 'NavBeacons', 'ResourceProbes', 'LaserTowers', 'Mines'},
+}
+
 local function free_units(C, ship, ship_lua, ware, ammo)
     if not ammo then return GetFreeCargoAfterTradeOrders(ship_lua, ware) end
     if ammo == 'missile' then return tonumber(C.GetFreeMissileStorageAfterTradeOrders(ship)) end
     if ammo == 'countermeasure' then return tonumber(C.GetFreeCountermeasureStorageAfterTradeOrders(ship)) end
+    if ammo == 'deployable' then return tonumber(C.GetFreeDeployableStorageAfterTradeOrders(ship)) end
 end
 
 local function can_trade(ffi, offer, ship, side)
@@ -54,29 +61,26 @@ end
 
 local function physical_ammunition(ffi, ship, category)
     local C = ffi.C
-    local count, items
-    if category == 'missile' then
-        count, items = C.GetNumAllMissiles, C.GetAllMissiles
-    elseif category == 'countermeasure' then
-        count, items = C.GetNumAllCountermeasures, C.GetAllCountermeasures
-    else
-        -- No audited physical per-ware API for the other equipment types.
-        return
-    end
-    local size = tonumber(count(ship))
-    if not integer(size, 0, max_rows) then return end
+    local lists = inventory_lists[category]
+    -- Unit storage exposes totals for drone categories, not exact wares.
+    if not lists then return end
     local result = {}
-    if size == 0 then return result end
-    local buffer = ffi.new('AmmoData[?]', size)
-    if tonumber(items(buffer, size, ship)) ~= size then return end
-    for index = 0, size - 1 do
-        local row = buffer[index]
-        if row.ware == nil then return end
-        local ware, amount = ffi.string(row.ware), tonumber(row.amount)
-        if not ware:match('^[a-z][a-z0-9_]*$') or not integer(amount, 0, max_integer) then return end
-        local total = (result[ware] or 0) + amount
-        if total > max_integer then return end
-        result[ware] = total
+    for _, name in ipairs(lists) do
+        local size = tonumber(C['GetNumAll' .. name](ship))
+        if not integer(size, 0, max_rows) then return end
+        if size > 0 then
+            local buffer = ffi.new('AmmoData[?]', size)
+            if tonumber(C['GetAll' .. name](buffer, size, ship)) ~= size then return end
+            for index = 0, size - 1 do
+                local row = buffer[index]
+                if row.ware == nil then return end
+                local ware, amount = ffi.string(row.ware), tonumber(row.amount)
+                if not ware:match('^[a-z][a-z0-9_]*$') or not integer(amount, 0, max_integer) then return end
+                local total = (result[ware] or 0) + amount
+                if total > max_integer then return end
+                result[ware] = total
+            end
+        end
     end
     return result
 end
@@ -155,13 +159,16 @@ function M.new(lease, net, monotonic)
         ]]
     end
     ffi.cdef[[
-        uint32_t GetNumAllMissiles(UniverseID);
-        uint32_t GetAllMissiles(AmmoData*, uint32_t, UniverseID);
-        uint32_t GetNumAllCountermeasures(UniverseID);
-        uint32_t GetAllCountermeasures(AmmoData*, uint32_t, UniverseID);
         uint32_t GetFreeMissileStorageAfterTradeOrders(UniverseID);
         uint32_t GetFreeCountermeasureStorageAfterTradeOrders(UniverseID);
+        uint32_t GetFreeDeployableStorageAfterTradeOrders(UniverseID);
     ]]
+    for _, lists in pairs(inventory_lists) do
+        for _, name in ipairs(lists) do
+            ffi.cdef(('uint32_t GetNumAll%s(UniverseID); uint32_t GetAll%s(AmmoData*, uint32_t, UniverseID);')
+                :format(name, name))
+        end
+    end
     local active, next_hello, serial = nil, nil, 0
 
     local function send(kind, fields)
