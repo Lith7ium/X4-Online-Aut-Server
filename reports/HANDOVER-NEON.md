@@ -9,6 +9,19 @@ hour, Berlin time, in `#x4-authorative-server`. The 12:00 check-in
 covers the matching flight packages and the staged Fedora upgrade.
 [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795604471235909)
 
+A separate four-pilot vanilla seed is available locally at
+`.local/base-four-fighters-seed.zip` (archive SHA-256
+`2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
+X4 created BBS-493, EST-929, OVO-739 and XNA-002 in Black Hole Sun V.
+Their saved loadouts passed inspection after the first reload. A GPU-free
+Linux provider then reopened the confirmed world. Four independent loopback
+TLS clients held reservations for ships 1077–1080 on one checkpoint. The
+fifth received `Session Full`. The provider ended paused. This run covered
+ship selection through the normal server intake. Four live cockpits and a
+Windows internet flight still need testing. Local evidence is in
+`.local/four-flight-admission/run-01/reservations.json` and
+`.local/four-flight-admission/run-01/server/result.json`.
+
 Fedora run-02 timed out on the native position inspection of HVC-420 (1073).
 It accepted 38 stationary pilot samples and issued no pose write. Run-03
 restored the last clean source with the native position writer disabled.

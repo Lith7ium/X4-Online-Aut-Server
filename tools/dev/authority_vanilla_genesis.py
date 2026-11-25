@@ -41,7 +41,7 @@ def verify_base_save(checkpoint):
         raise ValueError('expected a fresh base-game Creative universe without DLC')
 
 
-def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce):
+def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce, *, fighter_count=2):
     import authority_vanilla_pair as pair
     world_bridge.install_probe(case, port, lease, epoch, marker_required=True)
     lab = case / 'extensions/x4_lan_lab'
@@ -75,12 +75,12 @@ def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce):
                                + ' if not bridge then\n')
     # The status/enrollment overlay guards both startup and the save marker.
     probe.write_text(text, 'ascii')
-    pair.install_genesis(case, profile, pair_nonce)
+    pair.install_genesis(case, profile, pair_nonce, fighter_count=fighter_count)
     registry.install(case, nonce, ('uninitialized',), enroll=enrollment)
     return [path for path in lab.rglob('*') if path.is_file()] + [profile/'config.xml', profile/'content.xml']
 
 
-def run(game, out, display, auth, timeout, seed, *, software_rendered=True, display_hostname=None):
+def run(game, out, display, auth, timeout, seed, *, fighter_count=2, software_rendered=True, display_hostname=None):
     import authority_vanilla_pair as pair
     game = game.resolve(strict=True)
     out = snapshot.output_path(out)
@@ -104,7 +104,8 @@ def run(game, out, display, auth, timeout, seed, *, software_rendered=True, disp
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind(('127.0.0.1', 0))
             sock.settimeout(.5)
-            files = install(case, profile, sock.getsockname()[1], lease, epoch, nonce, enrollment, pair_nonce)
+            files = install(case, profile, sock.getsockname()[1], lease, epoch, nonce, enrollment, pair_nonce,
+                            fighter_count=fighter_count)
             expected = {path: live.sha(path) for path in files}
             (out/'checkpoints').mkdir(mode=0o700)
             store = CheckpointStore(out/'checkpoints')
@@ -149,7 +150,9 @@ def run(game, out, display, auth, timeout, seed, *, software_rendered=True, disp
                         or any(live.sha(path) != digest for path, digest in expected.items())):
                     raise ValueError('genesis process or inputs changed')
             verify()
-            result['vanilla_pair'] = pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence)
+            receipt_key = 'vanilla_pair' if fighter_count == 2 else 'vanilla_flight_group'
+            result[receipt_key] = pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence,
+                                                         fighter_count=fighter_count)
             registry.matches_log(log, nonce, 'startup', ('uninitialized',))
             count = registry.enrollment_receipt(log, enrollment['nonce'], enrollment['epoch'], enrollment['limit'])
             adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
@@ -175,7 +178,9 @@ def run(game, out, display, auth, timeout, seed, *, software_rendered=True, disp
         try:
             if case:
                 if result['success'] and remaining == []:
-                    if pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence) != result['vanilla_pair']:
+                    final_receipt = pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence,
+                                                           fighter_count=fighter_count)
+                    if final_receipt != result[receipt_key]:
                         raise ValueError('final fighter receipts changed')
                     if any(live.sha(path) != digest for path, digest in expected.items()):
                         raise ValueError('genesis overlay changed before cleanup')
@@ -204,6 +209,8 @@ def main():
     screens.add_argument('--desktop-display', help='use a licensed local GPU for the one-time census')
     parser.add_argument('--timeout', type=int, default=7200)
     parser.add_argument('--seed', type=int, default=276944566)
+    parser.add_argument('--fighter-count', type=int, choices=(2, 4), default=2,
+                        help='number of equipped company fighters to place in Black Hole Sun V')
     args = parser.parse_args()
     if not 1 <= args.timeout <= 86400 or not 0 <= args.seed < 2**32:
         parser.error('invalid timeout or seed')
@@ -211,10 +218,12 @@ def main():
         display, auth = live.desktop_display(args.desktop_display)
         if not os.access(auth, os.R_OK):
             parser.error('desktop rendering requires readable Xauthority')
-        result = run(args.game, args.out, display, auth, args.timeout, args.seed, software_rendered=False)
+        result = run(args.game, args.out, display, auth, args.timeout, args.seed,
+                     fighter_count=args.fighter_count, software_rendered=False)
     else:
         with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth, hostname):
-            result = run(args.game, args.out, display, auth, args.timeout, args.seed, display_hostname=hostname)
+            result = run(args.game, args.out, display, auth, args.timeout, args.seed,
+                         fighter_count=args.fighter_count, display_hostname=hostname)
     print(json.dumps(result, indent=2))
     return 0 if result['success'] else 1
 

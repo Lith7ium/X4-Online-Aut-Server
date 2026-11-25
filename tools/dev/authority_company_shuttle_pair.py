@@ -119,7 +119,7 @@ def verify_saved(checkpoint, pair):
 
 
 def verify_flight_pair(checkpoint, codes, *, loadout_path, sector_macro, station_code, room_macro):
-    """Resolve the two native codes from the verified snapshot and inspect their equipment."""
+    """Resolve the native codes from the verified snapshot and inspect their equipment."""
     loadout = ET.parse(loadout_path).find('./add/loadout')
     hull = loadout.attrib['macro']
     mounts = {node.attrib['path'].removeprefix('../'): node.attrib['macro']
@@ -175,8 +175,9 @@ def verify_flight_pair(checkpoint, codes, *, loadout_path, sector_macro, station
         components.append((depth, attrs))
 
     snapshot = verify_join_snapshot(checkpoint, observe_universe=observe)
-    if (set(ships) != set(codes) or len(owned_shuttles) != 2 or None in owned_shuttles
-            or len(set(owned_shuttles)) != 2 or avatars != ['player']):
+    ship_indices = {ship['index'] for ship in ships.values()}
+    if (set(ships) != set(codes) or len(ship_indices) != len(codes) or len(owned_shuttles) != len(codes)
+            or set(owned_shuttles) != ship_indices or avatars != ['player']):
         raise ValueError('saved format-3 ship identities or parked avatar differ')
     for ship in ships.values():
         index = ship['index']

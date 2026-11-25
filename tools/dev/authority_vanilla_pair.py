@@ -1,4 +1,4 @@
-"""Place two base-game fighters, discover a parking station and verify their cold identities."""
+"""Place base-game fighters, discover a parking station and verify their cold identities."""
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -15,24 +15,32 @@ UI = ('authority_registry_resolve_string.lua', 'authority_company_shuttle_pair.l
 TAG = b'[X4LAN] AUTH_VANILLA_PAIR '
 
 
+def _receipt_kind(fighter_count):
+    if type(fighter_count) is not int or fighter_count not in (2, 4):
+        raise ValueError('expected two or four vanilla fighters')
+    return 'PAIR' if fighter_count == 2 else 'GROUP'
+
+
 def _checked(pair):
     if (not isinstance(pair, dict) or set(pair) != {'codes','station','room','sector'}
             or pair['sector'] != SECTOR or not isinstance(pair['station'], str) or not CODE.fullmatch(pair['station'])
             or not isinstance(pair['room'], str) or not MACRO.fullmatch(pair['room']) or not isinstance(pair['codes'], list)
-            or len(pair['codes']) != 2 or any(not isinstance(c, str) or not CODE.fullmatch(c) for c in pair['codes'])
-            or len(set(pair['codes'])) != 2):
+            or len(pair['codes']) not in (2, 4)
+            or any(not isinstance(c, str) or not CODE.fullmatch(c) for c in pair['codes'])
+            or len(set(pair['codes'])) != len(pair['codes'])):
         raise ValueError('invalid native vanilla pair receipt')
     return pair
 
 
-def verify_genesis_log(log, nonce, read_evidence):
+def verify_genesis_log(log, nonce, read_evidence, *, fighter_count=2):
+    kind = _receipt_kind(fighter_count)
     rows = [line.split(TAG, 1)[1].strip() for line in read_evidence(log, 64 << 20).splitlines() if TAG in line]
     if len(rows) != 1:
         raise ValueError(f'expected a single native fighter receipt, got {len(rows)}')
     fields = rows[0].decode('ascii').split('|')
-    if len(fields) != 6 or fields[:2] != [nonce,'PAIR']:
+    if len(fields) != fighter_count + 4 or fields[:2] != [nonce, kind]:
         raise ValueError(f'native fighter inspection failed: {rows[0][:192]!r}')
-    return _checked(dict(codes=fields[2:4], station=fields[4], room=fields[5], sector=SECTOR))
+    return _checked(dict(codes=fields[2:-2], station=fields[-2], room=fields[-1], sector=SECTOR))
 
 
 def verify_saved(checkpoint, pair):
@@ -43,7 +51,7 @@ def verify_saved(checkpoint, pair):
     return result
 
 
-def _install(case, nonce, mode, pair=None, ships=None):
+def _install(case, nonce, mode, pair=None, ships=None, *, fighter_count=2):
     if re.fullmatch('[0-9a-f]{32}', nonce) is None:
         raise ValueError('invalid vanilla fixture nonce')
     lab = Path(case)/'extensions/x4_lan_lab'
@@ -59,11 +67,11 @@ def _install(case, nonce, mode, pair=None, ships=None):
     if mode == 'prepare':
         files[lab/'md'/CREATE] = DEV/CREATE
         files[lab/'libraries/loadouts.xml'] = LOADOUT
-        config['indices'] = [1,2]
+        config['indices'] = list(range(1, fighter_count + 1))
     else:
         pair = _checked(pair)
         if ([s['code'] for s in ships] != pair['codes'] or any(type(s['index']) is not int or s['index'] < 1 for s in ships)
-                or len({s['index'] for s in ships}) != 2):
+                or len({s['index'] for s in ships}) != len(pair['codes'])):
             raise ValueError('cold fighter registry indices differ')
         config.update(codes=pair['codes'], station=pair['station'], room=pair['room'], indices=[s['index'] for s in ships])
     includes = []
@@ -92,8 +100,9 @@ def _install(case, nonce, mode, pair=None, ships=None):
     return [*files,wrapper,manifest]
 
 
-def install_genesis(case, profile, nonce):
-    return _install(case, nonce, 'prepare')
+def install_genesis(case, profile, nonce, *, fighter_count=2):
+    _receipt_kind(fighter_count)
+    return _install(case, nonce, 'prepare', fighter_count=fighter_count)
 
 
 def install_cold(case, profile, nonce, pair, ships):

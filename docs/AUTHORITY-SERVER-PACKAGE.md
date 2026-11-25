@@ -214,12 +214,15 @@ pending pose with a newer sample from the same ship is excluded.
 
 ## Starting ships for human flight tests
 
-The base-game test starts two **Pulsar Vanguards** 3 km apart in Black Hole
-Sun V. Each has six Bolt Repeaters Mk2, three Paranid combat engines Mk3,
-a Teladi shield Mk3 and combat thrusters Mk3. The server avatar stays on
-a station. The pilots choose separate ships from their shared Company.
-Use the verified private Pulsar seed for this setup. Both Linux launchers
-take `--base-game-only`. The Windows PowerShell launcher takes `-BaseGameOnly`.
+Choose the private two- or four-fighter seed when setting up a fresh test world.
+Both start with **Pulsar Vanguards** in Black Hole Sun V. The pair starts 3 km
+apart. The four-ship formation starts at the corners of a 3 km square.
+Each fighter has six Bolt Repeaters Mk2, three Paranid combat engines Mk3,
+a Teladi shield Mk3 and combat thrusters Mk3. The server avatar stays on a
+station. Each pilot chooses a free ship from the shared Company at join.
+Both Linux launchers take `--base-game-only`. The Windows PowerShell launcher
+takes `-BaseGameOnly`. To generate a new four-fighter world with the development
+tool, pass `--fighter-count 4` to `tools/dev/authority_vanilla_genesis.py`.
 [Fighter equipment definition](../tools/dev/fixtures/vanilla-flight/libraries/loadouts.xml)
 
 ### Earlier Timelines test world

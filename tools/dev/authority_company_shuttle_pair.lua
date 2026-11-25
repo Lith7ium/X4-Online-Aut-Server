@@ -24,7 +24,9 @@ function M.new_x4(config, guard)
     local action = config.mode == 'prepare' and 'Create' or 'Inspect'
     local waiting, failure, finished, deadline = nil, nil, false, GetCurRealTime() + 30
     local indices = config.indices or {10083,10084}
+    assert(#indices == 2 or (config.live_station and #indices == 4), 'invalid fixture ship count')
     local slot, current, ships = 1, indices[1], {}
+    local codes = {}
     local station_code, room = config.station or 'XPJ-169', config.room
     local function log(row) DebugError('[X4LAN] ' .. (config.tag or 'AUTH_COMPANY_SHUTTLE_PAIR') .. ' ' .. config.nonce .. '|' .. row) end
     local function refuse(reason)
@@ -84,18 +86,36 @@ function M.new_x4(config, guard)
         end
         local pose = C.GetObjectPositionInSector(id)
         if config.codes and config.codes[slot] ~= shipcode then return refuse('COLD_IDENTITY') end
-        ships[slot] = {id=id, sector=sector, code=shipcode, pose=pose}
-        if slot == 1 then slot, current = 2, indices[2]; return end
         local first = ships[1]
-        if first.id == id or first.code == shipcode or first.sector ~= sector then return refuse('DUPLICATE') end
-        local dx, dy, dz = pose.x - first.pose.x, pose.y - first.pose.y, pose.z - first.pose.z
-        if not (math.abs(dx) < 2 and math.abs(dy) < 2 and math.abs(dz - 3000) < 3
-                and math.cos(first.pose.yaw) > .999 and math.cos(pose.yaw) < -.999
-                and math.cos(first.pose.pitch) > .999 and math.cos(pose.pitch) > .999) then
-            return refuse(('POSE_%.2f_%.2f_%.2f_%.3f_%.3f'):format(dx,dy,dz,first.pose.yaw,pose.yaw))
+        if first then
+            for _, previous in ipairs(ships) do
+                if previous.id == id or previous.code == shipcode then return refuse('DUPLICATE') end
+            end
+            if first.sector ~= sector then return refuse('DUPLICATE') end
+            local dx, dy, dz = pose.x - first.pose.x, pose.y - first.pose.y, pose.z - first.pose.z
+            local expected_x = slot > 2 and 3000 or 0
+            local far_row = slot % 2 == 0
+            local expected_z = far_row and 3000 or 0
+            local yaw_direction = far_row and -1 or 1
+            if not (math.abs(dx - expected_x) < 2 and math.abs(dy) < 2 and math.abs(dz - expected_z) < 3
+                    and math.cos(first.pose.yaw) > .999 and yaw_direction * math.cos(pose.yaw) > .999
+                    and math.cos(first.pose.pitch) > .999 and math.cos(pose.pitch) > .999) then
+                return refuse(('POSE_%.2f_%.2f_%.2f_%.3f_%.3f'):format(dx,dy,dz,first.pose.yaw,pose.yaw))
+            end
+            if #indices == 4 and math.cos(pose.pitch - first.pose.pitch) <= .999 then
+                return refuse('RELATIVE_PITCH')
+            end
+        end
+        ships[slot] = {id=id, sector=sector, code=shipcode, pose=pose}
+        codes[slot] = shipcode
+        if slot < #indices then
+            slot = slot + 1
+            current = indices[slot]
+            return
         end
         finished = true
-        log('PAIR|' .. first.code .. '|' .. shipcode .. (config.live_station and ('|' .. station_code .. '|' .. room) or ''))
+        local kind = #indices == 2 and 'PAIR' or 'GROUP'
+        log(kind .. '|' .. table.concat(codes, '|') .. (config.live_station and ('|' .. station_code .. '|' .. room) or ''))
     end
     for _, entry in ipairs({{'Create','Created'}, {'Inspect','Inspected'}}) do
         local which = entry[1]
@@ -111,6 +131,7 @@ function M.new_x4(config, guard)
             local args = {nonce=config.nonce,epoch=config.epoch,index=current}
             if config.live_station then
                 args.fresh, args.station, args.room = config.mode == 'prepare', config.station, config.room
+                if action == 'Create' then args.count = #indices end
             end
             if AddUITriggeredEvent(screen, action, args) == false then
                 refuse('DISPATCH')

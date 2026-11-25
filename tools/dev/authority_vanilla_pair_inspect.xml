@@ -11,8 +11,8 @@
     <set_value name="$status" exact="'PARKING'"/>
     <do_if value="@$station.isclass.station and $station.isoperational and $station.owner == faction.argon and $station.trueowner == faction.argon and @$station.sector.macro.id == 'cluster_06_sector002_macro' and @$room.exists and player.entity.hascontext.{$station} and not player.occupiedship and not player.controlled">
      <set_value name="$status" exact="'BINDING'"/>
-     <do_if value="$v.$fresh and ($v.$index == 1 or $v.$index == 2)">
-      <do_if value="@md.X4AuthorityVanillaPairCreate.Prepare.$nonce == $v.$nonce and @md.X4AuthorityVanillaPairCreate.Prepare.$station == $station">
+     <do_if value="$v.$fresh">
+      <do_if value="@md.X4AuthorityVanillaPairCreate.Prepare.$nonce == $v.$nonce and @md.X4AuthorityVanillaPairCreate.Prepare.$station == $station and $v.$index == ($v.$index)i and $v.$index ge 1 and $v.$index le @md.X4AuthorityVanillaPairCreate.Prepare.$count">
        <set_value name="$ship" exact="@md.X4AuthorityVanillaPairCreate.Prepare.$ships.{$v.$index}"/>
       </do_if>
      </do_if>
