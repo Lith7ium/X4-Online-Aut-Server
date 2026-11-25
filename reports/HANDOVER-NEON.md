@@ -29,21 +29,24 @@ reader, real LuaJIT and a simulated X4 ABI. The prior game's generic
 3,217. Use the fixed player build for both pilots when the operator
 returns. Check for sustained native flight and actual cockpit playback.
 
-Use the private packages built from `592733f8` for the next flight.
-They also fix a receiving cockpit that could authorize a correction
-over 50 m after rejecting its first position. Ten focused offline tests
-passed. Both archives contain the committed cockpit controller and
-position reader. The Windows ZIP retains the previously verified DLL.
+Use the private player packages built from `2ad3fc46` for the next flight.
+They preserve the observed ship's attitude on position writes and include
+the earlier fix for corrections over 50 m after a rejected first position.
+The cockpit controller, native pose adapter and position reader in both
+archives match Git. The Windows ZIP retains the previously verified DLL.
+In a native Linux cockpit, WRN-302 moved 16.59375 m through 26 corrections
+with its nonzero yaw, pitch and roll preserved at each readback.
+[Attitude evidence and test scope](AUTHORITY-COCKPIT-ATTITUDE-20261125.md)
 
 | Internal player package | Bytes | SHA-256 |
 | --- | ---: | --- |
-| X4-Authority-Linux-592733f8.tar.gz | 1,531,180 | `e542babb74f5091e444ccfc420a3ee89cdebaa55970ef2a33140c5b8c9924acd` |
-| X4-Authority-Windows-592733f8.zip | 2,892,688 | `8c02b4ae173ab9da5f74e025de20ba2b27d92ce59abdd45dc7edc97cd8eed05b` |
+| X4-Authority-Linux-2ad3fc46.tar.gz | 1,530,979 | `8f08a2b1f5bf1fe4b11c44a217e1d462f751d7629d7597ddba9004e7b4fccee1` |
+| X4-Authority-Windows-2ad3fc46.zip | 2,893,154 | `1a1cd0f00833aa9ad099198057464b3362826385c372533e8c41fcb37118afab` |
 
 Cobalt can reproduce the Windows ZIP from this fork using the DLL in
 the previously shared package. In PowerShell, from the repository root,
 set `$dll` to the extracted `network\x4lan_net_64.dll` path and run
-`py -3 tools/make_authority_windows_client_package.py --ref 592733f8 --recorded-network-dll $dll --out X4-Authority-Windows-592733f8.zip`.
+`py -3 tools/make_authority_windows_client_package.py --ref 2ad3fc46 --recorded-network-dll $dll --out X4-Authority-Windows-2ad3fc46.zip`.
 Compare the printed SHA-256 with the table before launching.
 
 The retained Fedora run-02 archive records revision `1611dbe1`. Its
