@@ -374,3 +374,32 @@ has SHA-256 `f5f0adf0279a6b54ea8503aedd4d738dd88ada75f0fce4d89411b7dfee333b26`.
 The corrected bridge requires the monitor to acknowledge the current
 request before X4 can receive a trade order. A native run with two
 confirmed orders in one session remains open.
+
+### Native server departure after a critical trade
+
+The private Linux run `undock-native-03` loaded a verified copy of
+`checkpoint-1dac0e4056eb41739aeecd30dbb1f1ca`. Registry index 7354 resolved
+to WRN-302 with the same assigned Company captain, PYN-740, at BIM-169's
+external trade bay with seed `507326418098681806`. The registry binding,
+ship ownership and NPC assignment matched again at the final readback. The
+server avatar stayed parked away from the ship.
+
+| X4 game age | Native observation |
+| --- | --- |
+| 321.980–322.380 s | `TradePerform` was critical. The trial refused to act, and a request with the wrong bay seed was also refused while the trade remained critical. |
+| 322.760–323.175 s | X4 returned to `Wait` with the trade queue clear. The trial submitted one stock `Undock` order. |
+| 333.429 s | `event_object_undocked` matched WRN-302, BIM-169 and the original bay in `param3`. The ship's physical dock reference and bay occupancy entry had cleared. The assigned dock and assigned ship still pointed to each other, the bay state was `undocking`, and the order was still critical. |
+| 352.393 s | A separate readback found the same ship and captain in the sector with no dock, assigned dock or parking reference. The old bay had zero occupants, no assigned ship and state `default`. The stock order was gone, the queue was empty and the ship had returned to `Wait`. Only then did the trial acknowledge departure. |
+| 352.770–353.160 s | Replay probes with the original request ID and a new ID were refused. Neither created another order. |
+
+This was a developer-only server experiment. It opened no remote client
+session and sent no flight permission over the network. The run wrote no
+checkpoint, left the source SHA-256 unchanged and stopped the owned X4 and
+display processes.
+
+Private artifacts from `.local/undock-native-03/` in the trial worktree are
+`result.json` (SHA-256
+`c8fcaa793b1dcaf3848d1f8453b7ca86860134a2aa3f8f202c62a0944f595ab7`)
+and the native engine log (SHA-256
+`8910e3bc82825e10716b1d62d3f8d936b7a45f65e31f6b9ca727124684705ff9`,
+lines 524–552).
