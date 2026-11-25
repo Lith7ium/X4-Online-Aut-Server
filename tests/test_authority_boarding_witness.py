@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
@@ -49,6 +51,12 @@ class BoardingWitnessTests(unittest.TestCase):
                 self.verify(self.arm, self.start, row)
         with self.assertRaisesRegex(ValueError, 'follows operation removal'):
             self.verify(self.arm, self.start, self.company, self.removed, self.boarded, self.owner)
+
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
+    def test_preflight_converts_lua_references_and_reports_identity_failure_stage(self):
+        result = subprocess.run(['luajit', 'tests/authority_boarding_preflight.lua'],
+                                cwd=ROOT, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_stock_event_selectors_and_no_game_actions(self):
         root = ET.parse(ROOT/'tools/dev/authority_boarding_witness.xml').getroot()

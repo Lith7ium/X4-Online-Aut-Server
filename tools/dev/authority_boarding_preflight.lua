@@ -23,7 +23,7 @@ bool IsUnit(UniverseID component);
 bool IsOrderSelectableFor(const char* orderdefid, UniverseID controllableid);
 const char* GetObjectIDCode(UniverseID component);
 UniverseID GetPlayerID(void);
-UniverseID GetTopLevelContainer(UniverseID component);
+UniverseID GetPlayerContainerID(void);
 UniverseID GetContextByClass(UniverseID component, const char* classid, bool includeself);
 UIPosRot GetObjectPositionInSector(UniverseID component);
 uint32_t GetNumTiersOfRole(const char* role);
@@ -103,50 +103,65 @@ end
 
 function M.read_x4(options)
     if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
+    local phase = 'configuration'
     local function read()
         local resolver = X4LAN_RESOLVE_STRING
         assert(type(resolver) == 'table' and type(options.lookup) == 'function' and type(options.guard) == 'function')
         assert(type(options.epoch) == 'string' and options.epoch:match('^[0-9a-f]+$') and #options.epoch == 32)
-        local function identify(witness)
+        local function identify(witness, label)
+            phase = label .. '_configuration'
             assert(type(witness) == 'table' and count(witness.index, 200000) and witness.index > 0)
             assert(type(witness.code) == 'string' and witness.code:match('^[A-Z0-9]+%-[A-Z0-9]+$'))
             assert(type(witness.macro) == 'string' and witness.macro:match('^[a-z0-9_]+$'))
             assert(type(witness.trueowner) == 'string' and witness.trueowner:match('^[a-z0-9_]+$'))
+            phase = label .. '_registry'
             local id = assert(resolver.actor_u64(witness.id))
             -- The loader returns the runtime uint64 and independently observed MD
             -- true owner for this epoch/index after checking both registry directions.
             local bound_id, trueowner = options.lookup(options.epoch, witness.index)
             assert(resolver.actor_u64(bound_id) == id and trueowner == witness.trueowner)
+            phase = label .. '_native_identity'
             assert(C.IsValidComponent(id) and C.IsComponentOperational(id) and C.IsComponentClass(id, 'ship'))
             local code = C.GetObjectIDCode(id)
             assert(code ~= nil and code ~= ffi.NULL and ffi.string(code) == witness.code)
-            local macro, visible_owner, player_owned = GetComponentData(id, 'macro', 'owner', 'isplayerowned')
+            phase = label .. '_lua_id'
+            local ref = ConvertStringToLuaID((tostring(id):gsub('ULL$', '')))
+            assert(ref and resolver.actor_u64(ConvertIDTo64Bit(ref)) == id)
+            phase = label .. '_component_data'
+            local macro, visible_owner, player_owned = GetComponentData(ref, 'macro', 'owner', 'isplayerowned')
             assert(macro == witness.macro and type(visible_owner) == 'string'
                 and visible_owner:match('^[a-z0-9_]+$'))
             assert(witness.visible_owner == nil or visible_owner == witness.visible_owner)
-            local sector = C.GetContextByClass(id, 'sector', false)
-            assert(sector ~= 0 and C.IsValidComponent(sector) and C.IsComponentClass(sector, 'sector'))
             if witness.trueowner == 'player' then
                 assert(visible_owner == 'player' and player_owned == true)
             else
                 assert(visible_owner ~= 'player' and visible_owner ~= 'ownerless' and not player_owned)
             end
-            return id, sector, visible_owner
+            phase = label .. '_sector'
+            local sector = C.GetContextByClass(id, 'sector', false)
+            assert(sector ~= 0 and C.IsValidComponent(sector) and C.IsComponentClass(sector, 'sector'))
+            return id, ref, sector, visible_owner
         end
 
+        phase = 'provider_context'
         assert(options.guard() == true and C.IsPlayerValid())
-        local ship, ship_sector, ship_owner = identify(options.ship)
-        local target, target_sector, target_owner = identify(options.target)
+        local ship, ship_ref, ship_sector, ship_owner = identify(options.ship, 'ship')
+        local target, target_ref, target_sector, target_owner = identify(options.target, 'target')
+        phase = 'pair_eligibility'
         assert(ship ~= target and options.ship.index ~= options.target.index and options.ship.trueowner == 'player')
         assert(options.target.trueowner ~= 'player' and options.target.trueowner ~= 'ownerless')
         assert(C.IsComponentClass(target, 'ship_l') or C.IsComponentClass(target, 'ship_xl'))
         -- Match the stock interaction menu: a falsy value excludes no ship.
-        assert(not C.IsUnit(ship) and not GetComponentData(ship, 'isonlineobject'))
+        assert(not C.IsUnit(ship) and not GetComponentData(ship_ref, 'isonlineobject'))
 
+        phase = 'avatar_identity'
         local avatar_id = C.GetPlayerID()
         assert(avatar_id ~= 0 and C.IsValidComponent(avatar_id))
-        local container = C.GetTopLevelContainer(avatar_id)
+        phase = 'avatar_container'
+        -- The stock Dock at Player path uses this for the current physical container.
+        local container = C.GetPlayerContainerID()
         assert(container ~= 0 and C.IsValidComponent(container) and container ~= ship and container ~= target)
+        phase = 'avatar_sector'
         local avatar_sector = C.GetContextByClass(container, 'sector', false)
         assert(avatar_sector ~= 0 and C.IsComponentClass(avatar_sector, 'sector'))
         local avatar = {id=avatar_id, sector=avatar_sector}
@@ -163,19 +178,20 @@ function M.read_x4(options)
             avatar_to_target_m=distance_to(avatar, target, target_sector),
             same_sector=ship_sector == target_sector, minimum_assigned_marines=1,
             board_order=observe(function() return C.IsOrderSelectableFor('Board', ship) end, boolean),
-            capturable=observe(function() return GetComponentData(target, 'iscapturable') end, boolean),
+            capturable=observe(function() return GetComponentData(target_ref, 'iscapturable') end, boolean),
             marines=observe(function() return marine_count(ship) end, function(v) return type(v) == 'table' end),
             target_capacity=observe(function() return tonumber(C.GetPeopleCapacity(target, '', false)) end,
                 function(v) return count(v, 1000000) end),
-            resistance=observe(function() return GetComponentData(target, 'boardingresistance') end,
+            resistance=observe(function() return GetComponentData(target_ref, 'boardingresistance') end,
                 function(v) return finite(v) and v >= 0 end),
         }
-        local ship_after, ship_sector_after, ship_owner_after = identify(options.ship)
-        local target_after, target_sector_after, target_owner_after = identify(options.target)
+        local ship_after, _, ship_sector_after, ship_owner_after = identify(options.ship, 'ship')
+        local target_after, _, target_sector_after, target_owner_after = identify(options.target, 'target')
+        phase = 'pair_or_avatar_changed'
         assert(ship_after == ship and target_after == target and ship_sector_after == ship_sector
             and target_sector_after == target_sector and ship_owner_after == ship_owner
             and target_owner_after == target_owner and C.GetPlayerID() == avatar_id
-            and C.GetTopLevelContainer(avatar_id) == container
+            and C.GetPlayerContainerID() == container
             and C.GetContextByClass(container, 'sector', false) == avatar_sector and options.guard() == true)
         -- This is the initial stock allocation bound for this single ship.
         -- It does not include subordinate crews or allocations to an existing
@@ -186,7 +202,7 @@ function M.read_x4(options)
         return result
     end
     local ok, result = pcall(read)
-    if not ok then return nil, 'binding_or_context_unavailable' end
+    if not ok then return nil, phase end
     return result
 end
 
