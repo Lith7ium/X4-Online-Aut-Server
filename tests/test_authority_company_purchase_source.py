@@ -1,13 +1,18 @@
 """Exercise the owned cockpit IPC and exact terminal receipt binding."""
+from contextlib import chdir
 from pathlib import Path
-import shutil
 import socket
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
 
 from authority.company_purchase_source import CompanyPurchaseSource
+
+
+if __package__:
+    from .run_fixture_lua import run_fixture
+else:
+    from run_fixture_lua import run_fixture
 
 
 class CompanyPurchaseSourceTests(unittest.TestCase):
@@ -306,8 +311,7 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         self.assertIsNone(source.sale_exchange(refusal))
         self.assertEqual(self.receive(), ['SALE_RECEIPT', new_id, 'WRN-302', 'refused', 'price_changed', '3501'])
 
-    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT required')
     def test_native_queue_requires_admission_and_matches_one_receipt(self):
         root = Path(__file__).resolve().parents[1]
-        subprocess.run(['luajit', 'tests/authority_company_purchase_source.lua'],
-                       cwd=root, timeout=10, check=True)
+        with chdir(root):
+            run_fixture(root / 'tests/authority_company_purchase_source.lua')
