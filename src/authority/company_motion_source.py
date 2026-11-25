@@ -257,18 +257,12 @@ class CompanyMotionSource:
             self._reported_stages.add(stage)
             self._on_stage(stage)
 
-    def _npc_radar_view(self):
-        if self._observer is not None:
-            # Its combined subscription also includes the map. Only the cockpit
-            # slot can corroborate the native radar-only measurement.
-            return self._observer._slots['cockpit']
-
     @staticmethod
     def _npc_binding(sample):
         return sample['sector_macro'], sample['index'], sample['actor'], sample['code']
 
     def _receive_npc_measurement(self, body):
-        if not self._registered_npc_local_measurement or self._npc_ended:
+        if not self._registered_npc_local_measurement or self._npc_ended or self._observer is None:
             return
         try:
             fields = body.decode('ascii').split('|')
@@ -283,11 +277,11 @@ class CompanyMotionSource:
 
         if self._npc_seat_gap or not 0 <= _npc_now() - sample['capture_time'] <= _MAX_NPC_AGE:
             return
-        view = self._npc_radar_view()
-        if view is not None and view.active is not None:
-            if view.active != self._npc_binding(sample):
+        binding = self._observer.cockpit_binding()
+        if binding is not None:
+            if binding != self._npc_binding(sample):
                 return
-            if self._npc_latest is not None and view.active != self._npc_binding(self._npc_latest):
+            if self._npc_latest is not None and binding != self._npc_binding(self._npc_latest):
                 self._npc_latest = None
         actor, sequence, captured, game_time = _npc_progress(sample)
         previous = self._npc_accepted
@@ -297,20 +291,21 @@ class CompanyMotionSource:
                                      or captured <= previous[2] or game_time < previous[3]):
             return
         self._npc_latest = sample
-        if view is None or view.active is not None:
+        if binding is not None:
             self._npc_accepted = (actor, sequence, captured, game_time)
 
     def take_npc_measurement(self):
         """Take the latest fresh local radar measurement or its one-shot end."""
         self._owner()
         sample, self._npc_latest = self._npc_latest, None
+        if self._observer is None:
+            return None
         if sample is None or sample is RADAR_ENDED:
             return sample
         now = _npc_now()
         if not 0 <= now - sample['capture_time'] <= _MAX_NPC_AGE:
             return None
-        view = self._npc_radar_view()
-        if view is not None and (view.active != self._npc_binding(sample) or time.monotonic() >= view.deadline):
+        if self._observer.cockpit_binding() != self._npc_binding(sample):
             return None
         self._npc_accepted = _npc_progress(sample)
         return sample
@@ -323,10 +318,10 @@ class CompanyMotionSource:
         newest = None
         checked_peer = None
         prefix = self._prefix()
-        packet_limit = _MAX_SAMPLER_DATAGRAM
+        packet_limit = (MAX_OBSERVER_DATAGRAM if self._observer is not None or self._registered_npc_local_measurement
+                        else _MAX_SAMPLER_DATAGRAM)
         if self._observer is not None:
             self._observer.expire()
-            packet_limit = MAX_OBSERVER_DATAGRAM
         drain_limit = 64 if self._cockpit_max_pilots > 1 else 32
         for _ in range(drain_limit):
             try:
@@ -353,7 +348,7 @@ class CompanyMotionSource:
             body = raw[len(prefix):]
             kind = body.partition(b'|')[0]
             if kind in (b'NPC_POINT', b'NPC_END'):
-                if len(raw) <= _MAX_SAMPLER_DATAGRAM:
+                if len(raw) <= MAX_OBSERVER_DATAGRAM:
                     self._receive_npc_measurement(body)
                 continue
             if self._observer is not None and kind not in (b'GAP', b'SAMPLE3'):

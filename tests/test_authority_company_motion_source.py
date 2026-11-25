@@ -78,31 +78,36 @@ class CompanyMotionSourceTest(unittest.TestCase):
                  point(6, 99.6), own(1))
             self.assertEqual(source.poll(validate)['sequence'], 1)
             self.assertIsNone(source.take_npc_measurement())
+            self.assertIsNone(observer.cockpit_binding())
             self.assertEqual(validate.call_count, 2)
 
-            send(point(1, 99.1), f'VIEW|cockpit|1|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}',
-                 point(2, 99.2), own(2), point(2, 99.3), point(3, 99.1))
+            radar = f'VIEW|cockpit|1|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}'
+            send(point(1, 99.1), radar, own(2))
             self.assertEqual(source.poll(validate)['sequence'], 2)
+            self.assertEqual(observer.cockpit_binding(), (SECTOR, NPC_INDEX, '0xabc', NPC_CODE))
+            self.assertEqual(source.take_npc_measurement()['sequence'], 1)
+            send(radar, point(2, 99.15), point(3, 99.2), point(3, 99.3), point(4, 99.1))
+            self.assertIsNone(source.poll(validate))
             measurement = source.take_npc_measurement()
             self.assertEqual((measurement['index'], measurement['sequence'], measurement['actor']),
-                             (NPC_INDEX, 2, '0xabc'))
+                             (NPC_INDEX, 3, '0xabc'))
             self.assertEqual(measurement['velocity_m_per_game_second'], [4., 5., 6.])
             self.assertIsNone(source.take_npc_measurement())
             measurement['sequence'] = 0  # The caller cannot reset the producer's progress.
 
-            send(point(2, 99.3), point(3, 99.4, actor='0xabd'), point(3, 99.5, game=11),
-                 point(4, 98), point(4, 101), point(4, 99.7, code='ABC-123'),
-                 point(4, 99.7, sector='sector_other'),
-                 point(4, 'NaN'), point(4, 99.7).replace('|1|2|3|', '|1_0|2|3|'),
-                 point(4, 99.7) + '|' + 'Z' * 600, own(3))
+            send(point(3, 99.3), point(4, 99.4, actor='0xabd'), point(4, 99.5, game=11),
+                 point(5, 98), point(5, 101), point(5, 99.7, code='ABC-123'),
+                 point(5, 99.7, sector='sector_other'),
+                 point(5, 'NaN'), point(5, 99.7).replace('|1|2|3|', '|1_0|2|3|'),
+                 point(5, 99.7) + '|' + 'Z' * 600, own(3))
             owned.sendto(prefix + b'NPC_POINT|\xff', destination)
             self.assertEqual(source.poll(validate)['sequence'], 3)
             self.assertIsNone(source.take_npc_measurement())
 
-            send(point(3, 99.7), 'GAP', point(4, 99.8))
+            send(point(4, 99.7), 'GAP', point(5, 99.8))
             self.assertIsNone(source.poll(validate))
             self.assertIsNone(source.take_npc_measurement())
-            send(own(4), point(4, 99.8))
+            send(own(4), point(5, 99.8))
             self.assertEqual(source.poll(validate)['sequence'], 4)
             errors = []
 
@@ -116,28 +121,63 @@ class CompanyMotionSourceTest(unittest.TestCase):
             thread.start()
             thread.join(timeout=1)
             self.assertEqual(errors, ['exclusive company motion owner thread required'])
-            self.assertEqual(source.take_npc_measurement()['sequence'], 4)
+            self.assertEqual(source.take_npc_measurement()['sequence'], 5)
 
-            send(point(5, 99.9))
+            send(point(6, 99.9))
             self.assertIsNone(source.poll(validate))
             clock.return_value = 101
             self.assertIsNone(source.take_npc_measurement())
             clock.return_value = 100
-            send(point(5, 100))
+            send(point(6, 100))
             self.assertIsNone(source.poll(validate))
             self.assertIsNone(source.take_npc_measurement())
 
-            send(point(5, 99.9), f'VIEW|cockpit|2|{REGISTRY_EPOCH}|-|0|-|-',
+            send(point(7, 100), f'VIEW|cockpit|2|{REGISTRY_EPOCH}|-|0|-|-',
                  f'NPC_END|{NPC_INDEX}|ABC-123')
             self.assertIsNone(source.poll(validate))
             self.assertIsNone(source.take_npc_measurement())  # Map retains its view.
-            send(f'NPC_END|{NPC_INDEX}|{NPC_CODE}', own(5), f'NPC_END|{NPC_INDEX}|{NPC_CODE}', point(6, 100))
+            self.assertIsNone(observer.cockpit_binding())
+            send(f'NPC_END|{NPC_INDEX}|{NPC_CODE}', own(5), f'NPC_END|{NPC_INDEX}|{NPC_CODE}', point(8, 100))
             self.assertEqual(source.poll(validate)['sequence'], 5)
             self.assertIs(source.take_npc_measurement(), RADAR_ENDED)
             self.assertIsNone(source.take_npc_measurement())
-            send(f'VIEW|cockpit|3|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}', point(7, 100))
+            send(f'VIEW|cockpit|3|{REGISTRY_EPOCH}|{SECTOR}|{NPC_INDEX}|0xabc|{NPC_CODE}', point(9, 100))
             self.assertIsNone(source.poll(validate))
             self.assertIsNone(source.take_npc_measurement())
+
+    def test_local_npc_datagram_limit_and_measurement_without_observer(self):
+        source = CompanyMotionSource(observed_npc=(NPC_INDEX, NPC_CODE), registered_npc_local_measurement=True)
+        self.addCleanup(source.close)
+        settings = source.configure(REGISTRY_EPOCH, PILOT_INDEX, operational_bits='1' * PILOT_INDEX)
+        destination = ('127.0.0.1', settings['port'])
+        prefix = source._prefix()
+        point = f'NPC_POINT|{NPC_INDEX}|{NPC_CODE}|{SECTOR}|0xabc|1|visible|99.9|12|1|2|3|4|5|6'.encode()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                patch('authority.company_motion_source._npc_now', return_value=100):
+            owned.bind(('127.0.0.1', 0))
+            validate = lambda address: address == owned.getsockname()
+            owned.sendto(prefix + point, destination)
+            owned.sendto(prefix + f'NPC_END|{NPC_INDEX}|{NPC_CODE}'.encode(), destination)
+            self.assertIsNone(source.poll(validate))
+            self.assertIsNone(source.take_npc_measurement())
+
+            at_limit = (prefix + point).ljust(MAX_OBSERVER_DATAGRAM, b'0')
+            with patch.object(source, '_receive_npc_measurement', wraps=source._receive_npc_measurement) as receive:
+                owned.sendto(at_limit, destination)
+                owned.sendto(at_limit + b'0', destination)
+                self.assertIsNone(source.poll(validate))
+                receive.assert_called_once_with(at_limit[len(prefix):])
+
+            def owned_sample(sequence, size):
+                header = prefix + f'SAMPLE3|{REGISTRY_EPOCH}|{PILOT_INDEX}|{sequence}|{SECTOR}|'.encode()
+                body = f'20|{sequence}|1|2|3|0|0|0|'.encode()
+                return header + b'0' * (size - len(header) - len(body)) + body
+
+            owned.sendto(owned_sample(1, 512), destination)
+            self.assertEqual(source.poll(validate)['sequence'], 1)
+            owned.sendto(owned_sample(2, 513), destination)
+            with self.assertRaisesRegex(ValueError, 'invalid local company motion packet'):
+                source.poll(validate)
 
     def test_hold_trial_is_explicit_and_bound_to_a_single_vanilla_pair(self):
         target = (943, 'MFQ-419')

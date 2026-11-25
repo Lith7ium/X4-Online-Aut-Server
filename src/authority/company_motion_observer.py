@@ -134,6 +134,11 @@ class CompanyMotionObserver:
                 view.replace(None)
         self._sync_views()
 
+    def cockpit_binding(self):
+        """Return the current immutable native cockpit binding, separate from map interest."""
+        view = self._slots['cockpit']
+        return view.active if time.monotonic() < view.deadline else None
+
     def _view(self, slot, view, serial, sector, index_text, actor, code):
         if (sector, index_text, actor, code) == ('-', '0', '-', '-'):
             binding = None
