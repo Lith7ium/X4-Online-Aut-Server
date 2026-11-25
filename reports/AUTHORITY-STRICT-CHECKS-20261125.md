@@ -25,3 +25,16 @@ try {
     Pop-Location
 }
 ```
+
+## Native Windows result
+
+Cobalt ran the thirteen selected cases at `3ad06b66` on Windows 11 Home
+build 26200 with 64-bit CPython 3.11.9. The product code, tools and
+tests matched the Linux run's revision. Nine passed, including the
+real UDP sender ownership lookup and three MSI checks. Three launcher
+cases skipped for missing Lupa and the Linux cross-build skipped for its
+toolchain. Zero failed or errored. Runtime was 11.907 seconds.
+
+Across these two platform reports, sixteen cases still lack a passing
+result, comprising those four and the twelve Linux reference checks. The final
+exit of the strict Linux command remains 1. [Cobalt's native Windows results](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795590203447069)

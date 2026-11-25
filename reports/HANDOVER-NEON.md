@@ -5,8 +5,8 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 07:00 team check-in
-records the Windows sender, WAN flight and Windows test assignments. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795586425233399)
+hour, Berlin time, in `#x4-authorative-server`. The 09:00 team check-in
+records the Windows results, WAN assignment and the server timeout. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795593679797079)
 
 Two ordinary Linux pilots have now flown the human test's vanilla Pulsars
 in one session. In Black Hole Sun V, each receiving cockpit used radar
@@ -155,8 +155,7 @@ outcome and must not be resubmitted. [Stock trade evidence](AUTHORITY-COMPANY-ST
 The complete strict Linux run on `8ff69b2d` counted 5,729 tests. All
 5,704 executed cases passed, including the census checks with their original
 fixture restored. The runner exited 1 for the 25 skipped checks. Thirteen
-require Windows and twelve need local reference inputs. Cobalt has the
-Windows selection for when the machine is available. [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
+require Windows and twelve need local reference inputs. Cobalt has since run the thirteen on native Windows. Nine passed. Three launcher checks need Lupa and the cross-build needs Zig. [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time
 
