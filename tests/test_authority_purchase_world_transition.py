@@ -12,6 +12,7 @@ from authority.checkpoints import CheckpointStore
 from authority.company_purchase_ledger import CompanyPurchaseLedger
 from authority.registry_availability_evidence import verify_join_snapshot
 from authority_recovered_registry_snapshot import receipt
+from authority_native_undock import NativeUndockProvider
 import test_authority_portable_seed as fixtures
 
 
@@ -23,6 +24,42 @@ REPORT = dict(purchase_id=PURCHASE_ID, ware='water', quantity=6, settled_total_c
 
 
 class PurchaseWorldTransitionTests(unittest.TestCase):
+    def test_stopped_undock_provider_archives_exact_cue_for_strict_cold_restore(self):
+        prior = fixtures.PortableSeedTests()
+        prior.setUp()
+        self.addCleanup(prior.doCleanups)
+        case = prior.source / 'case'
+        extension = case / 'extensions/x4_lan_lab'
+        (extension / 'ui').mkdir()
+        (extension / 'ui/authority_world_bridge_probe.lua').write_text(
+            'local registry_checkpoint\n local ok,reason=bridge:update();assert(ok,reason)\n')
+        (extension / 'ui.xml').write_text('    <file name="ui/authority_world_bridge_probe.lua" />\n')
+        profile = (prior.source / fixtures.seed.CONTENT).parent
+        expected = server.verify_previous_source(prior.store, prior.checkpoint, profile,
+                                                 require_registry_snapshot=True)
+        provider = NativeUndockProvider()
+        self.addCleanup(provider.close)
+        cue, *_ = provider.install(case)
+        original = cue.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'saved-state scripts differ'):
+            server.verify_previous_source(prior.store, prior.checkpoint, profile, require_registry_snapshot=True)
+        archive = prior.source / cue.name
+        archive.write_bytes(b'existing archive')
+        with self.assertRaises(FileExistsError):
+            provider.archive_cue(case, prior.source)
+        self.assertEqual(cue.read_bytes(), original)
+        self.assertEqual(archive.read_bytes(), b'existing archive')
+        archive.unlink()
+        cue.write_bytes(original + b'\n')
+        with self.assertRaisesRegex(ValueError, 'undock cue changed'):
+            provider.archive_cue(case, prior.source)
+        cue.write_bytes(original)
+        self.assertEqual(provider.archive_cue(case, prior.source), archive)
+        self.assertFalse(cue.exists())
+        self.assertEqual(archive.read_bytes(), original)
+        self.assertEqual(server.verify_previous_source(prior.store, prior.checkpoint, profile,
+                                                      require_registry_snapshot=True), expected)
+
     def test_serve_waits_for_native_verification_before_pause_and_save(self):
         events = []
         session = SimpleNamespace(pending=None, state='running')

@@ -1,5 +1,6 @@
 """Bridge the existing one-shot stock undock cue to the owned provider."""
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import os
 import re
@@ -161,12 +162,13 @@ class NativeUndockProvider:
         self._lease = secrets.token_hex(16)
         self._process = self._guard = self._peer = self._active = None
         self._history = {}
-        self._fenced = self._staged = False
+        self._fenced = False
+        self._staged_cue = None
 
     def install(self, case):
         """Stage the original native cue in a privately owned provider view."""
         extension = Path(case).absolute() / 'extensions/x4_lan_lab'
-        if (self._staged or extension.resolve(strict=True) != extension
+        if (self._staged_cue is not None or extension.resolve(strict=True) != extension
                 or extension.stat().st_uid != os.geteuid()):
             raise ValueError('new native undock overlay required')
         bridge = extension / 'ui/authority_world_bridge_probe.lua'
@@ -181,8 +183,9 @@ class NativeUndockProvider:
         cue, lua = extension / 'md' / _CUE, extension / 'ui' / _DRIVER
         if any(path.exists() or path.is_symlink() for path in (cue, lua)):
             raise FileExistsError('native undock scripts already present')
+        cue_bytes = Path(__file__).with_name(_CUE).read_bytes()
         with cue.open('xb') as output:
-            output.write(Path(__file__).with_name(_CUE).read_bytes())
+            output.write(cue_bytes)
         with lua.open('x', encoding='ascii') as output:
             output.write(_LUA)
         port = self._socket.getsockname()[1]
@@ -198,8 +201,22 @@ class NativeUndockProvider:
         bridge.write_text('local native_undock_tick\n' + bridge_text.replace(tick, tick + hook), encoding='ascii')
         manifest.write_text(manifest_text.replace(entry, f'    <file name="ui/{_DRIVER}" />\n' + entry),
                             encoding='ascii')
-        self._staged = True
+        self._staged_cue = (cue, hashlib.sha256(cue_bytes).digest())
         return [cue, lua, bridge, manifest]
+
+    def archive_cue(self, case, out):
+        """Archive the exact installed cue after the caller confirms X4 stopped."""
+        case, out = Path(case).absolute(), Path(out).absolute()
+        if case != out / 'case' or self._staged_cue is None:
+            raise ValueError('native undock archive must belong to its stopped run')
+        source, expected = self._staged_cue
+        if (source != case / 'extensions/x4_lan_lab/md' / _CUE or not source.is_file()
+                or source.resolve(strict=True) != source or hashlib.sha256(source.read_bytes()).digest() != expected):
+            raise ValueError('staged native undock cue changed')
+        archive = out / _CUE
+        os.link(source, archive, follow_symlinks=False)
+        source.unlink()
+        return archive
 
     def bind(self, process, guard):
         required = {'pid', 'start_ticks', 'exe_dev', 'exe_ino'}

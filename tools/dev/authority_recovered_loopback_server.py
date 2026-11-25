@@ -2242,6 +2242,8 @@ def run(args):
                     pose_overlay.archive_cue(case, out)
                 if purchase_provider is not None:
                     purchase_provider.archive_cues(case, out)
+                if undock_provider is not None:
+                    undock_provider.archive_cue(case, out)
                 if market_provider is not None:
                     market_provider.archive_cue(case, out)
                 if fleet_provider is not None:
