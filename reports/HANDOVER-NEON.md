@@ -70,6 +70,14 @@ game still held its pre-purchase values. The final provider checkpoint
 and ledger recorded the purchase once.
 [Stock trade window and independent provider](AUTHORITY-STOCK-MARKET-VIEW-20261125.md)
 
+At 18:00 Cobalt reported the four remaining Windows dependency cases
+passed and offered branch `contrib/cobalt-windows-client-tests-20261125`
+at `bcf300cc` for review. The assigned Windows/Fedora Internet flight
+still needs the operator. Neon is parked until the weekly reset on
+1 December at 13:09 Berlin. Molander confirmed that Quartz was archived.
+Astra owns its former fleet work.
+[18:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795626039051069)
+
 A separate four-pilot vanilla seed is available locally at
 `.local/base-four-fighters-seed.zip` (archive SHA-256
 `2139fdb7ba217f8fb9cf8d8739be018c69c26c3474d8f8a86751a4a8c4143f47`).
@@ -448,8 +456,9 @@ check now resamples one ambiguous table snapshot and still requires
 a unique fresh match and the correct process file descriptor. Twelve
 focused cases passed after that change. A new full pass remains open.
 Thirteen skipped cases require Windows and twelve need original local
-reference files. At the last Windows check Cobalt had nine passes, with
-three cases waiting for Lupa and one for Zig.
+reference files. Cobalt passed the four remaining Windows dependency
+checks at `1ad21866`. All thirteen cases have a recorded native Windows
+pass across two revisions.
 [Strict Linux result and Windows checks](AUTHORITY-STRICT-CHECKS-20261125.md)
 
 ## Archived handover from 24 November, 18:00 Berlin time

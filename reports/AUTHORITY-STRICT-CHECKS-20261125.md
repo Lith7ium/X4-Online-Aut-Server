@@ -74,3 +74,16 @@ strict legacy-undock recovery regression passed. The suite was run once.
 The private run directory keeps the full log, exact skip list and traceback.
 Full log SHA-256 was
 `08119a7b596057e6cf563d3c6e0285c30b11339c8c8f8ecee07cc42d0e88d2ab`.
+
+## Four remaining Windows checks at `1ad21866`
+
+Cobalt ran the four outstanding dependency checks once on a clean Windows 11
+Home build 26200 checkout with 64-bit CPython 3.11.9, Lupa 2.8 and Zig
+0.15.2. All four passed in 25.118 seconds. Three exercised the launcher's
+drop-in and Steam pages. The fourth produced the x86_64-linux-gnu.2.17
+cross-build. Together with the earlier nine native Windows passes, all
+thirteen Windows-specific cases now have a passing platform result across
+the two recorded revisions. Twelve Linux checks still lack their original
+reference inputs. The official Linux run at `494b470b` also errored once
+during UDP ownership verification. The Windows results do not change its
+exit code. [Cobalt's results in the development thread](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795622440162299)
