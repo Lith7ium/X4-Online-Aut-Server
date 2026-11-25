@@ -143,3 +143,10 @@ released. The verifier returned 0. Its private `verified.json` in
 
 Two native cockpit loads and stock-map actions, Fedora and a
 machine-boundary transport remain open.
+
+The normal Company ship catalogue read this final checkpoint with captain
+lookup enabled. It listed BBS-493 at index 1077 with captain seed
+`-97168325741795052`. The server position writer's retained-captain check
+requires an empty order queue. While A and B remain queued, selection in
+the catalogue alone does not establish that another pilot can take over
+flight. This run only issued fleet orders.
