@@ -76,11 +76,12 @@ class ProviderParkingTest(unittest.TestCase):
                 flags, = run.call_args.args
                 self.assertEqual(flags[:flags.index('--game')], expected)
 
-    def test_company_purchase_and_undock_opt_ins_reach_the_raw_supervisor_parser(self):
+    def test_company_purchase_opt_ins_reach_the_raw_supervisor_parser(self):
         tls = ['--tls-port', '0']
-        for enabled, undock in ((False, False), (True, False), (True, True)):
+        for enabled, undock, fleet in ((False, False, False), (True, False, False),
+                                       (True, True, False), (True, False, True)):
             with (
-                self.subTest(enabled=enabled, undock=undock),
+                self.subTest(enabled=enabled, undock=undock, fleet=fleet),
                 patch.object(provider.os, 'geteuid', return_value=1000),
                 patch.dict(provider.os.environ),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
@@ -92,10 +93,13 @@ class ProviderParkingTest(unittest.TestCase):
                 options = ['--company-purchases'] if enabled else []
                 if undock:
                     options.append('--company-undock-test')
+                if fleet:
+                    options.append('--company-fleet-orders')
                 self.assertEqual(provider.main([*ARGS, *tls, *options]), 0)
                 args, = run.call_args.args
                 self.assertIs(args.company_purchases, enabled)
                 self.assertIs(args.company_undock_test, undock)
+                self.assertIs(args.company_fleet_orders, fleet)
                 self.assertIs(args.require_company_ship, enabled)
                 self.assertIs(args.require_registry_snapshot, enabled)
                 self.assertFalse(args.company_motion)

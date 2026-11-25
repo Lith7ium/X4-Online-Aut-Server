@@ -1,5 +1,6 @@
 """Connect a saved company-ship choice to the paused client load owner."""
 import json
+import re
 
 from .client_registry_overlay import registry_receipt
 from .company_motion_source import CompanyMotionSource
@@ -14,6 +15,27 @@ COMPANY_TRADE_VIEW_UI = {'company_trade_view_ui.lua': 'src/authority/lua/company
 
 COMPANY_UNDOCK_UI = {'company_undock_hold.lua': 'src/authority/lua/company_undock_hold.lua'}
 COMPANY_UNDOCK_MD = {'company_client_undock.xml': 'src/authority/md/company_client_undock.xml'}
+
+COMPANY_FLEET_UI = {
+    f'{name}.lua': f'src/authority/lua/{name}.lua'
+    for name in ('company_fleet_capture', 'company_fleet_source')
+}
+COMPANY_FLEET_MD = {'company_fleet_lookup.xml': 'src/authority/md/company_fleet_lookup.xml'}
+
+
+def company_fleet_config(source, full_registry):
+    from .company_fleet_source import CompanyFleetSource
+
+    if not isinstance(source, CompanyFleetSource) or full_registry is None:
+        raise ValueError('Company fleet orders require a verified selected seat')
+    epoch = full_registry['epoch']
+    settings = source.configure(epoch)
+    port, lease = settings['port'], settings['lease']
+    if (settings['epoch'] != epoch or not re.fullmatch(r'[0-9a-f]{32}', epoch)
+            or type(port) is not int or not 1 <= port <= 65535
+            or type(lease) is not str or not re.fullmatch(r'[0-9a-f]{32}', lease)):
+        raise ValueError('invalid Company fleet order configuration')
+    return f',authority_company_fleet={{epoch="{epoch}",port={port},lease="{lease}"}}'
 
 
 def company_purchase_ui(source):

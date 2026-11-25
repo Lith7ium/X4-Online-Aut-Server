@@ -98,6 +98,19 @@ class ParticipantTest(unittest.TestCase):
                         self.participant.redact()
                     self.assertEqual(hashlib.sha256(path.read_bytes()).digest(), digest)
 
+    def test_redacts_fleet_lease_after_shutdown(self):
+        fleet = ',authority_company_fleet={epoch="' + 'a' * 32 + '",port=3100,lease="' + 'b' * 32 + '"}'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.lua'
+            self.write_owned_config(path, fleet)
+            self.participant.redact()
+            self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
+            self.write_owned_config(path, fleet + fleet)
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'unexpected Company fleet order lease configuration'):
+                self.participant.redact()
+            self.assertEqual(path.read_bytes(), before)
+
     def test_redaction_rejects_replaced_config(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'config.lua'

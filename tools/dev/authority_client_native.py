@@ -130,7 +130,8 @@ def verify_receipts(path, ticket, marker):
 def observe_and_activate(owner, participant, watch, ticket, marker, guard, verify_loaded, result, *,
                          registry_check=None, motion_consumer=None, company_purchase_exchange=None,
                          company_purchase_statement=None, company_purchase_statement_result=None,
-                         company_undock_exchange=None, company_trade_view_exchange=None, play_until_exit=False):
+                         company_undock_exchange=None, company_trade_view_exchange=None, company_fleet_exchange=None,
+                         play_until_exit=False):
     """No owner load assertion is made until complete native evidence is checked."""
     result['phase'] = 'load_receipts'
     while True:
@@ -164,6 +165,8 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
     motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
     if company_purchase_exchange is not None:
         motion_options['company_purchase_exchange'] = company_purchase_exchange
+    if company_fleet_exchange is not None:
+        motion_options['company_fleet_exchange'] = company_fleet_exchange
     if company_trade_view_exchange is not None:
         motion_options['company_trade_view_exchange'] = company_trade_view_exchange
     if company_undock_exchange is not None:
@@ -254,12 +257,14 @@ def error_code(error):
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
-        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False):
+        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
     if type(company_purchases) is not bool or (company_purchases and not player_mode):
         raise ValueError('Company purchases require player mode')
+    if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
+        raise ValueError('Company fleet orders require Company purchases')
     if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
         raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
@@ -294,7 +299,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = seat_watch = None
-    company_source = company_client = purchase_source = None
+    company_source = company_client = purchase_source = fleet_source = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -343,6 +348,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             capabilities['undock'] = True
                         if company_trade_view:
                             capabilities['trade_view'] = True
+                        if company_fleet_orders:
+                            capabilities['fleet_orders'] = True
                         purchase_epoch = owner.enable_company_purchases(**capabilities)
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
@@ -415,6 +422,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
                             server_fingerprint=connection_settings['server_fingerprint'], undock=company_undock_test, trade_view=company_trade_view)
                         source_options['company_purchase'] = purchase_source
+                    if company_fleet_orders:
+                        from authority.company_fleet_source import CompanyFleetSource
+
+                        fleet_source = CompanyFleetSource()
+                        source_options['company_fleet'] = fleet_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)
                     paths.extend(seat_paths)
@@ -464,6 +476,14 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
 
                     purchase_source.bind_validator(validate_purchase_peer)
                     purchase_options = purchase_source.control_callbacks(owner)
+                if fleet_source is not None:
+                    def validate_fleet_peer(peer):
+                        guard()
+                        return participant.process is not None and socket_owner(
+                            peer, fleet_source.socket.getsockname(), participant.process)
+
+                    fleet_source.bind_validator(validate_fleet_peer)
+                    purchase_options['company_fleet_exchange'] = fleet_source.exchange
                 observe_and_activate(owner, participant, watch, ticket, bound.marker,
                     guard, verify_loaded, result, registry_check=registry_check,
                     motion_consumer=(playback_driver.accept_motion
@@ -537,6 +557,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         purchase_source.close()
                     except OSError:
                         cleanup_errors.append('company_purchase_source_cleanup_failed')
+                if fleet_source is not None:
+                    try:
+                        fleet_source.close()
+                    except OSError:
+                        cleanup_errors.append('Company fleet order source cleanup failed')
                 resources_stopped = download.stop_owned_resources([], processes, result, cleanup_errors)
                 cleanup_attempted = True
                 if watch is not None and ticket is not None:

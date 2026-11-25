@@ -75,6 +75,43 @@ class TCPControlTest(unittest.TestCase):
         request = {'version': 1, 'kind': kind, 'attempt_id': offer.attempt_id, **fields}
         return json.dumps(request).encode('ascii') + b'\n'
 
+    def test_fleet_order_negotiation_is_opt_in_and_reset_with_the_offer(self):
+        self.owner.close()
+        self.read_company_ships.return_value = CompanyShipCatalogue('d' * 32, (
+            CompanyShip(7, '[0x345]', 'sector_01_macro', 'Scout', 'ABC-123'),
+        ))
+        self.session = TrustedMarkerLoadSession(self.world, enabled=True, require_company_ship=True,
+                                                company_ship_reader=self.read_company_ships)
+        self.owner = ExperimentalTCPControl(self.session, enabled=True, company_purchases=True,
+                                            company_fleet_orders=True)
+        client = self.connect()
+        self.ready_world()
+        peer = next(iter(self.owner._peers.values()))
+
+        def enable(offer, **options):
+            self.deliver(client, self.company_request('choose_company_ship', offer, ship_index=7))
+            self.assertEqual(json.loads(self.output(client))['kind'], 'company_ship_chosen')
+            self.deliver(client, self.company_request('enable_company_purchases', offer, ship_index=7,
+                                                      statement_version=1, **options))
+
+        first = self.offer(client).offer
+        enable(first)
+        expected = dict(kind='company_purchases_enabled', version=1, attempt_id=first.attempt_id,
+                        ship_index=7, registry_epoch='d' * 32, statement_version=1)
+        self.assertEqual(json.loads(self.output(client)), expected)
+        self.assertNotIn('fleet_order_version', peer)
+
+        next_offer = self.offer(client).offer
+        enable(next_offer, fleet_order_version=1)
+        self.assertEqual(json.loads(self.output(client)),
+                         dict(expected, attempt_id=next_offer.attempt_id, fleet_order_version=1))
+        self.assertEqual(peer['fleet_order_version'], 1)
+
+        last = self.offer(client).offer
+        self.assertNotIn('fleet_order_version', peer)
+        enable(last, fleet_order_version=True)
+        self.assertEqual(client.recv(1), b'')
+
     def test_company_ship_choice_is_exclusive_and_released_on_disconnect(self):
         alice, bob = self.connect(), self.connect()
         self.ready_world()

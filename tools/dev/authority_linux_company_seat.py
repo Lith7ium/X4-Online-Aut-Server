@@ -7,6 +7,7 @@ import shutil
 from authority.checkpoints import Checkpoint
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
+    COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
     company_motion_config, company_motion_md, company_motion_ui,
     company_purchase_config, company_purchase_md, company_purchase_ui, export_motion_buffer, extend_seat_gate,
 )
@@ -30,7 +31,8 @@ _MD = {
 }
 
 
-def install(case, profile, bound, target, index, pump, *, company_motion=None, company_purchase=None, software_rendered=False):
+def install(case, profile, bound, target, index, pump, *, company_motion=None, company_purchase=None,
+            company_fleet=None, software_rendered=False):
     """Verify the staged format-3 save and compose the gate before X4 starts."""
     offer = bound.offer
     checkpoint = Checkpoint(offer.checkpoint_id, target, offer.sha256, offer.size, bound.marker)
@@ -41,6 +43,11 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
     suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
     if company_purchase is not None:
         suffix += company_purchase_config(company_purchase, index, full)
+
+    if company_fleet is not None:
+        if company_purchase is None:
+            raise ValueError('Company fleet orders require purchase control')
+        suffix += company_fleet_config(company_fleet, full)
     paths = registry.install(case, nonce, status, load_gate='marker')
 
     lab = case / 'extensions/x4_lan_lab'
@@ -61,6 +68,9 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
     if company_purchase is not None:
         ui_sources = ui_sources | company_purchase_ui(company_purchase)
         md_sources = md_sources | company_purchase_md(company_purchase)
+    if company_fleet is not None:
+        ui_sources = ui_sources | COMPANY_FLEET_UI
+        md_sources = md_sources | COMPANY_FLEET_MD
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     manifest.write_text(body.replace(hook, modules + hook), encoding='utf-8')
 

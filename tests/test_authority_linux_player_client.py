@@ -243,6 +243,13 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-purchases']), 0)
             self.assertTrue(run.call_args.kwargs['company_purchases'])
+            self.assertNotIn('company_fleet_orders', run.call_args.kwargs)
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-purchases', '--company-fleet-orders']), 0)
+            self.assertIs(run.call_args.kwargs['company_fleet_orders'], True)
+            self.assertNotIn('company_trade_view', run.call_args.kwargs)
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                cli.main([*args, '--company-fleet-orders'])
             self.assertNotIn('company_trade_view', run.call_args.kwargs)
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-purchases', '--company-trade-view']), 0)

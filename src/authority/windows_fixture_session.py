@@ -111,7 +111,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
-                        play_until_exit=False, cockpit_radar_playback=False):
+                        play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -152,6 +152,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('company motion requires a seat selection and its own transport')
     if type(play_until_exit) is not bool or (play_until_exit and (select_ship is None or motion_request is not None)):
         raise ValueError('open-ended play requires a Company pilot')
+    if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
+        raise ValueError('Company fleet orders require Company purchases')
     if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
         raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
@@ -177,7 +179,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
-            company_source = company_client = purchase_source = None
+            company_source = company_client = purchase_source = fleet_source = None
             motion_socket = motion = None
             launch_attempted = overlay_registered = False
             original = None
@@ -201,6 +203,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         capabilities['undock'] = True
                     if company_trade_view:
                         capabilities['trade_view'] = True
+                    if company_fleet_orders:
+                        capabilities['fleet_orders'] = True
                     purchase_epoch = owner.enable_company_purchases(**capabilities)
                 download = owner.download(workspace.download_dir)
                 staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
@@ -242,6 +246,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     purchase_source = CompanyPurchaseSource(expected_epoch=purchase_epoch,
                                                             server_fingerprint=server_fingerprint, undock=company_undock_test, trade_view=company_trade_view)
                     source_options['company_purchase'] = purchase_source
+                if company_fleet_orders:
+                    from .company_fleet_source import CompanyFleetSource
+
+                    fleet_source = CompanyFleetSource()
+                    source_options['company_fleet'] = fleet_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
@@ -283,6 +292,9 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if purchase_source is not None:
                     purchase_source.bind_validator(WindowsMotionPeer(process, purchase_source.socket))
                     purchase_options = purchase_source.control_callbacks(owner)
+                if fleet_source is not None:
+                    fleet_source.bind_validator(WindowsMotionPeer(process, fleet_source.socket))
+                    purchase_options['company_fleet_exchange'] = fleet_source.exchange
                 session = ObservedClientSession(owner, bound, controller, slot='save_009',
                     read_log=workspace.read_log, guard=running_guard, deadline=deadline,
                     registry_status=registry_status, registry_nonce=registry_nonce,
@@ -372,6 +384,11 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         purchase_source.close()
                     except OSError:
                         cleanup_errors.append('company purchase source cleanup failed')
+                if fleet_source is not None:
+                    try:
+                        fleet_source.close()
+                    except OSError:
+                        cleanup_errors.append('Company fleet order source cleanup failed')
                 if motion is not None:
                     try:
                         if motion.running and not motion.stopped:

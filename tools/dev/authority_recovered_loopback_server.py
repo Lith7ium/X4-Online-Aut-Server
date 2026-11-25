@@ -910,6 +910,9 @@ def run(args):
     company_purchases = getattr(args, 'company_purchases', False)
     if type(company_purchases) is not bool or (company_purchases and (not require_company_ship or tls is None)):
         raise ValueError('company purchases require company-ship admission and the pinned TLS gateway')
+    company_fleet_orders = getattr(args, 'company_fleet_orders', False)
+    if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
+        raise ValueError('Company fleet orders require Company purchases')
     company_undock = getattr(args, 'company_undock_test', False)
     if type(company_undock) is not bool or (company_undock and not company_purchases):
         raise ValueError('company undock test requires Company purchases')
@@ -954,7 +957,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
-    purchase_provider = undock_provider = market_provider = purchases = purchase_ledger = None
+    purchase_provider = undock_provider = market_provider = fleet_provider = purchases = purchase_ledger = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1306,6 +1309,11 @@ def run(args):
             from authority_native_market_survey import NativeMarketSurveyProvider
             market_provider = NativeMarketSurveyProvider()
             protected.extend(market_provider.install(case))
+        if company_fleet_orders:
+            from authority_native_fleet_order import NativeFleetOrderProvider
+
+            fleet_provider = NativeFleetOrderProvider()
+            protected.extend(fleet_provider.install(case))
         protected = list(dict.fromkeys(protected))
         expected = {path:live.sha(path) for path in protected}
         store_path = out/'checkpoints'; store_path.mkdir(mode=0o700)
@@ -1385,7 +1393,7 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
-        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider)):
+        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider, fleet_provider)):
             game_stat = (game/'X4').stat()
             process_identity = {'pid': identity[0], 'start_ticks': identity[1],
                                 'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}
@@ -1393,6 +1401,8 @@ def run(args):
             undock_provider.bind(process_identity, check)
         if market_provider is not None:
             market_provider.bind(process_identity, check)
+        if fleet_provider is not None:
+            fleet_provider.bind(process_identity, check)
         if pose_channel is not None:
             pose_channel.bind(process_identity, check)
             if pose_cold:
@@ -1551,6 +1561,7 @@ def run(args):
         control = ExperimentalTCPControl(session, enabled=True, idle_timeout=300, keepalive_enabled=True,
                                          motion_service=motion_service, company_purchases=company_purchases,
                                          company_trade_view=market_provider is not None,
+                                         company_fleet_orders=fleet_provider is not None,
                                          **undock_capability)
         host = ExperimentalLocalHost(world, control, service, enabled=True)
         overlap_guard = [None]
@@ -1562,10 +1573,12 @@ def run(args):
             retire_disconnected_on_resume=require_company_ship)
         if purchase_provider is not None:
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
-            undock_options = {'undock': undock_provider} if undock_provider is not None else {}
+            purchase_options = {'undock': undock_provider} if undock_provider is not None else {}
+            if fleet_provider is not None:
+                purchase_options['fleet'] = fleet_provider
             purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
                                                  guard=world._participants.check_process, market=market_provider,
-                                                 **undock_options)
+                                                 **purchase_options)
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -2156,6 +2169,11 @@ def run(args):
                 market_provider.close()
             except OSError as error:
                 errors.append('market survey cleanup: ' + type(error).__name__)
+        if fleet_provider is not None:
+            try:
+                fleet_provider.close()
+            except OSError as error:
+                errors.append('Company fleet order cleanup: ' + type(error).__name__)
         if pose_channel is not None:
             pose_channel.close()
         services_stopped = True
@@ -2226,6 +2244,8 @@ def run(args):
                     purchase_provider.archive_cues(case, out)
                 if market_provider is not None:
                     market_provider.archive_cue(case, out)
+                if fleet_provider is not None:
+                    fleet_provider.archive_cue(case, out)
                 if trade_mode:
                     trade_probe.archive_cues(case, out, trade_mode)
                 if parking is not None:
@@ -2301,6 +2321,8 @@ def main(argv=None, *, display_hostname=None):
                         help='enable the separate participant-bound TLS movement channel')
     parser.add_argument('--company-purchases', action='store_true',
                         help='enable Company purchases for a verified company ship over pinned TLS')
+    parser.add_argument('--company-fleet-orders', action='store_true',
+                        help='enable stock orders for eligible Company fleet ships')
     parser.add_argument('--company-undock-test', action='store_true',
                         help='allow one witnessed Company departure after an admitted purchase')
     parser.add_argument('--require-company-ship', action='store_true',

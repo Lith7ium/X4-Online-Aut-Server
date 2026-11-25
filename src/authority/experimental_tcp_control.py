@@ -56,7 +56,8 @@ class ExperimentalTCPControl:
     and accept an attached handle even if admission never allocated a grant.
     """
     def __init__(self, session, *, enabled=False, idle_timeout=30, max_peers=8, keepalive_enabled=False,
-                 motion_service=None, company_purchases=False, company_undock=False, company_trade_view=False):
+                 motion_service=None, company_purchases=False, company_undock=False, company_trade_view=False,
+                 company_fleet_orders=False):
         if enabled is not True or type(session) is not TrustedMarkerLoadSession:
             raise ValueError('explicitly enabled trusted session required')
         if type(idle_timeout) not in (int, float) or not math.isfinite(idle_timeout) or not 0 < idle_timeout <= 300:
@@ -76,6 +77,9 @@ class ExperimentalTCPControl:
         if type(company_trade_view) is not bool or (company_trade_view and not company_purchases):
             raise ValueError('market view control requires authenticated purchase control')
         self._company_trade_view = company_trade_view
+        if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
+            raise ValueError('Company fleet order control requires authenticated purchase control')
+        self._company_fleet_orders = company_fleet_orders
         self._company_undock = company_undock
         self._company_purchases = company_purchases
         self._motion_service = motion_service
@@ -278,6 +282,7 @@ class ExperimentalTCPControl:
                 peer.pop('company_purchase_statement_version', None)
                 peer.pop('company_undock_version', None)
                 peer.pop('trade_view_version', None)
+                peer.pop('fleet_order_version', None)
                 peer['stage'] = 'offered'
                 peer['attempt_id'] = bound.offer.attempt_id
                 peer['keepalive_sequence'] = 0
@@ -296,6 +301,11 @@ class ExperimentalTCPControl:
                             or message['trade_view_version'] != 1):
                         raise ValueError('market view control unavailable')
                     fields.add('trade_view_version')
+                if 'fleet_order_version' in message:
+                    if (not self._company_fleet_orders or type(message['fleet_order_version']) is not int
+                            or message['fleet_order_version'] != 1):
+                        raise ValueError('Company fleet order control unavailable')
+                    fields.add('fleet_order_version')
                 if (not self._company_purchases or set(message) != fields
                         or type(message['statement_version']) is not int or message['statement_version'] != 1
                         or message['attempt_id'] != peer['attempt_id'] or 'company_purchase_ship' in peer):
@@ -312,6 +322,8 @@ class ExperimentalTCPControl:
                     peer['company_undock_version'] = message['undock_version']
                 if 'trade_view_version' in message:
                     peer['trade_view_version'] = message['trade_view_version']
+                if 'fleet_order_version' in message:
+                    peer['fleet_order_version'] = message['fleet_order_version']
                 reply = dict(message, kind='company_purchases_enabled', registry_epoch=registry_epoch)
                 peer['out'] += json.dumps(reply, separators=(',', ':')).encode('ascii') + b'\n'
                 return

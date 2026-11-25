@@ -61,6 +61,8 @@ def parser():
                         help='choose a company ship and use the separate authenticated motion channel')
     result.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
+    result.add_argument('--company-fleet-orders', action='store_true',
+                        help='request stock Company fleet order control from the provider')
     result.add_argument('--company-trade-view', action='store_true',
                         help='load current server offers and funds in the docked Company trade window')
     result.add_argument('--company-undock-test', action='store_true',
@@ -97,6 +99,9 @@ def parser():
 def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
+    fleet_orders = getattr(args, 'company_fleet_orders', False)
+    if fleet_orders and not args.company_purchases:
+        raise ValueError('--company-fleet-orders requires --company-purchases')
     trade_view = getattr(args, 'company_trade_view', False)
     if trade_view and not args.company_purchases:
         raise ValueError('--company-trade-view requires --company-purchases')
@@ -154,6 +159,8 @@ def run(args, *, on_stage=None):
         motion_options['company_purchases'] = True
     if trade_view:
         motion_options['company_trade_view'] = True
+    if fleet_orders:
+        motion_options['company_fleet_orders'] = True
     if undock_test:
         motion_options['company_undock_test'] = True
     if playback_index is not None:

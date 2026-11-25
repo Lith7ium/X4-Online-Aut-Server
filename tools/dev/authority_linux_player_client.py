@@ -27,6 +27,8 @@ def main(argv=None):
                         help='opt into the server’s separate authenticated company motion channel')
     parser.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
+    parser.add_argument('--company-fleet-orders', action='store_true',
+                        help='request stock Company fleet order control from the provider')
     parser.add_argument('--company-trade-view', action='store_true',
                         help='load current server offers and funds in the docked Company trade window')
     parser.add_argument('--company-undock-test', action='store_true',
@@ -41,6 +43,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
+    if args.company_fleet_orders and not args.company_purchases:
+        parser.error('--company-fleet-orders requires --company-purchases')
     if args.company_trade_view and not args.company_purchases:
         parser.error('--company-trade-view requires --company-purchases')
     if args.company_undock_test and not args.company_purchases:
@@ -76,6 +80,8 @@ def main(argv=None):
         motion_options = {'company_motion': True} if args.company_motion else {}
         if args.company_purchases:
             motion_options['company_purchases'] = True
+        if args.company_fleet_orders:
+            motion_options['company_fleet_orders'] = True
         if args.company_trade_view:
             motion_options['company_trade_view'] = True
         if args.company_undock_test:

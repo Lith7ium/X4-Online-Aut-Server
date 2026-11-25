@@ -25,6 +25,7 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
+    COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
     COMPANY_MOTION_UI, company_motion_config, company_motion_md, company_motion_ui,
     company_purchase_config, company_purchase_md, company_purchase_ui, export_motion_buffer, extend_seat_gate,
 )
@@ -90,6 +91,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
                             registry_status=None, registry_nonce=None, motion_settings=None,
                             registry_snapshot=None, seat_index=None, company_motion=None, company_purchase=None,
+                            company_fleet=None,
                             profile_id=profile.CAPTURE_PROFILE):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
@@ -251,6 +253,15 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         purchase_ui = company_purchase_ui(company_purchase)
         ui_files[insertion:insertion] = ['ui/' + name for name in purchase_ui]
         for folder, sources in (('ui', purchase_ui), ('md', company_purchase_md(company_purchase))):
+            for name, source in sources.items():
+                files[folder + '/' + name] = _source(ROOT / source, 1024 * 1024)
+    if company_fleet is not None:
+        if company_purchase is None:
+            raise ValueError('Company fleet orders require purchase control')
+        config = config[:-2] + company_fleet_config(company_fleet, full_registry) + '}\n'
+        insertion = ui_files.index('ui/authority_download_load_probe.lua')
+        ui_files[insertion:insertion] = ['ui/' + name for name in COMPANY_FLEET_UI]
+        for folder, sources in (('ui', COMPANY_FLEET_UI), ('md', COMPANY_FLEET_MD)):
             for name, source in sources.items():
                 files[folder + '/' + name] = _source(ROOT / source, 1024 * 1024)
     if company_motion is not None:

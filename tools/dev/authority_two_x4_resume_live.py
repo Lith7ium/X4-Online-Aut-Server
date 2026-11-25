@@ -84,6 +84,12 @@ class Participant(LocalParticipantControl):
                     r'\}(?=[,}])', '', text)
                 if count != 1 or ',authority_company_purchase=' in text:
                     raise ValueError('unexpected Company purchase lease configuration')
+            if ',authority_company_fleet=' in text:
+                text, count = re.subn(
+                    r',authority_company_fleet=\{epoch="[0-9a-f]{32}",port=[0-9]+,lease="[0-9a-f]{32}"'
+                    r'\}(?=[,}])', '', text)
+                if count != 1 or ',authority_company_fleet=' in text:
+                    raise ValueError('unexpected Company fleet order lease configuration')
             data = text.encode('ascii')
             os.lseek(fd, 0, os.SEEK_SET)
             written = 0
