@@ -10,8 +10,8 @@ local M=dofile('tools/dev/authority_job_descriptor_probe.lua')
 local id=ffi.new('uint64_t',9007199254740992)+ffi.new('uint64_t',1)
 local cfg={enabled=true,epoch=epoch,request_id=rid,timeout=5,actor=id,expected_save_path='/tmp/45841/save',
  row={epoch=epoch,index=2,sequence=1,classification='new_registry_entry'},guard=function()return true end}
-local function response(hex)
- return rid..'|'..epoch..'|2|ok|'..hex..'|ship_a|argon|0x2|sector_a'
+local function response(hex, request_id)
+ return (request_id or rid)..'|'..epoch..'|2|ok|'..hex..'|ship_a|argon|0x2|sector_a'
 end
 local app=M.new_x4(cfg);assert(app:start());assert(issued[1].index==2)
 local ok,row=app:response(response('0x20000000000001'));assert(ok and row.x==1 and row.sector_local==nil)
@@ -57,6 +57,24 @@ function ConvertStringToLuaID(s)assert(s=='9007199254740993');return opaque end
 function ConvertIDTo64Bit(ref)assert(ref==opaque,'expected Lua component userdata');return id end
 app=M.new_x4(cfg);assert(app:start());assert(#issued==1)
 ok,row=app:response(response('0x20000000000001'));assert(ok and row.index==2 and row.sequence==nil)
+-- The Company sampler creates a distinct reader for every captured position.
+local previous_reads = fake.test_pose_reads()
+local iterations = 20000
+cfg.include_capture_time = true
+cfg.capture_clock = GetCurRealTime
+for sequence = 1, iterations do
+    t = t + 0.1
+    cfg.request_id = string.format('%032x', sequence)
+    local reader = M.new_x4(cfg)
+    assert(reader:start())
+    assert(issued[#issued].request_id == cfg.request_id)
+    local accepted, sample = reader:response(response('0x20000000000001', cfg.request_id))
+    assert(accepted and sample.index == 2 and sample.x == 1 and sample.capture_after_pose == t)
+    issued = {}
+end
+assert(fake.test_pose_reads() - previous_reads == iterations)
+cfg.request_id, cfg.include_capture_time, cfg.capture_clock = rid, nil, nil
+
 -- Exact roundtrip remains mandatory; rounded Lua numbers and wrong refs fail.
 issued={};function ConvertIDTo64Bit(ref)assert(ref==opaque);return id+ffi.new('uint64_t',1) end
 app=M.new_x4(cfg);assert(not app:start() and #issued==0)

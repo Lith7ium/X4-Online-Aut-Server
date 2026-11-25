@@ -19,8 +19,15 @@ left cooperatively. Fedora confirmed the last-pilot checkpoint
 `a043498c333d4adf89027ff4e1158908f635aa85ddadb8ea7ef70b40d6afae76`).
 Control, file and movement services passed authenticated LAN checks after
 the save. The Windows operator was away and no WAN pilot flew.
-A new sampler build reports fixed error codes for the failing stage. Use it
-when the operator returns. Avoid repeating the idle-only run.
+An offline reproduction on Bazzite found that the native position reader
+redeclared its LuaJIT FFI functions on every sample. Constructing the
+original reader repeatedly failed at request 3,849 with `table overflow`.
+The fix registers those functions once per loaded module. A regression
+exercised 20,000 separately correlated position reads using the regular
+reader, real LuaJIT and a simulated X4 ABI. The prior game's generic
+`tick` error cannot establish the exact cause of its failure at sequence
+3,217. Use the fixed player build for both pilots when the operator
+returns. Check for sustained native flight and actual cockpit playback.
 
 A separate native purchase and departure test confirmed the server
 released WRN-302's berth before its pilot received authorization and

@@ -131,6 +131,33 @@ function M.new(o)
  return api
 end
 
+-- LuaJIT retains FFI declarations for the lifetime of the Lua state.
+-- A flight creates a new reader per sample, so declare the engine ABI once.
+local native_ffi
+local function get_native_ffi()
+    if native_ffi then return native_ffi end
+    local ffi = require('ffi')
+    if not pcall(ffi.typeof, 'UniverseID') then
+        ffi.cdef('typedef uint64_t UniverseID;')
+    end
+    if not pcall(ffi.typeof, 'UIPosRot') then
+        ffi.cdef('typedef struct { float x,y,z,yaw,pitch,roll; } UIPosRot;')
+    end
+    ffi.cdef[[
+        bool IsGamePaused(void);
+        bool IsPlayerValid(void);
+        bool IsValidComponent(UniverseID);
+        bool IsComponentOperational(UniverseID);
+        bool IsComponentClass(UniverseID, const char*);
+        UniverseID GetContextByClass(UniverseID, const char*, bool);
+        UIPosRot GetObjectPositionInSector(UniverseID);
+        double GetCurrentGameTime(void);
+        const char* GetSaveFolderPath(void);
+    ]]
+    native_ffi = ffi
+    return ffi
+end
+
 function M.new_x4(cfg)
  if type(cfg)~='table' or cfg.enabled~=true then return nil,'disabled' end
  local frozen={};for k,v in pairs(cfg) do frozen[k]=v end;cfg=frozen
@@ -148,13 +175,7 @@ function M.new_x4(cfg)
  if saved_baseline then assert(type(ConvertStringToLuaID)=='function','ConvertStringToLuaID unavailable') end
  assert(type(X4LAN_RESOLVE_STRING)=='table' and type(X4LAN_RESOLVE_STRING.actor_u64)=='function'
   and type(X4LAN_RESOLVE_STRING.parse_hex)=='function')
- local ffi=require('ffi')
- if not pcall(ffi.typeof,'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
- if not pcall(ffi.typeof,'UIPosRot') then ffi.cdef('typedef struct { float x,y,z,yaw,pitch,roll; } UIPosRot;') end
- ffi.cdef[[bool IsGamePaused(void);bool IsPlayerValid(void);bool IsValidComponent(UniverseID);
- bool IsComponentOperational(UniverseID);bool IsComponentClass(UniverseID,const char*);
- UniverseID GetContextByClass(UniverseID,const char*,bool);UIPosRot GetObjectPositionInSector(UniverseID);
- double GetCurrentGameTime(void);const char* GetSaveFolderPath(void);]]
+ local ffi = get_native_ffi()
  local C=ffi.C;local o={};for k,v in pairs(cfg) do o[k]=v end
  local function component_key(id)
   id=X4LAN_RESOLVE_STRING.actor_u64(id);assert(id)
