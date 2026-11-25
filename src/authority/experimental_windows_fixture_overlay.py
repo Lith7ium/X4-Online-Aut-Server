@@ -25,14 +25,14 @@ import stat
 from .trusted_load_messages import encode_bound_offer
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
-    COMPANY_PURCHASE_UI, company_motion_config, company_motion_md, company_motion_ui,
+    COMPANY_MOTION_UI, COMPANY_PURCHASE_UI, company_motion_config, company_motion_md, company_motion_ui,
     company_purchase_config, export_motion_buffer, extend_seat_gate,
 )
 from .client_motion_overlay import (
     SECRET_FIELDS, append_load_ready_hook, render_motion_config,
     select_motion_sources, transform_motion_control, validate_motion_settings,
 )
-from lockstep.launcher import extension
+from lockstep.launcher import extension, profile
 
 ROOT = Path(__file__).resolve().parents[2]
 _HEX32 = re.compile(r'[0-9a-f]{32}\Z')
@@ -75,21 +75,22 @@ def _source(path, maximum):
     return data
 
 
-def _windows_save_path(value):
+def _windows_save_path(value, profile_id):
     if (type(value) is not str or not value or
             any(ord(character) < 32 or ord(character) > 126 for character in value)):
         raise ValueError('ASCII Windows save path required')
     path = PureWindowsPath(value)
     if (not path.is_absolute() or '..' in path.parts or len(path.parts) < 3 or
-            path.name.lower() != 'save' or path.parent.name != '45841'):
-        raise ValueError('Windows profile-45841 save path syntax required')
+            path.name.lower() != 'save' or path.parent.name != str(profile_id)):
+        raise ValueError('Windows save path must name the selected profile')
     return value
 
 
 def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
                             registry_status=None, registry_nonce=None, motion_settings=None,
-                            registry_snapshot=None, seat_index=None, company_motion=None, company_purchase=None):
+                            registry_snapshot=None, seat_index=None, company_motion=None, company_purchase=None,
+                            profile_id=profile.CAPTURE_PROFILE):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
     A failure after creation leaves an owned partial extension for inspection;
@@ -125,7 +126,12 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             type(participant_lease) is not str or not _HEX32.fullmatch(participant_lease) or
             type(dll_sha256) is not str or not _HEX64.fullmatch(dll_sha256)):
         raise ValueError('invalid participant or DLL configuration')
-    save_path = _windows_save_path(save_path)
+    if type(profile_id) is not int or profile_id not in (profile.CAPTURE_PROFILE, *profile.PROFILES):
+        raise ValueError('expected a launcher-reserved Windows profile ID')
+    alternate_profile = profile_id != profile.CAPTURE_PROFILE
+    if alternate_profile and (seat_index is None or motion_settings is not None):
+        raise ValueError('alternate profiles require a Company seat without legacy motion diagnostics')
+    save_path = _windows_save_path(save_path, profile_id)
     view = Path(view)
     windows_dll = Path(windows_dll)
     if not view.is_absolute() or not windows_dll.is_absolute():
@@ -212,7 +218,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     ticket_lua = ','.join(key + '=' + (str(ticket[key]) if type(ticket[key]) is int else lua_string(ticket[key]))
                           for key in _FIELDS)
     identity_config = 'authority_identity_phase="load",' if legacy_identity else ''
-    config = ('X4LAN_CONFIG = {enabled=false,test_profile="45841",authority_download_load=true,'
+    profile_config = 'authority_windows_company_profile=true,' if alternate_profile else ''
+    config = (f'X4LAN_CONFIG = {{enabled=false,test_profile="{profile_id}",authority_download_load=true,{profile_config}'
               f'{identity_config}authority_marker_phase="load",'
               f'authority_load_save_path={lua_string(save_path)},authority_ticket={{{ticket_lua}}},'
               f'authority_participant_port={participant_port},authority_participant_lease={lua_string(participant_lease)}' + '}\n')
@@ -233,6 +240,11 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         insertion = ui_files.index('ui/authority_download_load_probe.lua')
         ui_files[insertion:insertion] = [
             'ui/authority_registry_resolve_string.lua', 'ui/client_seat.lua']
+    if alternate_profile and company_motion is None:
+        # The motion overlay already installs this before the load and participant probes.
+        name = 'replica_motion_binding.lua'
+        files['ui/' + name] = _source(ROOT / COMPANY_MOTION_UI[name], 1024 * 1024)
+        ui_files.insert(ui_files.index('ui/authority_download_load_probe.lua'), 'ui/' + name)
     if company_purchase is not None:
         config = config[:-2] + company_purchase_config(company_purchase, seat_index, full_registry) + '}\n'
         insertion = ui_files.index('ui/authority_download_load_probe.lua')

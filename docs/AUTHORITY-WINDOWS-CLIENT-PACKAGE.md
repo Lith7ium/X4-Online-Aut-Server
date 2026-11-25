@@ -30,11 +30,16 @@ tester's installed X4, Steam, and Python.
 
 Extract the ZIP and open PowerShell in `x4-authority-windows-diagnostic`.
 Use Python 3.11+, running Steam, the pinned Windows X4 9.00 build, and the
-server's private `connection.json`. Close X4 first. The existing Windows
-workspace checks the game executable and requires the actual
-`Documents\Egosoft\X4` root to exist with profile `45841` absent. Retained
-artifacts from an earlier trial need to be handled separately before repeating
-the diagnostic.
+server's private `connection.json`. Close X4 first. The launcher checks the
+game executable and requires the actual `Documents\Egosoft\X4` root to exist.
+By default it creates profile `45841` and stops if that path already exists.
+
+For a Company pilot with an existing test profile, invoke the packaged
+`tools\run_authority_windows_client.ps1` directly. Add `-FreshCompanyProfile`
+to your normal Company flight command. It creates the first unused launcher
+profile, starting with `45841` and then checking the reserved Company test
+IDs. Occupied profiles can stay in place. The run report records the selected
+`profile_id`. If every reserved slot is occupied, setup stops before joining.
 
 Compare the archive SHA-256 with the build operator's value. The optional
 connection check contacts both authenticated server services with the supplied

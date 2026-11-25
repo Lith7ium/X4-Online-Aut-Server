@@ -5,8 +5,10 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from authority.client_registry_overlay import extend_full_inspect
+from authority.company_motion_source import CompanyMotionSource
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
@@ -61,6 +63,37 @@ class FullRegistryOverlayTest(unittest.TestCase):
                     ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
                      str(target / 'ui'), mode], capture_output=True, text=True, cwd=root)
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_alternate_profile_binds_one_save_directory_for_load_control_and_optional_flight(self):
+        for flight in (False, True):
+            with self.subTest(flight=flight):
+                view = self.view.parent / ('flight' if flight else 'seat')
+                (view / 'extensions').mkdir(parents=True)
+                (view / '.x4ls-view').write_text('synthetic view')
+                source = CompanyMotionSource() if flight else None
+                if source is not None:
+                    self.addCleanup(source.close)
+                options = dict(self.options, profile_id=45850, save_path=r'D:\Test\45850\save',
+                               seat_index=1, company_motion=source)
+                install_fixture_overlay(view, **options)
+                target = view / 'extensions/x4_lan_lab'
+                config = (target / 'ui/config.lua').read_text()
+                self.assertIn('test_profile="45850"', config)
+                self.assertIn('authority_windows_company_profile=true', config)
+                self.assertIn(r'authority_load_save_path="D:\\Test\\45850\\save"', config)
+                scripts = [entry.get('name') for entry in ElementTree.parse(target / 'ui.xml').iter('file')]
+                normalizer = 'ui/replica_motion_binding.lua'
+                self.assertEqual(scripts.count(normalizer), 1)
+                for consumer in ('ui/authority_download_load_probe.lua', 'ui/authority_two_x4_participant_probe.lua'):
+                    self.assertLess(scripts.index(normalizer), scripts.index(consumer))
+
+    def test_alternate_profile_requires_its_own_company_save_path(self):
+        options = dict(self.options, profile_id=45850, save_path=r'D:\Test\45850\save', seat_index=1)
+        for change in ({'profile_id': 45852}, {'profile_id': 45850.0}, {'seat_index': None},
+                       {'save_path': r'D:\Test\45841\save'}, {'motion_settings': {}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                install_fixture_overlay(self.view, **(options | change))
+            self.assertFalse((self.view / 'extensions/x4_lan_lab').exists())
 
     def test_software_overlay_selects_bounded_inspection_budget(self):
         with patch('authority.experimental_windows_fixture_overlay.extend_full_inspect',
