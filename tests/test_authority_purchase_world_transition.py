@@ -1,5 +1,6 @@
 """Offline checks for the supervisor's purchase save and recovery boundaries."""
 
+import gzip
 import json
 import socket
 import time
@@ -41,7 +42,7 @@ class PurchaseWorldTransitionTests(unittest.TestCase):
         self.addCleanup(provider.close)
         cue, *_ = provider.install(case)
         original = cue.read_bytes()
-        with self.assertRaisesRegex(ValueError, 'saved-state scripts differ'):
+        with self.assertRaisesRegex(ValueError, 'requires a sealed Company ledger'):
             server.verify_previous_source(prior.store, prior.checkpoint, profile, require_registry_snapshot=True)
         archive = prior.source / cue.name
         archive.write_bytes(b'existing archive')
@@ -59,6 +60,65 @@ class PurchaseWorldTransitionTests(unittest.TestCase):
         self.assertEqual(archive.read_bytes(), original)
         self.assertEqual(server.verify_previous_source(prior.store, prior.checkpoint, profile,
                                                       require_registry_snapshot=True), expected)
+
+    def test_legacy_undock_source_requires_exact_cue_and_quiescent_saved_work(self):
+        prior = fixtures.PortableSeedTests()
+        prior.setUp()
+        self.addCleanup(prior.doCleanups)
+        md = prior.source / fixtures.seed.MD
+        provider_source = server.ROOT / 'tools/dev/authority_company_undock_trial.xml'
+        extra = md / provider_source.name
+        exact = provider_source.read_bytes()
+        extra.write_bytes(exact)
+        original = gzip.decompress(prior.checkpoint.path.read_bytes())
+        profile = (prior.source / fixtures.seed.CONTENT).parent
+        evidence = verify_join_snapshot(prior.checkpoint)
+        ledger = CompanyPurchaseLedger(evidence['epoch'], prior.root / 'legacy.sqlite3')
+        self.addCleanup(ledger.close)
+        cue = b'''<script name="X4AuthorityCompanyUndockTrial">
+            <cue name="State" state="complete"><vars>
+            <value name="$AttemptedNonce" type="string" value="98"/></vars>
+            <cue name="Request" state="waiting"><instances><cue state="complete"><vars>
+            <value name="$Status" type="string" value="99"/>
+            </vars></cue></instances></cue></cue></script>'''
+        result_path = prior.source / 'result.json'
+
+        def stage(status, *, saved_extra=b''):
+            xml = original.replace(b'</refs>', b'<ref id="99" string="' + status + b'"/></refs>', 1)
+            xml = xml.replace(b'</refs>', b'</refs><refs type="table"><ref id="99"/></refs>', 1)
+            xml = xml.replace(b'</md>', cue + b'</md>').replace(b'</universe>', saved_extra + b'</universe>')
+            save = prior.root / 'legacy.gz'
+            save.write_bytes(gzip.compress(xml))
+            checkpoint = prior.store.publish(save, marker=prior.checkpoint.marker)
+            reference = ledger.checkpoint(checkpoint)
+            prior.store.confirm(checkpoint)
+            prior.result.update(final_checkpoint_id=checkpoint.checkpoint_id,
+                                final_checkpoint_sha256=checkpoint.sha256, company_purchase_ledger=reference)
+            prior.result['registry_snapshot']['final_receipt'] = receipt(checkpoint, evidence)
+            result_path.write_text(json.dumps(prior.result))
+            return checkpoint
+
+        def verify(checkpoint):
+            return server.verify_previous_source(prior.store, checkpoint, profile, require_registry_snapshot=True)
+
+        with self.assertRaisesRegex(ValueError, 'undock request status is not quiescent'):
+            verify(stage(b'awaiting'))
+        with self.assertRaisesRegex(ValueError, 'saved player Undock order'):
+            verify(stage(b'undocked', saved_extra=b'<component owner="player"><orders>'
+                         b'<order order="Undock"/></orders></component>'))
+        checkpoint = stage(b'idle')
+        extra.write_bytes(exact + b'\n')
+        with self.assertRaisesRegex(ValueError, 'stock undock cue differs'):
+            verify(checkpoint)
+        extra.write_bytes(exact)
+        observer = md / 'authority_trial_undock_provider_observe.xml'
+        observer.write_text('<mdscript/>')
+        with self.assertRaisesRegex(ValueError, 'saved-state scripts differ'):
+            verify(checkpoint)
+        observer.unlink()
+        self.assertEqual(verify(checkpoint)[1], evidence)
+        self.assertEqual(extra.read_bytes(), exact)
+        self.assertEqual(prior.store.latest_marked_confirmed(), checkpoint)
 
     def test_serve_waits_for_native_verification_before_pause_and_save(self):
         events = []

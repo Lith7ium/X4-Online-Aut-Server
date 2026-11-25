@@ -136,8 +136,13 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         if (result.get('witness_diagnostic',{}).get('phase') != 'create' or
                 read_evidence(md/'authority_registry_witness.xml') != read_evidence(ROOT/'tools/dev/authority_registry_witness.xml')):
             raise ValueError('saved witness script provenance unavailable')
-    if md.is_symlink() or names not in valid_names:
+    legacy_undock = 'authority_company_undock_trial.xml'
+    previous_undock = (require_registry_snapshot and not witness_source and legacy_undock in names
+                       and names - {legacy_undock} in valid_names)
+    if md.is_symlink() or (names not in valid_names and not previous_undock):
         raise ValueError('source saved-state scripts differ')
+    if previous_undock and read_evidence(md / legacy_undock) != read_evidence(ROOT / 'tools/dev' / legacy_undock):
+        raise ValueError('source stock undock cue differs')
     if 'authority_ship_registry.xml' in names and read_evidence(md/'authority_ship_registry.xml') != read_evidence(ROOT/'tools/dev/authority_ship_registry.xml'):
         raise ValueError('source registry script differs')
     if require_registry_snapshot and (read_evidence(md/'authority_registry_availability_snapshot.xml') !=
@@ -158,6 +163,11 @@ def verify_previous_source(store, checkpoint, profile, *, registry_status=False,
         registry_snapshots.verify_previous_receipt(result, checkpoint, saved_evidence)
         reference = result.get('company_purchase_ledger')
         verify_purchase_ledger(checkpoint, reference, registry_epoch=saved_evidence['epoch'])
+        if previous_undock:
+            if reference is None:
+                raise ValueError('source stock undock cue requires a sealed Company ledger')
+            from authority_native_undock import verify_saved_undock_quiescent
+            verify_saved_undock_quiescent(checkpoint)
         if return_purchase_reference:
             return fixture, saved_evidence, reference
         return fixture, saved_evidence

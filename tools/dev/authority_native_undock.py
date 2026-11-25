@@ -9,6 +9,7 @@ import socket
 import time
 
 from authority.company_undock_messages import undock_request
+from authority.marker_evidence import _parse
 from authority_native_purchase import _valid_binding
 from authority_tcp_job_client_live import socket_owner
 
@@ -21,6 +22,89 @@ _FIELDS = ('sector', 'station_code', 'bay_seed', 'bay_macro', 'dockarea_macro')
 _REFUSALS = {'invalid_request', 'identity_mismatch', 'duplicate_or_attempted', 'berth_mismatch', 'busy'}
 _MAX_PACKET = 1024
 _MAX_REQUESTS = 1024
+_QUIESCENT_STATUSES = _REFUSALS | {'idle', 'undocked'}
+
+
+def verify_saved_undock_quiescent(checkpoint):
+    """Recognize the saved shape of the old stock cue and refuse pending undock work."""
+    script_path = ['savegame', 'md', 'script']
+    state_path = script_path + ['cue']
+    request_path = state_path + ['cue']
+    instance_path = request_path + ['instances', 'cue']
+    fence_path = state_path + ['vars', 'value']
+    status_path = instance_path + ['vars', 'value']
+    in_script = in_state = in_request = False
+    scripts = states = requests = fences = 0
+    instances = []
+    components = []
+
+    def inspect(path, attributes):
+        nonlocal in_script, in_state, in_request, scripts, states, requests, fences
+        depth = len(path)
+        while components and components[-1][0] >= depth:
+            components.pop()
+        if depth > 2 and path[1] == 'universe' and path[-1] == 'component':
+            components.append((depth, attributes.get('owner')))
+        if (path[-2:] == ['orders', 'order'] and attributes.get('order') == 'Undock'
+                and components and components[-1][1] == 'player'):
+            raise ValueError('saved player Undock order is still queued')
+        if path == script_path:
+            in_script = attributes.get('name') == 'X4AuthorityCompanyUndockTrial'
+            in_state = in_request = False
+            scripts += in_script
+        elif not in_script:
+            return
+        elif path == state_path:
+            in_state = attributes.get('name') == 'State'
+            in_request = False
+            if in_state:
+                states += 1
+                if attributes.get('state') != 'complete':
+                    raise ValueError('saved undock state is not initialized')
+        elif in_state and path == fence_path and attributes.get('name') == '$AttemptedNonce':
+            fences += 1
+            if attributes.get('type') != 'string':
+                raise ValueError('invalid saved undock fence')
+        elif in_state and path == request_path:
+            in_request = attributes.get('name') == 'Request'
+            if in_request:
+                requests += 1
+                if attributes.get('state') != 'waiting':
+                    raise ValueError('saved undock request listener is not waiting')
+        elif in_request and path == instance_path:
+            if attributes.get('state') != 'complete' or len(instances) >= _MAX_REQUESTS:
+                raise ValueError('saved undock request is not complete')
+            instances.append([])
+        elif in_request and path == status_path and attributes.get('name') == '$Status':
+            reference = attributes.get('value', '')
+            if attributes.get('type') != 'string' or not re.fullmatch(r'[0-9]{1,32}', reference):
+                raise ValueError('invalid saved undock request status')
+            instances[-1].append(reference)
+
+    _parse(checkpoint, inspect)
+    if (scripts, states, requests, fences) != (1, 1, 1, 1) or any(len(status) != 1 for status in instances):
+        raise ValueError('unrecognized saved undock cue state')
+    references = {status[0] for status in instances}
+    if not references:
+        return
+    confirmed = set()
+    string_table = False
+
+    def read_status(path, attributes):
+        nonlocal string_table
+        if path == ['savegame', 'script', 'refs']:
+            string_table = attributes.get('type') == 'string'
+        if string_table and path == ['savegame', 'script', 'refs', 'ref']:
+            reference = attributes.get('id')
+            if reference not in references:
+                return
+            if reference in confirmed or attributes.get('string') not in _QUIESCENT_STATUSES:
+                raise ValueError('saved undock request status is not quiescent')
+            confirmed.add(reference)
+
+    _parse(checkpoint, read_status)
+    if confirmed != references:
+        raise ValueError('saved undock request status reference is missing')
 
 
 # Kept next to its only installer. The unchanged MD cue owns all engine
