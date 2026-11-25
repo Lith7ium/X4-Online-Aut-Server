@@ -24,9 +24,10 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   Windows observer has since played back recorded trajectories locally.
   [Human flight](AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md) ·
   [Windows playback](AUTHORITY-COMPANY-COCKPIT-MULTIPILOT-WINDOWS-20261125.md)
-  A native Linux cockpit with an unrelated HUD target selected the correct
-  remote ship on radar, then lost the view before the first recorded pose.
-  The new indexed observer logs why an established view was withdrawn.
+  On software Vulkan, the Linux cockpit selected the correct remote ship
+  on radar while the HUD pointed elsewhere. It received an archived sample.
+  The observer logged expiry 1.563 s after confirming the binding, before a
+  position could be read back. The window for a fresh observation is 450 ms.
   [Native radar evidence](AUTHORITY-COMPANY-INDEXED-HUD-20261125.md)
 - **Neon** delivered Windows observations of shield and hull damage from
   weapons. Shared damage across machines and boarding remain open.
@@ -46,6 +47,10 @@ records the current Windows assignment. [Development check-in](https://x4multipl
   can assign another free trading bay. The release must cover the reserved
   ship leaving that server bay while the client still occupies its original
   bay. [Native alternate-bay trial](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md)
+  An offline check found that the existing Undock button can capture a
+  request handler before the Docked menu builds its row. A real click under
+  the stock lock and the keyboard shortcut still need checking.
+  [Stock Undock callback](AUTHORITY-COMPANY-STOCK-UNDOCK-CLICK-20261125.md)
 
 Two consecutive server purchases survived a save with matching cargo and
 Company balance. A separate Linux run sold two water, credited 69 Cr,
