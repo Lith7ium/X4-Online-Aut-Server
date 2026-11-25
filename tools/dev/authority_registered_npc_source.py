@@ -18,7 +18,8 @@ _COMPONENT = re.compile(r'\[(0x[0-9a-f]{1,16})\]')
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _DESCRIPTOR = 'authority_job_descriptor_probe.xml'
 _MODULES = ('tools/dev/authority_registry_resolve_string.lua',
-            'tools/dev/authority_job_descriptor_probe.lua', 'src/authority/lua/source_motion_sampler.lua',
+            'tools/dev/authority_job_descriptor_probe.lua', 'src/authority/lua/saved_baseline_source_bootstrap.lua',
+            'src/authority/lua/source_motion_sampler.lua',
             'tools/dev/authority_registered_npc_source.lua')
 _MAX_AGE = 2.0
 
@@ -32,6 +33,7 @@ class NpcCheckpointTarget:
             raise ValueError('registered NPC requires one index and exact X4 ship code')
         self.index, self.code = int(index), code
         self._saved = None
+        self._invalid = False
 
     def observe(self, element, _depth, attrs, index):
         if element != 'component' or index != self.index:
@@ -41,17 +43,23 @@ class NpcCheckpointTarget:
         if (self._saved is not None or (kind != 'ship' and not kind.startswith('ship_'))
                 or owner == 'player' or not _OWNER.fullmatch(owner) or attrs.get('code') != self.code
                 or ref is None or not int(ref[1], 16)):
-            raise ValueError('registered NPC differs from the requested saved identity')
+            self._invalid = True
+            return
         self._saved = ref[1], owner
 
     def confirmed(self, snapshot):
-        epoch, count = snapshot['epoch'], snapshot['issued_count']
-        if (self._saved is None or not _TOKEN.fullmatch(epoch) or not self.index <= count <= 200000
-                or snapshot.get('source_registry_checked') is not True):
+        epoch, count, run_id = snapshot['epoch'], snapshot['issued_count'], snapshot['run_id']
+        if self._invalid:
+            raise ValueError('registered NPC differs from the requested saved identity')
+        if (self._saved is None or not _TOKEN.fullmatch(epoch) or not _TOKEN.fullmatch(run_id)
+                or not self.index <= count <= 200000
+                or snapshot.get('source_registry_checked') is not True
+                or any(snapshot.get(bits, '')[self.index - 1:self.index] != '1'
+                       for bits in ('availability_bits', 'operational_bits'))):
             raise ValueError('registered NPC unavailable in the confirmed checkpoint')
         actor, owner = self._saved
         return {'epoch': epoch, 'index': self.index, 'code': self.code, 'actor': actor,
-                'owner': owner, 'count': count}
+                'owner': owner, 'count': count, 'run_id': run_id}
 
 
 class RegisteredNpcSource:
@@ -66,13 +74,40 @@ class RegisteredNpcSource:
         except BaseException:
             self._socket.close()
             raise
-        self._lease, self._generation, self._nonce = (secrets.token_hex(16) for _ in range(3))
+        self._lease, self._generation, self._nonce, self._lookup_nonce = (secrets.token_hex(16) for _ in range(4))
         self._prefix = f'N|{self._lease}|{self._generation}|'.encode('ascii')
         self._process = self._peer = self._binding = self._previous = None
-        self._descriptor = self._first_poll = self._last_received = None
+        self._descriptor = self._runtime_ref = self._last_received = None
+        self._join_checkpoint = self._join_component = None
+        self._running_seen = False
         self._service = self._reservation_guard = self._end_reason = None
         self._samples = self._velocity_samples = 0
+        self._initial_publications = []
         self._recent_publications = deque(maxlen=32)
+
+    def join_candidate(self):
+        if not self._running_seen:
+            return NpcCheckpointTarget(str(self.target['index']), self.target['code'])
+        return None
+
+    def confirm_join_checkpoint(self, checkpoint, snapshot, candidate):
+        """Keep a selection only while an exact, independently verified offer backs it."""
+        if self._running_seen:
+            return
+        self._join_checkpoint = self._join_component = None
+        try:
+            saved = candidate.confirmed(snapshot)
+        except ValueError:
+            return
+        if (saved['run_id'] == checkpoint.marker and saved['run_id'] != self.target['run_id']
+                and all(saved[key] == self.target[key] for key in ('epoch', 'index', 'code', 'owner'))):
+            self._join_checkpoint = checkpoint
+            self._join_component = f"[0x{int(saved['actor'], 16):x}]"
+
+    def reserved_or_unverified(self, checkpoint, reserved):
+        return (self._join_checkpoint is None or self._join_checkpoint != checkpoint
+                or any(ship.ship_index == self.target['index'] or ship.component_ref == self._join_component
+                       for ship in reserved))
 
     def install(self, case):
         lab = Path(case).absolute() / 'extensions/x4_lan_lab'
@@ -102,18 +137,23 @@ class RegisteredNpcSource:
                 output.write(source.read_bytes())
         self._descriptor = descriptor
         target = self.target
-        hook = f''' if not registered_npc_started and registry_checkpoint:ready() then
+        hook = f''' if not registered_npc_started and registry_checkpoint:admission_ready()
+  and registry_checkpoint:state().current_run_id ~= "{target['run_id']}" then
   registered_npc_started = true
   local initialized, advance = pcall(function()
    local lib = assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    return X4LAN_REGISTERED_NPC_SOURCE.new_x4({{
     epoch="{target['epoch']}", index={target['index']}, code="{target['code']}", owner="{target['owner']}",
-    actor="{target['actor']}", count={target['count']}, lease="{self._lease}", generation="{self._generation}",
-    nonce="{self._nonce}", save_path=cfg.authority_load_save_path,
+    count={target['count']}, lease="{self._lease}", generation="{self._generation}",
+    nonce="{self._nonce}", lookup_nonce="{self._lookup_nonce}", save_path=cfg.authority_load_save_path,
    }}, assert(lib.open('127.0.0.1',{self._socket.getsockname()[1]})), lib.monotonic,
-    function() return registry_checkpoint:ready() end)
+    function() return registry_checkpoint:admission_ready() end)
   end)
-  if initialized then registered_npc_tick = advance end
+  if initialized then
+   registered_npc_tick = advance
+  else
+   DebugError('[X4LAN] AUTH_REGISTERED_NPC_SOURCE END|initialize_failed')
+  end
  end
  if registered_npc_tick then registered_npc_tick() end
 '''
@@ -150,11 +190,15 @@ class RegisteredNpcSource:
             self._binding = None
 
     def _decode(self, fields):
-        _, epoch, index, sequence, code, owner, sector, source, capture, x, y, z, vx, vy, vz = fields
+        _, epoch, index, sequence, code, owner, actor, sector, source, capture, x, y, z, vx, vy, vz = fields
         target = self.target
         if ((epoch, index, code, owner) != (target['epoch'], str(target['index']), target['code'], target['owner'])
-                or not re.fullmatch(r'[1-9][0-9]{0,15}', sequence)):
+                or not re.fullmatch(r'[1-9][0-9]{0,15}', sequence)
+                or not re.fullmatch(r'0[xX][0-9a-fA-F]{1,16}', actor) or not int(actor, 16)):
             raise ValueError('NPC sample identity changed')
+        runtime_ref = f'0x{int(actor, 16):x}'
+        if self._runtime_ref is not None and self._runtime_ref != runtime_ref:
+            raise ValueError('NPC runtime component changed')
         velocity = None if (vx, vy, vz) == ('-', '-', '-') else dict(zip('xyz', map(float, (vx, vy, vz))))
         sample = motion_value({'version': 3, 'epoch': epoch, 'index': target['index'], 'generation': self._generation,
                                'sequence': int(sequence), 'sector_macro': sector, 'source_time': float(source),
@@ -163,26 +207,25 @@ class RegisteredNpcSource:
         if self._previous is not None and sample['sequence'] <= self._previous['sequence']:
             raise ValueError('NPC source sequence regressed')
         check_motion_progress(sample, self._previous)
-        return sample
+        return sample, runtime_ref
 
     def poll(self):
         if self._end_reason is not None:
             return
         service = self._service
         if not service.running:
-            if self._first_poll is not None:
+            if self._running_seen:
                 self._withdraw('motion_window_ended')
             return
+        self._running_seen = True
         now = self._clock()
-        if self._first_poll is None:
-            self._first_poll = now
         try:
             unreserved = self._reservation_guard() is True
         except (OSError, RuntimeError, ValueError):
             unreserved = False
         if not unreserved:
             return self._withdraw('source_guard_failed')
-        if now - (self._last_received if self._last_received is not None else self._first_poll) >= _MAX_AGE:
+        if self._last_received is not None and now - self._last_received >= _MAX_AGE:
             return self._withdraw('source_expired')
 
         samples, checked_peer = [], None
@@ -208,14 +251,16 @@ class RegisteredNpcSource:
                 return self._withdraw('native_source_ended')
             try:
                 fields = packet[len(self._prefix):].decode('ascii').split('|')
-                if len(packet) > 512 or len(fields) != 15 or fields[0] != 'SAMPLE3':
+                if len(fields) == 2 and fields[0] == 'END' and re.fullmatch(r'[a-z][a-z_]{0,63}', fields[1]):
+                    return self._withdraw('native_' + fields[1])
+                if len(packet) > 512 or len(fields) != 16 or fields[0] != 'SAMPLE3':
                     raise ValueError('invalid NPC frame')
-                sample = self._decode(fields)
+                sample, runtime_ref = self._decode(fields)
             except (ValueError, OverflowError):
                 return self._withdraw('invalid_native_sample')
             if not 0 <= self._clock() - sample['capture_time'] < _MAX_AGE:
                 return self._withdraw('sample_clock_or_age_invalid')
-            self._previous = sample
+            self._previous, self._runtime_ref = sample, runtime_ref
             samples.append(sample)
         if not samples:
             return
@@ -237,11 +282,16 @@ class RegisteredNpcSource:
             self._last_received = sample['capture_time']
             self._samples += 1
             self._velocity_samples += int(sample['real_velocity'] is not None)
+            if len(self._initial_publications) < 64:
+                self._initial_publications.append(sample)
             self._recent_publications.append(sample)
 
     def stats(self):
         return {'epoch': self.target['epoch'], 'ship_index': self.target['index'], 'ship_code': self.target['code'],
-                'owner': self.target['owner'], 'component_ref': self.target['actor'], 'samples': self._samples,
+                'owner': self.target['owner'], 'saved_component_ref': self.target['actor'],
+                'join_component_ref': self._join_component, 'runtime_component_ref': self._runtime_ref,
+                'join_checkpoint_id': self._join_checkpoint.checkpoint_id if self._join_checkpoint else None,
+                'samples': self._samples, 'initial_publications': list(self._initial_publications),
                 'samples_with_velocity': self._velocity_samples, 'last_native_sample': self._previous,
                 'recent_publications': list(self._recent_publications), 'end_reason': self._end_reason}
 

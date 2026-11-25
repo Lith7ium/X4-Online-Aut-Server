@@ -1449,7 +1449,11 @@ def run(args):
             if require_snapshot:
                 saved = store_arg.get(checkpoint_id)
                 appended = tuple(ship['index'] for ship in shuttle_pair['ships']) if shuttle_mode == 'prepare' else ()
-                registry_snapshot_state.verify_save(saved, profile/'engine-output.log', appended_indices=appended)
+                candidate = npc_source.join_candidate() if npc_source is not None else None
+                observe = {'observe_registry': candidate.observe} if candidate is not None else {}
+                registry_snapshot_state.verify_save(saved, profile/'engine-output.log', appended_indices=appended, **observe)
+                if candidate is not None:
+                    npc_source.confirm_join_checkpoint(saved, registry_snapshot_state.latest_evidence, candidate)
                 result['registry_snapshot'] = registry_snapshot_state.metadata()
                 if purchase_ledger is not None:
                     result['company_purchase_ledger'] = purchase_ledger.checkpoint(saved)
@@ -1586,15 +1590,17 @@ def run(args):
                 pose_trial.report['application_drops'] = application_drops
             motion_service = CompanyMotionService(application_drops=application_drops)
         if npc_source is not None:
-            npc = npc_source.target
-            component = f"[0x{int(npc['actor'], 16):x}]"
-
             def npc_unreserved():
                 with session._lock:
                     session._live()
-                    return (registry_snapshot_state.latest_receipt['checkpoint_id'] == checkpoint.checkpoint_id
-                            and not any(ship.ship_index == npc['index'] or ship.component_ref == component
-                                        for ship in session._reserved_ships(checkpoint)))
+                    baseline = world._baseline
+                    if baseline is None or world.session.baseline_id != baseline[0]:
+                        return False
+                    current = baseline[1]
+                    receipt = registry_snapshot_state.latest_receipt
+                    return ((receipt['checkpoint_id'], receipt['sha256'], receipt['run_id'])
+                            == (current.checkpoint_id, current.sha256, current.marker)
+                            and not npc_source.reserved_or_unverified(current, session._reserved_ships(current)))
 
             npc_source.attach(motion_service, npc_unreserved)
         undock_capability = {'company_undock': True} if company_undock else {}

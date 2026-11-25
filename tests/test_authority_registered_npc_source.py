@@ -1,18 +1,28 @@
 """Offline checkpoint binding, owned native IPC and read-only service ingress."""
 import os
+from dataclasses import replace
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
+from authority.checkpoints import Checkpoint
 from authority.company_motion_service import CompanyMotionService
+from authority.company_ships import CompanyShip
+from authority_recovered_registry_snapshot import RegistrySnapshotState
 from authority_registered_npc_source import NpcCheckpointTarget, RegisteredNpcSource
 
 
 EPOCH = 'a' * 32
 SAVED = {'class': 'ship_s', 'id': '[0x101]', 'owner': 'argon', 'code': 'ABC-401'}
-SNAPSHOT = {'epoch': EPOCH, 'issued_count': 100, 'source_registry_checked': True}
+SNAPSHOT = {'epoch': EPOCH, 'issued_count': 100, 'source_registry_checked': True, 'format': 3,
+            'run_id': 'b' * 32, 'availability_bits': '1' * 100, 'operational_bits': '1' * 100,
+            **{key: 'f' * 64 for key in ('availability_sha256', 'operational_sha256', 'mapping_sha256')}}
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def target():
@@ -29,11 +39,19 @@ class NpcCheckpointTargetTests(unittest.TestCase):
             request.confirmed(SNAPSHOT)
         for change in (dict(owner='player'), dict(code='ABC-402'), dict(id='[0x0]'), dict(**{'class': 'station'})):
             with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'saved identity'):
-                request.observe('component', 5, dict(SAVED, **change), 40)
+                mismatched = NpcCheckpointTarget('40', 'ABC-401')
+                mismatched.observe('component', 5, dict(SAVED, **change), 40)
+                mismatched.confirmed(SNAPSHOT)
         request.observe('component', 5, SAVED, 40)
-        with self.assertRaisesRegex(ValueError, 'unavailable'):
-            request.confirmed(dict(SNAPSHOT, source_registry_checked=False))
+        for changes in (dict(source_registry_checked=False), dict(operational_bits='1' * 39 + '0' + '1' * 60),
+                        dict(availability_bits='1' * 39 + '0' + '1' * 60)):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, 'unavailable'):
+                request.confirmed(dict(SNAPSHOT, **changes))
         self.assertEqual(request.confirmed(SNAPSHOT), target())
+
+    @unittest.skipUnless(shutil.which('luajit'), 'requires LuaJIT')
+    def test_native_bootstrap_binds_runtime_handle_and_refuses_wrong_code_or_owner(self):
+        subprocess.run(['luajit', 'tests/authority_registered_npc_source.lua'], cwd=ROOT, check=True, timeout=5)
 
 
 class RegisteredNpcSourceTests(unittest.TestCase):
@@ -52,9 +70,9 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.sender.connect(self.source._socket.getsockname())
         self.addCleanup(self.sender.close)
 
-    def send(self, sequence=1, *, sector='sector_a', code='ABC-401', owner='argon', velocity=None):
+    def send(self, sequence=1, *, sector='sector_a', code='ABC-401', owner='argon', actor='0x301', velocity=None):
         rates = ('-', '-', '-') if velocity is None else tuple(str(value) for value in velocity)
-        row = ('SAMPLE3', EPOCH, '40', str(sequence), code, owner, sector, str(sequence),
+        row = ('SAMPLE3', EPOCH, '40', str(sequence), code, owner, actor, sector, str(sequence),
                str(self.now), '45.125', '-2.25', '3000.5', *rates)
         self.sender.send(self.source._prefix + '|'.join(row).encode('ascii'))
 
@@ -79,6 +97,8 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.assertEqual(sample['real_velocity'], {'x': 2.75, 'y': 0, 'z': -11.625})
         self.assertEqual(sample['capture_time'], self.now)
         self.assertEqual(self.source.stats()['recent_publications'][-1], sample)
+        self.assertEqual(self.source.stats()['saved_component_ref'], '0x101')
+        self.assertEqual(self.source.stats()['runtime_component_ref'], '0x301')
         self.assertFalse(self.service._grants)
         self.assertFalse(self.service._application_pending)
 
@@ -94,14 +114,53 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.assertEqual(self.source.stats()['samples'], 1)
         self.assertEqual(self.source.stats()['end_reason'], 'invalid_native_sample')
 
+    def test_runtime_remap_retires_even_when_epoch_index_code_and_owner_match(self):
+        self.service.set_running(True)
+        self.send()
+        self.source.poll()
+        self.now = time.monotonic()
+        self.send(2, actor='0x401')
+        self.source.poll()
+        self.assertIsNone(self.observation())
+        self.assertEqual(self.source.stats()['runtime_component_ref'], '0x301')
+
+    def test_confirmed_join_save_rebinds_and_checks_the_current_offer(self):
+        cold = Checkpoint('cold', Path('/cold'), 'a' * 64, 100, SNAPSHOT['run_id'])
+        join = Checkpoint('join', Path('/join'), 'b' * 64, 101, 'c' * 32)
+        state = RegistrySnapshotState(cold, SNAPSHOT)
+        state.initial_inspect_verified = True
+        candidate = self.source.join_candidate()
+        snapshot = dict(SNAPSHOT, run_id=join.marker)
+
+        def scan(checkpoint, *, observe_universe):
+            self.assertEqual(checkpoint, join)
+            observe_universe('component', 5, dict(SAVED, id='[0x201]'), 40)
+            return snapshot
+
+        with patch('authority_recovered_registry_snapshot.verify_join_snapshot', side_effect=scan), \
+                patch('authority_recovered_registry_snapshot.bridge_gate.verify_bridge_observation'):
+            state.verify_save(join, Path('/join.log'), observe_registry=candidate.observe)
+        self.source.confirm_join_checkpoint(join, state.latest_evidence, candidate)
+        self.assertTrue(self.source.reserved_or_unverified(cold, ()))
+        self.assertTrue(self.source.reserved_or_unverified(replace(join, sha256='d' * 64), ()))
+        self.assertFalse(self.source.reserved_or_unverified(join, ()))
+        alias = CompanyShip(96, '[0x201]', 'sector_a', None, 'ALT-096')
+        self.assertTrue(self.source.reserved_or_unverified(join, (alias,)))
+        self.assertEqual(self.source.stats()['join_component_ref'], '[0x201]')
+        self.assertEqual(self.source.stats()['join_checkpoint_id'], 'join')
+        different_owner = self.source.join_candidate()
+        different_owner.observe('component', 5, dict(SAVED, owner='teladi'), 40)
+        self.source.confirm_join_checkpoint(join, snapshot, different_owner)
+        self.assertTrue(self.source.reserved_or_unverified(join, ()))
+
     def test_native_end_prevents_a_new_generation(self):
         self.service.set_running(True)
         self.send()
         self.source.poll()
-        self.sender.send(self.source._prefix + b'END')
+        self.sender.send(self.source._prefix + b'END|code_mismatch')
         self.source.poll()
         self.assertIsNone(self.observation())
-        self.assertEqual(self.source.stats()['end_reason'], 'native_source_ended')
+        self.assertEqual(self.source.stats()['end_reason'], 'native_code_mismatch')
         self.now = time.monotonic()
         self.send(2)
         self.source.poll()
@@ -124,6 +183,17 @@ class RegisteredNpcSourceTests(unittest.TestCase):
         self.source.poll()
         self.assertIsNone(self.observation())
         self.assertEqual(self.source.stats()['end_reason'], 'source_expired')
+
+    def test_initial_runtime_resolution_has_no_two_second_python_deadline(self):
+        self.service.set_running(True)
+        self.now -= 3
+        self.source.poll()
+        self.now = time.monotonic()
+        self.source.poll()
+        self.assertIsNone(self.source.stats()['end_reason'])
+        self.send()
+        self.source.poll()
+        self.assertIsNotNone(self.observation())
 
     def test_pause_retires_and_window_changes_do_not_restart(self):
         self.service.set_running(True)
@@ -151,8 +221,9 @@ class RegisteredNpcSourceTests(unittest.TestCase):
             manifest.write_text('    <file name="ui/authority_world_bridge_probe.lua" />\n')
             files = self.source.install(case)
             self.assertTrue(all(path.is_file() for path in files))
-            self.assertIn('registry_checkpoint:ready()', bridge.read_text())
-            self.assertIn('actor="0x101"', bridge.read_text())
+            self.assertIn('registry_checkpoint:admission_ready()', bridge.read_text())
+            self.assertIn('registry_checkpoint:state().current_run_id', bridge.read_text())
+            self.assertNotIn('0x101', bridge.read_text())
             descriptor = lab / 'md/authority_job_descriptor_probe.xml'
             self.source.archive_cue(out)
             self.assertFalse(descriptor.exists())

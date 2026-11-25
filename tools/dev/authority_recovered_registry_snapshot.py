@@ -119,10 +119,11 @@ class RegistrySnapshotState:
         bridge_gate.verify_bridge_observation(log_path, self.nonce, self.latest_evidence)
         self.initial_inspect_verified = True
 
-    def verify_save(self, checkpoint, log_path, *, appended_indices=()):
+    def verify_save(self, checkpoint, log_path, *, appended_indices=(), observe_registry=None):
         if not self.initial_inspect_verified:
             raise ValueError('initial registry inspection not verified')
-        current = verify_join_snapshot(checkpoint)
+        observe = {'observe_universe': observe_registry} if observe_registry is not None else {}
+        current = verify_join_snapshot(checkpoint, **observe)
         verify_transition(self.latest_evidence, current, appended_indices=appended_indices)
         bridge_gate.verify_bridge_observation(log_path, self.nonce, current,
                                               previous_run_id=self.latest_evidence['run_id'])
