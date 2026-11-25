@@ -11,6 +11,7 @@ local function owner()
         pinned = pinned, index = index,
         clock = function() return c.now end,
         guard = function() return c.paused end,
+        running = function() return not c.paused end,
         register = function(callback) c.callback = callback; return true end,
         register_berth = function(callback)
             assert(not c.berth_callback)
@@ -28,15 +29,17 @@ local function owner()
             c.requests[#c.requests + 1] = args
             return true
         end,
-        inspect = function(id, owner_id, controlled)
+        inspect = function(id, owner_id, controlled, context)
             assert(id == actor and owner_id == 'player')
             if c.controlled ~= controlled then return 'LOCAL_CONTROL_MISSING' end
+            if context == 'aboard' and not c.aboard then return 'PLAYER_CONTEXT' end
         end,
         log = function(row) c.logs[#c.logs + 1] = row end,
         fault = function(row) c.faults[#c.faults + 1] = row end,
     }))
-    function c.answer(action, status, id)
-        c.callback(nil, prefix .. action .. '|' .. status .. '|' .. (id or actor) .. '|player')
+    function c.answer(action, status, id, captain)
+        c.callback(nil, prefix .. action .. '|' .. status .. '|' .. (id or actor)
+            .. '|player' .. (captain and '|' .. captain or ''))
     end
     return probe, c
 end
@@ -149,4 +152,78 @@ do
     assert(probe:tick())
     c.paused = false
     assert(not probe:tick() and c.faults[1] == prefix .. 'PAUSE_OR_REGISTRY_LOST')
+end
+
+
+local captain = '0x20000000000002'
+local function reserve_passenger()
+    local probe, c = owner()
+    c.controlled = false
+    assert(probe:tick() and not probe:admission_ready() and not probe:admit())
+    c.answer('inspect', 'CREWED', actor, captain)
+    assert(probe:tick() and c.requests[2].action == 'board' and c.requests[2].captain == captain)
+    c.answer('board', 'BOARD_DISPATCHED', actor, captain)
+    c.now = 2
+    assert(probe:tick() and c.requests[3].action == 'aboard')
+    c.answer('aboard', 'BOARD_WAIT', actor, captain)
+    c.now = 3
+    assert(probe:tick() and c.requests[4].action == 'aboard')
+    c.aboard = true
+    c.answer('aboard', 'ABOARD', actor, captain)
+    assert(probe:tick() and probe:admission_ready())
+    assert(not probe:ready() and not probe:controlled_actor())
+    assert(not probe:read_occupied_berth(function() error('passenger berth') end))
+    assert(#c.logs == 1 and c.logs[1] == prefix .. 'aboard')
+    return probe, c
+end
+
+do
+    local probe, c = reserve_passenger()
+    c.paused = false
+    c.now = 40
+    assert(probe:tick() and #c.requests == 4 and not probe:admission_ready())
+    c.paused = true
+    assert(probe:admit() and probe:tick() and #c.requests == 4)
+    c.paused = false
+    assert(probe:tick() and c.requests[5].action == 'relief')
+    assert(probe:tick() and #c.requests == 5)
+    c.answer('relief', 'RELIEF_WAIT', actor, captain)
+    c.now = 80
+    assert(probe:tick() and c.requests[6].action == 'relief')
+    c.answer('relief', 'RELIEF_DISPATCHED', actor, captain)
+    c.now = 81
+    assert(probe:tick() and c.requests[7].action == 'helm' and not probe:ready())
+    c.answer('helm', 'HELM_WAIT', actor, captain)
+    c.now = 82
+    assert(probe:tick() and c.requests[8].action == 'helm')
+    c.answer('helm', 'HELM_DISPATCHED', actor, captain)
+    c.now = 83
+    assert(probe:tick() and c.requests[9].action == 'helmsample')
+    c.answer('helmsample', 'HELM_WAIT', actor, captain)
+    c.now = 84
+    assert(probe:tick() and c.requests[10].action == 'helmsample')
+    c.controlled = true
+    c.answer('helmsample', 'CONTROLLED', actor, captain)
+    assert(probe:tick() and probe:ready() and probe:controlled_actor() == actor)
+    assert(c.logs[2] == prefix .. 'controlled' and #c.faults == 0)
+    c.controlled = false
+    assert(not probe:ready() and not probe:controlled_actor())
+end
+
+do
+    local probe, c = reserve_passenger()
+    assert(probe:admit())
+    c.paused = false
+    assert(probe:tick())
+    c.answer('relief', 'RELIEF_WAIT', actor, '0x5')
+    assert(not probe:tick() and c.faults[1] == prefix .. 'CAPTAIN_CHANGED')
+end
+
+do
+    local probe, c = owner()
+    c.controlled = false
+    assert(probe:tick())
+    c.answer('inspect', 'SHIP_DOCKED_OR_STORED')
+    assert(not probe:tick() and not probe:admission_ready())
+    assert(c.faults[1] == prefix .. 'SHIP_DOCKED_OR_STORED')
 end

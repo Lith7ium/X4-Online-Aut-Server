@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <mdscript name="X4AuthorityClientSeat" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
-  <cue name="Seat" instantiate="true">
+  <cue name="Seat" instantiate="true" namespace="this">
    <conditions>
     <event_ui_triggered screen="'X4AuthorityClientSeat'" control="'Seat'"/>
    </conditions>
@@ -12,8 +12,12 @@
     <set_value name="$result" exact="'REGISTRY_INVALID'"/>
     <set_value name="$actor" exact="'0'"/>
     <set_value name="$owner" exact="'0'"/>
+    <set_value name="$captainid" exact="'0'"/>
     <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$faulted? and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship? and not md.X4AuthorityShipRegistry.State.$faulted">
-     <do_if value="md.X4AuthorityShipRegistry.State.$epoch != $args.$epoch or md.X4AuthorityShipRegistry.State.$last != $args.$count">
+     <set_value name="$live" exact="$action == 'relief' or $action == 'helm' or $action == 'helmsample'"/>
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch != $args.$epoch
+                   or md.X4AuthorityShipRegistry.State.$last lt $args.$count
+                   or (not $live and md.X4AuthorityShipRegistry.State.$last != $args.$count)">
       <set_value name="$result" exact="'REGISTRY_CHANGED'"/>
      </do_if>
      <do_elseif value="$index lt 1 or $index gt md.X4AuthorityShipRegistry.State.$last or $index != ($index)i">
@@ -36,6 +40,11 @@
        <do_if value="$action != 'inspect' and $args.$actor != $actor">
         <set_value name="$result" exact="'TARGET_CHANGED'"/>
        </do_if>
+       <do_elseif value="(@$args.$captain and $args.$captain != '0')
+                             or ($action == 'inspect' and (@$ship.pilot.exists or @$ship.assignedpilot.exists)
+                                 and player.controlled != $ship)">
+        <include_actions ref="CrewSeat"/>
+       </do_elseif>
        <do_elseif value="player.ship == $ship and player.occupiedship == $ship and player.controlled == $ship and player.container == $ship">
         <set_value name="$result" exact="'CONTROLLED'"/>
        </do_elseif>
@@ -67,7 +76,7 @@
       </do_else>
      </do_else>
     </do_if>
-    <raise_lua_event name="'X4AuthorityClientSeat.Result'" param="'%s|%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$index,$action,$result,$actor,$owner]"/>
+    <raise_lua_event name="'X4AuthorityClientSeat.Result'" param="'%s|%s|%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$index,$action,$result,$actor,$owner,$captainid]"/>
    </actions>
   </cue>
   <cue name="OccupiedBerth" instantiate="true" namespace="this">
@@ -101,5 +110,91 @@
     <raise_lua_event name="'X4AuthorityClientSeat.OccupiedBerth'" param="'%s|%s|%s|%s|%s|%s'.[$args.$nonce,$args.$epoch,$args.$index,$args.$request,$args.$actor,$receipt]"/>
    </actions>
   </cue>
+  <library name="CrewSeat" purpose="include_actions">
+   <actions>
+    <set_value name="$captain" exact="@$ship.assignedaipilot"/>
+    <set_value name="$result" exact="'CAPTAIN_CHANGED'"/>
+    <do_if value="@$captain.isclass.npc and $captain.owner == faction.player
+                  and $captain.assignedcontrolled == $ship and $ship.trueowner == faction.player
+                  and ($action == 'inspect' or '%s'.[$captain] == @$args.$captain)">
+     <set_value name="$captainid" exact="'%s'.[$captain]"/>
+     <set_value name="$result" exact="'SHIP_DOCKED_OR_STORED'"/>
+     <set_value name="$dock" exact="@$ship.dock"/>
+     <set_value name="$station" exact="@$dock.container"/>
+     <do_if value="not $ship.isinternallystored and @$ship.sector.isclass.sector
+                   and ((not $dock and not @$ship.assigneddock)
+                        or (@$dock.isclass.dockingbay and $dock.external and not $dock.isstorage
+                            and $dock.dockstate == dockstate.default and $dock.istradingallowed
+                            and $dock.docked.count == 1 and $dock.docked.{1} == $ship
+                            and @$station.isclass.station and $station.isoperational
+                            and $station.sector == $ship.sector))">
+      <include_actions ref="CrewAction"/>
+     </do_if>
+    </do_if>
+   </actions>
+  </library>
+
+  <library name="CrewAction" purpose="include_actions">
+   <actions>
+    <set_value name="$playeraboard" exact="player.container == $ship and @player.room.exists and not player.controlled"/>
+    <set_value name="$captainaboard" exact="@$captain.ship == $ship and @$captain.hascontext.{$ship}"/>
+    <set_value name="$result" exact="'CAPTAIN_CONTEXT'"/>
+    <do_if value="$action == 'inspect' or $action == 'board'">
+     <do_if value="$ship.pilot == $captain and not player.controlled and not player.occupiedship
+                   and player.container != $ship and player.ship != $ship">
+      <set_value name="$result" exact="'CREWED'"/>
+      <do_if value="$action == 'board'">
+       <teleport_player object="$ship" control="false" instant="true" force="true"/>
+       <set_value name="$result" exact="'BOARD_DISPATCHED'"/>
+      </do_if>
+     </do_if>
+    </do_if>
+    <do_elseif value="$action == 'aboard'">
+     <do_if value="$playeraboard and $captainaboard and $ship.pilot == $captain">
+      <set_value name="$result" exact="'ABOARD'"/>
+     </do_if>
+     <do_elseif value="not player.controlled and (player.container == $ship or not player.occupiedship)">
+      <set_value name="$result" exact="'BOARD_WAIT'"/>
+     </do_elseif>
+    </do_elseif>
+    <do_elseif value="$captainaboard">
+     <include_actions ref="CrewHelm"/>
+    </do_elseif>
+   </actions>
+  </library>
+
+  <library name="CrewHelm" purpose="include_actions">
+   <actions>
+    <find_npc_slot name="$chair" object="$ship" post="controlpost.aipilot" excludefilled="false"/>
+    <set_value name="$chairoccupant" exact="@$chair.component.slotactor.{$chair}"/>
+    <do_if value="$action == 'helmsample' and $chairoccupant == player.entity
+                  and player.controlled == $ship and player.occupiedship == $ship
+                  and player.container == $ship and player.ship == $ship">
+     <set_value name="$result" exact="'CONTROLLED'"/>
+    </do_if>
+    <do_elseif value="$action == 'helmsample' and player.container == $ship
+                      and (not player.controlled or player.controlled == $ship)">
+     <set_value name="$result" exact="'HELM_WAIT'"/>
+    </do_elseif>
+    <do_elseif value="$playeraboard and $chair and $action == 'relief'
+                      and (not $chairoccupant or $chairoccupant == $captain)">
+     <set_value name="$result" exact="'RELIEF_WAIT'"/>
+     <!-- Match the stock Get up conversation guard. Keep every ship order intact. -->
+     <do_if value="$chairoccupant == $captain and $ship.pilot == $captain
+                   and (not $ship.order or $ship.order.canplayercancel)">
+      <signal_objects object="$captain" param="'npc__leave_post'"/>
+      <set_value name="$result" exact="'RELIEF_DISPATCHED'"/>
+     </do_if>
+    </do_elseif>
+    <do_elseif value="$playeraboard and $chair and $action == 'helm'
+                      and (not $chairoccupant or $chairoccupant == $captain)">
+     <set_value name="$result" exact="'HELM_WAIT'"/>
+     <do_if value="not $chairoccupant and $captain.isbusy">
+      <teleport_player object="$ship" control="true" instant="true" force="true"/>
+      <set_value name="$result" exact="'HELM_DISPATCHED'"/>
+     </do_if>
+    </do_elseif>
+   </actions>
+  </library>
  </cues>
 </mdscript>

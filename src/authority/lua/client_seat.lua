@@ -1,4 +1,4 @@
--- Run once from the paused load owner after it has inspected the loaded register.
+-- Establish the occupied cockpit or a reserved passenger during paused load.
 local M = {}
 local SCREEN = 'X4AuthorityClientSeat'
 local REFUSALS = {
@@ -6,7 +6,7 @@ local REFUSALS = {
     BINDING_INVALID = true, OWNER_INVALID = true, SHIP_INOPERABLE = true,
     TARGET_CHANGED = true, CONTROL_MISSING = true, PLAYER_CONTEXT = true,
     SHIP_DOCKED_OR_STORED = true, SHIP_SECTOR_INVALID = true, PILOT_PRESENT = true,
-    ACTION_INVALID = true,
+    ACTION_INVALID = true, CAPTAIN_CHANGED = true, CAPTAIN_CONTEXT = true,
 }
 
 local function berth_identity(row)
@@ -26,7 +26,8 @@ function M.new(options)
     local pinned, index = options.pinned, options.index
     local prefix = pinned.nonce .. '|' .. pinned.epoch .. '|' .. index .. '|'
     local state, pending, target = 'inspect', nil, nil
-    local deadline, last_time, target_owner
+    local deadline, last_time, target_owner, captain
+    local admitted, admission, next_poll = false, false, 0
     local berth_registered, berth_request, berth_pending = false, 0, nil
     local api = {}
 
@@ -46,71 +47,144 @@ function M.new(options)
         end
         last_time = now
         if deadline and now >= deadline then return fail('TIMEOUT') end
-        if options.guard() ~= true then return fail('PAUSE_OR_REGISTRY_LOST') end
+        if not admission and options.guard() ~= true then return fail('PAUSE_OR_REGISTRY_LOST') end
         return true
     end
 
-    local function read_target(controlled)
-        local ok, refusal = pcall(options.inspect, target, target_owner, controlled)
-        if not ok then return fail('SHIP_READ_FAILED') end
+    local function native_refusal(context)
+        local ok, refusal = pcall(options.inspect, target, target_owner, context == 'helm', context)
+        if not ok then return 'SHIP_READ_FAILED' end
+        return refusal
+    end
+
+    local function read_target(context)
+        local refusal = native_refusal(context)
         if refusal then return fail(refusal) end
+        return true
+    end
+
+    local function accept_result(action, result)
+        if action == 'inspect' and result == 'READY' then
+            if not read_target('empty') then return false end
+            state = 'take'
+        elseif action == 'inspect' and result == 'CREWED' then
+            if not captain then return fail('CAPTAIN_CHANGED') end
+            if not read_target('crew') then return false end
+            state = 'board'
+        elseif action == 'take' and result == 'DISPATCHED' then
+            state = 'verify'
+        elseif (action == 'inspect' or action == 'verify' or action == 'helmsample')
+                and result == 'CONTROLLED' then
+            if not read_target('helm') then return false end
+            state = 'confirm'
+        elseif (action == 'board' and result == 'BOARD_DISPATCHED')
+                or (action == 'aboard' and result == 'BOARD_WAIT') then
+            state = 'aboard'
+            next_poll = last_time + 0.25
+        elseif action == 'aboard' and result == 'ABOARD' then
+            if not read_target('aboard') then return false end
+            state = 'confirmaboard'
+        elseif action == 'relief' and result == 'RELIEF_WAIT' then
+            state = 'relief'
+        elseif (action == 'relief' and result == 'RELIEF_DISPATCHED')
+                or (action == 'helm' and result == 'HELM_WAIT') then
+            state = 'helm'
+        elseif (action == 'helm' and result == 'HELM_DISPATCHED')
+                or (action == 'helmsample' and result == 'HELM_WAIT') then
+            state = 'helmsample'
+        else
+            return fail('RESULT_INVALID')
+        end
         return true
     end
 
     function api:event(row)
         if not pending or state ~= 'waiting' then return fail('UNEXPECTED_RESULT') end
         if not guard() then return false end
-        if type(row) ~= 'string' or #row > 200 or row:sub(1, #prefix) ~= prefix then
+        if type(row) ~= 'string' or #row > 240 or row:sub(1, #prefix) ~= prefix then
             return fail('RESULT_MISMATCH')
         end
-        local action, result, actor, owner =
-            row:sub(#prefix + 1):match('^([a-z]+)|([A-Z_]+)|([^|]+)|([^|]+)$')
+        local body = row:sub(#prefix + 1)
+        local action, result, actor, owner, reported_captain =
+            body:match('^([a-z]+)|([A-Z_]+)|([^|]+)|([^|]+)|([^|]+)$')
+        if not action then
+            action, result, actor, owner = body:match('^([a-z]+)|([A-Z_]+)|([^|]+)|([^|]+)$')
+        end
         if action ~= pending then return fail('RESULT_MISMATCH') end
         if REFUSALS[result] then return fail(result) end
-        if target and actor ~= target then return fail('TARGET_CHANGED') end
-        local ready = action == 'inspect' and result == 'READY'
-        local dispatched = action == 'take' and result == 'DISPATCHED'
-        local controlled = result == 'CONTROLLED'
-        if not (ready or dispatched or controlled) then return fail('RESULT_INVALID') end
-        pending = nil
-        target, target_owner = actor, owner
-        if dispatched then
-            state = 'verify'
-            return true
+        if target and (actor ~= target or owner ~= target_owner) then return fail('TARGET_CHANGED') end
+        if reported_captain == '0' then reported_captain = nil end
+        if reported_captain and not reported_captain:match('^0[xX][0-9a-fA-F]+$') then
+            return fail('CAPTAIN_CHANGED')
         end
-        if not read_target(controlled) then return false end
-        if controlled then state = 'confirm' else state = 'take' end
-        return true
+        if (target and captain ~= reported_captain) or (not target and result ~= 'CREWED' and reported_captain) then
+            return fail('CAPTAIN_CHANGED')
+        end
+        pending = nil
+        target, target_owner, captain = actor, owner, reported_captain
+        if admitted then
+            deadline = nil
+            next_poll = last_time + 0.25
+        end
+        return accept_result(action, result)
     end
 
     function api:tick()
         if state == 'failed' or not guard() then return false end
         if state == 'confirm' then
-            if not read_target(true) then return false end
+            if not read_target('helm') then return false end
             options.log(prefix .. 'controlled')
-            state = 'done'
+            state, deadline, admission = 'done', nil, true
+            return true
+        end
+        if state == 'confirmaboard' then
+            if not read_target('aboard') then return false end
+            options.log(prefix .. 'aboard')
+            state, deadline, admission = 'passenger', nil, true
             return true
         end
         if state == 'waiting' or state == 'done' then return true end
-        if state == 'take' and not read_target(false) then return false end
+        if state == 'passenger' then
+            if not admitted then return true end
+            state = 'relief'
+        end
+        if (admitted and options.running() ~= true) or last_time < next_poll then return true end
+        if state == 'take' and not read_target('empty') then return false end
+        if state == 'board' and not read_target('crew') then return false end
         deadline = deadline or (last_time + 10)
         pending, state = state, 'waiting'
         local ok, issued = pcall(options.issue, {
             nonce = pinned.nonce, epoch = pinned.epoch, count = pinned.issued_count,
-            index = index, action = pending, actor = target or '0',
+            index = index, action = pending, actor = target or '0', captain = captain or '0',
         })
         if not ok or issued ~= true then return fail('DISPATCH_FAILED') end
         return state ~= 'failed'
     end
 
+    local function admission_context()
+        if state == 'passenger' then return native_refusal('aboard') == nil end
+        return api:ready()
+    end
+
+    function api:admission_ready()
+        if not admission or state == 'failed' then return false end
+        if admitted then return true end
+        return options.guard() == true and admission_context()
+    end
+
+    function api:admit()
+        -- The server can acknowledge after the local clock has resumed.
+        if not admission or state == 'failed' or (not admitted and not admission_context()) then return false end
+        admitted = true
+        return true
+    end
+
     function api:ready()
-        return state == 'done'
+        return self:controlled_actor() ~= nil
     end
 
     function api:controlled_actor()
-        if state ~= 'done' then return nil end
-        local ok, refusal = pcall(options.inspect, target, target_owner, true)
-        if ok and refusal == nil then return target end
+        if state == 'done' and native_refusal('helm') == nil then return target end
     end
 
     -- Request a local snapshot of this occupied cockpit's physical trade bay.
@@ -158,6 +232,7 @@ function M.new_x4(pinned, index, registry, on_fault)
     local ffi = require('ffi')
     if not pcall(ffi.typeof, 'UniverseID') then ffi.cdef('typedef uint64_t UniverseID;') end
     ffi.cdef[[
+        bool IsGamePaused(void);
         bool IsValidComponent(UniverseID);
         bool IsComponentOperational(UniverseID);
         bool IsComponentClass(UniverseID,const char*);
@@ -168,7 +243,8 @@ function M.new_x4(pinned, index, registry, on_fault)
     local C = ffi.C
     return M.new({
         pinned = pinned, index = index, clock = GetCurRealTime,
-        guard = function() return registry:ready() end,
+        guard = function() return registry:ready() and C.IsGamePaused() end,
+        running = function() return not C.IsGamePaused() end,
         register = function(callback)
             return RegisterEvent(SCREEN .. '.Result', callback) ~= false
         end,
@@ -177,7 +253,7 @@ function M.new_x4(pinned, index, registry, on_fault)
             return RegisterEvent(SCREEN .. '.OccupiedBerth', callback) ~= false
         end,
         issue_berth = function(args) return AddUITriggeredEvent(SCREEN, 'ReadOccupiedBerth', args) ~= false end,
-        inspect = function(actor, owner, controlled)
+        inspect = function(actor, owner, controlled, context)
             local id = X4LAN_RESOLVE_STRING.parse_hex(actor)
             if not id or not C.IsValidComponent(id) or not C.IsComponentClass(id, 'ship')
                     or not C.IsComponentOperational(id) then return 'SHIP_ID_INVALID' end
@@ -193,11 +269,14 @@ function M.new_x4(pinned, index, registry, on_fault)
                 if occupied ~= id or active ~= id or container ~= id then
                     return 'LOCAL_CONTROL_MISSING'
                 end
+            elseif context == 'aboard' then
+                if container ~= id or active ~= 0 then return 'PLAYER_CONTEXT' end
+                if GetComponentData(lua_id, 'isinternallystored') ~= false then return 'SHIP_DOCK_STATE_UNSAFE' end
             else
                 if occupied == id or active == id or container == id then return 'PLAYER_CONTEXT' end
                 local docked, docking, stored =
                     GetComponentData(lua_id, 'isdocked', 'isdocking', 'isinternallystored')
-                if docked ~= false or docking ~= false or stored ~= false then
+                if stored ~= false or (context ~= 'crew' and (docked ~= false or docking ~= false)) then
                     return 'SHIP_DOCK_STATE_UNSAFE'
                 end
             end
