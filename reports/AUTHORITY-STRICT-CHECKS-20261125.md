@@ -38,3 +38,16 @@ toolchain. Zero failed or errored. Runtime was 11.907 seconds.
 Across these two platform reports, sixteen cases still lack a passing
 result, comprising those four and the twelve Linux reference checks. The final
 exit of the strict Linux command remains 1. [Cobalt's native Windows results](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795590203447069)
+
+## Linux follow-up at `11f10348`
+
+The official runner discovered 5,777 tests at `11f10348d9fdb438ff40647a719ce6304c88cb70`. On native Bazzite with Python 3.13.18, 5,751 passed, zero failed assertions, one errored and 25 were skipped. All 25 skip IDs and reasons matched the earlier Linux run. The command exited 1 after 1,176.051 seconds of test execution. It used the same verified reference inputs and census witness, fresh Zig caches, CPUs 8–15 and nice priority +10. Full log SHA-256 was `54102b1de273a133baedbdf1bbfc0ae0f0e4fe593d22c383028599674da46129`.
+
+The new error occurred in `test_authority_source_motion_tcp_worker.MotionWorker.test_near_then_ready_applies_only_second_sample`. During participant admission, the Linux UDP ownership guard rejected the connection with `RuntimeError: participant peer not owned by X4: connected IPv4 flow count differs from one (matches=2)`. The runner retained the traceback. This test passed in the earlier full run and in a separate isolated run at `11f10348` with the same prerequisite environment, interpreter, CPU affinity and nice priority. The isolated run took 1.222 seconds and its log SHA-256 was `7728d73f1e51b83e4cfab99487c372aec1c25d6f64ffe572017c8180790e0ce1`. The cause of the count of two remains undetermined.
+
+All 17 participant TCP tests and all four long-source diagnostic tests passed in the official run.
+
+At `6c6cc852` ambiguous matches also report the number of distinct socket
+inodes. Two focused fixtures distinguish two socket rows for the same inode
+from two different inodes, and both still fail the ownership check. All ten
+UDP ownership tests passed. The original failure predates this diagnostic.
