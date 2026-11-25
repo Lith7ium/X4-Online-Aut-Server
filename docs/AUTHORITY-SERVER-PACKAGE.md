@@ -424,7 +424,10 @@ committed purchase ledger entry. A following order for the same ship waits
 briefly for the previous stock order to leave its queue. An inconclusive receipt after dispatch
 closes the bridge to further orders for that run. Isolated native tests
 verified individual water purchases by WRN-302 (7354) at BIM-169 in
-Grand Exchange I. Consecutive purchases have offline regression coverage.
+Grand Exchange I. In one native server run a simulated pilot confirmed two
+successive purchases. X4 journalled four and five units of water separately,
+and the world saved after disconnect contained the additional nine units and
+the combined 525 Cr debit.
 If the price changes in either direction, reopen and review the fresh stock
 offer before confirming again. A pending request needs no second click.
 

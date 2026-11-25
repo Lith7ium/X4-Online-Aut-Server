@@ -371,9 +371,11 @@ unresolved receipt. No one resubmitted it or placed the planned second
 order. Final checkpoint `checkpoint-2738d4d619db40fa8486479494793925`
 has SHA-256 `f5f0adf0279a6b54ea8503aedd4d738dd88ada75f0fce4d89411b7dfee333b26`.
 
-The corrected bridge requires the monitor to acknowledge the current
-request before X4 can receive a trade order. A native run with two
-confirmed orders in one session remains open.
+An initial preflight after reloading the saved world received no
+acknowledgement and issued no trade. X4 applies a Mission Director cue reset
+after the current action block. The bridge now prepares the monitor in a
+separate step, waits for acknowledgement tied to the current purchase ID and
+rechecks the actual berth, stock and price before submitting the order.
 
 ### Native server departure after a critical trade
 
@@ -403,3 +405,31 @@ Private artifacts from `.local/undock-native-03/` in the trial worktree are
 and the native engine log (SHA-256
 `8910e3bc82825e10716b1d62d3f8d936b7a45f65e31f6b9ca727124684705ff9`,
 lines 524–552).
+
+## Two consecutive purchases through one native server
+
+One native Linux provider reloaded the idle WRN-302 checkpoint containing
+three units of water and a Company balance of 9,826 Cr. A simulated pilot
+sent two separate purchase confirmations over TLS. Both quotes were 58.48 Cr
+per unit. The provider waited for a native monitor acknowledgement for each
+request before it placed the corresponding stock order.
+
+| X4 trade ID | Quantity | Actual Company debit | Water aboard after the purchase |
+| --- | ---: | ---: | ---: |
+| 3 | 4 | 233 Cr | 7 |
+| 4 | 5 | 292 Cr | 12 |
+
+X4's journal and the two authenticated receipts identified both orders
+separately. After the second stock order finished, the pilot disconnected.
+The confirmed save showed 12 water, a balance of 9,301 Cr and PYN-740 idle
+at the helm of WRN-302 on the same BIM-169 berth. The four existing ledger
+records survived intact, including the earlier unresolved one-water request.
+The two new orders accounted for the entire saved difference of 525 Cr and
+nine units. The host stopped with no remaining X4 processes.
+
+| Final checkpoint | Save SHA-256 |
+| --- | --- |
+| `checkpoint-eb507e137a094f2c9591d7563df19b34` | `ae06a6c657146406ddb95058aba1aff9efa4e19c6b95cf3c8cece95ecb19bac5` |
+
+This test exercised two purchases on the same ship. Simultaneous real
+cockpits, sales and purchases at other stations remain separate cases.
