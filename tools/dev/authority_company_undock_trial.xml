@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Developer overlay only. The local harness owns and checks the trial reservation. -->
+<mdscript name="X4AuthorityCompanyUndockTrial" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this">
+   <actions>
+    <set_value name="$Requests" exact="table[]"/>
+    <set_value name="$AttemptedShips" exact="table[]"/>
+   </actions>
+   <cues>
+    <cue name="Request" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyUndockTrial'" control="'Run'"/></conditions>
+     <actions>
+      <set_value name="$Input" exact="event.param3"/>
+      <set_value name="$Nonce" exact="@$Input.$nonce"/>
+      <set_value name="$Index" exact="@$Input.$index"/>
+      <set_value name="$Status" exact="'invalid_request'"/>
+      <set_value name="$Witness" exact="false"/>
+      <do_if value="typeof $Nonce == datatype.string and $Nonce != '' and $Index ge 1 and $Index == ($Index)i
+                    and $Index le @md.X4AuthorityShipRegistry.State.$last">
+       <set_value name="$Ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$Index}"/>
+       <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+       <set_value name="$Avatar" exact="player.entity"/>
+       <set_value name="$AvatarStation" exact="player.station"/>
+       <set_value name="$AvatarRoom" exact="player.room"/>
+       <set_value name="$AvatarContainer" exact="player.container"/>
+       <include_actions ref="CheckIdentity"/>
+       <do_if value="not $SameIdentity">
+        <set_value name="$Status" exact="'identity_mismatch'"/>
+       </do_if>
+       <do_elseif value="@State.$Requests.{$Nonce} or @State.$AttemptedShips.{$Index}">
+        <set_value name="$Status" exact="'duplicate_or_attempted'"/>
+       </do_elseif>
+       <do_else>
+        <set_value name="State.$Requests.{$Nonce}" exact="true"/>
+        <set_value name="$Bay" exact="@$Ship.dock"/>
+        <set_value name="$Station" exact="@$Bay.container"/>
+        <include_actions ref="CheckBerth"/>
+        <do_if value="not $SameBerth or $Ship.isinternallystored or $Bay.dockstate != dockstate.default
+                       or not $Bay.istradingallowed or $Bay.docked.count != 1 or $Bay.docked.{1} != $Ship
+                       or (@$Bay.assignedship.exists and $Bay.assignedship != $Ship)
+                       or (@$Ship.assigneddock.exists and $Ship.assigneddock != $Bay)">
+         <set_value name="$Status" exact="'berth_mismatch'"/>
+        </do_if>
+        <do_elseif value="$Ship.orders.count or $Ship.tradeorders.count or @$Ship.tradecomputer.exists
+                           or $Captain.isbusy or ($Ship.defaultorder and $Ship.defaultorder.id != 'Wait')">
+         <set_value name="$Status" exact="'busy'"/>
+        </do_elseif>
+        <do_elseif value="@$Input.$check_only == true">
+         <set_value name="$Status" exact="'idle'"/>
+        </do_elseif>
+        <do_else>
+         <!-- Set the one-shot fence even if X4 does not return an order. -->
+         <set_value name="State.$AttemptedShips.{$Index}" exact="true"/>
+         <set_value name="$Deadline" exact="player.age + 45s"/>
+         <create_order name="$Order" id="'Undock'" object="$Ship" immediate="true"/>
+         <set_value name="$Status" exact="if @$Order.id == 'Undock' then 'awaiting' else 'dispatch_unconfirmed'"/>
+        </do_else>
+       </do_else>
+      </do_if>
+      <include_actions ref="Report"/>
+     </actions>
+     <cues>
+      <cue name="Undocked">
+       <conditions>
+        <event_object_undocked object="$Ship" dock="$Station"/>
+        <check_value value="$Status == 'awaiting' and event.object == $Ship and event.param == $Station and event.param3 == $Bay"/>
+       </conditions>
+       <actions><set_value name="$Witness" exact="true"/></actions>
+      </cue>
+      <cue name="Readback" checkinterval="250ms">
+       <conditions>
+        <check_value value="$Status == 'awaiting' and (player.age ge $Deadline
+            or ($Witness and not @$Order.exists and not @$Ship.dock.exists and not @$Ship.assigneddock.exists
+                and not @$Bay.assignedship.exists and @$Bay.docked.count == 0 and $Bay.dockstate == dockstate.default))"/>
+       </conditions>
+       <delay exact="250ms"/>
+       <actions>
+        <include_actions ref="CheckIdentity"/>
+        <include_actions ref="CheckBerth"/>
+        <set_value name="$Status" exact="'readback_unconfirmed'"/>
+        <do_if value="$Witness and $SameIdentity and $SameBerth and not @$Order.exists
+                      and not @$Ship.dock.exists and not @$Ship.assigneddock.exists and not $Ship.isinternallystored
+                      and $Ship.parent.isclass.zone and not $Ship.orders.count
+                      and not @$Bay.assignedship.exists and $Bay.docked.count == 0
+                      and $Bay.dockstate == dockstate.default">
+         <set_value name="$Status" exact="'undocked'"/>
+        </do_if>
+        <include_actions ref="Report"/>
+       </actions>
+      </cue>
+     </cues>
+    </cue>
+   </cues>
+  </cue>
+
+  <library name="CheckIdentity" purpose="include_actions">
+   <actions>
+    <set_value name="$SameIdentity" exact="@$Input.$epoch == @md.X4AuthorityShipRegistry.State.$epoch
+        and @md.X4AuthorityShipRegistry.State.$faulted == false
+        and @$Ship.isclass.ship and $Ship.isoperational
+        and @md.X4AuthorityShipRegistry.State.$ships.{$Index} == $Ship
+        and @md.X4AuthorityShipRegistry.State.$byship.{$Ship} == $Index
+        and $Ship.owner == faction.player and $Ship.trueowner == faction.player
+        and $Ship.idcode == @$Input.$ship_code and @$Ship.sector.macro.id == @$Input.$sector
+        and @$Captain.isclass.npc and $Captain.owner == faction.player
+        and '%s'.[$Captain.seed] == @$Input.$captain_seed and $Ship.assignedaipilot == $Captain
+        and $Ship.pilot == $Captain and $Captain.assignedcontrolled == $Ship
+        and $Captain.ship == $Ship and $Captain.hascontext.{$Ship}
+        and not player.controlled and not player.occupiedship and $Ship != player.ship and $Ship != player.container
+        and @$AvatarStation.isclass.station and @$AvatarRoom.exists and player.entity == $Avatar
+        and player.station == $AvatarStation and player.room == $AvatarRoom and player.container == $AvatarContainer
+        and player.entity.hascontext.{$AvatarStation}"/>
+   </actions>
+  </library>
+
+  <library name="CheckBerth" purpose="include_actions">
+   <actions>
+    <set_value name="$SameBerth" exact="@$Station.isclass.station and $Station.isoperational
+        and $Station.idcode == @$Input.$station_code and $Station.sector == $Ship.sector
+        and @$Bay.isclass.dockingbay and $Bay.container == $Station and $Bay.external and not $Bay.isstorage
+        and '%s'.[$Bay.seed] == @$Input.$bay_seed
+        and $Bay.macro.id == @$Input.$bay_macro and @$Bay.dockarea.macro.id == @$Input.$dockarea_macro"/>
+   </actions>
+  </library>
+
+  <library name="Report" purpose="include_actions">
+   <actions>
+    <set_value name="$Row" exact="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[$Nonce,$Status,@$Input.$epoch,$Index,
+        @$Input.$ship_code,@$Input.$sector,@$Input.$station_code,@$Input.$bay_seed,
+        @$Input.$bay_macro,@$Input.$dockarea_macro,@$Input.$captain_seed,if $Witness then 1 else 0,@$Ship.order.id,@$Ship.order.state,
+        @$Ship,@$Captain,@$Station,@$Bay]"/>
+    <raise_lua_event name="'X4AuthorityCompanyUndockTrial.Result'" param="$Row"/>
+   </actions>
+  </library>
+ </cues>
+</mdscript>
