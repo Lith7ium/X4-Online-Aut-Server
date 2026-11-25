@@ -56,3 +56,49 @@ class IdleNpcPoseTrialTests(unittest.TestCase):
         self.assertEqual(channel.actions[1], ('apply', (60, 20, 30), '0x12'))
         self.assertEqual(proof['early_error_m'], 0)
         self.assertEqual(proof['late_error_m'], 0)
+
+    def test_two_writes_require_separate_first_readback_and_new_inspection(self):
+        original = (trial.overlay.ROOT / 'src/authority/md/company_ship_pose.xml').read_bytes()
+        pose = ET.fromstring(trial.render_pose(original, '1' * 32, twice=True))
+        apply = pose.find("./cues/library[@name='ApplyPose']/actions/do_if")
+        self.assertIn('State.$TrialSecondBefore?', apply.get('value'))
+        self.assertIn('not @State.$TrialSecondWrite', apply.get('value'))
+        self.assertEqual([node.tag for node in apply], ['do_if', 'do_else', 'warp', 'set_value'])
+        self.assertEqual(apply[1][0].get('name'), 'State.$TrialSecondWrite')
+        read = pose.find("./cues/library[@name='ProcessPose']/actions/do_else")
+        for flag, action in (('TrialFirstObserved', 'verify'), ('TrialSecondBefore', 'inspect')):
+            guard = read.find(f"./do_if/set_value[@name='State.${flag}']/..")
+            self.assertIn(f"$action == '{action}'", guard.get('value'))
+
+    def test_second_write_uses_fresh_same_actor_position(self):
+        class Channel:
+            epoch = 'a' * 32
+            ship_codes = {trial.INDEX: trial.SHIP}
+            ship_sectors = {trial.INDEX: trial.SECTOR}
+
+            def __init__(self, replacement_actor=False):
+                self.pose = (10, 20, 30)
+                self.actions = []
+                self.replacement_actor = replacement_actor
+
+            def begin(self, action, sample, actor='0'):
+                self.actions.append(action)
+                if action == 'apply':
+                    self.pose = tuple(sample[key] for key in 'xyz')
+
+            def wait(self):
+                actor = '0x13' if self.replacement_actor and len(self.actions) >= 5 else '0x12'
+                return {'actor': actor, 'md': self.pose, 'ui': self.pose,
+                        'code': trial.SHIP, 'sector_macro': trial.SECTOR}
+
+        for replacement in (False, True):
+            channel, report = Channel(replacement), {}
+            with patch.object(trial.time, 'monotonic', side_effect=(0, 1, 3, 4, 5, 7)):
+                if replacement:
+                    with self.assertRaisesRegex(ValueError, 'lost the first verified actor'):
+                        trial.verify_two_poses(channel, 'c' * 32, lambda: None, report)
+                else:
+                    trial.verify_two_poses(channel, 'c' * 32, lambda: None, report)
+            self.assertEqual(channel.actions.count('apply'), 1 if replacement else 2)
+            self.assertEqual(report['steps'][0]['target'], (60, 20, 30))
+            self.assertEqual(report['steps'][1]['target'], (110, 20, 30))
