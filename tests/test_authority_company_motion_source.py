@@ -9,12 +9,33 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+from authority.client_seat_overlay import company_motion_md, company_motion_ui
 from authority.company_motion_frames import MAX_COUNTER
 from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_source import CompanyMotionSource
 
 
 class CompanyMotionSourceTest(unittest.TestCase):
+    def test_hold_trial_is_explicit_and_bound_to_a_single_vanilla_pair(self):
+        target = (943, 'MFQ-419')
+        epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
+        operational = '1' * 1073
+        observer = CompanyMotionSource(observed_npc=target)
+        self.addCleanup(observer.close)
+        self.assertNotIn('registered_npc_hold_trial', observer.configure(epoch, 1073, operational_bits=operational))
+        self.assertNotIn('authority_saved_replica_control.xml', company_motion_md(observer))
+        self.assertNotIn('saved_replica_control.lua', company_motion_ui(observer))
+        with self.assertRaisesRegex(ValueError, 'requires observation'):
+            CompanyMotionSource(observed_npc=(943, 'NPC-042'), registered_npc_hold_trial=True)
+        trial = CompanyMotionSource(observed_npc=target, registered_npc_hold_trial=True)
+        self.addCleanup(trial.close)
+        for world, pilot in ((epoch, 1072), ('b' * 32, 1073)):
+            with self.assertRaisesRegex(ValueError, 'verified HVC-420'):
+                trial.configure(world, pilot, operational_bits=operational)
+        self.assertTrue(trial.configure(epoch, 1073, operational_bits=operational)['registered_npc_hold_trial'])
+        self.assertIn('authority_saved_replica_control.xml', company_motion_md(trial))
+        self.assertIn('registered_npc_hold_trial.lua', company_motion_ui(trial))
+
     def test_loopback_coalesces_and_refuses_foreign_peer_and_selection(self):
         source = CompanyMotionSource()
         self.addCleanup(source.close)

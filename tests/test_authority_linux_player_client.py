@@ -282,6 +282,15 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *npc]), 0)
             self.assertEqual(run.call_args.kwargs['observed_npc'], (42, 'NPC-042'))
+            hold = ['--company-motion', '--observe-registered-npc', '943', 'MFQ-419',
+                    '--company-ship-index', '1073', '--trial-registered-npc-hold']
+            with patch.object(native, 'run') as run, redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    cli.main([*args, *hold])
+                run.assert_not_called()
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--base-game-only', *hold]), 0)
+                self.assertTrue(run.call_args.kwargs['registered_npc_hold_trial'])
             multi = ['--company-cockpit-playback']
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *multi]), 0)

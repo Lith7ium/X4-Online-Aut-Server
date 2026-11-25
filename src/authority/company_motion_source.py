@@ -45,7 +45,7 @@ class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
-                 observed_npc=None):
+                 observed_npc=None, registered_npc_hold_trial=False):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
         if cockpit_radar_playback:
@@ -65,6 +65,10 @@ class CompanyMotionSource:
         self._reported_stages = set()
         self._observed_npc = validate_npc_observation(
             observed_npc, company_motion=True, playback_index=playback_index, cockpit_radar_playback=cockpit_radar_playback)
+        if type(registered_npc_hold_trial) is not bool or (registered_npc_hold_trial and
+                self._observed_npc != (943, 'MFQ-419')):
+            raise ValueError('NPC hold trial requires observation of MFQ-419 at index 943')
+        self._registered_npc_hold_trial = registered_npc_hold_trial
         self._playback_index = playback_index
         self._cockpit_radar_playback = cockpit_radar_playback
         self._cockpit_max_pilots = cockpit_max_pilots
@@ -98,6 +102,10 @@ class CompanyMotionSource:
     @property
     def playback_index(self):
         return self._playback_index
+
+    @property
+    def registered_npc_hold_trial(self):
+        return self._registered_npc_hold_trial
 
     @property
     def observed_npc(self):
@@ -141,11 +149,15 @@ class CompanyMotionSource:
             if (target_index == index or type(operational_bits) is not str
                     or target_index > len(operational_bits) or operational_bits[target_index - 1] != '1'):
                 raise ValueError('registered NPC must be a distinct operational entry in the offered checkpoint')
+        if self._registered_npc_hold_trial and (epoch, index) != ('26a1a365c66788aa06f0aeb9e18ff62e', 1073):
+            raise ValueError('NPC hold trial requires the verified HVC-420 seat in the MFQ-419 test world')
         self._registry = (epoch, index)
         config = {'port': self._socket.getsockname()[1], 'lease': self._lease,
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
         if self._observed_npc:
             config['observed_npc_index'], config['observed_npc_code'] = self._observed_npc
+        if self._registered_npc_hold_trial:
+            config['registered_npc_hold_trial'] = True
         if playback_index is not None:
             config['playback_index'] = playback_index
         if self._cockpit_radar_playback:

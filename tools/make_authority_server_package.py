@@ -61,6 +61,7 @@ REQUIRED = {
     'tools/dev/authority_provider_server.py',
     'tools/dev/authority_registered_npc_source.py',
     'tools/dev/authority_registered_npc_source.lua',
+    'tools/dev/authority_saved_replica_control.xml',
     'tools/dev/authority_portable_seed.py',
     'tools/dev/authority_software_vulkan.py',
     'tools/run_authority_server.sh',
