@@ -9,17 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SavedInitialAlignmentRuntimeTests(unittest.TestCase):
     def test_native_initial_alignment_and_later_limit(self):
-        source = (ROOT/'tests/fixtures/saved_motion_apply_abi.c').read_text()
-        source = source.replace('static bool paused=false;', 'static int alignment_mode=0; void TestAlignmentMode(int mode){alignment_mode=mode;}\nstatic bool paused=false;')
-        source = source.replace('UniverseID GetPlayerControlledShipID(void){return 0;}',
-                                'UniverseID GetPlayerControlledShipID(void){return (alignment_mode==4||alignment_mode==7)?41:0;}')
-        source = source.replace('"ENH-870":"WRG-830"',
-                                '((alignment_mode==6||alignment_mode==7)?"MFQ-419":"ENH-870"):"WRG-830"')
-        source = source.replace('return pose;}', 'if(alignment_mode==5){UIPosRot invalid=pose;invalid.x=NAN;return invalid;}return pose;}')
-        source = source.replace('pose=v;pose.yaw', 'pose=v;if(alignment_mode==2)pose.x+=10;if(alignment_mode==3)actor_zone=46;pose.yaw')
         with tempfile.TemporaryDirectory() as directory:
-            fixture = Path(directory)/'abi.c'
-            fixture.write_text(source)
+            fixture = ROOT/'tests/fixtures/saved_motion_apply_abi.c'
             library = Path(directory)/'abi.so'
             subprocess.run(['cc','-shared','-fPIC','-O2',str(fixture),'-o',str(library)],check=True,capture_output=True)
             for case in ('success','default_off','stale','future','unprepared','profile','actor','frame',

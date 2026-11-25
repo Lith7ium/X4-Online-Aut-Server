@@ -22,7 +22,8 @@ class SavedReplicaControlTests(unittest.TestCase):
             library = Path(directory)/'native.so'
             subprocess.run(['cc','-shared','-fPIC','-O2',str(ROOT/'tests/fixtures/saved_motion_apply_abi.c'),
                 '-o',str(library)],check=True,capture_output=True)
-            for case in ('success','fixture','pause','docked','wrong_actor','profile','collision','duplicate'):
+            for case in ('success','fixture','pause','docked','wrong_actor','profile','collision','duplicate',
+                         'mfq_success','mfq_alternate_code','mfq_player','mfq_wrong_reply'):
                 with self.subTest(case=case):
                     result = subprocess.run(['luajit','tests/authority_saved_replica_control_native.lua'],
                         cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(library),CONTROL_NATIVE_CASE=case),

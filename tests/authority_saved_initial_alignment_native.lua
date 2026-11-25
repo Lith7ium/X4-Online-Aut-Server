@@ -1,6 +1,15 @@
 -- Real fixed-fixture inspector/setter and playback with a fake X4 ABI, no game.
 local ffi = require('ffi')
-ffi.cdef[[void TestSetRecoveryCode(bool);void TestAlignmentMode(int);int TestWrites(void);float TestYaw(void);]]
+ffi.cdef[[
+ void TestSetRecoveryCode(bool);
+ void TestSetMFQCode(void);
+ void TestSetPlayerControlsActor(bool);
+ void TestSetInvalidPose(bool);
+ void TestSetOffsetAfterWrite(bool);
+ void TestSetChangeZoneAfterWrite(bool);
+ int TestWrites(void);
+ float TestYaw(void);
+]]
 ffi.C.TestSetRecoveryCode(true)
 local mode = assert(os.getenv('ALIGNMENT_CASE'))
 local now = 1
@@ -52,10 +61,10 @@ if mode == 'future' then options.initial_sample.arrival = 2 end
 if mode == 'profile' then options.expected_save_path = '/other/45841/save' end
 if mode == 'actor' then options.binding.actor_key = '42' end
 if mode == 'frame' then snapshot.frame = 'wrong_sector' end
-if mode == 'readback' then ffi.C.TestAlignmentMode(2) end
-if mode == 'identity_after_write' then ffi.C.TestAlignmentMode(3) end
-if mode == 'player' then ffi.C.TestAlignmentMode(4) end
-if mode == 'invalid_prewrite_pose' then ffi.C.TestAlignmentMode(5) end
+if mode == 'readback' then ffi.C.TestSetOffsetAfterWrite(true) end
+if mode == 'identity_after_write' then ffi.C.TestSetChangeZoneAfterWrite(true) end
+if mode == 'player' then ffi.C.TestSetPlayerControlsActor(true) end
+if mode == 'invalid_prewrite_pose' then ffi.C.TestSetInvalidPose(true) end
 if mode == 'default_off' then options.initial_alignment_fixture = nil end
 local mfq_case = mode:match('^mfq_') ~= nil
 if mfq_case then
@@ -63,11 +72,11 @@ if mfq_case then
  options.initial_alignment_fixture = options.fixture
  options.binding.epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
  options.binding.index = 943
- ffi.C.TestAlignmentMode(6)
+ ffi.C.TestSetMFQCode()
  if mode == 'mfq_wrong_epoch' then options.binding.epoch = '4ba7be438ebb04ec5bb85fdb95b5a488' end
  if mode == 'mfq_wrong_index' then options.binding.index = 1318 end
- if mode == 'mfq_wrong_code' then ffi.C.TestAlignmentMode(0) end
- if mode == 'mfq_player' then ffi.C.TestAlignmentMode(7) end
+ if mode == 'mfq_wrong_code' then ffi.C.TestSetRecoveryCode(true) end
+ if mode == 'mfq_player' then ffi.C.TestSetPlayerControlsActor(true) end
  if mode == 'mfq_guard' then options.guard = function() return false end end
  if mode == 'mfq_unprepared' then prepared = false end
  if mode == 'mfq_stale' then options.initial_sample.arrival = 0 end
@@ -121,7 +130,7 @@ if mode:match('^inspector_') then
   options.fixture = 'recovery_mfq_419'
   options.binding.epoch = '26a1a365c66788aa06f0aeb9e18ff62e'
   options.binding.index = 943
-  ffi.C.TestAlignmentMode(6)
+  ffi.C.TestSetMFQCode()
  end
  options.initial_alignment_fixture = options.fixture
  if mode == 'inspector_default' then
@@ -145,7 +154,7 @@ if mode:match('^inspector_') then
  options.binding.actor_key = '42' -- The inspector retains the originally selected binding.
  assert(reader.guard() == true and reader.read().x == 0 and reader.game() == 10)
  if mode == 'inspector_wrong_code' then
-  ffi.C.TestAlignmentMode(0)
+  ffi.C.TestSetRecoveryCode(true)
   assert(reader.guard() == false and not pcall(reader.read))
  end
  assert(ffi.C.TestWrites() == 0 and #events == 0 and not options.initial_alignment_state.used)
