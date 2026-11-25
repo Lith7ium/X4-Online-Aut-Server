@@ -124,6 +124,12 @@ plays. A dedicated server avatar uses no pilot slot. A fifth pilot sees
 `Session Full` before admission can pause the world. A pilot who leaves
 releases their slot and ship.
 
+A reservation identifies one ship in the shared fleet. For example, when a
+pilot reserves WRN-302, their local X4 and the server each load WRN-302
+from the checkpoint. The registry connects the local game objects across
+processes. The server's saved ship carries the cargo, accounts for the trade
+and retains the NPC assignment. The client supplies the human's flight input.
+
 A pilot can reserve a Company ship with an assigned NPC captain. If the
 captain is still completing a trade, the client can verify the player's
 arrival aboard the reserved ship as a passenger while the world is paused.
@@ -136,6 +142,11 @@ require an empty NPC helm.
 A native Linux client joined as a passenger, received a resume and
 acquired the helm on the same reservation. The loopback test host ran the
 usual transfer and participant controls with simulated world operations. [Native seat takeover results](../reports/AUTHORITY-COMPANY-CAPTAIN-TAKEOVER-20261125.md)
+
+For undocking after a trade, the agreed behaviour is to hold the client
+at the berth until the server confirms departure of the reserved ship.
+A queued order or a completed purchase receipt is insufficient to release
+the local flight controls. This departure handshake is under development.
 
 ## Server positions for reserved Company ships
 
