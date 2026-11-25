@@ -124,6 +124,13 @@ plays. A dedicated server avatar uses no pilot slot. A fifth pilot sees
 `Session Full` before admission can pause the world. A pilot who leaves
 releases their slot and ship.
 
+The intended seat selection includes ships with an assigned Company captain.
+When a human takes the helm, the same NPC should remain aboard and assigned
+to the ship. On the server that NPC can execute confirmed station purchases.
+An uncrewed ship should still be available for flight. The current seat
+handover and flight-position writer require an empty helm. Taking over a
+crewed ship is under native development.
+
 ## Server positions for reserved Company ships
 
 Use `--company-ship-positions` (also accepted as `--company-pose-trial`) to
