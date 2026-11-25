@@ -4,8 +4,7 @@
  <cues>
   <cue name="State" namespace="this">
    <actions>
-    <set_value name="$Requests" exact="table[]"/>
-    <set_value name="$AttemptedShips" exact="table[]"/>
+    <set_value name="$AttemptedNonce" exact="''"/>
    </actions>
    <cues>
     <cue name="Request" instantiate="true" namespace="this">
@@ -28,11 +27,10 @@
        <do_if value="not $SameIdentity">
         <set_value name="$Status" exact="'identity_mismatch'"/>
        </do_if>
-       <do_elseif value="@State.$Requests.{$Nonce} or @State.$AttemptedShips.{$Index}">
+       <do_elseif value="State.$AttemptedNonce != ''">
         <set_value name="$Status" exact="'duplicate_or_attempted'"/>
        </do_elseif>
        <do_else>
-        <set_value name="State.$Requests.{$Nonce}" exact="true"/>
         <set_value name="$Bay" exact="@$Ship.dock"/>
         <set_value name="$Station" exact="@$Bay.container"/>
         <include_actions ref="CheckBerth"/>
@@ -51,7 +49,7 @@
         </do_elseif>
         <do_else>
          <!-- Set the one-shot fence even if X4 does not return an order. -->
-         <set_value name="State.$AttemptedShips.{$Index}" exact="true"/>
+         <set_value name="State.$AttemptedNonce" exact="$Nonce"/>
          <set_value name="$Deadline" exact="player.age + 45s"/>
          <create_order name="$Order" id="'Undock'" object="$Ship" immediate="true"/>
          <set_value name="$Status" exact="if @$Order.id == 'Undock' then 'awaiting' else 'dispatch_unconfirmed'"/>

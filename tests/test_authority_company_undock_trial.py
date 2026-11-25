@@ -21,7 +21,8 @@ class CompanyUndockTrialTests(unittest.TestCase):
         self.assertIn('$Ship.orders.count', guard.get('value'))
         self.assertLess(ordered.index(guard), ordered.index(order))
         latch, = (action for action in tree.iter('set_value')
-                   if action.get('name') == 'State.$AttemptedShips.{$Index}')
+                   if action.get('name') == 'State.$AttemptedNonce')
+        self.assertEqual(latch.get('exact'), '$Nonce')
         self.assertLess(ordered.index(latch), ordered.index(order))
         for bypass in ('undock', 'cancel_order', 'spawn_docked', 'teleport_player', 'remove_docking_request'):
             self.assertEqual(list(tree.iter(bypass)), [])
