@@ -132,7 +132,9 @@ local function stock_rows(ffi, ship, station)
                 local free = space[space_key]
                 if not integer(free, 0, max_integer) then return nil, 'invalid_observation' end
                 local side = offer.isselloffer == true and 'buy' or 'sell'
-                local tradeable = (side == 'buy' or available >= math.max(1, minimum))
+                -- Native sales only settle normal cargo. Keep the separate
+                -- equipment count visible without permitting a sale from it.
+                local tradeable = (side == 'buy' or (not category and available >= math.max(1, minimum)))
                     and can_trade(ffi, offer, ship_lua, side)
                 rows[#rows + 1] = table.concat({side, ware, price, amount, minimum,
                     available, free, tradeable and '1' or '0'}, ',')

@@ -86,7 +86,7 @@ end
 
 function CanTradeWith(id, ship_lua, minimum, buying)
     assert(ship_lua == 'ship' and id ~= 19)
-    if id == 2 or id == 20 then
+    if id == 2 or id == 20 or id == 21 then
         assert(buying == nil and minimum == (id == 2 and 2 or 1))
         calls.sell = calls.sell + 1
         if id == 20 then return false end
@@ -206,10 +206,13 @@ offers = {
         isselloffer = true, ammotypename = 'deployable'},
     {id = 7, ware = 'resourceprobe_01', price = 80, amount = 15, minamount = 1,
         isselloffer = true, ammotypename = 'deployable'},
+    {id = 21, ware = 'satellite_mk2', price = 110, amount = 12, minamount = 1,
+        isbuyoffer = true, ammotypename = 'deployable'},
 }
 local seventh = string.rep('3', 32)
 open(seventh, 7)
 observe(seventh)
 send('READ', seventh, '0')
 assert(sent[#sent] == 'MARKET_PAGE|' .. lease .. '|' .. seventh
-    .. '|0|buy,resourceprobe_01,8000,15,1,0,10,1|buy,satellite_mk2,12000,25,1,3,10,1')
+    .. '|0|buy,resourceprobe_01,8000,15,1,0,10,1|buy,satellite_mk2,12000,25,1,3,10,1'
+    .. '|sell,satellite_mk2,11000,12,1,3,10,0')
