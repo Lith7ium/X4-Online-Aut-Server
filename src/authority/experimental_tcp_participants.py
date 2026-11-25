@@ -40,13 +40,15 @@ class ExperimentalTCPParticipants:
     Failure permanently faults this adapter. Caller must fence all clients,
     outstanding transfers and the coordinator before attempting recovery.
     """
-    def __init__(self, host, *, enabled=False, timeout=30, retire_disconnected=False):
+    def __init__(self, host, *, enabled=False, timeout=30,
+                 retire_disconnected_on_resume=False, retire_disconnected_on_pause=False):
         if (enabled is not True or type(host) is not ExperimentalLocalHost or
                 type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 300):
             raise ValueError('explicitly enabled local host and bounded timeout required')
-        if type(retire_disconnected) is not bool:
+        if type(retire_disconnected_on_resume) is not bool or type(retire_disconnected_on_pause) is not bool:
             raise ValueError('participant departure policy must be boolean')
-        self._retire_disconnected = retire_disconnected
+        self._retire_disconnected_on_resume = retire_disconnected_on_resume
+        self._retire_disconnected_on_pause = retire_disconnected_on_pause
         host._check()
         if host._world.session.players:
             raise ValueError('install participant adapter before clients join')
@@ -96,7 +98,9 @@ class ExperimentalTCPParticipants:
                 del peers[handle]
 
             # WorldCoordinator confirms the native server pause before calling us.
-            retire = retire_disconnected if self._retire_disconnected else None
+            allow_departure = (self._retire_disconnected_on_resume if operation == 'resume'
+                               else self._retire_disconnected_on_pause)
+            retire = retire_disconnected if allow_departure else None
             deadline = time.monotonic() + self._timeout
             for handle in handles:
                 if handle not in peers:

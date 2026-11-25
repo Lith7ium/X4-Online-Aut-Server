@@ -25,7 +25,8 @@ from test_authority_trusted_marker_load_session import claim_for
 
 
 class ParticipantTCPFixture(unittest.TestCase):
-    retire_disconnected = False
+    retire_disconnected_on_resume = False
+    retire_disconnected_on_pause = False
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -39,8 +40,10 @@ class ParticipantTCPFixture(unittest.TestCase):
         self.addCleanup(lambda: self.control.close() if not (self.control._closed or self.control._failed) else None)
         self.host = ExperimentalLocalHost(self.world, self.control, self.service, enabled=True)
         options = {}
-        if getattr(self, 'retire_disconnected', False):
-            options['retire_disconnected'] = True
+        if self.retire_disconnected_on_resume:
+            options['retire_disconnected_on_resume'] = True
+        if self.retire_disconnected_on_pause:
+            options['retire_disconnected_on_pause'] = True
         self.participants = ExperimentalTCPParticipants(self.host, enabled=True, timeout=.3, **options)
         self.world._participants = self.participants
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -157,7 +160,7 @@ class ParticipantTCPTest(ParticipantTCPFixture):
 
 
 class ResumeDisconnectTest(ParticipantTCPFixture):
-    retire_disconnected = True
+    retire_disconnected_on_resume = True
 
     def assert_departure_saved(self, initial):
         self.assertEqual(self.world.session.pending.operation, 'pause')
@@ -314,8 +317,20 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
     def test_opt_in_keeps_non_eof_and_invalid_receipts_fatal(self):
         for mode in ('wrong_id', 'wrong_epoch', 'duplicate', 'timeout', 'malformed_fin'):
             with self.subTest(mode=mode):
-                with ParticipantCase(mode, retire_disconnected=True) as case:
+                with ParticipantCase(mode, retire_disconnected_on_resume=True) as case:
                     case.exercise()
+
+    def test_legacy_resume_opt_in_keeps_pause_eof_strict(self):
+        pilot = self.connect()
+        self.offer_and_claim(pilot)
+        records = self.responder(pilot, 'pause_eof')
+        self.host.tick(.1)
+        self.assertEqual(self.world.session.state, 'running')
+        self.connect()
+        with self.assertRaisesRegex(RuntimeError, 'participant disconnected during operation'):
+            self.host.tick(.1)
+        self.assertEqual([record['operation'] for record in records], ['resume', 'pause'])
+        self.assertEqual(self.world.session.state, 'faulted')
 
     def test_last_pilot_closes_after_partial_expected_resume_receipt(self):
         pilot = self.connect()
@@ -398,7 +413,7 @@ class ResumeDisconnectTest(ParticipantTCPFixture):
 
 
 class PauseDisconnectTest(ParticipantTCPFixture):
-    retire_disconnected = True
+    retire_disconnected_on_pause = True
 
     def running_pilot(self, mode='pause_eof'):
         pilot = self.connect()
@@ -483,10 +498,10 @@ class PauseDisconnectTest(ParticipantTCPFixture):
 
 class ParticipantCase:
     """Reuse fixture lifecycle for one deliberate failure without re-running tests."""
-    def __init__(self, mode, *, retire_disconnected=False):
+    def __init__(self, mode, *, retire_disconnected_on_resume=False):
         self.mode = mode
         self.case = ParticipantTCPTest('test_adapter_refuses_use_outside_active_host_operation')
-        self.case.retire_disconnected = retire_disconnected
+        self.case.retire_disconnected_on_resume = retire_disconnected_on_resume
     def __enter__(self): self.case.setUp(); return self
     def __exit__(self, *args): self.case.doCleanups()
     def exercise(self):

@@ -648,11 +648,13 @@ def finish_recovery_lock(lockbox, remaining, services_stopped, errors):
 class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
     """Fence every recovered-server participant exchange with its owner guard."""
 
-    def __init__(self, host, *, enabled, timeout, guard_process, retire_disconnected=False):
+    def __init__(self, host, *, enabled, timeout, guard_process,
+                 retire_disconnected_on_resume=False, retire_disconnected_on_pause=False):
         if not callable(guard_process):
             raise ValueError('participant process guard required')
         super().__init__(host, enabled=enabled, timeout=timeout,
-                         retire_disconnected=retire_disconnected)
+                         retire_disconnected_on_resume=retire_disconnected_on_resume,
+                         retire_disconnected_on_pause=retire_disconnected_on_pause)
         self._guard_process = guard_process
 
     def check_process(self):
@@ -1624,7 +1626,8 @@ def run(args):
             return overlap_guard[0]()
         world._participants = RecoveredGuardedParticipants(
             host, enabled=True, timeout=120, guard_process=verify_process,
-            retire_disconnected=require_company_ship)
+            retire_disconnected_on_resume=require_company_ship,
+            retire_disconnected_on_pause=require_company_ship)
         if purchase_provider is not None:
             from authority.company_purchase_scheduler import CompanyPurchaseScheduler
             purchase_options = {'undock': undock_provider} if undock_provider is not None else {}
