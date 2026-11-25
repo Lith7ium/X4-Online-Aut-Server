@@ -125,6 +125,98 @@ class CompanyCockpitOptInConfigTests(unittest.TestCase):
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')
 class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
+    def test_indexed_observer_reports_each_actual_withdrawal_reason_once(self):
+        lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        lua.globals()._ROOT = str(ROOT).replace('\\', '/')
+        lua.execute(r"""
+            local module = dofile(_ROOT .. '/src/authority/lua/company_cockpit_observer.lua')
+            local epoch = ('a'):rep(32)
+            local pinned = {epoch=epoch, nonce=('b'):rep(32), issued_count=10}
+            local target = {actor=22, space=1, sector_macro='sector_a', code='RUN-002'}
+            local function run(index)
+                local now, available, valid, verified, issue = 0, true, true, true, true
+                local register, request
+                local reasons = {}
+                local reader = module.new(pinned, 1, {
+                    target_index=index,
+                    clock=function() return now end,
+                    probe=function() return available and {mode='radar'} or nil end,
+                    validate_actor=function() return valid end,
+                    parse_actor=tonumber,
+                    verify_radar_actor=function() return verified and target or nil end,
+                    register=function(callback) register=callback; return true end,
+                    issue=function(args) request=args; return issue end,
+                    on_withdrawal=function(reason) reasons[#reasons+1]=reason end,
+                })
+                local function reply(status)
+                    register(nil, table.concat({request.request_id,epoch,status,2,'22',
+                        target.sector_macro,target.code,'radar'}, '|'))
+                end
+                local function establish()
+                    now=now+.2
+                    reader:tick()
+                    reply('OBSERVED')
+                    assert(reader:current().index==2)
+                end
+                local function fault(reason, effect)
+                    local previous = #reasons
+                    effect()
+                    assert(reader:current()==nil)
+                    if index then
+                        assert(#reasons==previous+1 and reasons[#reasons]==reason)
+                    else
+                        assert(#reasons==0)
+                    end
+                end
+
+                issue=false
+                reader:tick()
+                assert(#reasons==0)
+                issue=true
+                establish()
+                fault('expired', function() now=now+.46 end)
+                establish()
+                now=now+.46
+                assert(reader:current()==nil and #reasons==(index and 1 or 0))
+
+                establish()
+                fault('probe_unavailable', function() available=false end)
+                available=true
+                establish()
+                fault('revalidation_failed', function() valid=false end)
+                valid=true
+                establish()
+                fault('response_rejected', function()
+                    now=now+.2
+                    reader:tick()
+                    register(nil,'other-request|ignored')
+                    assert(reader:current())
+                    reply('UNAVAILABLE')
+                end)
+                establish()
+                fault('observation_rejected', function()
+                    now=now+.2
+                    reader:tick()
+                    verified=false
+                    reply('OBSERVED')
+                end)
+                verified=true
+                establish()
+                fault('issue_failed', function()
+                    now=now+.2
+                    issue=false
+                    reader:tick()
+                end)
+                issue=true
+                establish()
+                fault('clock_invalid', function() now=now-.01 end)
+                reader:close()
+                assert(#reasons==(index and 7 or 0))
+            end
+            run(2)
+            run(nil)
+        """)
+
     def test_hud_target_then_untargeted_radar_independent_map_loss_generation_and_reacquisition(self):
         lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
         lua.globals()._ROOT = str(ROOT).replace('\\', '/')
@@ -172,6 +264,8 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 md_handlers = {},
             }
 
+            local withdrawal
+            DebugError = function(message) withdrawal = message end
             Menus = {{name = 'MapMenu', shown = false}}
             GetCurRealTime = function() return st.now end
             GetPlayerTarget = function() return st.hud_target and tostring(st.hud_target) or nil end
@@ -456,6 +550,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             deliver(7, st.poses[remote_actor].x + 3, 20, gen2, hud_serial)
             step(0.2); step(0.1)
             assert(cockpit:current() == nil)
+            assert(withdrawal == '[X4LAN] AUTH_COMPANY_COCKPIT_WITHDRAWAL revalidation_failed')
             assert(latest_cockpit_serial() ~= hud_serial and #st.writes == before_out_of_range)
 
             stream:close()

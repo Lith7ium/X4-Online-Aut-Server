@@ -46,13 +46,24 @@ function M.new(pinned, own_index, engine)
     local sequence = 0
     local closed = false
     local api = {}
+    local reported = {}
+
+    local function clear_observation(reason)
+        if observed == nil then return end
+        observed = nil
+        if target_index ~= nil and engine.on_withdrawal and not reported[reason] then
+            reported[reason] = true
+            pcall(engine.on_withdrawal, reason)
+        end
+    end
 
     local function inspect()
         if closed then return nil end
         local now = engine.clock()
         if type(now) ~= 'number' or not (now >= 0 and now < math.huge)
                 or (last ~= nil and now < last) then
-            pending, observed, closed = nil, nil, true
+            pending, closed = nil, true
+            clear_observation('clock_invalid')
             return nil
         end
         last = now
@@ -71,22 +82,22 @@ function M.new(pinned, own_index, engine)
             if expired or mismatch then pending = nil end
         end
         if observed then
-            local expired = now >= observed.deadline
-            local still_valid = false
-            if not expired and probe ~= nil then
+            if now >= observed.deadline then
+                clear_observation('expired')
+            elseif probe == nil then
+                clear_observation('probe_unavailable')
+            else
                 -- Keep an indexed radar binding while the HUD points elsewhere.
-                if probe.mode ~= 'radar' and same_hull(observed.hull, probe) then
-                    still_valid = true
-                elseif probe.mode == 'radar' or target_index ~= nil then
+                local still_valid = probe.mode ~= 'radar' and same_hull(observed.hull, probe)
+                if not still_valid and (probe.mode == 'radar' or target_index ~= nil) then
+                    still_valid = probe.mode == 'radar'
                     if engine.validate_actor then
                         local ok, valid = pcall(engine.validate_actor, observed.hull)
                         still_valid = ok and valid == true
-                    else
-                        still_valid = probe.mode == 'radar'
                     end
                 end
+                if not still_valid then clear_observation('revalidation_failed') end
             end
-            if not still_valid then observed = nil end
         end
         return probe, now
     end
@@ -97,7 +108,10 @@ function M.new(pinned, own_index, engine)
         local probe = inspect()
         local eligible = pending == request and probe ~= nil
         pending = nil
-        if not eligible or #row > 416 then observed = nil; return end
+        if not eligible or #row > 416 then
+            clear_observation('response_rejected')
+            return
+        end
         local id, actual_epoch, status, index_text, actor_text, sector, code, rmode =
             row:match('^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]+)$')
         local index = tonumber(index_text)
@@ -108,16 +122,19 @@ function M.new(pinned, own_index, engine)
                 or not index_in(index, count) or index == own_index or tostring(index) ~= index_text
                 or not valid_sector(sector) or not valid_code(code) or not actor_id
                 or (target_index ~= nil and index ~= target_index) or not mode_matches then
-            observed = nil
+            clear_observation('response_rejected')
             return
         end
         local hull
         if rmode == 'radar' then
             hull = engine.verify_radar_actor and engine.verify_radar_actor(actor_id, sector, code) or nil
-            if not hull then observed = nil; return end
+            if not hull then
+                clear_observation('observation_rejected')
+                return
+            end
         else
             if sector ~= probe.sector_macro or code ~= probe.code or actor_id ~= probe.actor then
-                observed = nil
+                clear_observation('observation_rejected')
                 return
             end
             hull = probe
@@ -146,7 +163,10 @@ function M.new(pinned, own_index, engine)
                 request_id = id, epoch = epoch, count = count, own = own_index,
                 mode = probe.mode, target_index = target_index,
             })
-            if not ok or issued ~= true then pending, observed = nil, nil end
+            if not ok or issued ~= true then
+                pending = nil
+                clear_observation('issue_failed')
+            end
         end
         return clone_row(observed and observed.row)
     end
@@ -605,6 +625,9 @@ function M.new_x4(pinned, own_index, registry_ready, options)
     end
     return M.new(pinned, own_index, {
         target_index = radar_fallback and target_index or nil,
+        on_withdrawal = options.on_withdrawal or function(reason)
+            DebugError('[X4LAN] AUTH_COMPANY_COCKPIT_WITHDRAWAL ' .. reason)
+        end,
         clock = options.clock or GetCurRealTime,
         probe = probe,
         parse_actor = h.resolve.parse_hex,
