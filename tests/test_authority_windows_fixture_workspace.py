@@ -103,6 +103,9 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         return {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
 
     def _prepare_and_register(self):
+        # Release the retained log handle before the temporary tree is removed;
+        # Windows cannot delete a file that is still open.
+        self.addCleanup(self.workspace.close)
         self.workspace.prepare()
         self.assertFalse(self.workspace.download_dir.exists())
         # The receive layer creates this child beneath the restricted run root.
@@ -196,6 +199,13 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         workspace.read_log()
         replacement = workspace.log_path.with_name('replacement.log')
         replacement.write_bytes(b'other file\n')
+        if os.name == 'nt':
+            # The retained handle does not share delete access, so Windows itself
+            # refuses to replace the log while the reader holds it.
+            with self.assertRaises(PermissionError):
+                os.replace(replacement, workspace.log_path)
+            workspace.read_log()
+            return
         os.replace(replacement, workspace.log_path)
         with self.assertRaisesRegex(RuntimeError, 'replaced, shrunk'):
             workspace.read_log()

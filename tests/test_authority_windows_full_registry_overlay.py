@@ -1,6 +1,7 @@
 """Synthetic install and actual Lua-owner checks; no native X4 run."""
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -57,6 +58,8 @@ class FullRegistryOverlayTest(unittest.TestCase):
         self.assertLess(probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'),
                         probe.index('barrier.update()'))
         root = Path(__file__).resolve().parents[1]
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         for mode in ('ready', 'wrong_bits', 'time_changed', 'time_changed_header'):
             with self.subTest(mode=mode):
                 result = subprocess.run(
@@ -101,6 +104,8 @@ class FullRegistryOverlayTest(unittest.TestCase):
             install_fixture_overlay(self.view, **self.options)
         target = self.view / 'extensions/x4_lan_lab/ui'
         root = Path(__file__).resolve().parents[1]
+        if shutil.which('luajit') is None:
+            self.skipTest('needs a luajit executable')
         result = subprocess.run(
             ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
              str(target), 'ready', '300'], capture_output=True, text=True, cwd=root)
