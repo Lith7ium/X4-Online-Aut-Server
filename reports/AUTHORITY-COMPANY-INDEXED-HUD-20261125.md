@@ -1,16 +1,17 @@
 # Indexed Company cockpit playback on Bazzite
 
-X4 9.00 selected the unrelated Company ship YRD-027 in the HUD while
-WOO-831 was under local control and the configured ship WRN-302 was
-800 m away in the same sector. The private fixture stopped before it
-received a radar route or supplied a motion sample. Native movement
-under the new indexed HUD fallback in `bc7e9150` remains unverified.
+The regular cockpit observer in `bc7e9150` resolved WRN-302 on radar
+while a different Company ship, YRD-027, was selected in the native X4
+HUD. The route was withdrawn before the local fixture supplied its
+first replay sample. Native position playback remains unverified.
 
-Both attempts used one Bazzite X4 process at a time, a private Xvfb
-display, Mesa llvmpipe and disposable profile 45841. Each started from
-a fresh copy of the confirmed save from the [24 November playback
+Each attempt used one Bazzite X4 9.00 process, a private Xvfb display,
+Mesa llvmpipe and disposable profile 45841. Each started from a fresh
+copy of the confirmed save from the [24 November playback
 rehearsal](AUTHORITY-COMPANY-SHIP-PLAYBACK-20261124.md). The planned feed
 was an archived flight replay through the regular receiving modules.
+
+## First two setup attempts
 
 The first attempt loaded the expected checkpoint and confirmed the
 800 m setup. The current seat module returned `PAUSE_OR_REGISTRY_LOST`
@@ -34,9 +35,34 @@ only recorded the fixture's generic initialization error. There were
 no post-playback positions to compare.
 
 The changed cockpit MD and the private setup MD passed schema
-validation. Both launches exited with no remaining owned processes and
+validation. These two launches exited with no remaining owned processes and
 each preserved the source save's SHA-256. The result-file digests are
 `8f1b1dc0c3d5ce36aca437f5ac5fbf9550167e473f1a3207db2effeca0234c8d`
 for the first launch and
 `defaaa144429b5c5db6b7690d403f1e502d4550c686b7a090b0eaef4cd113a0b`
 for the corrected setup.
+
+## Native radar route with the full production module set
+
+The revised private fixture assembled its Lua and MD from the ordinary
+player overlay's module lists. The staged modules matched the production
+sources, with the production buffer export applied. The assembled
+offline preflight kept YRD-027 on the simulated HUD, resolved WRN-302
+through the cockpit slot and replayed sequences 30–39. Only that ship
+received position writes in the preflight.
+
+The next native run confirmed control of WOO-831 and selected YRD-027
+with the stock HUD. X4 returned the same three starting positions shown
+in the table. The regular observer then published cockpit serial 2 for
+WRN-302, registry index 7354, in `cluster_01_sector001_macro`. Its route
+mode was `radar` while YRD-027 remained the native HUD target.
+
+The fixture next reported `cockpit-view-lost`. The log gives no cause
+for the withdrawal. It contains no `LOCAL_REPLAY` or
+`FOLLOWER_READBACK` records. There are no final positions for WOO-831,
+YRD-027 or WRN-302 in this run, so displacement cannot be measured for
+any of the three ships. No further run was made.
+
+The game exited with no remaining owned processes and the source save
+retained its SHA-256. The private result-file digest is
+`df70ee95bc7b760e18c224e9e63ffbdbf9d72a894090238bc01d62a8ef949745`.
