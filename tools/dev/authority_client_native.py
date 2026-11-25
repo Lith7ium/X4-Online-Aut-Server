@@ -350,6 +350,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             capabilities['trade_view'] = True
                         if company_fleet_orders:
                             capabilities['fleet_orders'] = True
+                            capabilities['fleet_order_version'] = 2
                         purchase_epoch = owner.enable_company_purchases(**capabilities)
                 result['phase'] = 'download'
                 target = profile/'save'/snapshot.SLOT
@@ -425,7 +426,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     if company_fleet_orders:
                         from authority.company_fleet_source import CompanyFleetSource
 
-                        fleet_source = CompanyFleetSource()
+                        fleet_source = CompanyFleetSource(version=owner._company_fleet_order_version)
                         source_options['company_fleet'] = fleet_source
                     seat_paths, seat_watch = company_seat.install(case, profile, bound, target, index,
                         owner.poll, **source_options)

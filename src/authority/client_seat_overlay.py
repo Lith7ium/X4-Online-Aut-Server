@@ -35,7 +35,11 @@ def company_fleet_config(source, full_registry):
             or type(port) is not int or not 1 <= port <= 65535
             or type(lease) is not str or not re.fullmatch(r'[0-9a-f]{32}', lease)):
         raise ValueError('invalid Company fleet order configuration')
-    return f',authority_company_fleet={{epoch="{epoch}",port={port},lease="{lease}"}}'
+    version = settings.get('version', 1)
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('invalid Company fleet order version')
+    extra = ',version=2' if version == 2 else ''
+    return f',authority_company_fleet={{epoch="{epoch}",port={port},lease="{lease}"{extra}}}'
 
 
 def company_purchase_ui(source):

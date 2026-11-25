@@ -145,13 +145,15 @@ def _frame(value):
 
 
 class _PurchaseWindow:
-    def __init__(self):
+    def __init__(self, fleet_version=1):
         self.sequence = 0
         self.pending = None
         self.seen = set()
         self.challenges = OrderedDict()
         self.undock = UndockWindow()
-        self.fleet = CompanyCommandWindow(fleet_order, fleet_receipt, 'order_id')
+        self.fleet = CompanyCommandWindow(
+            lambda value: fleet_order(value, version=fleet_version),
+            lambda value: fleet_receipt(value, version=fleet_version), 'order_id')
 
     def check_challenge(self, challenge):
         if challenge in self.challenges:
@@ -193,7 +195,7 @@ class ClientPurchaseControl:
     """Consume one host poll on the client's owned control thread."""
 
     def __init__(self, epoch, handle, attempt, ship_index, exchange, statement=None, statement_result=None, *,
-                 undock_exchange=None, trade_view_exchange=None, fleet_exchange=None):
+                 undock_exchange=None, trade_view_exchange=None, fleet_exchange=None, fleet_version=1):
         _envelope(epoch, handle, attempt, ship_index, 1)
         callbacks = (exchange, statement, statement_result, undock_exchange, trade_view_exchange, fleet_exchange)
         if all(value is None for value in callbacks) or any(
@@ -206,7 +208,7 @@ class ClientPurchaseControl:
         self.trade_view_exchange = trade_view_exchange
         self.statement = statement
         self.statement_result = statement_result
-        self.window = _PurchaseWindow()
+        self.window = _PurchaseWindow(fleet_version)
 
     def reply(self, command, check):
         envelope = _envelope(*self.binding, self.window.sequence + 1)
@@ -363,7 +365,8 @@ def _poll_company_order(participants, handle, attempt_id, ship_index, receipt, g
 
     def negotiated(peer):
         version = peer.get(version_field)
-        return type(version) is int and version == 1
+        supported = (1, 2) if service == 'fleet' else (1,)
+        return type(version) is int and version in supported
 
     return _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, guard,
                               peer_supports=negotiated)
@@ -452,7 +455,9 @@ def _exchange_purchase(participants, handle, attempt_id, ship_index, prepare, gu
 
     if not binding_current():
         raise ValueError('company purchase participant binding unavailable')
-    window = peer.setdefault('company_purchase', _PurchaseWindow())
+    if 'company_purchase' not in peer:
+        peer['company_purchase'] = _PurchaseWindow(peer.get('fleet_order_version', 1))
+    window = peer['company_purchase']
     envelope = _envelope(epoch, handle, attempt_id, reservation.ship_index, window.sequence + 1)
     raw, envelope, kind, payload, parse, advance = prepare(peer, window, reservation, envelope)
 

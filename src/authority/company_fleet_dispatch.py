@@ -27,7 +27,7 @@ class CompanyFleetDispatch:
 
     def take_turn(self, pilot, peer):
         version = peer.get('fleet_order_version')
-        if type(version) is not int or version != 1:
+        if type(version) is not int or version not in (1, 2):
             return False
         if pilot in self._next_turn:
             self._next_turn.discard(pilot)
@@ -45,10 +45,19 @@ class CompanyFleetDispatch:
         if request is None:
             return
         order = fleet_order(request)
+        if 'queue_mode' in order:
+            # The caller queues these in the same receive order as purchases.
+            return order
+        if provider_busy or self._active is not None:
+            self._receipts[pilot] = dict(order, outcome='refused', reason='provider_busy')
+        else:
+            self.start(pilot, order)
+
+    def start(self, pilot, order):
+        if self._active is not None:
+            raise RuntimeError('another Company fleet order is still being verified')
         if self._uncertain:
             reason = 'provider_unavailable'
-        elif provider_busy or self._active is not None:
-            reason = 'provider_busy'
         else:
             reason = self._session.hold_fleet_target(pilot.conn, pilot.reservation, pilot.registry_epoch, order)
         if reason is not None:
@@ -70,7 +79,7 @@ class CompanyFleetDispatch:
                 if self._clock() < deadline:
                     return
                 result = dict(order, outcome='unknown')
-            receipt = fleet_receipt(result)
+            receipt = fleet_receipt(result, version=2 if 'queue_mode' in order else 1)
             if any(receipt[key] != expected for key, expected in order.items()):
                 raise ValueError('native receipt refers to another fleet order')
         except Exception:

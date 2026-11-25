@@ -36,6 +36,13 @@ class _Binding:
                     ship_code=self.ship_code)
 
 
+@dataclass(frozen=True)
+class _QueuedCommand:
+    pilot: _Binding
+    kind: str
+    request: dict
+
+
 @dataclass
 class _ActivePurchase:
     binding: _Binding
@@ -157,10 +164,15 @@ class CompanyPurchaseScheduler:
         if self._native_busy():
             return
         while self._queue:
-            binding, purchase = self._queue.popleft()
+            command = self._queue.popleft()
+            binding = command.pilot
             if bindings.get(binding.handle) != binding:
                 continue
             self._check()
+            if command.kind == 'fleet':
+                self._fleet.start(binding, command.request)
+                return
+            purchase = command.request
             if not self._ledger.begin(binding.ship_index, binding.ship_code, purchase):
                 self._receipts[binding.handle] = (
                     binding, dict(purchase, outcome='refused', reason='request_replayed'))
@@ -283,8 +295,8 @@ class CompanyPurchaseScheduler:
             self._advance_native()
         if self._active_undock is not None:
             self._advance_undock()
-        self._queue = deque((binding, purchase) for binding, purchase in self._queue
-                            if bindings.get(binding.handle) == binding)
+        self._queue = deque(command for command in self._queue
+                            if bindings.get(command.pilot.handle) == command.pilot)
         self._receipts = {handle: item for handle, item in self._receipts.items()
                           if bindings.get(handle) == item[0]}
         current = set(bindings.values())
@@ -310,7 +322,7 @@ class CompanyPurchaseScheduler:
         if not regular_turn and (self._market is None or now < self._next_market_poll
                                  or self._next_poll - now < _SLOW_MARKET_EXCHANGE):
             return
-        busy = {binding for binding, _ in self._queue}
+        busy = {command.pilot for command in self._queue}
         if self._active is not None:
             busy.add(self._active.binding)
         if self._active_undock is not None:
@@ -352,7 +364,9 @@ class CompanyPurchaseScheduler:
         if self._fleet is not None and receipt is None:
             peer = self._participants._host._control._peers[binding.conn]
             if self._fleet.take_turn(binding, peer):
-                self._fleet.poll_pilot(binding, provider_busy=self._native_busy() or bool(self._queue))
+                order = self._fleet.poll_pilot(binding, provider_busy=self._native_busy() or bool(self._queue))
+                if order is not None:
+                    self._queue.append(_QueuedCommand(binding, 'fleet', order))
                 return
         self._poll_purchase(binding, receipt, recover_at=now)
 
@@ -382,7 +396,7 @@ class CompanyPurchaseScheduler:
             return
         self._receipts.pop(handle, None)
         if purchase is not None:
-            self._queue.append((binding, purchase))
+            self._queue.append(_QueuedCommand(binding, 'purchase', purchase))
 
     def before_world_transition(self):
         """Allow a transition once the current native decision has been recorded.

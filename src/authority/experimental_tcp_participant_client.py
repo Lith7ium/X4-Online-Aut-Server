@@ -41,9 +41,12 @@ class ExperimentalTCPParticipantClient:
     def __init__(self, conn, controller, *, enabled=False, epoch, handle, timeout=30, apply_job=None, apply_motion=None, apply_motion_once=None, preflight_motion=None, authority_grant=None, authority_guard=None, pull_authority_motion=None, company_purchase_exchange=None,
                  company_purchase_attempt=None, company_purchase_ship_index=None, company_purchase_statement=None,
                  company_purchase_statement_result=None, company_undock_exchange=None, company_trade_view_exchange=None,
-                 company_fleet_exchange=None):
+                 company_fleet_exchange=None, company_fleet_version=1):
         validate_participant_connection(conn, controller, enabled=enabled,
                                         epoch=epoch, handle=handle, timeout=timeout)
+        if type(company_fleet_version) is not int or company_fleet_version not in (1, 2) or (
+                company_fleet_version == 2 and company_fleet_exchange is None):
+            raise ValueError('invalid Company fleet order capability')
         self._company_purchase = None
         if any(value is not None for value in (company_purchase_exchange, company_purchase_attempt,
                                                 company_purchase_ship_index, company_purchase_statement,
@@ -54,7 +57,7 @@ class ExperimentalTCPParticipantClient:
                 epoch, handle, company_purchase_attempt, company_purchase_ship_index,
                 company_purchase_exchange, company_purchase_statement, company_purchase_statement_result,
                 undock_exchange=company_undock_exchange, trade_view_exchange=company_trade_view_exchange,
-                fleet_exchange=company_fleet_exchange)
+                fleet_exchange=company_fleet_exchange, fleet_version=company_fleet_version)
         conn.setblocking(False)
         self._conn, self._controller, self._epoch, self._handle = conn, controller, epoch, handle
         self._timeout = float(timeout)

@@ -134,14 +134,20 @@ class ExperimentalClientOwner:
             raise CompanyShipChoiceDenied(result)
         return result
 
-    def enable_company_purchases(self, *, undock=False, trade_view=False, fleet_orders=False):
+    def enable_company_purchases(self, *, undock=False, trade_view=False, fleet_orders=False,
+                                 fleet_order_version=1):
         """Enable authenticated purchase polls for the ship chosen on this offer."""
         with self._operation('loading'):
             if type(fleet_orders) is not bool:
                 raise ValueError('invalid Company fleet order capability')
+            if type(fleet_order_version) is not int or fleet_order_version not in (1, 2) or (
+                    fleet_order_version == 2 and not fleet_orders):
+                raise ValueError('invalid Company fleet order version')
             capabilities = {'fleet_orders': True} if fleet_orders else {}
+            if fleet_order_version == 2:
+                capabilities['fleet_order_version'] = 2
             epoch = self._load.enable_company_purchases(undock=undock, trade_view=trade_view, **capabilities)
-            self._company_fleet_order_version = 1 if fleet_orders else None
+            self._company_fleet_order_version = fleet_order_version if fleet_orders else None
             self._company_trade_view_version = 1 if trade_view else None
             self._company_undock_enabled = undock
             self._company_purchases_enabled = True
@@ -245,10 +251,12 @@ class ExperimentalClientOwner:
                 purchase_options['company_trade_view_exchange'] = company_trade_view_exchange
             elif company_trade_view_exchange is not None:
                 raise ValueError('Company trade view callback requires negotiated control')
-            if getattr(self, '_company_fleet_order_version', None) == 1:
+            if getattr(self, '_company_fleet_order_version', None) in (1, 2):
                 if not purchase_options or not callable(company_fleet_exchange):
                     raise ValueError('negotiated Company fleet orders require an order callback')
                 purchase_options['company_fleet_exchange'] = company_fleet_exchange
+                if self._company_fleet_order_version == 2:
+                    purchase_options['company_fleet_version'] = 2
             elif company_fleet_exchange is not None:
                 raise ValueError('Company fleet order callback requires negotiated control')
             checked_grant = None

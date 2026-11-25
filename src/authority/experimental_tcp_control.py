@@ -277,6 +277,7 @@ class ExperimentalTCPControl:
                     self._drop(conn)
                     return
                 peer['out'] += encode_bound_offer(bound) + b'\n'
+                peer.pop('company_purchase', None)
                 peer.pop('company_purchase_ship', None)
                 peer.pop('company_purchase_epoch', None)
                 peer.pop('company_purchase_statement_version', None)
@@ -303,7 +304,7 @@ class ExperimentalTCPControl:
                     fields.add('trade_view_version')
                 if 'fleet_order_version' in message:
                     if (not self._company_fleet_orders or type(message['fleet_order_version']) is not int
-                            or message['fleet_order_version'] != 1):
+                            or message['fleet_order_version'] not in (1, 2)):
                         raise ValueError('Company fleet order control unavailable')
                     fields.add('fleet_order_version')
                 if (not self._company_purchases or set(message) != fields

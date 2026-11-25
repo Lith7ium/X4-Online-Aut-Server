@@ -102,9 +102,10 @@ class ParticipantTest(unittest.TestCase):
         fleet = ',authority_company_fleet={epoch="' + 'a' * 32 + '",port=3100,lease="' + 'b' * 32 + '"}'
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.lua'
-            self.write_owned_config(path, fleet)
-            self.participant.redact()
-            self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
+            for settings in (fleet, fleet[:-1] + ',version=2}'):
+                self.write_owned_config(path, settings)
+                self.participant.redact()
+                self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
             self.write_owned_config(path, fleet + fleet)
             before = path.read_bytes()
             with self.assertRaisesRegex(ValueError, 'unexpected Company fleet order lease configuration'):

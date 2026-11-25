@@ -205,6 +205,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         capabilities['trade_view'] = True
                     if company_fleet_orders:
                         capabilities['fleet_orders'] = True
+                        capabilities['fleet_order_version'] = 2
                     purchase_epoch = owner.enable_company_purchases(**capabilities)
                 download = owner.download(workspace.download_dir)
                 staged_path = owner.copy_to_new_slot(download, workspace.save_dir / 'save_009.xml.gz')
@@ -249,7 +250,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_fleet_orders:
                     from .company_fleet_source import CompanyFleetSource
 
-                    fleet_source = CompanyFleetSource()
+                    fleet_source = CompanyFleetSource(version=owner._company_fleet_order_version)
                     source_options['company_fleet'] = fleet_source
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
