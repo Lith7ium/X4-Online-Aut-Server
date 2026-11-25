@@ -1,4 +1,4 @@
--- Opt-in owner of docked purchases through the stock MapMenu.
+-- Opt-in owner of docked Company trades through the stock MapMenu.
 local M = {}
 local max_integer = 2147483647
 local max_exact_lua_integer = 9007199254740991
@@ -69,6 +69,7 @@ function M.install(o)
     if o.enabled ~= true then return nil, 'disabled' end
     local menu = o.menu
     local dynamic_station = o.dynamic_station == true
+    local request_sale = dynamic_station and o.market_ui and type(o.request_sale) == 'function' and o.request_sale
     if type(menu) ~= 'table' or menu.name ~= 'MapMenu' or type(menu.getTradeOfferByID) ~= 'function'
             or type(menu.buttonConfirmTrade) ~= 'function' or o.ship == nil
             or (not dynamic_station and (o.station == nil or type(o.sector) ~= 'string' or o.sector == ''
@@ -91,6 +92,63 @@ function M.install(o)
         phase = 'ready'
     end
 
+    local function dispatch_sale(data, intent, displayed_total)
+        -- The sale transport returns the accepted transaction ID before any
+        -- receipt can be trusted. Inline receipts are held until then.
+        if not request_sale or not exact_cents(intent.price_cents) or intent.price_cents <= 0
+                or not positive_integer(intent.quantity) or type(o.ship_code) ~= 'string'
+                or not o.ship_code:match('^[A-Z0-9][A-Z0-9][A-Z0-9]%-[A-Z0-9][A-Z0-9][A-Z0-9]$') then
+            o.notice('sale_refused')
+            return
+        end
+        local attempt, orders = {}, data.orders
+        active_attempt, phase = attempt, 'dispatching'
+        local sale_id, answered, early_receipt
+        local function settle(receipt)
+            if active_attempt ~= attempt then return end
+            if phase == 'dispatching' then
+                if not answered then answered, early_receipt = true, receipt end
+                return
+            end
+            active_attempt, phase = nil, 'finished'
+            if type(receipt) ~= 'table' or receipt.sale_id ~= sale_id
+                    or receipt.ship_code ~= o.ship_code or not matches(intent, receipt) then
+                o.notice('sale_uncertain')
+                return
+            end
+            if receipt.outcome == 'confirmed' and exact_cents(receipt.credited_cents) and receipt.credited_cents > 0
+                    and exact_cents(receipt.company_balance_cents) and exact_cents(receipt.cargo_units)
+                    and receipt.cargo_units <= max_integer then
+                phase = 'ready'
+                o.notice('sale_confirmed', receipt.credited_cents, {company_balance_cents = receipt.company_balance_cents,
+                    ship_code = receipt.ship_code, ware = intent.ware, cargo_units = receipt.cargo_units})
+            elseif receipt.outcome == 'refused' then
+                phase = 'ready'
+                o.notice('sale_refused')
+            else
+                o.notice('sale_uncertain')
+            end
+        end
+        local sent, accepted, id = pcall(request_sale, {
+            sector = intent.sector, station_code = intent.station_code, ware = intent.ware,
+            quantity = intent.quantity, price_cents = intent.price_cents, ship_code = o.ship_code,
+        }, settle, displayed_total)
+        completed_contexts[data], completed_orders[orders] = true, true
+        o.market_ui:consume(data)
+        if sent and accepted == true and type(id) == 'string' and #id == 32 and id:match('^[0-9a-f]+$') then
+            sale_id, phase = id, 'pending'
+            if answered then settle(early_receipt) else o.notice('sale_pending') end
+        else
+            active_attempt, phase = nil, 'finished'
+            if sent and accepted == false and not answered then
+                phase = 'ready'
+                o.notice('sale_refused')
+            else
+                o.notice('sale_uncertain')
+            end
+        end
+    end
+
     local function confirm(...)
         local data = menu.contextMenuData
         if type(data) ~= 'table' then
@@ -103,7 +161,17 @@ function M.install(o)
             o.notice('stale_identity')
             return
         end
-        if ship ~= o.ship or (not dynamic_station and station ~= o.station) then return original(...) end
+        if ship ~= o.ship or (not dynamic_station and station ~= o.station) then
+            if request_sale and type(data.orders) == 'table' then
+                for id, quantity in pairs(data.orders) do
+                    if type(id) == 'number' and id < 0 and type(quantity) == 'number' and quantity > 0 then
+                        o.notice('stale_identity')
+                        return
+                    end
+                end
+            end
+            return original(...)
+        end
         if phase ~= 'ready' or completed_contexts[data] or completed_orders[data.orders] then
             o.notice('already_attempted')
             return
@@ -135,6 +203,10 @@ function M.install(o)
             return
         end
         intent.sector, intent.station_code = dock.sector, dock.station_code
+        if intent.side == 'sell' then
+            dispatch_sale(data, intent, market_total)
+            return
+        end
         if price_retry and intent.ware == price_retry.ware and intent.station_code == price_retry.station_code
                 and intent.sector == price_retry.sector and intent.price_cents ~= price_retry.current_price then
             local previous = price_retry.current_price
@@ -239,6 +311,10 @@ end
 
 local trade_notices = {
     pending = 'Company purchase awaiting confirmation.',
+    sale_pending = 'Company sale awaiting confirmation.',
+    sale_refused = 'Company sale refused. Reopen trade for a fresh offer.',
+    sale_uncertain = 'Company sale status uncertain. Check the authoritative receipt.',
+    single_trade_required = 'Company trade requires one order.',
     accepted_pending_statement = 'Company purchase accepted. Awaiting reconciliation with your purchase record.',
     refused = 'Company purchase refused.',
     uncertain = 'Company purchase status uncertain. Check the authoritative receipt.',
@@ -337,8 +413,9 @@ function M.install_x4(o)
     end
     local function stock_notice(status, settled_total_cents, details)
         local text = trade_notices[status] or refusal_notices[status]
-        if status == 'confirmed' then
-            text = 'Company purchase confirmed. Paid ' .. format_credits(settled_total_cents) .. '.'
+        if status == 'confirmed' or status == 'sale_confirmed' then
+            text = (status == 'sale_confirmed' and 'Company sale confirmed. Credited ' or 'Company purchase confirmed. Paid ')
+                .. format_credits(settled_total_cents) .. '.'
             if details then
                 text = text .. ' Company balance ' .. format_credits(details.company_balance_cents)
                     .. '. ' .. details.ship_code .. ': ' .. details.cargo_units .. ' ' .. details.ware .. '.'
@@ -360,6 +437,7 @@ function M.install_x4(o)
     if o.market then
         market_ui = X4LAN_COMPANY_TRADE_VIEW_UI.install({
             menu = o.menu, ship = ship, identity = id, read_dock = live_dock, market = o.market,
+            request_sale = dynamic_station and o.request_sale,
         })
         if not market_ui then return nil, 'unavailable' end
     end
@@ -367,7 +445,8 @@ function M.install_x4(o)
         enabled = true, menu = o.menu, ship = ship, station = expected_station, sector = o.sector,
         market_ui = market_ui,
         dynamic_station = dynamic_station,
-        station_code = o.station_code, ship_code = ship_code, request = o.request, notice = o.notice or stock_notice,
+        station_code = o.station_code, ship_code = ship_code, request = o.request, request_sale = o.request_sale,
+        notice = o.notice or stock_notice,
         identity = id, read_dock = live_dock, decode_offer_id = ConvertStringToLuaID,
         offer_station = function(offer_id)
             local data = GetTradeData(offer_id)

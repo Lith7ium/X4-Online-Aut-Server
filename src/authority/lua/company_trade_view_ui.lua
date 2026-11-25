@@ -40,6 +40,7 @@ local function build_stock_offers(view)
             quantityfactor = 1, price_cents = value.price_cents, amount = value.amount,
             minamount = value.min_amount,
             desiredamount = value.amount, free = value.free_units, tradeable = value.tradeable,
+            cargo_units = value.cargo_units,
             isselloffer = value.side == 'buy', isbuyoffer = value.side == 'sell'}
         local ammotypename = view.get_ammo_type(value.ware)
         offer.ammotypename = ammotypename
@@ -52,6 +53,7 @@ end
 
 function TradeViewUI.install(options)
     local menu, market = options.menu, options.market
+    local sales_enabled = type(options.request_sale) == 'function'
     local stock = {}
     for _, name in ipairs({'initTradeContextData', 'createTradeContext', 'getTradeContextRowContent',
             'getTradeContextStorableAmountAfterTradeOrders', 'getTradeOfferByID', 'updateTradeCost',
@@ -128,6 +130,14 @@ function TradeViewUI.install(options)
         return low
     end
 
+    local function maximum_sale_quantity(context, offer)
+        if not sales_enabled or context.status ~= 'observed' or context.used or not offer or not offer.isbuyoffer
+                or not offer.tradeable or offer.price_cents < 1 or offer.price_cents > max_unit_price_cents
+                or offer.price_cents % 1 ~= 0 then return 0 end
+        local maximum = math.min(max_units_per_order, offer.amount, offer.cargo_units)
+        return maximum >= math.max(1, offer.minamount) and maximum or 0
+    end
+
     local function trade_environment(context)
         return {
             ConvertIDTo64Bit = function(id)
@@ -195,10 +205,11 @@ function TradeViewUI.install(options)
         result[11] = comparison and {{text = 'Net price vs. average', amount = comparison.amount}} or {}
         local scale = result[4].scale
         local offer = waredata.sell
-        scale.min, scale.minselect = 0, 0 -- Provider settlement currently accepts purchases only.
+        local sale_limit = maximum_sale_quantity(context, waredata.buy)
+        scale.min, scale.minselect = -sale_limit, -sale_limit
         scale.max = maximum_purchase_quantity(context, offer)
         scale.maxselect = scale.max
-        scale.start = math.min(scale.max, math.max(0, scale.start))
+        scale.start = math.min(scale.max, math.max(scale.min, scale.start))
         return result
     end
 
@@ -212,19 +223,28 @@ function TradeViewUI.install(options)
                 end
                 return stock_function(sell_id, buy_id, ware, stock_amount, quantity)
             end
-            local offer = context.by_id[sell_id]
-            if not offer or not offer.isselloffer or offer.ware ~= ware or type(quantity) ~= 'number'
-                    or quantity % 1 ~= 0 or quantity < 0
-                    or quantity > maximum_purchase_quantity(context, offer) then return end
-            if quantity > 0 and quantity < math.max(1, offer.minamount) then quantity = 0 end
+            if type(quantity) ~= 'number' or quantity % 1 ~= 0 then return end
+            local selling = quantity < 0
+            local id = selling and buy_id or sell_id
+            local offer = context.by_id[id]
+            if sales_enabled and quantity == 0 and (not offer or not offer.isselloffer) then
+                offer = context.by_id[buy_id]
+            end
+            if not offer or offer.ware ~= ware then return end
+            if selling then
+                if -quantity > maximum_sale_quantity(context, offer) then return end
+            elseif quantity > maximum_purchase_quantity(context, offer) or
+                    (not offer.isselloffer and not (sales_enabled and quantity == 0 and offer.isbuyoffer)) then
+                return
+            end
+            if quantity ~= 0 and math.abs(quantity) < math.max(1, offer.minamount) then quantity = 0 end
             if not same_dock(context.dock, current_dock(context.data)) then return end
-            -- The existing booking service accepts one buy. Keep this a single
-            -- stock provisional order and let stock draw its own rounded total.
-            if quantity > 0 then
-                for id in pairs(context.data.orders) do context.data.orders[id] = nil end
-                context.data.orders[sell_id] = -quantity
+            if quantity ~= 0 then
+                for order_id in pairs(context.data.orders) do context.data.orders[order_id] = nil end
+                context.data.orders[id] = -quantity
             else
-                context.data.orders[sell_id] = nil
+                if sell_id then context.data.orders[sell_id] = nil end
+                if sales_enabled and buy_id then context.data.orders[buy_id] = nil end
             end
             menu.tradeAmountChanged = ware
             menu.tradeContextCostAndStorageUpdateHelper(name == 'slidercellShipAmmo' and 'ammo' or 'cargo', ware)
@@ -244,7 +264,8 @@ function TradeViewUI.install(options)
         environment.GetCargoAfterTradeOrders = function() return cargo end
         environment.GetAmmoCountAfterTradeOrders = function() return ammo end
         environment.CanTradeWith = function(id)
-            return context.by_id[id] and maximum_purchase_quantity(context, context.by_id[id]) > 0
+            local offer = context.by_id[id]
+            return offer and (maximum_purchase_quantity(context, offer) > 0 or maximum_sale_quantity(context, offer) > 0)
         end
         environment.SetVirtualCargoMode = function() end
         environment.AddKnownItem = function() end
@@ -304,7 +325,7 @@ function TradeViewUI.install(options)
         if footer and type(footer.addRow) == 'function' and context.status == 'observed' and not context.used then
             local status = footer:addRow(nil, {fixed = true})
             status[1]:setColSpan(4):createText('Company balance  ' .. credits(context.view.balance)
-                .. '  ·  Purchases only')
+                .. (sales_enabled and '' or '  ·  Purchases only'))
             frame.properties.y = math.min(frame.properties.y,
                 Helper.viewHeight - footer.properties.y - footer:getFullHeight() - Helper.frameBorder)
         end
@@ -322,24 +343,26 @@ function TradeViewUI.install(options)
                 or not same_dock(context.dock, current_dock(data)) then
             return nil, 'fresh_offer_required'
         end
-        local selected_offer, quantity
+        local selected_offer, quantity, selling
         for id, signed_quantity in pairs(data.orders) do
             if signed_quantity ~= 0 then
-                if selected_offer or type(signed_quantity) ~= 'number' or signed_quantity >= 0
-                        or signed_quantity % 1 ~= 0 then
-                    return nil, 'single_buy_required'
+                if selected_offer or type(signed_quantity) ~= 'number' or signed_quantity % 1 ~= 0
+                        or (signed_quantity > 0 and not sales_enabled) then
+                    return nil, sales_enabled and 'single_trade_required' or 'single_buy_required'
                 end
-                selected_offer, quantity = context.by_id[id], -signed_quantity
+                selected_offer, quantity, selling = context.by_id[id], math.abs(signed_quantity), signed_quantity > 0
                 if not selected_offer then return nil, 'stale_offer' end
             end
         end
-        if not selected_offer or quantity < math.max(1, selected_offer.minamount)
-                or quantity > maximum_purchase_quantity(context, selected_offer) then
-            return nil, 'stale_offer'
-        end
+        if not selected_offer or quantity < math.max(1, selected_offer.minamount) then return nil, 'stale_offer' end
+        local maximum = selling and maximum_sale_quantity(context, selected_offer)
+            or maximum_purchase_quantity(context, selected_offer)
+        if quantity > maximum then return nil, 'stale_offer' end
         local total = quote_cents(RoundTotalTradePrice(quantity * selected_offer.price))
-        if not total or total > context.view.balance then return nil, 'stale_offer' end
-        return {ware = selected_offer.ware, quantity = quantity, price_cents = selected_offer.price_cents}, nil, total
+        if not total or (not selling and total > context.view.balance) then return nil, 'stale_offer' end
+        local intent = {ware = selected_offer.ware, quantity = quantity, price_cents = selected_offer.price_cents}
+        if selling then intent.side = 'sell' end
+        return intent, nil, total
     end
 
     function api:consume(data)

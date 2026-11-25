@@ -1,6 +1,7 @@
 local ffi = require('ffi')
 local module = dofile('src/authority/lua/company_trade_view_ui.lua')
 local local_money = 1
+local sale_mode = arg[1] == 'sale'
 function GetPlayerMoney() return local_money end
 function RoundTotalTradePrice(total) return math.floor(total) end
 function GetNumAffordableTradeItems(money, price)
@@ -64,6 +65,7 @@ function menu.tradeContextCostAndStorageUpdateHelper() menu.updateTradeCost() en
 function menu.closeContextMenu() menu.contextMenuData = nil end
 
 local market, serial, view = {}, 0, nil
+local dock_live = true
 function market:open()
     serial = serial + 1
     view = {serial = serial, status = 'pending', balance = 11600, rows = {
@@ -76,23 +78,150 @@ function market:open()
         {side = 'buy', ware = 'energycells', price_cents = 100, amount = 70000, min_amount = 1,
             cargo_units = 0, free_units = 70000, tradeable = true},
     }}
+    if sale_mode then
+        view.rows[1].cargo_units = 12
+        local bid = view.rows[2]
+        bid.price_cents, bid.amount, bid.min_amount, bid.cargo_units = 3473, 60, 2, 12
+    end
     return view
 end
 function market:close() end
 function market.clock() return 0 end
+local function read_dock(ship, station)
+    if dock_live and ship == 7354 and station == 9 then
+        return {ship = ship, station = station, sector = 'sector', station_code = sale_mode and 'CTD-093' or 'BIM-169'}
+    end
+end
+local function identity(value) return value end
+local request_sale, settle_sale, sale_requests, notices = nil, nil, {}, {}
+local sale_id
+local inline_sale = true
+local function receipt(intent, quantity)
+    return {outcome='confirmed', sale_id=sale_id, ship_code=intent.ship_code, ware=intent.ware,
+        sector=intent.sector, station_code=intent.station_code, quantity=quantity,
+        price_cents=intent.price_cents, credited_cents=6900, company_balance_cents=937000, cargo_units=10}
+end
+if sale_mode then
+    request_sale = function(intent, callback, displayed_total)
+        assert(intent.ware == 'water' and intent.price_cents == 3473)
+        assert(intent.sector == 'sector' and intent.station_code == 'CTD-093' and intent.ship_code == 'WRN-302')
+        assert(displayed_total == RoundTotalTradePrice(intent.quantity * 34.73) * 100)
+        sale_requests[#sale_requests+1] = intent
+        sale_id = string.format('%032x', #sale_requests)
+        settle_sale = callback
+        if inline_sale then callback(receipt(intent, 2)) end
+        return true, sale_id
+    end
+end
 local ui = assert(module.install({menu = menu, market = market, ship = 7354,
-    identity = function(value) return value end,
-    read_dock = function(ship, station)
-        if ship == 7354 and station == 9 then
-            return {ship = ship, station = station, sector = 'sector', station_code = 'BIM-169'}
-        end
-    end}))
+    identity = identity, read_dock = read_dock, request_sale = request_sale}))
 
 local data = menu.contextMenuData
 menu.initTradeContextData()
 assert(#data.offers == 0 and not ui:order(data))
 view.status = 'observed'
 ui:tick()
+if sale_mode then
+    local capture = dofile('src/authority/lua/company_trade_capture.lua')
+    local function notice(status, amount, snapshot)
+        notices[#notices+1] = {status=status, amount=amount, snapshot=snapshot}
+    end
+    menu.name = 'MapMenu'
+    menu.buttonConfirmTrade = function() error('sale must never go through local stock confirmation') end
+    local purchases = 0
+    assert(capture.install({enabled=true, menu=menu, market_ui=ui, dynamic_station=true,
+        ship=7354, ship_code='WRN-302', identity=identity, read_dock=read_dock,
+        request=function(intent)
+            assert(intent.ware == 'water' and intent.quantity == 2 and intent.price_cents == 5848 and not intent.side)
+            purchases = purchases + 1
+            return true
+        end,
+        request_sale=request_sale, notice=notice, decode_offer_id=identity, offer_station=identity}))
+
+    local function check_dock()
+        data.immediate, data.immediateObject = true, 7354
+        return unpack(data.offers)
+    end
+    local function reopen()
+        menu.closeContextMenu()
+        menu.contextMenuData = {currentShip=7354, component=9, orders={}}
+        data = menu.contextMenuData
+        menu.initTradeContextData()
+        view.status = 'observed'
+        ui:tick()
+        return check_dock()
+    end
+    local buy, sell = check_dock()
+    local scale = menu.getTradeContextRowContent({sell=buy, buy=sell})[4].scale
+    assert(sell.active and scale.min == -12 and scale.max == 2)
+    sell.cargo_units = 90
+    assert(menu.getTradeContextRowContent({sell=buy, buy=sell})[4].scale.min == -60)
+    sell.cargo_units = 12
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -13)
+    assert(not ui:order(data))
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -1)
+    assert(not ui:order(data))
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, 2)
+    assert(ui:order(data).quantity == 2 and not ui:order(data).side)
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -2)
+    assert(data.orders[sell.id] == 2 and data.orders[buy.id] == nil and ui:order(data).side == 'sell')
+    data.orders[buy.id] = -1
+    menu.buttonConfirmTrade()
+    assert(notices[#notices].status == 'single_trade_required' and #sale_requests == 0)
+    data.orders[buy.id] = nil
+    data.currentShip = 89
+    menu.buttonConfirmTrade()
+    assert(notices[#notices].status == 'stale_identity' and #sale_requests == 0)
+    data.currentShip = 7354
+    dock_live = false
+    menu.buttonConfirmTrade()
+    assert(notices[#notices].status == 'stale_dock' and #sale_requests == 0)
+    dock_live = true
+    menu.buttonConfirmTrade()
+    assert(#sale_requests == 1 and purchases == 0 and native_slider_calls == 0)
+    local confirmed = notices[#notices]
+    assert(confirmed.status == 'sale_confirmed' and confirmed.amount == 6900)
+    assert(confirmed.snapshot.company_balance_cents == 937000 and confirmed.snapshot.cargo_units == 10)
+    menu.buttonConfirmTrade()
+    assert(notices[#notices].status == 'already_attempted' and #sale_requests == 1)
+
+    inline_sale = false
+    buy, sell = reopen()
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -12)
+    menu.buttonConfirmTrade()
+    local delayed = settle_sale
+    assert(notices[#notices].status == 'sale_pending' and #sale_requests == 2)
+    menu.buttonConfirmTrade()
+    assert(notices[#notices].status == 'already_attempted' and #sale_requests == 2)
+    local empty = receipt(sale_requests[2], 12)
+    empty.cargo_units = 0
+    delayed(empty)
+    assert(notices[#notices].status == 'sale_confirmed' and notices[#notices].snapshot.cargo_units == 0)
+
+    if arg[2] == 'buy' then
+        buy, sell = reopen()
+        menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, 2)
+        menu.buttonConfirmTrade()
+        assert(purchases == 1 and #sale_requests == 2 and notices[#notices].status == 'pending')
+        return
+    end
+    buy, sell = reopen()
+    menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -2)
+    menu.buttonConfirmTrade()
+    local wrong = receipt(sale_requests[3], 2)
+    if arg[2] == 'wrong_price' then
+        wrong.price_cents = 3472
+    elseif arg[2] == 'negative_cargo' then
+        wrong.cargo_units = -1
+    else
+        wrong.sale_id = ('c'):rep(32)
+    end
+    settle_sale(wrong)
+    assert(notices[#notices].status == 'sale_uncertain' and purchases == 0)
+    settle_sale(receipt(sale_requests[3], 2))
+    assert(notices[#notices].status == 'sale_uncertain')
+    return
+end
 assert(#data.offers == 4 and data.currentcargo.water == 2 and data.playerMoney == local_money)
 local buy, sell, disabled, large_offer = unpack(data.offers)
 assert(buy.active and not sell.active and not disabled.active)
