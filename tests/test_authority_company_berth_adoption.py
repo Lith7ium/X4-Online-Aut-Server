@@ -55,3 +55,38 @@ class BerthAdoptionCue(unittest.TestCase):
         report = self.script.find(".//library[@name='Report']//raise_lua_event")
         for datum in ('$Route', '$Request.$bay_seed', '$Actual.seed', '$Actual.dockarea.macro.id'):
             self.assertIn(datum, report.attrib['param'])
+
+    def test_selecting_a_berth_requires_an_empty_or_idle_captained_ship(self):
+        choose = self.script.find(".//library[@name='ChooseBerth']/actions")
+        self.assertEqual(list(choose)[0].attrib, {'name': '$Status', 'exact': "'ship_busy'"})
+        self.assertEqual(list(choose)[1].attrib, {'name': '$Captain', 'exact': '@$Ship.assignedaipilot'})
+        self.assertEqual(list(choose)[2].attrib, {'ref': 'CheckIdleShip'})
+        self.assertEqual(list(choose)[3].attrib, {'value': '$IdleShip'})
+
+        idle = self.script.find(".//library[@name='CheckIdleShip']/actions/set_value")
+        terms = ' '.join(idle.attrib['exact'].split())
+        for requirement in (
+            'not $Ship.isinternallystored', 'not $Ship.orders.count',
+            'not $Ship.tradeorders.count', 'not @$Ship.tradecomputer.exists',
+            'not $Ship.commander', 'not $Ship.subordinates.count',
+            "(not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait')",
+            '(not $Captain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)',
+            '@$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy',
+            '$Ship.assignedaipilot == $Captain and $Ship.pilot == $Captain',
+            '$Captain.assignedcontrolled == $Ship and $Captain.ship == $Ship',
+            '$Captain.hascontext.{$Ship}',
+        ):
+            self.assertIn(requirement, terms)
+
+    def test_changed_or_busy_captain_leaves_deferred_readback_unconfirmed(self):
+        self.assertEqual(len(self.script.findall(".//set_value[@name='$Captain']")), 1)
+        readback = self.script.find(".//cue[@name='Readback']/actions")
+        self.assertEqual(list(readback)[0].attrib, {'name': '$Status', 'exact': "'readback_failed'"})
+        self.assertEqual(list(readback)[1].attrib, {'ref': 'CheckIdleShip'})
+        adopted = readback.find("do_if/set_value[@exact=\"'adopted'\"]/..")
+        self.assertIn('and $IdleShip', adopted.attrib['value'])
+        self.assertIn('@$Ship.dock == $Actual', adopted.attrib['value'])
+        self.assertIn('$Actual.docked.count == 1 and $Actual.docked.{1} == $Ship', adopted.attrib['value'])
+        failed = readback.find("do_if[@value=\"$Status != 'adopted'\"]")
+        self.assertEqual(failed.find("set_value[@name='$Actual']").attrib['exact'], 'null')
+        self.assertEqual(failed.find("set_value[@name='$Route']").attrib['exact'], "'none'")

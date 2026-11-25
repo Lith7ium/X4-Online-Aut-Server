@@ -65,6 +65,7 @@
               <delay exact="2s"/>
               <actions>
                 <set_value name="$Status" exact="'readback_failed'"/>
+                <include_actions ref="CheckIdleShip"/>
                 <do_if value="@$Ship.isoperational
                               and $Request.$epoch == @md.X4AuthorityShipRegistry.State.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted
                               and $Ship == @md.X4AuthorityShipRegistry.State.$ships.{$Index}
@@ -76,7 +77,7 @@
                               and @$Actual.container == $Station and $Actual.external
                               and $Actual.istradingallowed and $Actual.dockstate == dockstate.default
                               and $Actual.docked.count == 1 and $Actual.docked.{1} == $Ship
-                              and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.orders.count
+                              and $IdleShip
                               and player.entity == $Avatar and player.station == $AvatarStation
                               and player.room == $AvatarRoom and player.container == $AvatarContainer and not player.controlled and not player.occupiedship">
                   <set_value name="$Status" exact="'adopted'"/>
@@ -146,9 +147,9 @@
     <library name="ChooseBerth" purpose="include_actions">
       <actions>
         <set_value name="$Status" exact="'ship_busy'"/>
-        <do_if value="not $Ship.isinternallystored and not $Ship.pilot and not $Ship.assignedpilot
-                      and not $Ship.orders.count and not $Ship.commander and not $Ship.subordinates.count
-                      and (not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait')">
+        <set_value name="$Captain" exact="@$Ship.assignedaipilot"/>
+        <include_actions ref="CheckIdleShip"/>
+        <do_if value="$IdleShip">
           <do_if value="@$Ship.dock">
             <set_value name="$Dock" exact="$Ship.dock"/>
             <do_if value="$CompatibleBays.indexof.{$Dock} and $Dock.container == $Station and $Dock.external
@@ -199,6 +200,21 @@
         <do_if value="$Actual">
           <set_value name="$Route" exact="if $Actual == $Requested then 'exact' else 'fallback'"/>
         </do_if>
+      </actions>
+    </library>
+
+    <library name="CheckIdleShip" purpose="include_actions">
+      <actions>
+        <!-- Keep the original captain handle for deferred readback. -->
+        <set_value name="$IdleShip" exact="@$Ship.isclass.ship and not $Ship.isinternallystored
+                    and not $Ship.orders.count and not $Ship.tradeorders.count and not @$Ship.tradecomputer.exists
+                    and not $Ship.commander and not $Ship.subordinates.count
+                    and (not $Ship.defaultorder or $Ship.defaultorder.id == 'Wait')
+                    and ((not $Captain and not $Ship.pilot and not $Ship.assignedpilot and not $Ship.assignedaipilot)
+                         or (@$Captain.isclass.npc and $Captain.owner == faction.player and not $Captain.isbusy
+                             and $Ship.assignedaipilot == $Captain and $Ship.pilot == $Captain
+                             and $Captain.assignedcontrolled == $Ship and $Captain.ship == $Ship
+                             and $Captain.hascontext.{$Ship}))"/>
       </actions>
     </library>
 
