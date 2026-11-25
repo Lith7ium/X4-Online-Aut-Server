@@ -8,7 +8,13 @@ BBS-493 at (30000, 100000, 55000) m in the destination sector.
 The ship kept its registry index and its original NPC captain.
 [Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
 
-In a fresh GPU-free provider, the eight marines on ARU-541 launched in
+The ordinary boarding menu now has a native positive control. On a
+disposable provider the test activated the enabled Start Operation button
+once. X4 confirmed eight marines and exactly one attacker, ARU-541,
+against ZNG-430. No player was connected.
+[Native map start](AUTHORITY-BOARDING-BASELINE-20261125.md#native-start-operation-click-with-stock-component-ids)
+
+In a separate GPU-free provider, the eight marines on ARU-541 launched in
 two pods against the fully armed ZNG-430. The stock operation progressed
 to infiltration, then X4 reported failure. Scale Plate retained the ship.
 Pod attachment and the cause of failure are unknown. This trial started
@@ -26,6 +32,7 @@ Matching private operator packages for `6d4062fd` are in
 `.local/flight-build-6d4062fd/`. All 176 files common to the Linux
 and Windows archives matched byte for byte. These packages include the
 retained-captain sector transfer and the trade-window corrections.
+Both extracted Linux launchers passed their help entry point.
 
 | Package | Bytes | SHA-256 |
 | --- | ---: | --- |
