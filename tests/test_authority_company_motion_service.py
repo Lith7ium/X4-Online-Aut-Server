@@ -1,10 +1,12 @@
 """Real loopback movement sockets with explicit admission and visibility."""
 import json
 import socket
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from authority.company_motion_frames import MAX_PEERS
+from authority.company_motion_client import CompanyMotionClient
+from authority.company_motion_frames import MAX_PEERS, validate_pilot_roster
 from authority.company_motion_service import CompanyMotionService, MAX_SAMPLE_AGE
 
 
@@ -53,6 +55,109 @@ class CompanyMotionServiceTests(unittest.TestCase):
     def view(self, viewer, indices, sector='sector_a', view_id=1):
         self.send(viewer, {'kind': 'motion_view', 'window': self.service.window,
                            'view_id': view_id, 'indices': indices, 'sector_macro': sector})
+
+    def test_pilot_roster_tracks_same_epoch_control_grants_without_view_subscriptions(self):
+        self.service.set_running(True)
+        for index in reversed(range(4, MAX_PEERS + 1)):
+            self.grant(index)
+        self.service.admit(3, '3' * 32, 3, 'sector_a', 'a' * 32, 'c' * 32)
+        source, source_stream = self.bind(self.first)
+        viewer, stream = self.bind(self.second, loss_notifications=True, cockpit_playback_limit=3,
+                                   pilot_roster=True)
+        expected = [1, 4, 5]
+        self.assertEqual(json.loads(stream.readline()), {
+            'kind': 'pilot_roster', 'window': 1, 'epoch': self.second['epoch'], 'ship_indices': expected,
+        })
+        self.publish(source, self.first, 1)
+        self.assertEqual(json.loads(source_stream.readline())['kind'], 'motion_sampled')
+        self.view(viewer, [1])
+        snapshot = json.loads(stream.readline())
+        self.assertEqual((snapshot['kind'], snapshot['view_id']), ('motion_snapshot', 1))
+        self.service.revoke(4)
+        self.grant(100)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['ship_indices'], [1, 5, 6])
+        source.shutdown(socket.SHUT_RDWR)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['kind'], 'motion_hidden')
+        self.service.transport_lost(1)
+        self.service.poll()
+        self.assertEqual(json.loads(stream.readline())['ship_indices'], [5, 6, 7])
+
+    def test_pilot_roster_clears_on_pause_and_disconnect_and_refreshes_after_bind(self):
+        self.service.set_running(True)
+        changes = []
+        source = SimpleNamespace(registry=(self.second['epoch'], self.second['index']),
+                                 poll=Mock(return_value=None))
+
+        def connect():
+            client = CompanyMotionClient(self.service.port, self.second, source, Mock(),
+                                         cockpit_playback_limit=3, on_transport_lost=Mock(),
+                                         on_pilot_roster=changes.append)
+            self.addCleanup(client.close)
+            client.poll()
+            self.service.poll()
+            client.poll()
+            return client
+
+        client = connect()
+        self.assertEqual(changes, [(1,)])
+        self.service.set_running(False)
+        self.grant(3)
+        self.service.revoke(1)
+        self.service.poll()
+        client.poll()
+        self.assertEqual(changes, [(1,), ()])
+        self.service.set_running(True)
+        self.service.poll()
+        client.poll()
+        self.assertEqual(changes, [(1,), (), (3,)])
+        client.close()
+        self.service.poll()
+        self.grant(4)
+        connect()
+        self.assertEqual(changes, [(1,), (), (3,), (), (3, 4)])
+
+    def test_pilot_roster_does_not_accept_invalid_capability(self):
+        for capabilities in ({'pilot_roster': True}, {'pilot_roster': False, 'cockpit_playback_limit': 1,
+                                                     'loss_notifications': True}):
+            connection, stream = self.open()
+            self.send(connection, {'kind': 'bind_motion', 'ticket': self.second['ticket'], **capabilities})
+            self.assertEqual(stream.readline(), b'')
+
+    def test_pilot_roster_frame_requires_bounded_ordered_foreign_indices(self):
+        frame = {'kind': 'pilot_roster', 'window': 1, 'epoch': 'b' * 32,
+                 'ship_indices': [2, 3, 4]}
+        self.assertEqual(validate_pilot_roster(frame, epoch='b' * 32, own_index=1), (2, 3, 4))
+        invalid_fields = ({'ship_indices': indices} for indices in
+                          ([1], [3, 2], [2, 2], [True], [200001], [2, 3, 4, 5]))
+        for fields in (*invalid_fields, {'epoch': 'c' * 32}, {'x': 0}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                validate_pilot_roster(dict(frame, **fields), epoch='b' * 32, own_index=1)
+
+    def test_initial_bind_only_identifies_empty_transport_disconnect_for_legacy_retry(self):
+        source = SimpleNamespace(registry=(self.second['epoch'], self.second['index']),
+                                 poll=Mock(return_value=None))
+        cases = ((b'', ConnectionError, True), (b'{"kind":', ConnectionError, False),
+                 (b'{"kind":"motion_bound"}\n', ValueError, False))
+        for response, error, disconnected in cases:
+            with self.subTest(response=response), socket.socket() as listener:
+                listener.bind(('127.0.0.1', 0))
+                listener.listen()
+                client = CompanyMotionClient(listener.getsockname()[1], self.second, source, Mock(),
+                                             cockpit_playback_limit=3, on_transport_lost=Mock(),
+                                             on_pilot_roster=Mock())
+                self.addCleanup(client.close)
+                with listener.accept()[0] as server:
+                    server.settimeout(1)
+                    client.poll()
+                    self.assertTrue(server.recv(4096).endswith(b'\n'))
+                    server.sendall(response)
+                    server.shutdown(socket.SHUT_WR)
+                    with self.assertRaises(error):
+                        for _ in range(2):
+                            client.poll()
+                    self.assertIs(client.disconnected_before_bind, disconnected)
 
     def test_latest_visible_sample_waits_for_previous_receipt(self):
         self.service.set_running(True)

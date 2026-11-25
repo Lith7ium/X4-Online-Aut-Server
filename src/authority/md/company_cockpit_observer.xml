@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Read-only opt-in cockpit Company observer supporting selected HUD targets and up to 3 nearby radar-visible pilots without a target lock. -->
+<!-- Read-only Company cockpit observer with active-pilot preference and HUD/radar fallbacks. -->
 <mdscript name="X4AuthorityCompanyCockpitObserver" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
   <cue name="Read" instantiate="true">
@@ -24,15 +24,39 @@
      <set_value name="$selected" exact="[]"/>
      <set_value name="$modes" exact="[]"/>
      <do_if value="$canobserve">
+      <set_value name="$roster" exact="[@$args.$pilot1,@$args.$pilot2,@$args.$pilot3]"/>
       <set_value name="$hud_mode" exact="@$args.$hud_mode"/>
+      <set_value name="$hud_eligible" exact="false"/>
       <set_value name="$target" exact="@player.target"/>
       <do_if value="($hud_mode == 'hud' or $hud_mode == 'hudmap') and @$target.isclass.ship and $target.isoperational and $target.owner == faction.player and $target != player.ship and $target != player.occupiedship and $target != player.controlled and $target != player.container and not $target.dock.exists and not $target.isinternallystored and not $target.pilot.exists and not $target.assignedpilot.exists and @$target.sector.isclass.sector and $target.sector == player.sector and $target.attention ge attention.visible and $target.isphysicsready">
        <set_value name="$withinradar" exact="$hud_mode == 'hud' or (@player.controlled.currentradarrange gt 0m and $target.distanceto.{player.controlled} le player.controlled.currentradarrange)"/>
        <set_value name="$reg" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
        <do_if value="$withinradar and $reg ge 1 and $reg le $args.$count and $reg == ($reg)i and $reg != $args.$own and @md.X4AuthorityShipRegistry.State.$ships.{$reg} == $target">
-        <append_to_list name="$selected" exact="$target"/>
-        <append_to_list name="$modes" exact="$hud_mode"/>
+        <set_value name="$hud_eligible" exact="true"/>
+        <do_if value="$roster.indexof.{$reg} gt 0">
+         <append_to_list name="$selected" exact="$target"/>
+         <append_to_list name="$modes" exact="$hud_mode"/>
+        </do_if>
        </do_if>
+      </do_if>
+      <!-- Resolve only the bounded registry preferences and apply the existing radar eligibility checks. -->
+      <do_if value="@player.controlled.currentradarrange gt 0m">
+       <do_for_each name="$reg" in="$roster">
+        <do_if value="$selected.count ge $limit">
+         <break/>
+        </do_if>
+        <do_if value="$reg ge 1 and $reg le $args.$count and $reg == ($reg)i and $reg != $args.$own">
+         <set_value name="$cand" exact="@md.X4AuthorityShipRegistry.State.$ships.{$reg}"/>
+         <do_if value="@$cand.isclass.ship and $cand.isoperational and $cand.owner == faction.player and $cand != player.ship and $cand != player.occupiedship and $cand != player.controlled and $cand != player.container and not $cand.dock.exists and not $cand.isinternallystored and not $cand.pilot.exists and not $cand.assignedpilot.exists and @$cand.sector.isclass.sector and $cand.sector == player.sector and $cand.attention ge attention.visible and $cand.isphysicsready and $selected.indexof.{$cand} == 0 and $cand.distanceto.{player.controlled} le player.controlled.currentradarrange and @md.X4AuthorityShipRegistry.State.$byship.{$cand} == $reg">
+          <append_to_list name="$selected" exact="$cand"/>
+          <append_to_list name="$modes" exact="'radar'"/>
+         </do_if>
+        </do_if>
+       </do_for_each>
+      </do_if>
+      <do_if value="$hud_eligible and $selected.count lt $limit and $selected.indexof.{$target} == 0">
+       <append_to_list name="$selected" exact="$target"/>
+       <append_to_list name="$modes" exact="$hud_mode"/>
       </do_if>
       <do_if value="$selected.count lt $limit and @player.controlled.currentradarrange gt 0m">
        <find_ship name="$nearby" space="player.sector" owner="faction.player" multiple="true"/>

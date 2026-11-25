@@ -1,4 +1,4 @@
--- Opt-in read-only cockpit Company observer: selected HUD target first, then up to 3 nearby radar-visible Company pilots without target lock.
+-- Opt-in read-only cockpit Company observer with active-pilot preference and HUD/radar fallbacks.
 local M = {}
 local SCREEN = 'X4AuthorityCompanyCockpitObserver'
 local INTERVAL, FRESHNESS = 0.15, 0.45
@@ -207,7 +207,7 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
     for k = 1, max_pilots do slot_names[k] = COCKPIT_SLOTS[k] end
 
     local pending, last, next_poll
-    local slots = {}
+    local slots, roster = {}, {}
     local sequence = 0
     local closed = false
 
@@ -338,22 +338,10 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
         end
         for _, cand in ipairs(candidates) do
             if not cand.assigned then
-                local placed = false
                 for k = 1, max_pilots do
                     if slots[k] == nil then
                         slots[k] = cand
-                        cand.assigned = true
-                        placed = true
                         break
-                    end
-                end
-                if not placed and (cand.mode == 'hud' or cand.mode == 'hudmap') then
-                    for k = max_pilots, 1, -1 do
-                        if slots[k] and slots[k].mode == 'radar' then
-                            slots[k] = cand
-                            cand.assigned = true
-                            break
-                        end
                     end
                 end
             end
@@ -375,6 +363,7 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
             local ok, issued = pcall(engine.issue, {
                 request_id = id, epoch = epoch, count = count, own = own_index,
                 mode = 'multi', max_pilots = max_pilots, hud_mode = probe.hud_mode or 'none',
+                pilot1 = roster[1] or 0, pilot2 = roster[2] or 0, pilot3 = roster[3] or 0,
             })
             if not ok or issued ~= true then
                 pending = nil
@@ -447,6 +436,31 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
             return out
         end,
     }
+    function multi:set_pilot_roster(indices)
+        if closed or type(indices) ~= 'table' then return false end
+        local replacement, seen = {}, {}
+        local length = 0
+        for key, index in pairs(indices) do
+            if not index_in(key, MAX_PILOTS) or not index_in(index, MAX_INDEX)
+                    or index == own_index or seen[index] then return false end
+            seen[index] = true
+            length = length + 1
+        end
+        -- Peers may have joined after this client's checkpoint was loaded.
+        -- Pass only preferences that this client can resolve in its register.
+        for key = 1, length do
+            local index = rawget(indices, key)
+            if index == nil then return false end
+            if index <= count then replacement[#replacement + 1] = index end
+        end
+        if roster[1] ~= replacement[1] or roster[2] ~= replacement[2] or roster[3] ~= replacement[3] then
+            -- An in-flight result belongs to the old preferences. Let current bindings
+            -- expire normally while the next tick requests a fresh result.
+            roster, pending, next_poll = replacement, nil, nil
+        end
+        return true
+    end
+
     assert(engine.register(receive) == true, 'company cockpit multi-observer event unavailable')
     return multi
 end

@@ -61,6 +61,59 @@ send('cockpit', 1, 12, 'sector_a', moving)
 owner:tick(false)
 assert(#sent == 10 and sent[9]:match('VIEW|cockpit|2|') and sent[10]:match('VIEW|map|4|'))
 owner:close()
+
+-- Only the automatic cockpit reader consumes roster metadata. The stream
+-- preserves the newest revision while the lease expires and renews.
+local rosters = {}
+local auto = {
+    set_pilot_roster = function(_, indices)
+        if indices[1] == 1970 then return false end
+        rosters[#rosters + 1] = table.concat(indices, ',')
+        return true
+    end,
+}
+local function roster(revision, suffix, packet_epoch, packet_prefix)
+    incoming[#incoming + 1] = (packet_prefix or prefix)
+        .. 'ROSTER|' .. (packet_epoch or epoch) .. '|' .. revision .. (suffix or '')
+end
+owner = stream.new({cockpit = cockpit, map = map}, epoch, net, prefix, function() return clock end, nil, auto)
+roster('1', '|12|7354')
+owner:tick(true)
+assert(#rosters == 1 and rosters[1] == '12,7354')
+local roster_view_count = #sent
+roster('1', '|12')
+roster('7', '|12', ('d'):rep(32))
+roster('7', '|12', epoch, 'C|unowned|lease|')
+roster('7', '|1970')
+roster('7', '|3|3')
+roster('7', '|3|2')
+roster('7', '|1|200001')
+roster('7', '|1|2|3|4')
+roster('7', '|')
+roster('9007199254740992', '|12')
+roster('0', '|12')
+owner:tick(true)
+assert(#rosters == 1 and #sent == roster_view_count)
+roster('2')
+roster('1', '|12|7354')
+owner:tick(true)
+assert(#rosters == 2 and rosters[2] == '')
+roster('3', '|12')
+owner:tick(true)
+clock = clock + 2.5
+roster('3', '|12')
+owner:tick(true)
+clock = clock + .6
+owner:tick(true)
+assert(#rosters == 3 and rosters[3] == '12')
+clock = clock + 2.5
+owner:tick(true)
+assert(#rosters == 4 and rosters[4] == '')
+roster('2')
+roster('3', '|12')
+owner:tick(true)
+assert(#rosters == 5 and rosters[5] == '12')
+owner:close()
 assert(cockpit.closed and map.closed)
 
 -- Only a current, locally confirmed cockpit observation can reach the optional trial.

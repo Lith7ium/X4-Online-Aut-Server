@@ -155,7 +155,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     end
     local ok, observer = pcall(function()
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
-        local readers, trial
+        local readers, trial, pilot_roster
         if config.cockpit_radar_playback == true then
             local max_pilots = config.cockpit_max_pilots or (config.playback_index and 1 or 3)
             local playback_mod = assert(X4LAN_COMPANY_COCKPIT_PLAYBACK)
@@ -164,6 +164,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                     max_pilots = max_pilots,
                     clock = udp.monotonic,
                 })
+                if config.playback_index == nil then pilot_roster = multi end
                 readers = {map = map}
                 for slot_name, reader in pairs(multi.readers) do
                     readers[slot_name] = reader
@@ -195,7 +196,8 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
             end
         end
-        return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, trial)
+        return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, trial,
+                                                pilot_roster)
     end)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({

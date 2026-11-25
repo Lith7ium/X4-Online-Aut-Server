@@ -865,6 +865,57 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
             self.service.poll()
             self.assertEqual(len(attempts), admitted_attempts)
 
+    async def test_automatic_radar_retries_legacy_bind_and_negotiates_roster_after_reconnect(self):
+        _, port = await self.link()
+        credential = self.grant(1, 1, 'sector_a')
+        self.grant(2, 2, 'sector_b')
+        source = CompanyMotionSource(cockpit_radar_playback=True)
+        self.addCleanup(source.close)
+        config = source.configure(REGISTRY_EPOCH, 1, operational_bits='11')
+        overlay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(overlay.close)
+        overlay.bind(('127.0.0.1', 0))
+        overlay.setblocking(False)
+        viewer = ReconnectingCompanyMotionClient.observing(
+            port, credential, source, lambda address: address == overlay.getsockname())
+        self.addCleanup(viewer.close)
+        self.clients = [viewer]
+        prefix = f'C|{config["lease"]}|{config["generation"]}|'.encode('ascii')
+        overlay.sendto(prefix + f'VIEW|cockpit|1|{REGISTRY_EPOCH}|-|0|-|-'.encode('ascii'),
+                       ('127.0.0.1', config['port']))
+        attempts = []
+        bind = self.service._bind
+
+        def legacy_bind(peer, message):
+            attempts.append(message)
+            if 'pilot_roster' in message:
+                raise ValueError('unknown bind field')
+            bind(peer, message)
+
+        self.service.set_running(True)
+        with patch.object(self.service, '_bind', side_effect=legacy_bind):
+            await self.drive(lambda: viewer._clock is not None)
+        self.assertEqual([attempt.get('pilot_roster') for attempt in attempts], [True, None])
+        self.assertTrue(all(attempt['ticket'] == credential['ticket'] for attempt in attempts))
+
+        peer, = self.service._peers.values()
+        self.service._drop(peer)
+
+        def received_peer_index():
+            try:
+                packet, _ = overlay.recvfrom(MAX_OBSERVER_DATAGRAM)
+            except BlockingIOError:
+                return False
+            if not packet.startswith(prefix):
+                return False
+            fields = packet[len(prefix):].decode('ascii').split('|')
+            return fields[:2] == ['ROSTER', REGISTRY_EPOCH] and fields[3:] == ['2']
+
+        await self.drive(received_peer_index)
+        peer, = self.service._peers.values()
+        self.assertEqual(peer.views, {})
+        self.assertIsNone(viewer.failure)
+
     async def test_legacy_server_can_reject_dual_view_without_dropping_existing_control(self):
         control, motion = await self.link()
         reader, writer = await asyncio.open_connection('127.0.0.1', control)

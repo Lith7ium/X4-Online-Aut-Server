@@ -2,6 +2,7 @@
 import json
 import re
 
+from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .load_messages import MAX_MESSAGE, _pairs, _reject_constant
 
 MAX_PEERS = 16
@@ -41,6 +42,17 @@ def read_frames(connection, buffer):
         if type(message) is not dict:
             raise ValueError('movement message object required')
         yield message
+
+
+def validate_pilot_roster(message, *, epoch, own_index):
+    indices = message.get('ship_indices')
+    if (set(message) != {'kind', 'window', 'epoch', 'ship_indices'} or
+            message['epoch'] != epoch or type(indices) is not list or len(indices) > MAX_COCKPIT_PLAYBACK_PILOTS or
+            any(type(index) is not int or not 1 <= index <= 200000 or index == own_index
+                for index in indices) or
+            any(left >= right for left, right in zip(indices, indices[1:]))):
+        raise ValueError('invalid movement pilot roster')
+    return tuple(indices)
 
 
 def validate_view(sector, indices):

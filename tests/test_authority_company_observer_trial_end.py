@@ -47,6 +47,7 @@ class CockpitTrialEndTests(unittest.TestCase):
             client._connection = owned
             client._visible = {TRIAL_INDEX: (SECTOR, GENERATION)}
             client._hidden = set()
+            client._pilot_roster = None
             client._on_end = observer.end
             client._stats = dict(visibility_ends=0)
             client.close()

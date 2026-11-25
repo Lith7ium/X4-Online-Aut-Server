@@ -2,6 +2,7 @@
 from copy import deepcopy
 import time
 
+from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_motion_client import CompanyMotionClient
 from .company_motion_frames import BIND_TIMEOUT, normalize_views
 
@@ -41,15 +42,17 @@ class ReconnectingCompanyMotionClient:
     """
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
                  on_transport_lost=None, on_world_reset=None, trial_index=None, resume_route=None,
-                 cockpit_playback_limit=None, resume_routes=None):
+                 cockpit_playback_limit=None, resume_routes=None, on_pilot_roster=None):
         if ((on_snapshot is not None or on_end is not None)
                 and not (callable(on_snapshot) and callable(on_end))):
             raise ValueError('an observed view needs snapshot and visibility callbacks')
         if (trial_index is not None or resume_route is not None) and (
                 cockpit_playback_limit is not None or resume_routes is not None):
             raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
+        if on_pilot_roster is not None and (cockpit_playback_limit is None or not callable(on_pilot_roster)):
+            raise ValueError('pilot roster requires automatic cockpit playback')
         if cockpit_playback_limit is not None:
-            if (type(cockpit_playback_limit) is not int or not 1 <= cockpit_playback_limit <= 3
+            if (type(cockpit_playback_limit) is not int or not 1 <= cockpit_playback_limit <= MAX_COCKPIT_PLAYBACK_PILOTS
                     or not callable(resume_routes) or not callable(on_transport_lost)):
                 raise ValueError('cockpit playback needs recovery callbacks')
         elif (trial_index is not None or on_transport_lost is not None) and (
@@ -66,6 +69,8 @@ class ReconnectingCompanyMotionClient:
         self._resume_route = resume_route
         self._cockpit_playback_limit = cockpit_playback_limit
         self._resume_routes = resume_routes
+        self._on_pilot_roster = on_pilot_roster
+        self._retry_without_roster = False
         self._initial_bind_until = (None if trial_index is None and cockpit_playback_limit is None
                                     else time.monotonic() + BIND_TIMEOUT)
         self._clock = None
@@ -113,6 +118,7 @@ class ReconnectingCompanyMotionClient:
 
     def _bound_clock(self, window, running):
         self._initial_bind_until = None
+        self._retry_without_roster = False
         clock = (window, running)
         if self._on_world_reset is not None and self._clock is not None and clock != self._clock:
             self._notify(self._on_world_reset)
@@ -181,6 +187,8 @@ class ReconnectingCompanyMotionClient:
                         observer['resume_route'] = self._resume_route()
                     elif self._cockpit_playback_limit is not None:
                         observer['cockpit_playback_limit'] = self._cockpit_playback_limit
+                        if self._on_pilot_roster is not None and not self._retry_without_roster:
+                            observer['on_pilot_roster'] = lambda indices: self._notify(self._on_pilot_roster, indices)
                         routes = self._resume_routes()
                         if routes:
                             observer['resume_routes'] = routes
@@ -191,6 +199,11 @@ class ReconnectingCompanyMotionClient:
             if self._retry_delay > _INITIAL_DELAY and self._client.stats()['samples_acknowledged']:
                 self._retry_delay = _INITIAL_DELAY
         except OSError:
+            # Older providers close a bind that requests an unknown capability.
+            # Keep the same credential and retry with their ordinary radar binding.
+            if (self._on_pilot_roster is not None and self._client is not None
+                    and self._client.disconnected_before_bind):
+                self._retry_without_roster = True
             self._finish_link()
             self._retry_at = time.monotonic() + self._retry_delay
             self._retry_delay = min(_MAX_DELAY, self._retry_delay * 2)
@@ -209,8 +222,8 @@ class ReconnectingCompanyMotionClient:
                          trial_index=trial_index, resume_route=observer.resume_route)
         elif cockpit_radar:
             trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
-                         cockpit_playback_limit=getattr(source, 'cockpit_max_pilots', 3),
-                         resume_routes=observer.resume_routes)
+                         cockpit_playback_limit=getattr(source, 'cockpit_max_pilots', MAX_COCKPIT_PLAYBACK_PILOTS),
+                         resume_routes=observer.resume_routes, on_pilot_roster=observer.set_pilot_roster)
         client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end, **trial)
         observer.bind_views(client.set_views)
         return client

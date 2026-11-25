@@ -4,8 +4,9 @@ import re
 import socket
 import time
 
+from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_motion_frames import (BIND_TIMEOUT, MAX_COUNTER, encode_frame,
-                                    normalize_views, read_frames, view_matches)
+                                    normalize_views, read_frames, validate_pilot_roster, view_matches)
 from .experimental_tcp_motion import motion_value
 from .trusted_load_messages import validate_ship_motion_credential
 
@@ -17,17 +18,20 @@ class CompanyMotionClient:
 
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
                  on_view_reset=None, on_transport_lost=None, on_clock=None, trial_index=None,
-                 resume_route=None, cockpit_playback_limit=None, resume_routes=None, _latest_seen=None):
+                 resume_route=None, cockpit_playback_limit=None, resume_routes=None,
+                 on_pilot_roster=None, _latest_seen=None):
         epoch, index = source.registry
         if any(callback is not None and not callable(callback)
-               for callback in (on_view_reset, on_transport_lost, on_clock)):
+               for callback in (on_view_reset, on_transport_lost, on_clock, on_pilot_roster)):
             raise ValueError('invalid movement observation callback')
+        if on_pilot_roster is not None and cockpit_playback_limit is None:
+            raise ValueError('pilot roster requires cockpit playback')
         if (trial_index is not None or resume_route is not None) and (
                 cockpit_playback_limit is not None or resume_routes is not None):
             raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
         if cockpit_playback_limit is not None:
             if (on_transport_lost is None or type(cockpit_playback_limit) is not int
-                    or not 1 <= cockpit_playback_limit <= 3):
+                    or not 1 <= cockpit_playback_limit <= MAX_COCKPIT_PLAYBACK_PILOTS):
                 raise ValueError('invalid cockpit playback limit')
         elif (trial_index is not None or on_transport_lost is not None) and (
                 on_transport_lost is None or type(trial_index) is not int
@@ -69,6 +73,8 @@ class CompanyMotionClient:
                 bind.update(loss_notifications=True, cockpit_playback_limit=cockpit_playback_limit)
             if normalized_resume_routes:
                 bind['resume_routes'] = [list(item) for item in normalized_resume_routes]
+            if on_pilot_roster is not None:
+                bind['pilot_roster'] = True
             self._outgoing = encode_frame(bind)
         except BaseException:
             self._connection.close()
@@ -80,6 +86,8 @@ class CompanyMotionClient:
         self._on_view_reset = on_view_reset
         self._on_transport_lost = on_transport_lost
         self._on_clock = on_clock
+        self._on_pilot_roster = on_pilot_roster
+        self._pilot_roster = None
         self._trial_index = trial_index
         self._resume_route = resume_route
         self._cockpit_playback_limit = cockpit_playback_limit
@@ -87,6 +95,7 @@ class CompanyMotionClient:
         self._generation = credential['generation']
         self._incoming = bytearray()
         self._bind_deadline = time.monotonic() + BIND_TIMEOUT
+        self.disconnected_before_bind = False
         self._window = None
         self._running = False
         self._last_sequence = 0
@@ -187,6 +196,10 @@ class CompanyMotionClient:
                 valid_indices = message.get('resume_valid_indices')
                 if type(valid_indices) is not list or any(type(item) is not int for item in valid_indices):
                     raise ValueError('movement bind lacks cockpit resume verdicts')
+            if self._on_pilot_roster is not None:
+                fields.add('pilot_roster')
+                if message.get('pilot_roster') is not True:
+                    raise ValueError('movement bind lacks negotiated pilot roster')
         window = message.get('window')
         if (set(message) != fields or type(window) is not int or not 0 <= window <= MAX_COUNTER or
                 type(message['running']) is not bool or binding != (self._window is None)):
@@ -203,6 +216,7 @@ class CompanyMotionClient:
         self._sent_view = None
         self._view_id = 0
         self._route_revisions.clear()
+        self._clear_pilot_roster()
         self._retire_outside({})
         if self._on_clock is not None:
             self._on_clock(window, self._running)
@@ -234,6 +248,13 @@ class CompanyMotionClient:
         window = message.get('window')
         if self._window is None or type(window) is not int or window != self._window or not self._running:
             raise ValueError('received movement outside the running window')
+        if kind == 'pilot_roster' and self._on_pilot_roster is not None:
+            epoch, own_index = self._source.registry
+            roster = validate_pilot_roster(message, epoch=epoch, own_index=own_index)
+            if roster != self._pilot_roster:
+                self._pilot_roster = roster
+                self._on_pilot_roster(roster)
+            return
         if kind == 'motion_sampled':
             sequence = message.get('sequence')
             if (set(message) != {'kind', 'sequence', 'window'} or type(sequence) is not int or
@@ -326,8 +347,12 @@ class CompanyMotionClient:
             if self._window is None and time.monotonic() > self._bind_deadline:
                 raise TimeoutError('movement stream did not bind to admitted player')
             old_window = self._window
-            for message in read_frames(self._connection, self._incoming):
-                self._receive(message)
+            try:
+                for message in read_frames(self._connection, self._incoming):
+                    self._receive(message)
+            except ConnectionError:
+                self.disconnected_before_bind = self._window is None and not self._incoming
+                raise
             sample = self._source.poll(self._validate_peer)
             if sample is not None and self._running and old_window == self._window:
                 sample = motion_value(sample)
@@ -346,7 +371,11 @@ class CompanyMotionClient:
                     sent = self._connection.send(self._outgoing)
                 except BlockingIOError:
                     break
+                except ConnectionError:
+                    self.disconnected_before_bind = self._window is None and not self._incoming
+                    raise
                 if not sent:
+                    self.disconnected_before_bind = self._window is None and not self._incoming
                     raise ConnectionError('movement stream closed on write')
                 self._outgoing = self._outgoing[sent:]
         except OSError:
@@ -359,4 +388,12 @@ class CompanyMotionClient:
     def close(self, *, transport_lost=False):
         self._outgoing = b''
         self._connection.close()
-        self._retire_outside({}, transport_lost=transport_lost)
+        try:
+            self._clear_pilot_roster()
+        finally:
+            self._retire_outside({}, transport_lost=transport_lost)
+
+    def _clear_pilot_roster(self):
+        previous, self._pilot_roster = self._pilot_roster, None
+        if previous:
+            self._on_pilot_roster(())

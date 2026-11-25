@@ -347,9 +347,11 @@ On Windows, run the matching player package from PowerShell.
 On Linux, keep the connection file owner-readable only (`chmod 600`). Use
 the ship prompt on either platform to select a free ship from the server's
 checkpoint. The same commands apply to the two- and four-Pulsar worlds.
-Automatic cockpit playback prioritizes the HUD target and fills up to three
-slots with nearby eligible Company ships on radar. An idle ship can take a
-slot ahead of a more distant pilot.
+With matching builds, the server sends the registry indices of the other
+active pilots. Your cockpit checks local visibility and gives those ships
+priority over idle Company ships in its three observation slots. A visible
+pilot you target gets first priority. Position updates still require a
+visible ship. Older providers use HUD and proximity selection.
 
 The Linux launcher allows up to an hour to connect and join. Once admitted,
 close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,

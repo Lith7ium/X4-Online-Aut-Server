@@ -175,10 +175,13 @@ still needs testing. [Native flight and authority transfer](AUTHORITY-SUPERHIGHW
   The observer logged expiry 1.563 s after confirming the binding, before a
   position could be read back. The window for a fresh observation is 450 ms.
   [Native radar evidence](AUTHORITY-COMPANY-INDEXED-HUD-20261125.md)
-  For the two-pilot flight use the explicit remote ship index. With automatic
-  selection the cockpit fills three slots from the HUD and nearby eligible
-  Company ships. Idle ships can take all three slots while another pilot is
-  still within radar range. [Cockpit selection](../src/authority/md/company_cockpit_observer.xml)
+  With the `2ad3fc46` packages, use the explicit remote ship index for the
+  two-pilot diagnostic. Their proximity-based selection can fill all three
+  slots with idle ships. Current source negotiates a list of up to three
+  active foreign ship indices on the authenticated motion stream. The
+  cockpit checks local visibility before giving those ships priority.
+  A legacy provider can still serve the proximity-based selection.
+  [Cockpit selection](../src/authority/md/company_cockpit_observer.xml)
   Use the uncrewed fighters for this flight. Current playback on the observing
   client excludes ships with an assigned NPC captain, even after another
   player's client has taken the helm. The earlier human test used uncrewed

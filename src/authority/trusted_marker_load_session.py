@@ -12,6 +12,7 @@ from itertools import islice
 import re
 import threading
 
+from .company_limits import COMPANY_PILOT_LIMIT
 from .company_ships import CompanyShip, CompanyShipCatalogue, read_company_ship_catalogue
 from .experimental_load_session import ExperimentalLoadSession
 from .experimental_client_load import HonestClientLoadClaim
@@ -19,7 +20,6 @@ from .load_messages import MAX_INTEGER, Offer, Receipt
 from .marker_evidence import verify_saved_marker
 
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
-COMPANY_PILOT_LIMIT = 4
 
 
 class StaleShipChoice(ValueError):

@@ -96,9 +96,10 @@ matching package and a server with Company motion enabled.
 ```
 
 Select a free ship at the terminal prompt. The same command applies to the
-two- and four-Pulsar worlds. Automatic cockpit playback prioritizes
-the HUD target and fills up to three slots with nearby eligible Company
-ships on radar. An idle ship can take a slot ahead of a more distant pilot.
+two- and four-Pulsar worlds. With matching builds, automatic cockpit
+playback gives visible pilot ships priority over idle Company ships in
+its three slots. The server sends the active pilots' ship indices and
+your cockpit checks local visibility. Older providers use HUD and proximity.
 After admission, motion uses a separate stream through the pinned TLS endpoint.
 Target a Company ship in the cockpit or select a rendered Company ship on
 the open map. Both views can stay active

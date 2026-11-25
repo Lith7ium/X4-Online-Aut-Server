@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 
+from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .experimental_tcp_motion import check_motion_progress, motion_value
 from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
@@ -17,7 +18,6 @@ _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
 # A stopped game sampler cannot refresh a new viewer from an indefinitely old pose.
 MAX_SAMPLE_AGE = 3.0
-MAX_COCKPIT_PLAYBACK_PILOTS = 3
 
 
 @dataclass
@@ -82,6 +82,8 @@ class _Peer:
     hidden: set = field(default_factory=set)
     trial_index: int | None = None
     cockpit_playback_limit: int = 0
+    pilot_roster: bool = False
+    last_pilot_roster: tuple | None = None
     resuming: tuple | None = None
     resuming_routes: dict = field(default_factory=dict)
     awaiting_ack: tuple | None = None
@@ -272,6 +274,7 @@ class CompanyMotionService:
             peer.resuming = None
             peer.resuming_routes.clear()
             peer.views.clear()
+            peer.last_pilot_roster = None
             peer.awaiting_ack, peer.source_ack, peer.view_id = None, b'', 0
             self._notice(peer, {'kind': 'motion_state', 'window': self.window, 'running': running})
 
@@ -365,7 +368,7 @@ class CompanyMotionService:
         ticket = message.get('ticket')
         fields = set(message)
         allowed = {'kind', 'ticket', 'loss_notifications', 'trial_index', 'resume_route',
-                   'cockpit_playback_limit', 'resume_routes'}
+                   'cockpit_playback_limit', 'resume_routes', 'pilot_roster'}
         if (fields - allowed or message.get('kind') != 'bind_motion'
                 or type(ticket) is not str or not _TICKET.fullmatch(ticket)):
             raise ValueError('invalid movement binding')
@@ -386,6 +389,8 @@ class CompanyMotionService:
                 message.get('loss_notifications') is not True or type(cockpit_limit) is not int
                 or not 1 <= cockpit_limit <= MAX_COCKPIT_PLAYBACK_PILOTS):
             raise ValueError('invalid cockpit playback limit')
+        if 'pilot_roster' in fields and (message['pilot_roster'] is not True or cockpit_limit is None):
+            raise ValueError('pilot_roster requires cockpit playback')
 
         route = None
         if 'resume_route' in fields:
@@ -420,6 +425,7 @@ class CompanyMotionService:
         peer.grant = grant
         peer.trial_index = trial_index
         peer.cockpit_playback_limit = cockpit_limit or 0
+        peer.pilot_roster = message.get('pilot_roster', False)
         grant.traffic.channel_bindings += 1
         bound = {'kind': 'motion_bound', 'window': self.window, 'running': self.running,
                  'last_sequence': grant.last_sequence}
@@ -431,6 +437,8 @@ class CompanyMotionService:
             bound.update(loss_notifications=True, cockpit_playback_limit=cockpit_limit)
         if 'resume_routes' in fields:
             bound['resume_valid_indices'] = sorted(resumed_routes)
+        if peer.pilot_roster:
+            bound['pilot_roster'] = True
         self._notice(peer, bound)
 
     def _view(self, peer, message):
@@ -549,12 +557,25 @@ class CompanyMotionService:
             raise ValueError('unknown movement message')
 
     def _write(self, peer):
+        roster = None
+        if peer.pilot_roster and self.running:
+            # The bounded control grants are authoritative across movement socket loss.
+            # Diagnostic services can admit more ships than the regular company session.
+            # Preserve a stable subset of the lowest same-epoch indices in that case.
+            indices = sorted(grant.index for grant in self._grants.values()
+                             if grant is not peer.grant and grant.epoch == peer.grant.epoch)
+            roster = tuple(indices[:MAX_COCKPIT_PLAYBACK_PILOTS])
         for _ in range(8):
+            sending_roster = False
             if not peer.outgoing:
                 if peer.notices:
                     peer.outgoing = peer.notices.popleft()
                 elif peer.source_ack:
                     peer.outgoing, peer.source_ack = peer.source_ack, b''
+                elif roster is not None and roster != peer.last_pilot_roster:
+                    sending_roster = True
+                    peer.outgoing = encode_frame({'kind': 'pilot_roster', 'window': self.window,
+                                                  'epoch': peer.grant.epoch, 'ship_indices': roster})
                 elif peer.latest and peer.awaiting_ack is None:
                     index = next(iter(peer.latest))
                     sample = peer.latest.pop(index)
@@ -572,9 +593,14 @@ class CompanyMotionService:
             try:
                 sent = peer.connection.send(peer.outgoing)
             except BlockingIOError:
+                if sending_roster:
+                    # Retry with the current membership if no bytes entered the stream.
+                    peer.outgoing = b''
                 return
             if not sent:
                 raise ConnectionError('movement send closed')
+            if sending_roster:
+                peer.last_pilot_roster = roster
             peer.outgoing = peer.outgoing[sent:]
 
     def poll(self):

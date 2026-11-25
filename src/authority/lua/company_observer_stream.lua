@@ -2,6 +2,9 @@
 local M = {}
 local SLOT_NAMES = {'cockpit', 'map'}
 local HEARTBEAT_SECONDS = 0.5
+local ROSTER_TTL = 3
+local MAX_PILOT_INDEX = 200000
+local MAX_PILOTS = 3
 local MAX_COUNTER = 9007199254740991
 
 local function same_binding(left, right)
@@ -38,7 +41,7 @@ local function valid_sample(row)
     return true
 end
 
-function M.new(readers, epoch, net, prefix, clock, playback_trial)
+function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster)
     local slot_names = {'cockpit'}
     local playback_slots = {cockpit = true}
     for _, extra in ipairs({'cockpit2', 'cockpit3'}) do
@@ -54,6 +57,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
     end
     local receive_budget = 8 * #slot_names
     local api = {}
+    local roster_revision, roster_packet, roster_deadline = 0, nil, nil
 
     local function publish_view(slot, name, binding, now, running)
         if slot.serial == 0 and not running then return end
@@ -76,11 +80,36 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         net:send(prefix .. table.concat(fields, '|'))
     end
 
-    local function observe(packet)
+    local function observe_roster(row, packet, now)
+        if not pilot_roster or #row < 3 or #row > 3 + MAX_PILOTS or row[2] ~= epoch then return end
+        local revision = counter(row[3])
+        if not revision or revision < roster_revision then return end
+        if revision == roster_revision then
+            if packet ~= roster_packet then return end
+            if roster_deadline then
+                roster_deadline = now + ROSTER_TTL
+                return
+            end
+        end
+        local indices, previous = {}, 0
+        for field = 4, #row do
+            local index = counter(row[field])
+            if not index or index <= previous or index > MAX_PILOT_INDEX then return end
+            indices[#indices + 1], previous = index, index
+        end
+        if pilot_roster:set_pilot_roster(indices) ~= true then return end
+        roster_revision, roster_packet, roster_deadline = revision, packet, now + ROSTER_TTL
+    end
+
+    local function observe(packet, now)
         if #packet > 576 or packet:sub(1, #prefix) ~= prefix then return end
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
+        end
+        if row[1] == 'ROSTER' then
+            observe_roster(row, packet, now)
+            return
         end
         if playback_trial and #row == 7 and row[1] == 'END' and playback_slots[row[2]] then
             local slot = slots[row[2]]
@@ -125,6 +154,10 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
 
     function api:tick(running)
         local now = clock()
+        if roster_deadline and now >= roster_deadline then
+            pilot_roster:set_pilot_roster({})
+            roster_deadline = nil
+        end
         for _, name in ipairs(slot_names) do
             local slot = slots[name]
             local binding
@@ -143,7 +176,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial)
         for _ = 1, receive_budget do
             local packet = net:receive()
             if packet == nil then break end
-            if running then observe(packet) end
+            if running then observe(packet, now) end
         end
         if playback_trial and running then playback_trial:tick(now) end
     end

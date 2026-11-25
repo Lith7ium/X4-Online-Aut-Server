@@ -95,6 +95,49 @@ class CompanyMotionSourceTest(unittest.TestCase):
     def test_selected_sampler_only_captures_after_resume_and_resets_rates(self):
         subprocess.run(['luajit', 'tests/authority_company_motion_source.lua'], cwd=ROOT, check=True)
 
+    def test_auto_cockpit_roster_retries_on_the_owned_udp_peer_without_subscribing(self):
+        source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_max_pilots=1)
+        self.addCleanup(source.close)
+        epoch = 'a' * 32
+        config = source.configure(epoch, 1961)
+        destination = ('127.0.0.1', config['port'])
+        prefix = source._prefix()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as foreign, \
+                patch('authority.company_motion_observer.time.monotonic', return_value=10) as clock:
+            owned.bind(('127.0.0.1', 0))
+            owned.settimeout(.1)
+            foreign.setblocking(False)
+            validate = lambda peer: peer == owned.getsockname()
+            observer = source.observe(validate)
+            set_views = Mock()
+            observer.bind_views(set_views)
+            observer.set_pilot_roster((12, 7354))
+            foreign.sendto(prefix + b'GAP', destination)
+            clock.return_value = 10.5
+            source.poll(validate)
+            with self.assertRaises(BlockingIOError):
+                foreign.recv(576)
+            owned.sendto(prefix + b'GAP', destination)
+            source.poll(validate)
+            clock.return_value = 11
+            source.poll(validate)
+            expected = prefix + f'ROSTER|{epoch}|1|12|7354'.encode()
+            self.assertEqual(owned.recv(576), expected)
+
+            observer.set_pilot_roster((12, 7354))
+            for malformed in ((7354, 12), (12, 12), (1961,), (200001,), (True,), (1, 2, 3, 4)):
+                observer.set_pilot_roster(malformed)
+            source.poll(validate)
+            with self.assertRaises(socket.timeout):
+                owned.recv(576)
+            clock.return_value = 11.5
+            source.poll(validate)
+            self.assertEqual(owned.recv(576), expected)
+            observer.set_pilot_roster(())
+            self.assertEqual(owned.recv(576), prefix + f'ROSTER|{epoch}|2'.encode())
+            set_views.assert_not_called()
+
 
 class CompanyMotionObserverTest(unittest.TestCase):
     def setUp(self):
@@ -276,6 +319,7 @@ class CompanyMotionObserverTest(unittest.TestCase):
         self.assertEqual(self.views, [])
         self.view('map', 1)
         self.poll()
+        self.observer.set_pilot_roster((7354,))
         self.validator_live = False
         self.observer.snapshot(self.sample(1))
         with self.assertRaises(socket.timeout):

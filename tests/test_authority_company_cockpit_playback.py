@@ -76,6 +76,29 @@ class CompanyCockpitObserverMdTests(unittest.TestCase):
             self.assertIn(required, guards)
 
 
+    def test_md_prefers_eligible_active_pilots_before_existing_hud_and_nearby_fallbacks(self):
+        root = ET.parse(MD_PATH).getroot()
+        multi = next(node for node in root.iter('do_if') if node.get('value') == "$mode == 'multi'")
+        multi = multi.find("do_if[@value='$canobserve']")
+        self.assertIsNotNone(multi)
+        hud, roster, hud_fallback, nearby = multi.findall('do_if')
+        self.assertIsNotNone(hud.find(".//do_if[@value='$roster.indexof.{$reg} gt 0']/append_to_list"))
+        self.assertIn('$hud_eligible and $selected.count lt $limit', hud_fallback.get('value'))
+        self.assertIsNotNone(nearby.find('find_ship'))
+        self.assertIsNone(roster.find('.//find_ship'))
+        loop = roster.find("do_for_each[@in='$roster']")
+        self.assertIsNotNone(loop)
+        self.assertIsNotNone(loop.find(".//set_value[@exact='@md.X4AuthorityShipRegistry.State.$ships.{$reg}']"))
+        guards = ' '.join(node.get('value', '') for node in roster.iter())
+        for check in ('$selected.count ge $limit', '$reg le $args.$count',
+                      '$reg != $args.$own', '$cand.isoperational', '$cand.owner == faction.player',
+                      'not $cand.dock.exists', 'not $cand.pilot.exists', 'not $cand.assignedpilot.exists',
+                      '$cand.sector == player.sector', '$cand.attention ge attention.visible',
+                      '$cand.isphysicsready', '$cand.distanceto.{player.controlled} le player.controlled.currentradarrange',
+                      'State.$byship.{$cand} == $reg'):
+            self.assertIn(check, guards)
+
+
 class CompanyCockpitOptInConfigTests(unittest.TestCase):
     def test_opt_in_flag_default_off_and_overlay_selection(self):
         default_src = CompanyMotionSource(playback_index=1074)
@@ -1124,6 +1147,66 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             assert(multi.readers.cockpit3:current().index == 3, 'cockpit3 slot must stay sticky on uint64_t cdata!')
             assert(multi:mode('cockpit') == 'radar')
             multi:close()
+            return true
+        """)
+        self.assertTrue(ok)
+
+
+    def test_multi_roster_updates_replace_pending_query_without_inventing_bindings(self):
+        lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        lua.globals()._ROOT = str(ROOT).replace('\\', '/')
+        ok = lua.execute(r"""
+            local observer_mod = dofile(_ROOT .. '/src/authority/lua/company_cockpit_observer.lua')
+            local epoch = ('a'):rep(32)
+            local pinned = {epoch = epoch, issued_count = 20, nonce = ('f'):rep(32)}
+            local received, issued
+            local calls = 0
+            local multi = observer_mod.new_multi(pinned, 1, 3, {
+                clock = function() return 10 end,
+                probe = function() return {mode = 'multi'} end,
+                parse_actor = tonumber,
+                verify_radar_actor = function(actor, sector, code)
+                    if actor == 42 then return {actor = actor, sector_macro = sector, code = code} end
+                    return nil
+                end,
+                register = function(cb) received = cb; return true end,
+                issue = function(args) issued = args; calls = calls + 1; return true end,
+            })
+            local reader = multi.readers.cockpit
+            assert(reader:tick() == nil and issued.pilot1 == 0)
+            local stale = issued.request_id
+            local list = {3, 4, 5}
+            assert(multi:set_pilot_roster(list))
+            list[1] = 2
+            assert(reader:tick() == nil and issued.epoch == epoch and issued.count == 20)
+            assert(issued.pilot1 == 3 and issued.pilot2 == 4 and issued.pilot3 == 5)
+            local fresh = issued.request_id
+            assert(fresh ~= stale and calls == 2)
+            for _, invalid in ipairs({{1}, {200001}, {4, 4}, {21, 21}, {2, [3] = 4},
+                                     {2, 3, 4, 5}, {'3'}, {2.5}}) do
+                assert(not multi:set_pilot_roster(invalid))
+            end
+            assert(multi:set_pilot_roster({3, 4, 5}))
+            reader:tick()
+            assert(calls == 2)
+            received(nil, stale .. '|' .. epoch .. '|MULTI|1|2,0x2a,sector_macro,ABC-100,radar')
+            assert(reader:current() == nil)
+            received(nil, fresh .. '|' .. epoch .. '|MULTI|2|3,0x2b,sector_macro,ABC-300,radar;4,0x2a,sector_macro,ABC-400,radar')
+            assert(reader:current().index == 4)
+            assert(multi:set_pilot_roster({4, 21}))
+            reader:tick()
+            assert(calls == 3 and issued.pilot1 == 4 and issued.pilot2 == 0 and issued.pilot3 == 0)
+            received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|2'
+                .. '|21,0x2a,sector_macro,ABC-401,radar;4,0x2a,sector_macro,ABC-400,radar')
+            assert(reader:current().index == 4 and multi.readers.cockpit2:current() == nil)
+            assert(multi:set_pilot_roster({21}))
+            reader:tick()
+            assert(calls == 4 and issued.pilot1 == 0 and issued.pilot2 == 0 and issued.pilot3 == 0)
+            received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|0|-')
+            assert(reader:current() == nil)
+            assert(multi:set_pilot_roster({}))
+            multi:close()
+            assert(not multi:set_pilot_roster({3}))
             return true
         """)
         self.assertTrue(ok)

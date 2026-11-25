@@ -6,6 +6,7 @@ import re
 import sys
 import time
 
+from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS as MAX_COCKPIT_PILOTS
 from .company_motion_frames import MAX_COUNTER, SECTOR
 from .experimental_tcp_motion import motion_value
 
@@ -14,9 +15,9 @@ _COUNTER = re.compile(r'[1-9][0-9]{0,15}')
 _ACTOR = re.compile(r'(?:0[xX][0-9a-fA-F]{1,16}|[1-9][0-9]{0,19})')
 _CODE = re.compile(r'[A-Z0-9]{3}-[A-Z0-9]{3}')
 _TTL = 3.0
+_ROSTER_HEARTBEAT = 0.5
 _MAX_PENDING = 4
 _SLOTS = ('cockpit', 'map')
-MAX_COCKPIT_PILOTS = 3
 COCKPIT_SLOTS = ('cockpit', 'cockpit2', 'cockpit3')
 # A full SEEN can reach 544 bytes with the lease/generation prefix,
 # cockpit2/cockpit3 slot name, a 128-byte sector macro and eight round-trippable doubles.
@@ -76,6 +77,27 @@ class CompanyMotionObserver:
         self._slots = {name: _View() for name in slot_names}
         self._subscribed = ()
         self._last_confirmed = None
+        self._pilot_roster = ()
+        self._roster_revision = 0
+        self._next_roster_heartbeat = 0
+
+    def set_pilot_roster(self, indices):
+        """Give automatic cockpit playback a bounded list of pilot preferences."""
+        if not self._cockpit_playback_slots or self._trial_index is not None:
+            return
+        if (type(indices) is not tuple or len(indices) > MAX_COCKPIT_PILOTS
+                or any(type(index) is not int or not 1 <= index <= 200000
+                       or index == self._own_index for index in indices)
+                or tuple(sorted(set(indices))) != indices):
+            return
+        if indices != self._pilot_roster and self._roster_revision < MAX_COUNTER:
+            self._pilot_roster = indices
+            self._roster_revision += 1
+            self._send_roster(time.monotonic())
+
+    def _send_roster(self, now):
+        self._next_roster_heartbeat = now + _ROSTER_HEARTBEAT
+        self._send('|'.join(map(str, ('ROSTER', self._epoch, self._roster_revision, *self._pilot_roster))))
 
     def bind_views(self, set_views):
         self._set_views = set_views
@@ -102,6 +124,9 @@ class CompanyMotionObserver:
 
     def expire(self):
         now = time.monotonic()
+        if self._roster_revision and now >= self._next_roster_heartbeat:
+            # The local UDP peer may bind after admission, and datagrams may be lost.
+            self._send_roster(now)
         for slot, view in self._slots.items():
             if view.active is not None and now >= view.deadline:
                 if slot in self._active_tracks:
