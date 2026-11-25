@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 import authority_client_native as native
+from authority.company_npc_measurement import validate_measurement_trial
 from authority.company_motion_source import validate_npc_observation, validate_playback_index
 from authority.experimental_remote_load_client import SessionFull
 from authority_client_options import read_connection_settings, terminal_company_ship_selector
@@ -45,6 +46,8 @@ def main(argv=None):
     playback.add_argument('--company-hull-playback-index', type=int,
                           help='isolated test only: follow another company ship in the same cockpit sector')
     npc_trial = parser.add_mutually_exclusive_group()
+    npc_trial.add_argument('--trial-registered-npc-measurement', action='store_true',
+                           help='send read-only native radar samples of MFQ-419 from the vanilla HVC-420 fixture')
     npc_trial.add_argument('--trial-registered-npc-align', action='store_true',
                            help='isolated vanilla HVC-420 pilot only: align MFQ-419 once after its verified hold')
     npc_trial.add_argument('--trial-registered-npc-hold', action='store_true',
@@ -68,6 +71,8 @@ def main(argv=None):
         observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
                                                 company_motion=args.company_motion, own_index=args.company_ship_index)
         hold_npc = args.trial_registered_npc_hold or args.trial_registered_npc_align
+        validate_measurement_trial(args.trial_registered_npc_measurement, base_game_only=args.base_game_only,
+                                   observed_npc=observed_npc, pilot_index=args.company_ship_index)
         if hold_npc and (not args.base_game_only or args.company_ship_index != 1073
                                                 or observed_npc != (943, 'MFQ-419')):
             raise ValueError('NPC hold trial requires the vanilla HVC-420 pilot and observation of MFQ-419')
@@ -107,6 +112,8 @@ def main(argv=None):
             motion_options['company_undock_test'] = True
         if observed_npc:
             motion_options['observed_npc'] = observed_npc
+        if args.trial_registered_npc_measurement:
+            motion_options['registered_npc_local_measurement'] = True
         if hold_npc:
             motion_options['registered_npc_hold_trial'] = True
         if args.trial_registered_npc_align:

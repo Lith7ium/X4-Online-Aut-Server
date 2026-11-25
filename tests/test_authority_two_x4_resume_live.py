@@ -115,6 +115,7 @@ class ParticipantTest(unittest.TestCase):
             observed,
             dict(observed, registered_npc_hold_trial=True),
             dict(observed, registered_npc_hold_trial=True, registered_npc_alignment_trial=True),
+            dict(observed, registered_npc_local_measurement=True),
             {'playback_index': 943},
             {'cockpit_radar_playback': True},
             {'playback_index': 943, 'cockpit_radar_playback': True},

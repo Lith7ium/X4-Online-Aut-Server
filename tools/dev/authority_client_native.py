@@ -29,6 +29,7 @@ from authority.experimental_remote_load_client import SessionFull
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
 from authority.company_motion_source import CompanyMotionSource, validate_npc_observation, validate_playback_index
+from authority.company_npc_measurement import validate_measurement_trial
 from authority.company_purchase_source import CompanyPurchaseSource
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
@@ -261,7 +262,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
         cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
         company_sales=False,
-        observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False):
+        observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
+        registered_npc_local_measurement=False):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
@@ -278,6 +280,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
+    validate_measurement_trial(registered_npc_local_measurement, base_game_only=getattr(args, 'base_game_only', False),
+                               observed_npc=observed_npc)
+    if registered_npc_local_measurement and registered_npc_hold_trial:
+        raise ValueError('NPC measurement requires a read-only radar observation')
     if type(registered_npc_alignment_trial) is not bool or (registered_npc_alignment_trial and not registered_npc_hold_trial):
         raise ValueError('NPC alignment trial requires its reversible hold')
     if type(registered_npc_hold_trial) is not bool or (registered_npc_hold_trial and
@@ -435,7 +441,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         company_source = CompanyMotionSource(
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
                             cockpit_radar_playback=cockpit_radar_playback, registered_npc_hold_trial=registered_npc_hold_trial,
-                            registered_npc_alignment_trial=registered_npc_alignment_trial)
+                            registered_npc_alignment_trial=registered_npc_alignment_trial,
+                            registered_npc_local_measurement=registered_npc_local_measurement)
                         source_options['company_motion'] = company_source
                     if company_purchases:
                         sale_options = {'sales': True} if company_sales else {}

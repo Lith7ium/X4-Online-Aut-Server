@@ -69,6 +69,8 @@ class ReconnectingCompanyMotionClient:
         self._port = port
         self._credential = dict(credential) if type(credential) is dict else credential
         self._source = _LocalSource(source)
+        self._npc_measurement_source = (source.take_npc_measurement
+                                        if getattr(source, 'registered_npc_local_measurement', False) is True else None)
         self._validate_peer = validate_peer
         self._on_snapshot, self._on_end = on_snapshot, on_end
         self._on_transport_lost = on_transport_lost
@@ -200,8 +202,12 @@ class ReconnectingCompanyMotionClient:
                         routes = self._resume_routes()
                         if routes:
                             observer['resume_routes'] = routes
+                if self._npc_measurement_source is not None:
+                    observer['npc_measurement_source'] = self._npc_measurement_source
                 self._client = CompanyMotionClient(self._port, self._credential,
                                                    self._source, self._validate_peer, **observer)
+                # The receiver binds this trial once. A later link carries ordinary pilot motion.
+                self._npc_measurement_source = None
                 self._apply_view()
             self._client.poll()
             if self._retry_delay > _INITIAL_DELAY and self._client.stats()['samples_acknowledged']:

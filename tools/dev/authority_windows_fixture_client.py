@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 from authority_client_options import _read_settings, read_connection_settings, terminal_company_ship_selector
 from authority.experimental_remote_load_client import SessionFull
+from authority.company_npc_measurement import validate_measurement_trial
 
 
 def read_motion_request(path):
@@ -69,6 +70,8 @@ def parser():
                         help='opt in to authority-confirmed sales in the Company trade window')
     result.add_argument('--company-undock-test', action='store_true',
                         help='isolated test: require authority confirmation before stock undock')
+    result.add_argument('--trial-registered-npc-measurement', action='store_true',
+                        help='send read-only native radar samples of MFQ-419 from the vanilla HVC-420 fixture')
     playback = result.add_mutually_exclusive_group()
     playback.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'CODE'),
                           help='read one visible registered NPC through the Company motion channel')
@@ -125,6 +128,9 @@ def run(args, *, on_stage=None):
     playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
     observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
                                             company_motion=args.company_motion, own_index=args.company_ship_index)
+    measurement = getattr(args, 'trial_registered_npc_measurement', False)
+    validate_measurement_trial(measurement, base_game_only=getattr(args, 'base_game_only', False),
+                               observed_npc=observed_npc, pilot_index=args.company_ship_index)
     validate_playback_index(playback_index, company_motion=args.company_motion,
                             own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
@@ -176,6 +182,8 @@ def run(args, *, on_stage=None):
         motion_options['company_undock_test'] = True
     if observed_npc:
         motion_options['observed_npc'] = observed_npc
+    if measurement:
+        motion_options['registered_npc_local_measurement'] = True
     if playback_index is not None:
         motion_options['company_hull_playback_index'] = playback_index
     if cockpit_radar_playback:

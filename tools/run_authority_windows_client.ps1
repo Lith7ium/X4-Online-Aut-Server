@@ -19,6 +19,7 @@ param(
     [switch] $CompanySales,
     [switch] $CompanyFleetOrders,
     [ValidateCount(2, 2)] [string[]] $ObserveRegisteredNpc,
+    [switch] $TrialRegisteredNpcMeasurement,
     [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
@@ -65,6 +66,10 @@ if ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
 if ($ObserveRegisteredNpc -and (-not $CompanyMotion -or $CompanyCockpitPlayback -or
         $PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -or $PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex'))) {
     throw 'ObserveRegisteredNpc requires CompanyMotion with ship playback disabled.'
+}
+if ($TrialRegisteredNpcMeasurement -and (-not $BaseGameOnly -or $CompanyShipIndex -ne 1073 -or
+        -not $ObserveRegisteredNpc -or $ObserveRegisteredNpc[0] -ne '943' -or $ObserveRegisteredNpc[1] -cne 'MFQ-419')) {
+    throw 'TrialRegisteredNpcMeasurement requires the vanilla HVC-420 pilot observing 943 MFQ-419.'
 }
 $companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
 if ($FreshCompanyProfile -and -not $companyPilot) {
@@ -153,6 +158,7 @@ if ($CompanyMotion) {
         $clientArgs += @('--company-cockpit-playback-index', [string]$CompanyCockpitPlaybackIndex)
     } elseif ($ObserveRegisteredNpc) {
         $clientArgs += @('--observe-registered-npc', $ObserveRegisteredNpc[0], $ObserveRegisteredNpc[1])
+        if ($TrialRegisteredNpcMeasurement) { $clientArgs += '--trial-registered-npc-measurement' }
     } elseif ($CompanyCockpitPlayback) {
         $clientArgs += '--company-cockpit-playback'
     }

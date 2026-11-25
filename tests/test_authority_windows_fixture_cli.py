@@ -223,6 +223,12 @@ class FixtureCliTests(unittest.TestCase):
             observe = ['--observe-registered-npc', '42', 'NPC-042']
             cli.run(cli.parser().parse_args([*base, '--company-motion', *observe]))
             self.assertEqual(run_session.call_args.kwargs['observed_npc'], (42, 'NPC-042'))
+            measure = ['--company-motion', '--company-ship-index', '1073', '--observe-registered-npc',
+                       '943', 'MFQ-419', '--trial-registered-npc-measurement']
+            cli.run(cli.parser().parse_args([*base, '--base-game-only', *measure]))
+            self.assertTrue(run_session.call_args.kwargs['registered_npc_local_measurement'])
+            with self.assertRaisesRegex(ValueError, 'vanilla pilot'):
+                cli.run(cli.parser().parse_args([*base, *measure]))
             cli.run(parsed)
             with self.assertRaisesRegex(ValueError, 'requires company motion'):
                 cli.run(cli.parser().parse_args([*base, '--company-cockpit-playback']))

@@ -298,6 +298,11 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--base-game-only', *hold]), 0)
                 self.assertTrue(run.call_args.kwargs['registered_npc_hold_trial'])
+                measure = [*hold[:-1], '--trial-registered-npc-measurement']
+                self.assertEqual(cli.main([*args, '--base-game-only', *measure]), 0)
+                self.assertTrue(run.call_args.kwargs['registered_npc_local_measurement'])
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                cli.main([*args, *measure])
             multi = ['--company-cockpit-playback']
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *multi]), 0)

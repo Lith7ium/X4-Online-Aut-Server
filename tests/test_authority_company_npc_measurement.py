@@ -187,10 +187,8 @@ class NpcMeasurementTests(unittest.TestCase):
         source = SimpleNamespace(
             registry=(REGISTRY_EPOCH, PILOT_INDEX), local_generation='b' * 32,
             observed_npc=(NPC_INDEX, 'MFQ-419'), registered_npc_hold_trial=False,
+            registered_npc_local_measurement=True, take_npc_measurement=lambda: probe,
             poll=lambda validate: own, observe=lambda validate: observer)
-        initialize = CompanyMotionClient.__init__
-        def install_diagnostic(client, *args, **kwargs):
-            initialize(client, *args, **kwargs, npc_measurement_source=lambda: probe)
 
         client = ReconnectingCompanyMotionClient.observing(self.service.port, self.pilot, source, lambda: True)
         self.addCleanup(client.close)
@@ -200,26 +198,25 @@ class NpcMeasurementTests(unittest.TestCase):
                 self.service.poll()
             self.assertIsNone(client.failure)
 
-        with patch.object(CompanyMotionClient, '__init__', install_diagnostic):
-            drive()
-            self.assertEqual(self.rows, [])
-            observer.set_views([{'sector_macro': SECTOR, 'indices': [NPC_INDEX]}])
-            own = {'version': 3, 'epoch': REGISTRY_EPOCH, 'generation': source.local_generation,
-                   'index': PILOT_INDEX, 'sequence': 1, 'sector_macro': SECTOR, 'source_time': 10.,
-                   'capture_time': time.monotonic(), 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
-            probe = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
-                     'actor': '0x41961', 'sequence': 1, 'attention': 'inzone', 'position': [1., 2., 3.],
-                     'game_time': 10., 'capture_time': time.monotonic(),
-                     'velocity_m_per_game_second': [2., 0., 1.]}
-            drive()
-            self.assertEqual(client.stats()['samples_acknowledged'], 1)
-            self.assertEqual(self.rows[0]['sample'], probe)
-            probe = RADAR_ENDED
-            own = dict(own, sequence=2, source_time=11., capture_time=time.monotonic())
-            drive()
-            self.assertEqual(self.ingress.retired_reason, 'radar_ended')
-            self.assertEqual(client.stats()['samples_acknowledged'], 2)
-            self.assertEqual(len(self.rows), 1)
+        drive()
+        self.assertEqual(self.rows, [])
+        observer.set_views([{'sector_macro': SECTOR, 'indices': [NPC_INDEX]}])
+        own = {'version': 3, 'epoch': REGISTRY_EPOCH, 'generation': source.local_generation,
+               'index': PILOT_INDEX, 'sequence': 1, 'sector_macro': SECTOR, 'source_time': 10.,
+               'capture_time': time.monotonic(), 'x': 5., 'y': 8., 'z': 6., 'real_velocity': None}
+        probe = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
+                 'actor': '0x41961', 'sequence': 1, 'attention': 'inzone', 'position': [1., 2., 3.],
+                 'game_time': 10., 'capture_time': time.monotonic(),
+                 'velocity_m_per_game_second': [2., 0., 1.]}
+        drive()
+        self.assertEqual(client.stats()['samples_acknowledged'], 1)
+        self.assertEqual(self.rows[0]['sample'], probe)
+        probe = RADAR_ENDED
+        own = dict(own, sequence=2, source_time=11., capture_time=time.monotonic())
+        drive()
+        self.assertEqual(self.ingress.retired_reason, 'radar_ended')
+        self.assertEqual(client.stats()['samples_acknowledged'], 2)
+        self.assertEqual(len(self.rows), 1)
 
     def test_expiry_does_not_retire_ordinary_pilot_motion(self):
         connection, stream = self.open(self.pilot)

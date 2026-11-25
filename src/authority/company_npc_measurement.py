@@ -19,6 +19,14 @@ _ACTOR = re.compile(r'0x[0-9a-f]{1,16}')
 _ATTENTION = {'visible', 'inzone', 'nearby', 'adjacentroom', 'inroom'}
 
 
+def validate_measurement_trial(enabled, *, base_game_only, observed_npc, pilot_index=PILOT_INDEX):
+    """Recognize the supported native experiment before staging a game profile."""
+    if type(enabled) is not bool or (enabled and (
+            base_game_only is not True or observed_npc != (NPC_INDEX, NPC_CODE)
+            or type(pilot_index) is not int or pilot_index != PILOT_INDEX)):
+        raise ValueError('NPC measurement requires vanilla pilot 1073 observing 943 MFQ-419')
+
+
 def _number(value, maximum):
     return type(value) in (int, float) and -maximum <= value <= maximum and math.isfinite(value)
 
