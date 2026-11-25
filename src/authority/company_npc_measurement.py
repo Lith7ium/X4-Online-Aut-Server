@@ -7,6 +7,7 @@ import re
 from .company_motion_frames import MAX_COUNTER, view_matches
 
 MEASUREMENT_KIND = 'npc_measurement'
+RADAR_ENDED = object()
 REGISTRY_EPOCH = '26a1a365c66788aa06f0aeb9e18ff62e'
 PILOT_INDEX = 1073
 NPC_INDEX = 943
@@ -47,7 +48,7 @@ def measurement_value(value):
 
 @dataclass
 class NpcMeasurementIngress:
-    """One authenticated pilot/socket/view in one running motion window."""
+    """One authenticated pilot's reported radar, in one running motion window."""
 
     guard: Callable[[], bool]
     on_sample: Callable[[dict], None]
@@ -106,6 +107,9 @@ class NpcMeasurementIngress:
                 or type(message['view_id']) is not int or not 1 <= message['view_id'] <= MAX_COUNTER
                 or message['view_id'] != peer.view_id or message['generation'] != peer.grant.generation):
             raise ValueError('NPC measurement grant or radar view is unavailable')
+        if message['sample'] is None:
+            self.retire('radar_ended')
+            return
         sample = measurement_value(message['sample'])
         previous = self.latest
         if previous is not None and (sample['actor'] != previous['actor']

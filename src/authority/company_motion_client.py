@@ -8,7 +8,7 @@ from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_motion_frames import (BIND_TIMEOUT, MAX_COUNTER, encode_frame,
                                     normalize_views, read_frames, validate_pilot_roster, view_matches)
 from .company_npc_measurement import (MEASUREMENT_KIND, NPC_CODE, NPC_INDEX, PILOT_INDEX,
-                                      REGISTRY_EPOCH, SECTOR, measurement_value)
+                                      RADAR_ENDED, REGISTRY_EPOCH, SECTOR, measurement_value)
 from .experimental_tcp_motion import motion_value
 from .trusted_load_messages import validate_ship_motion_credential
 
@@ -374,6 +374,10 @@ class CompanyMotionClient:
         raw = source()
         if raw is None:
             return None
+        if raw is RADAR_ENDED:
+            self._npc_measurement_source = None
+            return {'kind': MEASUREMENT_KIND, 'generation': self._generation,
+                    'view_id': self._view_id, 'sample': None}
         sample = measurement_value(raw)
         if sample['sequence'] <= self._npc_measurement_sequence:
             return None

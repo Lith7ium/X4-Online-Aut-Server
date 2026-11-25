@@ -9,7 +9,7 @@ from unittest.mock import patch
 from authority.company_motion_client import CompanyMotionClient
 from authority.company_motion_service import CompanyMotionService
 from authority.company_npc_measurement import (MEASUREMENT_KIND, NPC_INDEX, PILOT_INDEX,
-                                              REGISTRY_EPOCH, SECTOR, NpcMeasurementIngress)
+                                              RADAR_ENDED, REGISTRY_EPOCH, SECTOR, NpcMeasurementIngress)
 
 
 class NpcMeasurementTests(unittest.TestCase):
@@ -139,3 +139,38 @@ class NpcMeasurementTests(unittest.TestCase):
         self.sample(connection, sequence=2, window=original)
         self.assertEqual(stream.read(1), b'')
         self.assertEqual(len(self.rows), 1)
+
+    def test_radar_end_retires_route_while_map_view_remains(self):
+        local = None
+        source = SimpleNamespace(registry=(REGISTRY_EPOCH, PILOT_INDEX), observed_npc=(NPC_INDEX, 'MFQ-419'),
+                                 poll=lambda validate: None)
+        client = CompanyMotionClient(self.service.port, self.pilot, source, lambda: True,
+                                     on_snapshot=lambda sample: self.fail('measurement was forwarded'),
+                                     on_end=lambda *_: None, npc_measurement_source=lambda: local)
+        self.addCleanup(client.close)
+
+        def drive():
+            for _ in range(3):
+                client.poll()
+                self.service.poll()
+
+        drive()
+        client.set_view(SECTOR, [NPC_INDEX])  # Map only.
+        drive()
+        self.assertEqual(self.rows, [])
+        local = {'epoch': REGISTRY_EPOCH, 'index': NPC_INDEX, 'code': 'MFQ-419', 'sector_macro': SECTOR,
+                 'actor': '0x41961', 'sequence': 1, 'attention': 'visible', 'position': [1., 2., 3.],
+                 'game_time': 10., 'capture_time': time.monotonic(),
+                 'velocity_m_per_game_second': [2., 0., 1.]}
+        drive()
+        self.assertEqual(len(self.rows), 1)
+        peer, = self.service._peers.values()
+        map_views = peer.views.copy()
+        local = RADAR_ENDED  # Radar lost; the map keeps this same combined view.
+        drive()
+        self.assertEqual(peer.views, map_views)
+        self.assertEqual(self.ingress.retired_reason, 'radar_ended')
+        self.assertIsNone(self.ingress.latest)
+        self.sample(client._connection, sequence=2)
+        self.assertEqual(len(self.rows), 1)
+        self.assertEqual(client._connection.recv(1), b'')
