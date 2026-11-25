@@ -23,7 +23,7 @@ indexed and multi-pilot HUD and radar readers exclude ships with a
 locally active or assigned captain. The native hull adapter rechecks
 `pilot`, `assignedpilot` and `assignedaipilot` before writing. The
 opt-in provider position cue can now follow a ship in its current sector
-after verifying its original idle NPC captain against the join checkpoint.
+after verifying its original idle NPC captain against the server's recovery checkpoint.
 [Standard reader](../src/authority/lua/company_observer_target.lua) ·
 [Cockpit reader](../src/authority/lua/company_cockpit_observer.lua) ·
 [Cockpit MD](../src/authority/md/company_cockpit_observer.xml) ·

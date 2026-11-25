@@ -85,8 +85,15 @@ remains open. [Crewed berth trial](AUTHORITY-COMPANY-BERTH-RETAINED-CAPTAIN-2026
 The private Linux provider moved the undocked WRN-302 twice with its
 original idle captain PYN-740 aboard. The final saved position was within
 1 mm of the second target. Both targets came from a test driver.
-The regular opt-in provider in `ee4ed8f5` can now check the saved
-captain's identity when applying same-sector pilot motion. [Provider move and save](AUTHORITY-TWO-IDLE-NPC-POSES-20261125.md)
+[Provider move and save](AUTHORITY-TWO-IDLE-NPC-POSES-20261125.md)
+
+A regular Bazzite pilot then took the helm of WRN-302 and strafed with
+stock game input. The GPU-free provider on the same computer accepted
+42 samples, including 41 with velocity. It moved WRN-302 by 17.4375 m to
+the subsequent settled position. After the pilot left, the saved position
+was within 0.51 mm of the paused target. PYN-740 remained aboard,
+and the Company balance and cargo matched. This run used loopback TLS
+and one pilot. [Native flight and final saved bytes](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md)
 
 A separate native Bazzite observer saw WRN-302 at 800 m. The ordinary
 HUD identified the ship while the indexed radar reader declined it because
