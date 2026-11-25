@@ -13,7 +13,7 @@ import time
 from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
-from .company_motion_source import validate_playback_index
+from .company_motion_source import validate_npc_observation, validate_playback_index
 from .company_ship_selection import reserve_company_ship
 from .experimental_client_owner import CompanyShipChoiceDenied
 from .experimental_client_session import client_connection
@@ -111,7 +111,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         stop_requested, io_timeout=30, participant_timeout=30, motion_request=None,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
-                        play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False):
+                        play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False, observed_npc=None):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -160,6 +160,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('Company undock test requires Company purchases')
     if type(company_purchases) is not bool or (company_purchases and (select_ship is None or not require_registry_snapshot)):
         raise ValueError('Company purchases require a verified selected seat')
+    validate_npc_observation(observed_npc, company_motion=company_motion, playback_index=company_hull_playback_index,
+                             cockpit_radar_playback=cockpit_radar_playback)
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
                             cockpit_radar_playback=cockpit_radar_playback)
     validate_motion_request(motion_request, participant_timeout)
@@ -238,7 +240,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 source_options = {}
                 if company_motion:
                     from .company_motion_source import CompanyMotionSource
-                    company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
+                    company_source = CompanyMotionSource(playback_index=company_hull_playback_index, observed_npc=observed_npc,
                                                         cockpit_radar_playback=cockpit_radar_playback,
                                                         on_stage=on_stage)
                     source_options['company_motion'] = company_source

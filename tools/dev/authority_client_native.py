@@ -28,7 +28,7 @@ from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_remote_load_client import SessionFull
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
-from authority.company_motion_source import CompanyMotionSource, validate_playback_index
+from authority.company_motion_source import CompanyMotionSource, validate_npc_observation, validate_playback_index
 from authority.company_purchase_source import CompanyPurchaseSource
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
@@ -257,7 +257,7 @@ def error_code(error):
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
-        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False):
+        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False, observed_npc=None):
     player_mode = player_settings is not None
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
@@ -269,6 +269,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         raise ValueError('Company trade view requires Company purchases')
     if type(company_undock_test) is not bool or (company_undock_test and not company_purchases):
         raise ValueError('Company undock test requires Company purchases')
+    validate_npc_observation(observed_npc, company_motion=company_motion, playback_index=company_hull_playback_index,
+                             cockpit_radar_playback=cockpit_radar_playback)
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
                             cockpit_radar_playback=cockpit_radar_playback)
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
@@ -416,7 +418,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     source_options = dict(software_rendered=software_vulkan_icd is not None)
                     if company_motion:
-                        company_source = CompanyMotionSource(playback_index=company_hull_playback_index,
+                        company_source = CompanyMotionSource(playback_index=company_hull_playback_index, observed_npc=observed_npc,
                                                             cockpit_radar_playback=cockpit_radar_playback)
                         source_options['company_motion'] = company_source
                     if company_purchases:

@@ -106,20 +106,16 @@ local function native_access()
 		if type(_G.Menus) ~= 'table' then
 			return nil
 		end
+		local active
 		for _, menu in ipairs(_G.Menus) do
 			if type(menu) == 'table' and menu.name == 'MapMenu' and menu.shown == true then
-				local handle = menu.holomap
-				if handle == nil then
-					return nil
-				end
-				local map_id = ffi.cast('UniverseID', handle)
-				if map_id == 0 then
-					return nil
-				end
-				return menu, map_id
+				if active then return nil end
+				active = menu
 			end
 		end
-		return nil
+		if not active or active.holomap == nil then return nil end
+		local map_id = ffi.cast('UniverseID', active.holomap)
+		if map_id ~= 0 then return active, map_id end
 	end
 
 	local function decimal_id(value)
@@ -162,8 +158,28 @@ end
 
 -- One explicitly selected component must also be present in the same raw
 -- renderer list. Recheck the map handle, selection and count after enumeration.
-function M.new_selected_x4()
+function M.new_selected_x4(options)
 	local ffi, native, active_map, decimal_id = native_access()
+	local require_picked_sector = options and options.require_picked_sector == true
+	local picked_sector
+	if require_picked_sector then
+		if not pcall(ffi.typeof, 'UIPosRot') then
+			ffi.cdef('typedef struct { float x, y, z, yaw, pitch, roll; } UIPosRot;')
+		end
+		ffi.cdef[[
+			UniverseID GetPickedMapComponent(UniverseID holomapid);
+			UniverseID GetMapPositionOnEcliptic2(UniverseID holomapid, UIPosRot* position,
+				bool adaptiveecliptic, UniverseID eclipticsectorid, UIPosRot eclipticoffset);
+			bool IsComponentClass(UniverseID componentid, const char* classname);
+		]]
+		local position, offset = ffi.new('UIPosRot[1]'), ffi.new('UIPosRot')
+		picked_sector = function(menu, map_id, selected)
+			-- Equipment panes and other overlays disable stock map picking.
+			if menu.picking ~= true or native.GetPickedMapComponent(map_id) ~= selected then return nil end
+			local sector = native.GetMapPositionOnEcliptic2(map_id, position, false, 0, offset)
+			if sector ~= 0 and native.IsComponentClass(sector, 'sector') then return sector end
+		end
+	end
 	local selected_buffer = ffi.new('UniverseID[1]')
 	local rendered_buffer, capacity
 	local function selection(map_id)
@@ -180,6 +196,8 @@ function M.new_selected_x4()
 		if not map_id then return nil end
 		local selected = selection(map_id)
 		if not selected then return nil end
+		local viewed_sector = picked_sector and picked_sector(menu, map_id, selected)
+		if require_picked_sector and not viewed_sector then return nil end
 		local count = tonumber(native.GetNumMapRenderedComponents(map_id))
 		if not valid_count(count, DEFAULT_MAX_COMPONENTS) or count == 0 then return nil end
 		if not capacity or count > capacity then
@@ -198,8 +216,9 @@ function M.new_selected_x4()
 		if not found or not same_map(active_map, menu, map_key, decimal_id)
 			or selection(map_id) ~= selected or native.GetNumMapSelectedComponents(map_id) ~= 1
 			or native.GetNumMapRenderedComponents(map_id) ~= count
+			or (require_picked_sector and picked_sector(menu, map_id, selected) ~= viewed_sector)
 			or not same_map(active_map, menu, map_key, decimal_id) then return nil end
-		return selected
+		return selected, viewed_sector
 	end
 	return sampler
 end

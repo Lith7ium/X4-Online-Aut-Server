@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 import authority_client_native as native
-from authority.company_motion_source import validate_playback_index
+from authority.company_motion_source import validate_npc_observation, validate_playback_index
 from authority.experimental_remote_load_client import SessionFull
 from authority_client_options import read_connection_settings, terminal_company_ship_selector
 
@@ -34,6 +34,8 @@ def main(argv=None):
     parser.add_argument('--company-undock-test', action='store_true',
                         help='isolated test: require authority confirmation before stock undock')
     playback = parser.add_mutually_exclusive_group()
+    playback.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'CODE'),
+                          help='read one visible registered NPC through the Company motion channel')
     playback.add_argument('--company-cockpit-playback', action='store_true',
                           help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-cockpit-playback-index', type=int,
@@ -54,6 +56,8 @@ def main(argv=None):
     cockpit_radar_playback = args.company_cockpit_playback or args.company_cockpit_playback_index is not None
     playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
     try:
+        observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
+                                                company_motion=args.company_motion, own_index=args.company_ship_index)
         validate_playback_index(playback_index, company_motion=args.company_motion,
                                 own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
     except ValueError as error:
@@ -86,6 +90,8 @@ def main(argv=None):
             motion_options['company_trade_view'] = True
         if args.company_undock_test:
             motion_options['company_undock_test'] = True
+        if observed_npc:
+            motion_options['observed_npc'] = observed_npc
         if playback_index is not None:
             motion_options['company_hull_playback_index'] = playback_index
         if cockpit_radar_playback:

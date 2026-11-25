@@ -23,10 +23,29 @@ def validate_playback_index(index, *, company_motion, own_index=None, cockpit_ra
         raise ValueError('hull playback requires company motion and a different valid registry index')
 
 
+def validate_npc_observation(target, *, company_motion, playback_index=None, cockpit_radar_playback=False,
+                             own_index=None):
+    """Read one registered NPC while the pilot is in a read-only observation mode."""
+    if target is None:
+        return None
+    if company_motion is not True or playback_index is not None or cockpit_radar_playback:
+        raise ValueError('registered NPC observation requires Company motion with ship playback disabled')
+    if not isinstance(target, (list, tuple)) or len(target) != 2:
+        raise ValueError('registered NPC observation requires an index and ship code')
+    index, code = target
+    if type(index) is str and re.fullmatch(r'[1-9][0-9]{0,5}', index):
+        index = int(index)
+    if (type(index) is not int or not 1 <= index <= 200000 or index == own_index
+            or type(code) is not str or not re.fullmatch(r'[A-Z0-9]{3}-[A-Z0-9]{3}', code)):
+        raise ValueError('invalid registered NPC index or ship code')
+    return index, code
+
+
 class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
-    def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None):
+    def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
+                 observed_npc=None):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
         if cockpit_radar_playback:
@@ -44,6 +63,8 @@ class CompanyMotionSource:
             raise ValueError('invalid company motion stage reporter')
         self._on_stage = on_stage
         self._reported_stages = set()
+        self._observed_npc = validate_npc_observation(
+            observed_npc, company_motion=True, playback_index=playback_index, cockpit_radar_playback=cockpit_radar_playback)
         self._playback_index = playback_index
         self._cockpit_radar_playback = cockpit_radar_playback
         self._cockpit_max_pilots = cockpit_max_pilots
@@ -79,6 +100,10 @@ class CompanyMotionSource:
         return self._playback_index
 
     @property
+    def observed_npc(self):
+        return self._observed_npc
+
+    @property
     def cockpit_radar_playback(self):
         return self._cockpit_radar_playback
 
@@ -111,9 +136,16 @@ class CompanyMotionSource:
             or operational_bits[playback_index - 1] != '1'
         ):
             raise ValueError('hull playback target is unavailable in the verified register')
+        if self._observed_npc:
+            target_index = self._observed_npc[0]
+            if (target_index == index or type(operational_bits) is not str
+                    or target_index > len(operational_bits) or operational_bits[target_index - 1] != '1'):
+                raise ValueError('registered NPC must be a distinct operational entry in the offered checkpoint')
         self._registry = (epoch, index)
         config = {'port': self._socket.getsockname()[1], 'lease': self._lease,
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
+        if self._observed_npc:
+            config['observed_npc_index'], config['observed_npc_code'] = self._observed_npc
         if playback_index is not None:
             config['playback_index'] = playback_index
         if self._cockpit_radar_playback:

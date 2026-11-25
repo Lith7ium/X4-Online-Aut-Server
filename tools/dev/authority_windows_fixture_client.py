@@ -68,6 +68,8 @@ def parser():
     result.add_argument('--company-undock-test', action='store_true',
                         help='isolated test: require authority confirmation before stock undock')
     playback = result.add_mutually_exclusive_group()
+    playback.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'CODE'),
+                          help='read one visible registered NPC through the Company motion channel')
     playback.add_argument('--company-cockpit-playback', action='store_true',
                           help='follow up to three visible other pilots by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-cockpit-playback-index', type=int,
@@ -113,9 +115,11 @@ def run(args, *, on_stage=None):
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
     if fresh_company_profile and (not company_pilot or args.motion_config is not None):
         raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
-    from authority.company_motion_source import validate_playback_index
+    from authority.company_motion_source import validate_npc_observation, validate_playback_index
     cockpit_radar_playback = getattr(args, 'company_cockpit_playback', False) or args.company_cockpit_playback_index is not None
     playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
+    observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
+                                            company_motion=args.company_motion, own_index=args.company_ship_index)
     validate_playback_index(playback_index, company_motion=args.company_motion,
                             own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
@@ -163,6 +167,8 @@ def run(args, *, on_stage=None):
         motion_options['company_fleet_orders'] = True
     if undock_test:
         motion_options['company_undock_test'] = True
+    if observed_npc:
+        motion_options['observed_npc'] = observed_npc
     if playback_index is not None:
         motion_options['company_hull_playback_index'] = playback_index
     if cockpit_radar_playback:

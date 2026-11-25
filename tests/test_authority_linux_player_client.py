@@ -278,6 +278,10 @@ class PlayerClientTests(unittest.TestCase):
                 self.assertEqual(cli.main([*args, '--company-motion', *cockpit]), 0)
             self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
             self.assertIs(run.call_args.kwargs['cockpit_radar_playback'], True)
+            npc = ['--observe-registered-npc', '42', 'NPC-042']
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', *npc]), 0)
+            self.assertEqual(run.call_args.kwargs['observed_npc'], (42, 'NPC-042'))
             multi = ['--company-cockpit-playback']
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *multi]), 0)
@@ -285,7 +289,7 @@ class PlayerClientTests(unittest.TestCase):
             self.assertIs(run.call_args.kwargs['cockpit_radar_playback'], True)
             with patch.object(native, 'run') as run, redirect_stderr(io.StringIO()):
                 for invalid in (
-                    option, cockpit, multi,
+                    option, cockpit, multi, npc, ['--company-motion', *npc, *multi],
                     ['--company-motion', *option, *cockpit],
                     ['--company-motion', *option, *multi],
                     ['--company-motion', *cockpit, *multi],

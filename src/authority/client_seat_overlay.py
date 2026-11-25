@@ -104,6 +104,8 @@ def seat_prefix(index, nonce, status):
 
 
 def company_motion_ui(source):
+    if getattr(source, 'observed_npc', None):
+        return COMPANY_MOTION_UI | {'npc_cockpit_observer.lua': 'src/authority/lua/npc_cockpit_observer.lua'}
     if getattr(source, 'cockpit_radar_playback', False):
         return COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI | COMPANY_MOTION_UI
     if source.playback_index is not None:
@@ -112,6 +114,8 @@ def company_motion_ui(source):
 
 
 def company_motion_md(source):
+    if getattr(source, 'observed_npc', None):
+        return COMPANY_MOTION_MD | {'npc_cockpit_observer.xml': 'src/authority/md/npc_cockpit_observer.xml'}
     if getattr(source, 'cockpit_radar_playback', False):
         return COMPANY_MOTION_MD | COMPANY_COCKPIT_RADAR_MD
     return COMPANY_MOTION_MD

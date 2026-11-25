@@ -69,6 +69,7 @@ COMPANY_SEAT = {
     'src/authority/lua/company_cockpit_observer.lua',
     'src/authority/lua/company_cockpit_playback.lua',
     'src/authority/md/company_cockpit_observer.xml',
+    'src/authority/md/npc_cockpit_observer.xml', 'src/authority/lua/npc_cockpit_observer.lua',
     'src/authority/lua/company_trade_capture.lua', 'src/authority/lua/company_purchase_source.lua',
     'src/authority/lua/company_trade_view_ui.lua',
     'src/authority/lua/company_fleet_capture.lua', 'src/authority/lua/company_fleet_source.lua',

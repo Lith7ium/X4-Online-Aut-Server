@@ -166,6 +166,17 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
         DebugError('[X4LAN] AUTH_COMPANY_OBSERVER_UNAVAILABLE')
     end
     local ok, observer = pcall(function()
+        if config.observed_npc_index then
+            assert(not config.playback_index and not config.cockpit_radar_playback)
+            local function npc_reader(mode)
+                return assert(X4LAN_NPC_COCKPIT_OBSERVER.new_x4(pinned, config.index, available, {
+                    enabled = true, mode = mode, target_index = config.observed_npc_index,
+                    target_code = assert(config.observed_npc_code), clock = udp.monotonic,
+                }))
+            end
+            local readers = {cockpit = npc_reader('radar'), map = npc_reader('map')}
+            return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic)
+        end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
         local readers, trial, pilot_roster
         if config.cockpit_radar_playback == true then

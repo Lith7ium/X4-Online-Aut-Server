@@ -21,6 +21,7 @@ REQUIRED = {
     'src/authority/md/checkpoint_marker.xml',
     'src/authority/md/company_ship_pose.xml',
     'src/authority/lua/company_ship_pose.lua',
+    'src/authority/lua/npc_cockpit_observer.lua', 'src/authority/md/npc_cockpit_observer.xml',
     'src/authority/lua/replica_motion_binding.lua',
     'tools/dev/authority_company_pose_overlay.py',
     'tools/dev/authority_company_pose_trial.py',

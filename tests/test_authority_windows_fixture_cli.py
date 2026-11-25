@@ -220,6 +220,9 @@ class FixtureCliTests(unittest.TestCase):
                 patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as run_session, \
                 patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace'):
             platform.name = 'nt'
+            observe = ['--observe-registered-npc', '42', 'NPC-042']
+            cli.run(cli.parser().parse_args([*base, '--company-motion', *observe]))
+            self.assertEqual(run_session.call_args.kwargs['observed_npc'], (42, 'NPC-042'))
             cli.run(parsed)
             with self.assertRaisesRegex(ValueError, 'requires company motion'):
                 cli.run(cli.parser().parse_args([*base, '--company-cockpit-playback']))

@@ -17,6 +17,7 @@ param(
     [switch] $CompanyUndockTest,
     [switch] $CompanyTradeView,
     [switch] $CompanyFleetOrders,
+    [ValidateCount(2, 2)] [string[]] $ObserveRegisteredNpc,
     [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
@@ -56,6 +57,10 @@ if ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
     if ($PSBoundParameters.ContainsKey('CompanyShipIndex') -and $CompanyCockpitPlaybackIndex -eq $CompanyShipIndex) {
         throw 'CompanyCockpitPlaybackIndex requires the other Company ship index.'
     }
+}
+if ($ObserveRegisteredNpc -and (-not $CompanyMotion -or $CompanyCockpitPlayback -or
+        $PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -or $PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex'))) {
+    throw 'ObserveRegisteredNpc requires CompanyMotion with ship playback disabled.'
 }
 $companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
 if ($FreshCompanyProfile -and -not $companyPilot) {
@@ -142,6 +147,8 @@ if ($CompanyMotion) {
         $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)
     } elseif ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {
         $clientArgs += @('--company-cockpit-playback-index', [string]$CompanyCockpitPlaybackIndex)
+    } elseif ($ObserveRegisteredNpc) {
+        $clientArgs += @('--observe-registered-npc', $ObserveRegisteredNpc[0], $ObserveRegisteredNpc[1])
     } elseif ($CompanyCockpitPlayback) {
         $clientArgs += '--company-cockpit-playback'
     }

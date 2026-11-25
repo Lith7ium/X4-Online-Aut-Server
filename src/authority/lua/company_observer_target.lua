@@ -234,5 +234,6 @@ function M.new_map_x4(pinned, own_index, registry_ready, map_target)
     return new_x4(pinned, own_index, registry_ready, map_target)
 end
 
+M.same_target = same_target
 X4LAN_COMPANY_OBSERVER_TARGET = M
 return M
