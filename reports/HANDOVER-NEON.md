@@ -5,8 +5,29 @@
 Astra integrates on `Lith7ium/X4-Online-Aut-Server`, branch
 `test/base-game-two-pilots-20261124`. Lith7ium approves major architecture decisions. The session
 limit is four pilots. Compare findings and assign work at the top of the
-hour, Berlin time, in `#x4-authorative-server`. The 09:00 team check-in
-records the Windows results, WAN assignment and the server timeout. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795593679797079)
+hour, Berlin time, in `#x4-authorative-server`. The 11:00 check-in
+covers the Fedora startup, the stalled Linux sender and the Windows
+operator's availability. [Development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795600842370719)
+
+Fedora run-02 timed out on the native position inspection of HVC-420 (1073).
+It accepted 38 stationary pilot samples and issued no pose write. Run-03
+restored the last clean source with the native position writer disabled.
+Bazzite entered the cockpit and received 2,653 service acknowledgements
+before the native Linux sampler reported a generic tick failure. Bazzite
+left cooperatively. The Windows operator was away and no WAN pilot flew.
+A new sampler build reports fixed error codes for the failing stage. Use it
+when the operator returns. Avoid repeating the idle-only run.
+
+A separate native purchase and departure test confirmed the server
+released WRN-302's berth before its pilot received authorization and
+X4 started the pilot's undock. The client-side final physical read was
+missing. [Linux purchase and departure evidence](AUTHORITY-PURCHASE-AND-UNDOCK-LINUX-20261125.md)
+
+Lith7ium selected a separate marker for a visible remote pilot on the
+stock map. The installed MapMenu and its exported interfaces examined so
+far have no verified renderer for a standalone marker at an arbitrary
+sector position. Keep the existing local ship and the player's guidance
+and missions intact while investigating the display path.
 
 Two ordinary Linux pilots have now flown the human test's vanilla Pulsars
 in one session. In Black Hole Sun V, each receiving cockpit used radar
