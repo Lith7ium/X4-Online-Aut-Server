@@ -1,8 +1,6 @@
 """Synthetic install and actual Lua-owner checks; no native X4 run."""
 import hashlib
 from pathlib import Path
-import shutil
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,6 +11,11 @@ from authority.company_motion_source import CompanyMotionSource
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
+
+if __package__:
+    from .run_fixture_lua import run_fixture
+else:
+    from run_fixture_lua import run_fixture
 
 
 class FullRegistryOverlayTest(unittest.TestCase):
@@ -58,14 +61,9 @@ class FullRegistryOverlayTest(unittest.TestCase):
         self.assertLess(probe.index('X4LAN_RECOVERY_REGISTRY_STATUS.new'),
                         probe.index('barrier.update()'))
         root = Path(__file__).resolve().parents[1]
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
         for mode in ('ready', 'wrong_bits', 'time_changed', 'time_changed_header'):
             with self.subTest(mode=mode):
-                result = subprocess.run(
-                    ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
-                     str(target / 'ui'), mode], capture_output=True, text=True, cwd=root)
-                self.assertEqual(result.returncode, 0, result.stderr)
+                run_fixture(root / 'tests/authority_windows_full_registry_overlay.lua', target / 'ui', mode)
 
     def test_alternate_profile_binds_one_save_directory_for_load_control_and_optional_flight(self):
         for flight in (False, True):
@@ -104,12 +102,7 @@ class FullRegistryOverlayTest(unittest.TestCase):
             install_fixture_overlay(self.view, **self.options)
         target = self.view / 'extensions/x4_lan_lab/ui'
         root = Path(__file__).resolve().parents[1]
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
-        result = subprocess.run(
-            ['luajit', str(root / 'tests/authority_windows_full_registry_overlay.lua'),
-             str(target), 'ready', '300'], capture_output=True, text=True, cwd=root)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        run_fixture(root / 'tests/authority_windows_full_registry_overlay.lua', target, 'ready', '300')
 
     def test_invalid_snapshot_rejected_before_install(self):
         for change in ({'format': 2}, {'source_registry_checked': False},

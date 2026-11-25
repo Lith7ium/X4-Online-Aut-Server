@@ -23,7 +23,6 @@ LINUX_EXE = Path(os.environ.get('X4_LINUX_EXE', ROOT.parent / 'x4-re/bin-linux/X
 WINDOWS_EXE = Path(os.environ.get('X4_WINDOWS_EXE', ROOT.parent / 'x4-re/bin/X4.exe'))
 # tools/dev/linux_gate_live.py imports fcntl, so it loads only on POSIX hosts.
 HAS_FCNTL = importlib.util.find_spec('fcntl') is not None
-HAS_LUPA = importlib.util.find_spec('lupa') is not None
 
 
 class SiteTable(unittest.TestCase):
@@ -361,7 +360,6 @@ class LiveRunner(unittest.TestCase):
             self.assertFalse(live.steam_shared_memory(shm / 'missing', uid))
 
 
-@unittest.skipUnless(HAS_LUPA, 'needs lupa (LuaJIT)')
 class ProbeLibrary(unittest.TestCase):
     """The probe loads the platform's gate module and names a refused verification stage."""
     def run_probe(self, separator, stage):

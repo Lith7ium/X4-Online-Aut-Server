@@ -342,18 +342,16 @@ class AssembledFixtureSessionTest(unittest.TestCase):
                 return self.thread is not None and self.thread.is_alive()
 
             def close(self):
-                try:
-                    if motion_enabled and not self.cleanup_confirmed:
-                        test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
-                finally:
-                    # Stop the fake X4 threads even when that check fails; otherwise
-                    # they keep polling and the test process never exits.
-                    self.done.set()
+                self.done.set()
                 if self.motion_thread is not None:
                     self.motion_thread.join(3)
-                    test.assertFalse(self.motion_thread.is_alive())
                 if self.thread is not None:
                     self.thread.join(3)
+                if self.motion_thread is not None:
+                    test.assertFalse(self.motion_thread.is_alive())
+                if motion_enabled and not self.cleanup_confirmed:
+                    test.assertEqual(motion_messages, [bind_kind]*expected_bind_count + ['STOP'])
+                if self.thread is not None:
                     if self.thread.is_alive():
                         raise RuntimeError('fake X4 thread did not stop')
                     if not self.cleanup_confirmed:

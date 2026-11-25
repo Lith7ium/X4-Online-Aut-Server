@@ -153,18 +153,9 @@ def install(case,profile,status,settings):
         raise ValueError('client registry status differs')
     manifest_hook='    <file name="ui/authority_two_x4_participant_probe.lua" />\n'
     udp_loader_hook='    <file name="ui/local_udp_module.lua" />\n'
-    control_hook=' assert(state:on_update())\n'
-    local_hook='local net,state,engine,next_hello,failed=nil,nil,nil,0,false\n'
-    validity_hook=' if not ffi.C.IsPlayerValid() then return end\n'
     if (udp_loader.read_bytes()!=participant.local_udp_loader_bytes() or
-        mf.count(udp_loader_hook)!=1 or mf.count(manifest_hook)!=1 or mf.index(udp_loader_hook)>mf.index(manifest_hook) or
-        ctl.count(control_hook)!=1 or ctl.count(local_hook)!=1 or ctl.count(validity_hook)!=1 or
-        ctl.count("SetScript('onUpdate'")!=1 or load_text.count("SetScript('onUpdate'")!=1 or
-        'X4LAN_RECOVERED_CLIENT_LOAD_READY' in load_text):
+        mf.count(udp_loader_hook)!=1 or mf.count(manifest_hook)!=1 or mf.index(udp_loader_hook)>mf.index(manifest_hook)):
         raise ValueError('client owner hooks missing or ambiguous')
-    submission_hook="  assert(state:submit('isolated-client',epoch,tonumber(id),op))\n"
-    if saved_playback_fixture is not None and ctl.count(submission_hook)!=1:
-        raise ValueError('client pause submission hook missing or ambiguous')
     motion_control=transform_motion_control(ctl,settings)
     load_text=append_load_ready_hook(load_text)
     modules,md_names=select_motion_sources(settings)

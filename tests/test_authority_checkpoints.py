@@ -287,6 +287,9 @@ with tempfile.TemporaryDirectory() as directory:
         save.symlink_to(self.source)
         with self.assertRaises((CheckpointError, OSError)):
             self.store.latest()
+        with mock.patch.object(os, 'O_NOFOLLOW', 0, create=True):
+            with self.assertRaises(CheckpointError):
+                self.store.latest()
         self.assertEqual(self.source.read_bytes(), original)
 
     def test_restart_revalidates_xml_even_when_hashes_agree(self):

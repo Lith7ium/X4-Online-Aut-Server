@@ -42,9 +42,19 @@ class Checkpoint:
     marker: str | None = None
 
 
+def _open_for_read(path):
+    no_follow = getattr(os, 'O_NOFOLLOW', 0)
+    if not no_follow:
+        entry = os.lstat(path)
+        attributes = getattr(entry, 'st_file_attributes', 0)
+        if not stat.S_ISREG(entry.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise CheckpointError('expected a regular file')
+    flags = os.O_RDONLY | no_follow | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0)
+    return os.open(path, flags)
+
+
 def _read_regular(path, limit):
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
-    fd = os.open(path, flags)
+    fd = _open_for_read(path)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise CheckpointError('expected a regular file')
@@ -84,7 +94,7 @@ def _validate_save(path):
     parser.ExternalEntityRefHandler = reject
     total = 0
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+        fd = _open_for_read(path)
         with os.fdopen(fd, 'rb') as raw:
             if not stat.S_ISREG(os.fstat(raw.fileno()).st_mode):
                 raise CheckpointError('save is not a regular file')
@@ -105,7 +115,7 @@ def _validate_save(path):
 
 
 def _file_digest(path):
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    fd = _open_for_read(path)
     with os.fdopen(fd, 'rb') as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise CheckpointError('save is not a regular file')
@@ -126,9 +136,8 @@ def _file_digest(path):
 
 def _sync_dir(path):
     if os.name == 'nt':
-        # Windows has no directory fsync, and os.open cannot open a directory
-        # there. The files are fsynced before each rename; the rename itself is
-        # left to the NTFS metadata journal.
+        # Windows test stores flush the files. Python's os.open cannot open
+        # a directory for the additional metadata flush used by the Linux host.
         return
     fd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
     try:
@@ -170,7 +179,7 @@ class CheckpointStore:
         pointer_temp = None
         try:
             target = stage / 'save.xml.gz'
-            fd = os.open(source, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+            fd = _open_for_read(source)
             with os.fdopen(fd, 'rb') as incoming, target.open('xb') as outgoing:
                 before = os.fstat(incoming.fileno())
                 if not stat.S_ISREG(before.st_mode):

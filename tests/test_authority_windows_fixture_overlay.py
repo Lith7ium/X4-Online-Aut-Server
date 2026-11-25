@@ -1,8 +1,7 @@
 """Synthetic files only: no X4, Windows installation, or real DLL."""
 import hashlib
-import shutil
+import os
 import stat
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +12,11 @@ import xml.etree.ElementTree as ET
 from authority.experimental_windows_fixture_overlay import _ordinary, install_fixture_overlay
 from authority.load_messages import Offer
 from authority.trusted_marker_load_session import MarkerBoundOffer
+
+if __package__:
+    from .run_fixture_lua import compile_fixture, run_fixture
+else:
+    from run_fixture_lua import compile_fixture, run_fixture
 
 
 class FixtureOverlayTest(unittest.TestCase):
@@ -117,12 +121,9 @@ class FixtureOverlayTest(unittest.TestCase):
                         paths.index('ui/authority_download_load_probe.lua'))
         self.assertIn('md/authority_ship_registry.xml', manifest)
         root = Path(__file__).resolve().parents[1]
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
         for mode in ('ready', 'wrong_count'):
             with self.subTest(mode=mode):
-                subprocess.run(['luajit', str(root / 'tests/authority_windows_registry_gate.lua'),
-                                str(target / 'ui'), mode], check=True, capture_output=True, cwd=root)
+                run_fixture(root / 'tests/authority_windows_registry_gate.lua', target / 'ui', mode)
 
     def test_saved_ship_seat_requires_operational_full_registry_and_loads_before_pause(self):
         status = ('ready', '1' * 32, 8, '2' * 64)
@@ -180,9 +181,7 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertLess(load.index('client_seat:tick()'), load.index('barrier.update()'))
         self.assertIn('authority_registry_snapshot,8,full_registry_inspect', load)
         root = Path(__file__).resolve().parents[1]
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
-        subprocess.run(['luajit', 'tests/authority_client_seat.lua'], cwd=root, check=True)
+        run_fixture(root / 'tests/authority_client_seat.lua', root)
 
     def test_explicit_undock_overlay_orders_hook_before_participant_and_stages_lock_cue(self):
         from authority.company_purchase_source import CompanyPurchaseSource
@@ -237,12 +236,8 @@ class FixtureOverlayTest(unittest.TestCase):
         self.assertIn('saved_playback_fixture=cfg.authority_client_motion_saved_playback_fixture', control)
         self.assertIn('X4LAN_RECOVERED_CLIENT_LOAD_READY', (target/'ui/authority_download_load_probe.lua').read_text())
         self.assertNotIn('md/authority_saved_motion_apply.xml', manifest)  # Playback uses native setters, not the one-shot MD route.
-        root = Path(__file__).resolve().parents[1]
-        if shutil.which('luajit') is None:
-            self.skipTest('needs a luajit executable')
         for path in paths:
-            subprocess.run(['luajit', '-b', str(target/path), str(target/'compiled.out')],
-                           check=True, capture_output=True, cwd=root)
+            compile_fixture(target / path, target / 'compiled.out')
 
     def test_motion_context_collision_refuses_before_writing(self):
         settings = dict(port=23456, lease='1'*32, attempt='2'*32, generation='3'*32,
@@ -284,10 +279,19 @@ class FixtureOverlayTest(unittest.TestCase):
         extensions.rmdir()
         other = self.view.parent / 'other'
         other.mkdir()
-        try:
+        if os.name == 'nt':
+            # A directory junction exercises the reparse-point check on NTFS
+            # without requiring permission to create symbolic links.
+            import _winapi
+            try:
+                _winapi.CreateJunction(str(other), str(extensions))
+            except OSError as error:
+                if error.winerror != 50:
+                    raise
+                self.skipTest('test filesystem does not support Windows junctions')
+            self.assertTrue(extensions.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        else:
             extensions.symlink_to(other, target_is_directory=True)
-        except (OSError, NotImplementedError):
-            return
         with self.assertRaises(ValueError):
             self.install()
         self.assertEqual(list(other.iterdir()), [])

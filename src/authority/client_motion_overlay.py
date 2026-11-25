@@ -164,7 +164,7 @@ def transform_motion_control(control_text, settings):
     """Install the shared update hook and motion-specific STOP/pause gate."""
     control_hook = ' assert(state:on_update())\n'
     local_hook = 'local net,state,engine,next_hello,failed=nil,nil,nil,0,false\n'
-    validity_hook = ' if not ffi.C.IsPlayerValid() then return end\n'
+    validity_hook = ' if not ffi.C.IsPlayerValid() then'
     submission_hook = "  assert(state:submit('isolated-client',epoch,tonumber(id),op))\n"
     if (control_text.count(control_hook) != 1 or control_text.count(local_hook) != 1 or
             control_text.count(validity_hook) != 1 or control_text.count("SetScript('onUpdate'") != 1):
@@ -219,7 +219,7 @@ def transform_motion_control(control_text, settings):
     control_text = control_text.replace(local_hook, local_hook + 'ffi.cdef[[bool IsGamePaused(void);]]\nlocal client_motion=nil\n')
     control_text = control_text.replace(
         validity_hook,
-        " if not ffi.C.IsPlayerValid() then if client_motion then error('client motion player lost') end;return end\n")
+        validity_hook + "\n  assert(not client_motion, 'client motion player lost')\n")
     return control_text.replace(control_hook, control_hook + code)
 
 

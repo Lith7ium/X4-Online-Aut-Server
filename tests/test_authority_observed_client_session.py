@@ -115,6 +115,12 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(self.errors, [])
 
+    def wait_for_reply(self, session):
+        deadline = time.monotonic() + 4
+        while not self.replies and not self.server_done.is_set() and time.monotonic() < deadline:
+            session.poll(.1)
+        self.assertTrue(self.replies, f'no control reply received; server errors: {self.errors}')
+
     def start_fake_participant(self, controller):
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.bind(('127.0.0.1', 0)); udp.settimeout(.05)
@@ -214,8 +220,7 @@ class ObservedSessionTest(unittest.TestCase):
         session.continue_until_exit()
         later = SimpleNamespace(monotonic=lambda: deadline + 7200, sleep=time.sleep)
         with patch('authority.observed_client_session.time', later):
-            while not self.replies:
-                session.poll(.1)
+            self.wait_for_reply(session)
         self.assertEqual(self.replies[0]['status'], 'confirmed')
         self.assertEqual(stages, ['world_marker_confirmed', 'participant_admitted',
                                   'first_local_resume_confirmed'])
@@ -259,8 +264,7 @@ class ObservedSessionTest(unittest.TestCase):
         self.assertTrue(session.start())
         # READY and STOP each get .75s, native control 2s, framing 1s.
         self.assertEqual(owner._participant._timeout, 4.5)
-        while not self.replies:
-            session.poll(.1)
+        self.wait_for_reply(session)
         self.assertEqual(self.replies[0]['status'], 'confirmed')
         self.assertEqual(motion.events, [('before', 'resume'), ('after', 'resume')])
 
@@ -278,8 +282,7 @@ class ObservedSessionTest(unittest.TestCase):
             registry_status=('ready', epoch, 3, '3' * 64), registry_nonce=nonce)
         self.addCleanup(session.close)
         self.assertTrue(session.start())
-        while not self.replies:
-            session.poll(.1)
+        self.wait_for_reply(session)
         self.assertEqual(self.replies[0]['status'], 'confirmed')
         self.assertEqual(len(self.claims), 1)
         self.log += f'[X4LAN] AUTH_RECOVERY_REGISTRY_ERROR {nonce}\n'.encode()

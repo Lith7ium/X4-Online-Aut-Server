@@ -1,5 +1,6 @@
 -- Exercises the single update owner using cooperative synthetic MD replies.
-local seat = dofile('src/authority/lua/client_seat.lua')
+local root = arg and arg[1] or '.'
+local seat = dofile(root .. '/src/authority/lua/client_seat.lua')
 local pinned = {epoch = ('a'):rep(32), nonce = ('b'):rep(32), issued_count = 121}
 local index = 118
 local prefix = pinned.nonce .. '|' .. pinned.epoch .. '|' .. index .. '|'
