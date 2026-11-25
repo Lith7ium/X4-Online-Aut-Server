@@ -154,6 +154,43 @@ this provider remains separate work. Raw logs and
 `independent-start.json` are in
 `.local/native-boarding-crew-seed/stock-exports-01/`.
 
+## Native follow-up at the highest stock thresholds
+
+A single disposable Linux provider at `6d4062fd` repeated the stock export
+sequence with the map menu's `veryhigh` option for both approach and
+insertion. Native getters returned 100/100. The provider started operation
+`0x42dc` once, with eight marines on ARU-541 (`0x4204c`, temporary index
+5049) and ZNG-430 (`0x41f83`, sealed index 1666) as the target. The MD
+start witness independently confirmed both actors and the allocation.
+At start ZNG-430 had 100% hull, 100% shields and 11 of 11 operational
+turrets by the native component query. The simulation stayed at 1×.
+The driver made no changes to hull, shields or equipment and issued no
+further boarding or combat command.
+
+| Game time | Native observation |
+| --- | --- |
+| 568.779–569.219 s | Setup advanced through pre-approach to approach. |
+| 590.413–591.209 s | Stock requested launch for eight marines. MD then observed two operational boarding pods in the approach list, `0xb766e` with five marines and `0xb767c` with three. |
+| 612.285 s | The operation entered infiltration. X4 emitted `boarding_failed` for ZNG-430 and removed the operation at the same recorded time. The target's true owner was still Scale Plate at removal. |
+| 614.353 s | The provider paused again, 45.134 game seconds into the 360-second observation window. |
+
+The witness recorded no pod attachment, `boarded` signal or ownership
+transfer. Stock `md/boarding.xml` lines 560–571 allow the transition to
+infiltration once marines have been dispatched and no pods remain in
+approach. The transition alone does not establish that a pod reached the
+hull. The trace did not identify the failure branch or the fate of either
+pod.
+
+The provider exited successfully with no owned X4 processes remaining
+and no output checkpoint. An independent read verified identical
+confirmed pointers and SHA-256
+`b80e43e31242758bdd1b422d157c87b46a3c327399fcc58d810957763feb1bd4`
+for the original and staged source saves. The load marker and initial
+registry inspection confirmed the 5,048-entry source association, and
+index 5049 stayed in memory. Raw logs, the provider result and
+`independent-follow.json` are in
+`.local/native-boarding-crew-seed/stock-follow-01/`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
