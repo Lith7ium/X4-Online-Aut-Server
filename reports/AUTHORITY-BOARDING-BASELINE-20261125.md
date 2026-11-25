@@ -220,6 +220,35 @@ the confirmed original and staged source bytes above. The raw engine
 log and `independent-ui.json` are in
 `.local/native-boarding-crew-seed/stock-start-03/`.
 
+## Native Start Operation click with stock component IDs
+
+Run04 at `f444e5f0` used the same pinned provider on a fresh disposable
+copy. The driver passed the unchanged outputs of the stock
+`ConvertStringTo64Bit` call for both actors. X4 returned both as Lua
+numbers. Reads on those exact values returned ZNG-430, 100% hull and
+the display label `Unknown Ship`, and confirmed the Company ARU-541
+with zero subordinates. The registry and MD witness independently
+identified the ships. The first-use Keep action ran once and closed
+before the boarding context opened.
+
+The driver assigned eight marines with the stock slider handlers and
+invoked the enabled, mounted `Start Operation` button once (frame 234,
+cell 307). At game time 569.50 s X4 reported operation `0x42e3` on
+ZNG-430 `0x41f81`, sealed index 1666. MD verified the sole attacker
+ARU-541 `0x4204a`, temporary index 5049, and eight assigned marines.
+Independent stock getters confirmed the same attacker and allocation
+and the default approach/insertion thresholds 30/80. The provider
+repaused at game time 570.00 s. This isolated local map test ended at
+native start and did not observe pods, takeover or remote attribution.
+
+Seven offline LuaJIT cases passed, including independent rejection of
+raw attacker and target values before context creation. The provider
+exited successfully with no client endpoint, surviving X4 process or
+output checkpoint. Both confirmed pointers and the original and staged
+save hashes remained unchanged. Raw logs, the provider result and
+`independent-ui.json` are in
+`.local/native-boarding-crew-seed/stock-start-04/`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
