@@ -84,6 +84,7 @@
        <conditions>
         <check_value value="$Status == 'awaiting' and (player.age ge $Deadline
             or ($Witness and not @$Order.exists and not @$Ship.dock.exists and not @$Ship.assigneddock.exists
+                and not @$Ship.parkedat.exists and not $Ship.isinternallystored
                 and not @$Bay.assignedship.exists and @$Bay.docked.count == 0 and $Bay.dockstate == dockstate.default))"/>
        </conditions>
        <delay exact="250ms"/>
@@ -92,7 +93,8 @@
         <include_actions ref="CheckBerth"/>
         <set_value name="$Status" exact="'readback_unconfirmed'"/>
         <do_if value="$Witness and $SameIdentity and $SameBerth and not @$Order.exists
-                      and not @$Ship.dock.exists and not @$Ship.assigneddock.exists and not $Ship.isinternallystored
+                      and not @$Ship.dock.exists and not @$Ship.assigneddock.exists
+                      and not @$Ship.parkedat.exists and not $Ship.isinternallystored
                       and $Ship.parent.isclass.zone and not $Ship.orders.count
                       and not @$Bay.assignedship.exists and $Bay.docked.count == 0
                       and $Bay.dockstate == dockstate.default">

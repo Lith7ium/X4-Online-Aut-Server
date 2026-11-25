@@ -37,6 +37,10 @@ class CompanyUndockTrialTests(unittest.TestCase):
                       'not @$Ship.dock.exists', 'not @$Ship.assigneddock.exists',
                       '$Bay.docked.count == 0', 'not @$Bay.assignedship.exists'):
             self.assertIn(guard, receipt.get('value'))
+        ready = tree.find(".//cue[@name='Readback']/conditions/check_value")
+        for guard in ('not @$Ship.parkedat.exists', 'not $Ship.isinternallystored'):
+            self.assertIn(guard, ready.get('value'))
+            self.assertIn(guard, receipt.get('value'))
         self.assertEqual(receipt.find('set_value').get('exact'), "'undocked'")
 
     def test_trace_records_individual_fields_even_if_bay_event_does_not_match(self):
