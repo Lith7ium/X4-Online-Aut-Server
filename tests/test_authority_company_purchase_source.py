@@ -5,6 +5,7 @@ import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from authority.company_purchase_source import CompanyPurchaseSource
 
@@ -310,6 +311,21 @@ class CompanyPurchaseSourceTests(unittest.TestCase):
         refusal = dict(expected, outcome='refused', reason='price_changed', current_price_cents=3501)
         self.assertIsNone(source.sale_exchange(refusal))
         self.assertEqual(self.receive(), ['SALE_RECEIPT', new_id, 'WRN-302', 'refused', 'price_changed', '3501'])
+
+        # A pilot can confirm just before a join pauses X4, leaving the first
+        # local sale packet to reach the launcher only after its quote expires.
+        with patch('authority.company_purchase_source.time.monotonic', return_value=100):
+            expired_view, expired_id = offer(3)
+        expired_packet = f'SALE|{expired_id}|{expired_view}|sector|CTD-093|water|2|3473|WRN-302'
+        with patch('authority.company_purchase_source.time.monotonic', return_value=190):
+            for _ in range(2):
+                send(expired_packet)
+                self.assertIsNone(source.sale_exchange(None))
+                self.assertEqual(self.receive(), ['SALE_RECEIPT', expired_id, 'WRN-302', 'refused'])
+
+        next_view, next_id = offer(4)
+        send(f'SALE|{next_id}|{next_view}|sector|CTD-093|water|2|3473|WRN-302')
+        self.assertEqual(source.sale_exchange(None), {**expected, 'sale_id': next_id})
 
     def test_native_queue_requires_admission_and_matches_one_receipt(self):
         root = Path(__file__).resolve().parents[1]

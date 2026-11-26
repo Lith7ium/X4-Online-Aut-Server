@@ -59,7 +59,7 @@ local function market_client(options, prefix)
 
     function api:close()
         if view then
-            send('MARKET_CLOSE', view.id)
+            if view.deadline then send('MARKET_CLOSE', view.id) end
             view.status, view.rows, view = 'unavailable', nil, nil
         end
     end
@@ -70,10 +70,9 @@ local function market_client(options, prefix)
         if type(dock.sector) ~= 'string' or #dock.sector > 128 or not dock.sector:match('^[A-Za-z0-9_]+$')
                 or type(dock.station_code) ~= 'string' or not dock.station_code:match(ship_code) then return end
         serial = serial + 1
-        local now = options.clock()
         view = {id = options.lease:sub(1, 24) .. string.format('%08x', serial),
             serial = serial, sector = dock.sector, station = dock.station_code, offset = 0, rows = {}, page = {},
-            next_send = 0, deadline = now + 90, page_deadline = now + 20, status = 'pending'}
+            next_send = 0, status = 'pending'}
         return view
     end
 
@@ -82,7 +81,8 @@ local function market_client(options, prefix)
     end
 
     function api:receive(row)
-        if not view or view.status ~= 'pending' or row[2] ~= view.id or row[3] ~= tostring(view.offset) then return end
+        if not view or not view.deadline or view.status ~= 'pending'
+                or row[2] ~= view.id or row[3] ~= tostring(view.offset) then return end
         if row[1] == 'MARKET_PAGE' then
             if #row == 5 and (row[4] == 'refused' or row[4] == 'unavailable') then
                 if #row[5] <= 64 and row[5]:match('^[a-z][a-z0-9_]*$') then fail() end
@@ -168,7 +168,10 @@ local function market_client(options, prefix)
     function api:tick()
         if not view or view.status ~= 'pending' then return end
         local now = options.clock()
-        if now >= view.deadline or now >= view.page_deadline or not options.available() then
+        if not options.available() then fail(); return end
+        if not view.deadline then
+            view.deadline, view.page_deadline = now + 90, now + 20
+        elseif now >= view.deadline or now >= view.page_deadline then
             fail()
             return
         end
@@ -332,7 +335,9 @@ function M.new(options)
             end
         end
         local now = options.clock()
-        if market and running then market:tick() end
+        -- The launcher retains one sale authorization. A newer market request
+        -- must wait until the sale using the previous view receives a receipt.
+        if market and running and not pending_sale then market:tick() end
         if options.recovered_notice and running and now >= next_notice_poll and options.available() then
             next_notice_poll = now + 4
             options.net:send(prefix .. 'NOTICE_POLL')

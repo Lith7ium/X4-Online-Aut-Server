@@ -233,11 +233,17 @@ sale_terms.quantity = 2
 local ok, id = sale_source:request_sale(sale_terms, receive_sale)
 assert(ok and id == sale_id and not sale_source:request_sale(sale_terms, receive_sale))
 sale_source.market:close()
+local before_reopen = #sale_out
+assert(sale_source.market:open(station))
+sale_source.market:close()
+local waiting_view = assert(sale_source.market:open(station))
+assert(#sale_out == before_reopen, 'closing an unsent view must not revoke a submitted sale')
 sale_source:tick()
 local packet = prefix .. 'SALE|' .. sale_id .. '|' .. sale_view.id .. '|' .. sale_terms.sector
     .. '|' .. sale_terms.station_code .. '|water|2|3473|WRN-302'
-assert(sale_out[#sale_out] == packet)
-now = now + .5
+assert(#sale_out == before_reopen + 1 and sale_out[#sale_out] == packet,
+    'a new market view must wait for the submitted sale')
+now = now + 30
 sale_source:tick()
 assert(sale_out[#sale_out] == packet and sale_out[#sale_out-1] == packet)
 sale_in = {prefix .. 'SALE_RECEIPT|' .. ('d'):rep(32) .. '|WRN-302|confirmed|6900|937000|10',
@@ -248,6 +254,8 @@ assert(#sale_receipts == 0 and not sale_source:request_sale(sale_terms, receive_
 sale_in = {prefix .. 'SALE_RECEIPT|' .. sale_id .. '|WRN-302|confirmed|6900|937000|0'}
 sale_source:tick()
 assert(#sale_receipts == 1 and sale_receipts[1].credited_cents == 6900 and sale_receipts[1].cargo_units == 0)
+assert(waiting_view.status == 'pending' and sale_out[#sale_out] == prefix .. 'MARKET|' .. waiting_view.id
+    .. '|cluster_01_sector001_macro|BIM-169|0', 'a fresh market view must start after settlement')
 assert(not sale_source:request_sale(sale_terms, receive_sale))
 local second_id = ('e'):rep(32)
 offer_sale(second_id)

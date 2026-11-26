@@ -329,7 +329,7 @@ class CompanyPurchaseSource:
             if self._sale_answer is None:
                 return
         view = self._sale_view
-        if (view is None or view['used'] or time.monotonic() >= view['expires']
+        if (view is None or view['used']
                 or int(view_id[24:], 16) != self._market_serial
                 or (view_id, sector, station, sale_id) !=
                    (view['view_id'], view['sector'], view['station_code'], view['sale_id'])
@@ -340,6 +340,15 @@ class CompanyPurchaseSource:
             return
         view['used'] = True
         self._peer, self._sale_intent, self._sale_ship, self._sale_answer = peer, intent, ship, None
+        if time.monotonic() >= view['expires']:
+            # This exact unused offer expired before the sale reached the provider.
+            # Retain the refusal so retries can settle the cockpit's pending sale.
+            self._answer_sale('refused')
+
+    def _answer_sale(self, outcome, *fields):
+        self._sale_answer = self._prefix + '|'.join(
+            ('SALE_RECEIPT', self._sale_intent['sale_id'], self._sale_ship, outcome, *fields)).encode('ascii')
+        self._send_sale_answer()
 
     def sale_exchange(self, receipt_or_none):
         """Return the active sale value to the bound poll or deliver its terminal receipt."""
@@ -374,9 +383,7 @@ class CompanyPurchaseSource:
             fields = []
         else:
             return dict(intent)
-        self._sale_answer = self._prefix + '|'.join(
-            ('SALE_RECEIPT', intent['sale_id'], self._sale_ship, outcome, *fields)).encode('ascii')
-        self._send_sale_answer()
+        self._answer_sale(outcome, *fields)
         return None
 
     def _receive(self):
