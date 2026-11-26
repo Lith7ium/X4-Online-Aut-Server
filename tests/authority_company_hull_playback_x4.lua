@@ -227,7 +227,7 @@ end
 local function flight(speed, update, test, trace, measured_attitude)
     local now, actual, pending = 0, {x=0, y=0, z=0, yaw=0, pitch=0, roll=0}, nil
     local accepted_samples, confirmed_sequence, confirmed_long_write = 0, 0, false
-    local native_offset, writes, faults = 0, {}, {}
+    local native_offset, writes, faults, corrections = 0, {}, {}, {}
     local engine = {
         cockpit = function() return {actor=cockpit, sector=sector, zone=cockpit_zone} end,
         target = function()
@@ -258,13 +258,17 @@ local function flight(speed, update, test, trace, measured_attitude)
                 confirmed_sequence = event.source_sequence
                 confirmed_long_write = confirmed_long_write or writes[#writes] > 50
             end
-            if test == 'native_offset' and event.kind == 'observation' and event.target.x - event.actual.x > 50 then
+            if (test == 'native_offset' or test == 'native_step_limit')
+                    and event.kind == 'observation' and event.target.x - event.actual.x > 50 then
                 -- The independent pre-write read sees an unexpected lateral displacement.
-                native_offset = 120
+                native_offset = test == 'native_offset' and 120 or 300
             end
             return true
         end,
         fault=function(reason) faults[#faults + 1] = reason end,
+        on_event=function(kind, detail)
+            if kind == 'active_correction_refused' then corrections[#corrections + 1] = detail end
+        end,
     })
     local function submit(seq, capture_time, game_time, pose, velocity)
         local accepted, reason = controller:sample(binding, 1, {
@@ -308,14 +312,27 @@ local function flight(speed, update, test, trace, measured_attitude)
         controller:tick(now)
         if #faults > 0 then break end
     end
-    return writes, faults, accepted_samples, confirmed_sequence, confirmed_long_write, actual.yaw
+    return writes, faults, accepted_samples, confirmed_sequence, confirmed_long_write, actual.yaw, corrections
 end
 
-local accepted, rejected = flight(1500, .05)
-assert(#accepted > 0 and math.max(unpack(accepted)) > 50 and #rejected == 0)
-for _, test in ipairs({'one_sample', 'missing_velocity', 'long_update', 'native_offset'}) do
-    accepted, rejected = flight(1500, .05, test)
+local accepted, rejected, _, _, _, _, corrections = flight(1500, .05)
+assert(#accepted > 0 and math.max(unpack(accepted)) > 50 and #rejected == 0 and #corrections == 0)
+for _, test in ipairs({'one_sample', 'missing_velocity', 'long_update', 'native_offset', 'native_step_limit'}) do
+    local _, rejected, _, _, _, _, corrections = flight(1500, .05, test)
     assert(#rejected == 1, test)
+    local phase = test == 'native_offset' and 'native_recheck'
+        or test == 'native_step_limit' and 'native_step_limit' or 'playback_distance'
+    assert(rejected[1] == (phase == 'playback_distance' and 'correction_out_of_bounds' or 'playback_failed'), test)
+    assert(#corrections == 1, test)
+    local detail = corrections[1]
+    assert(detail.index == binding.index and detail.slot == 'cockpit' and detail.phase == phase, test)
+    assert(tonumber(detail.sequence) >= 1 and tonumber(detail.capture_time_s) >= 0
+        and tonumber(detail.source_time_s) >= 0 and tonumber(detail.distance_m) > 50, test)
+    assert(detail.actual_xyz ~= detail.requested_xyz and detail.last_real_velocity_mps == '1500,0,0', test)
+    if test == 'one_sample' then assert(detail.capture_dt_s == 'unknown') end
+    if test == 'long_update' then assert(tonumber(detail.update_dt_s) > .1) end
+    if test == 'native_offset' then assert(detail.actual_xyz:match(',120,0$')) end
+    if test == 'native_step_limit' then assert(tonumber(detail.distance_m) > 250) end
 end
 accepted, rejected = flight(4000, .08)
 assert(#rejected == 1 and (#accepted == 0 or math.max(unpack(accepted)) <= 250))

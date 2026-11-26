@@ -231,9 +231,12 @@ function M.new(options)
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
             write = function(_, target, before, recheck, attitude)
-                local ok = active_session:write(target, before, recheck, attitude)
+                local ok, outside_native_limit = active_session:write(target, before, recheck, attitude)
                 if ok == true then stats.writes = stats.writes + 1 end
-                return ok
+                return ok, outside_native_limit
+            end,
+            correction_refused = function(detail)
+                emit('active_correction_refused', detail)
             end,
             record = function(ev)
                 if options.record(ev) ~= true then return false end

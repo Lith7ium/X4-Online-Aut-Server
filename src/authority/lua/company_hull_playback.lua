@@ -39,6 +39,14 @@ local function copy(value)
     return detached
 end
 
+local function decimal(value)
+    return value and ('%.17g'):format(value) or 'unknown'
+end
+
+local function coordinates(value)
+    return value and table.concat({decimal(value.x), decimal(value.y), decimal(value.z)}, ',') or 'unknown'
+end
+
 local function same_binding(value, binding)
     if type(value) ~= 'table' or getmetatable(value) ~= nil then return false end
     for _, key in ipairs(BINDING_FIELDS) do
@@ -79,6 +87,27 @@ function M.new(options)
     local velocity_steps = cfg.velocity_steps == true
     local velocity, sample_count, previous_update = nil, 0, nil
     local authorize_step
+    local observation, prior_update, last_real_velocity
+    local native_refusal, native_refusal_phase
+
+    local function report_correction(phase, actual)
+        if not observation or type(cfg.correction_refused) ~= 'function' then return end
+        local target = observation.target
+        local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
+        local source = rendered_source
+        pcall(cfg.correction_refused, {
+            index = binding.index, phase = phase, render_phase = observation.phase,
+            sequence = source and ('%.0f'):format(source.sequence) or 'unknown',
+            source_time_s = decimal(source and source.source_time),
+            capture_time_s = decimal(source and source.capture_time),
+            capture_dt_s = decimal(source and source.capture_interval),
+            update_dt_s = decimal(prior_update and observation.local_time - prior_update.time),
+            last_real_velocity_mps = coordinates(last_real_velocity),
+            previous_update_velocity_mps = coordinates(prior_update and prior_update.velocity),
+            actual_xyz = coordinates(actual), requested_xyz = coordinates(target),
+            distance_m = decimal(math.sqrt(dx * dx + dy * dy + dz * dz)),
+        })
+    end
 
     local function step_guard(actual, target, now, phase)
         local previous = previous_update
@@ -140,8 +169,10 @@ function M.new(options)
                         or reason == 'teleport' and 'source_discontinuity' or 'invalid_source_progress'
                     return false
                 end
+                local previous = lineage[#lineage]
                 lineage[#lineage + 1] = {sequence = sample.sequence, source_time = sample.source_time,
-                                         capture_time = sample.capture_time}
+                    capture_time = sample.capture_time,
+                    capture_interval = previous and sample.capture_time - previous.capture_time}
                 if #lineage > 16 then table.remove(lineage, 1) end
                 newest = {pose = sample.pose, rate = sample.real_rate, arrival = arrival}
                 return true
@@ -198,10 +229,20 @@ function M.new(options)
             local authorize = authorize_step
             authorize_step = nil
             local function recheck(actual)
-                return expiry() == false and authorize(actual)
+                if expiry() ~= false then return false end
+                local permitted = authorize(actual)
+                if not permitted then
+                    native_refusal, native_refusal_phase = actual, 'native_recheck'
+                end
+                return permitted
             end
             local attitude = follows_attitude and assert(buffer.copy_attitude(target)) or nil
-            return cfg.write(copy(binding), position, xyz(before, 1e7), authorize and recheck or nil, attitude)
+            local written, outside_native_limit = cfg.write(
+                copy(binding), position, xyz(before, 1e7), authorize and recheck or nil, attitude)
+            if written == false and outside_native_limit then
+                native_refusal, native_refusal_phase = xyz(outside_native_limit, 1e7), 'native_step_limit'
+            end
+            return written
         end,
         record = function(event)
             local readback = event.kind == 'readback'
@@ -214,6 +255,8 @@ function M.new(options)
                     refusal = 'readback_out_of_bounds'
                     return false
                 end
+            else
+                observation, prior_update = event, previous_update
             end
             local source = readback and write_source or rendered_source
             assert(source and source.sequence == event.source_sequence)
@@ -229,7 +272,13 @@ function M.new(options)
             })
         end,
         fault = function(_, _, stage)
-            stop(refusal or (stage == 'distance' and 'correction_out_of_bounds') or 'playback_failed', stage)
+            local reason = refusal or (stage == 'distance' and 'correction_out_of_bounds') or 'playback_failed'
+            stop(reason, stage)
+            if reason == 'correction_out_of_bounds' and observation then
+                report_correction('playback_distance', observation.actual)
+            elseif native_refusal then
+                report_correction(native_refusal_phase, native_refusal)
+            end
         end,
     }))
 
@@ -277,6 +326,7 @@ function M.new(options)
             return stop(reason == 'paused' and 'paused' or 'stale', 'arrival')
         end
         last_arrival = arrival
+        last_real_velocity = incoming_velocity
         if velocity_steps then
             velocity, sample_count = incoming_velocity, math.min(sample_count + 1, 2)
         end

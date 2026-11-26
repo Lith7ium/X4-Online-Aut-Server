@@ -116,7 +116,9 @@ function M.new(options, engine)
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
             if recheck ~= nil and type(recheck) ~= 'function' then return false end
             local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
-            if dx * dx + dy * dy + dz * dz > maximum * maximum then return false end
+            if dx * dx + dy * dy + dz * dz > maximum * maximum then
+                return false, recheck and actual or nil
+            end
             local destination_zone = engine.destination_zone(original_target.sector, target)
             if not destination_zone then return false end
             local crossing = destination_zone ~= confirmed_zone
