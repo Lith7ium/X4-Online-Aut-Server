@@ -65,5 +65,40 @@ class OverlapFrameTest(unittest.TestCase):
         self.assertFalse(A.accepted(by_phase))
 
 
+def ev(seq, age, kind, amount=0.0, shield=500.0, hull=2500.0, last='company_player', attacker='none', phase='overlap'):
+    from types import SimpleNamespace
+    return SimpleNamespace(seq=seq, age=age, kind=kind, amount=amount, shield=shield, hull=hull, phase=phase,
+                           victim_label='npc_target', last_att_label=last, ev_att_label=attacker)
+
+
+class DamageAttributionTest(unittest.TestCase):
+    baselines = {'1': {'26': 4}, '2': {'36': 4}}
+
+    def test_shield_only_amounts_name_the_shooter_and_are_compared(self):
+        events = [
+            ev(1, 2.0, 'object_attacked', attacker='company_player'),
+            ev(2, 2.0, 'shield_damaged', 26),
+            ev(3, 2.0, 'object_attacked', last='second_shooter', attacker='second_shooter'),
+            ev(4, 2.0, 'shield_damaged', 36, last='second_shooter'),
+            ev(5, 2.01, 'shield_damaged', 36, last='company_player'),
+        ]
+        result = A.damage_attribution(events, 'overlap', self.baselines)['shield_only']
+        self.assertEqual((result['callbacks'], result['lastattacker_agrees'], result['lastattacker_differs']), (3, 2, 1))
+        self.assertEqual((result['notification_in_frame_agrees'], result['no_notification_yet_in_frame']), (2, 1))
+
+    def test_overflow_counts_only_when_one_bullet_explains_it(self):
+        clean = [ev(1, 3.0, 'shield_damaged', 10, shield=0), ev(2, 3.0, 'hull_damaged', 16)]
+        result = A.damage_attribution(clean, 'overlap', self.baselines)
+        self.assertEqual((result['classes'], result['overflow_one_bullet']['by_damage']), ({'overflow_one_bullet': 1}, {'1': 1}))
+        # 10 + 26 = 36 could be one laser bullet or a gatling remainder next to a separate gatling hit.
+        unclear = [ev(1, 3.0, 'shield_damaged', 10, shield=0), ev(2, 3.0, 'hull_damaged', 26)]
+        self.assertEqual(A.damage_attribution(unclear, 'overlap', self.baselines)['classes'],
+                         {'overflow_ambiguous': 1, 'hull_only': 1})
+
+    def test_same_gun_on_both_ships_assigns_nothing(self):
+        result = A.damage_attribution([ev(1, 2.0, 'shield_damaged', 26)], 'overlap', {'1': {'26': 3}, '2': {'26': 3}})
+        self.assertEqual((result['damage_values'], result['classes']), ({}, {'shield_unknown_amount': 1}))
+
+
 if __name__ == '__main__':
     unittest.main()

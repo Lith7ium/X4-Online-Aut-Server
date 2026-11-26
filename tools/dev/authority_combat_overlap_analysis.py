@@ -193,6 +193,102 @@ def analyse_phase(bucket, events):
     }
 
 
+LABEL_INDEX = {'company_player': '1', 'second_shooter': '2'}
+
+
+def _target_damage(events, phase):
+    return [e for e in events if e.phase == phase and e.victim_label == 'npc_target'
+            and e.kind in ('shield_damaged', 'hull_damaged', 'object_attacked')]
+
+
+def damage_baselines(events):
+    """Shield-only amounts per shooter from the single-shooter controls (shield still up after the hit)."""
+    out = {}
+    for shooter, phases in (('1', ('control_pilot',)), ('2', ('control_second_yawfix', 'control_second'))):
+        for phase in phases:
+            amounts = [e.amount for e in _target_damage(events, phase) if e.kind == 'shield_damaged' and e.shield > 0]
+            if amounts:
+                out[shooter] = _count(f'{a:g}' for a in amounts)
+                break
+    return out
+
+
+def damage_attribution(events, phase, baselines):
+    """Assign each callback on #4 by its amount alone, then compare with lastattacker and object_attacked."""
+    values, shared = {}, set()
+    for shooter, counts in baselines.items():
+        if len(counts) == 1:
+            value = float(next(iter(counts)))
+            if value in values:
+                shared.add(value)
+            values[value] = shooter
+    for value in shared:
+        # Same gun on both ships: the amount cannot name the shooter.
+        del values[value]
+    rows = []
+    frame_events = {}
+    for e in _target_damage(events, phase):
+        frame_events.setdefault(f'{e.age:g}', []).append(e)
+    for age, evs in frame_events.items():
+        notified = None
+        used_hulls = set()
+        hulls = [e for e in evs if e.kind == 'hull_damaged']
+        for e in evs:
+            if e.kind == 'object_attacked':
+                notified = LABEL_INDEX.get(e.ev_att_label, e.ev_att_label)
+                continue
+            row = {'age': age, 'seq': e.seq, 'kind': e.kind, 'amount': e.amount, 'after': e.shield if e.kind == 'shield_damaged' else e.hull,
+                   'lastattacker': LABEL_INDEX.get(e.last_att_label, e.last_att_label), 'notified_in_frame': notified}
+            if e.kind == 'shield_damaged':
+                if e.amount in values:
+                    row['by_damage'] = values[e.amount]
+                    row['class'] = 'shield_only' if e.shield > 0 else 'shield_exact_depletion'
+                elif e.shield > 0:
+                    row['by_damage'], row['class'] = None, 'shield_unknown_amount'
+                else:
+                    # Shield emptied by part of one bullet: pair it with a hull piece from this frame.
+                    options = [(h, values[e.amount + h.amount]) for h in hulls
+                               if h.seq > e.seq and h.seq not in used_hulls and (e.amount + h.amount) in values]
+                    shooters = {w for _, w in options}
+                    clean = [(h, w) for h, w in options if h.amount not in values]
+                    if len(shooters) == 1 and len(clean) == len(options) and len({h.seq for h, _ in clean}) == 1:
+                        hull, shooter = clean[0]
+                        used_hulls.add(hull.seq)
+                        row['by_damage'], row['class'], row['hull_piece'] = shooter, 'overflow_one_bullet', hull.amount
+                    else:
+                        # Unpaired, several weapons possible, or the hull piece could be a separate full hit.
+                        row['by_damage'], row['class'] = None, 'overflow_ambiguous' if options else 'overflow_unpaired'
+            else:
+                if e.seq in used_hulls:
+                    continue
+                row['by_damage'] = values.get(e.amount)
+                row['class'] = 'hull_only' if row['by_damage'] else 'hull_unknown_amount'
+            rows.append(row)
+
+    def tally(cls):
+        picked = [r for r in rows if r['class'] in cls]
+        return {
+            'callbacks': len(picked),
+            'by_damage': _count(r['by_damage'] for r in picked),
+            'lastattacker_agrees': sum(1 for r in picked if r['by_damage'] and r['lastattacker'] == r['by_damage']),
+            'lastattacker_differs': sum(1 for r in picked if r['by_damage'] and r['lastattacker'] != r['by_damage']),
+            'notification_in_frame_agrees': sum(1 for r in picked if r['by_damage'] and r['notified_in_frame'] == r['by_damage']),
+            'notification_in_frame_differs': sum(1 for r in picked if r['by_damage'] and r['notified_in_frame'] not in (None, r['by_damage'])),
+            'no_notification_yet_in_frame': sum(1 for r in picked if r['notified_in_frame'] is None),
+        }
+
+    shield_classes = ('shield_only', 'shield_exact_depletion')
+    return {
+        'damage_values': {f'{v:g}': s for v, s in values.items()},
+        'shield_only': tally(shield_classes),
+        'overflow_one_bullet': tally(('overflow_one_bullet',)),
+        'hull_only': tally(('hull_only',)),
+        'classes': _count(r['class'] for r in rows),
+        'ambiguous_or_disagreeing': [r for r in rows if not r.get('by_damage') or r['lastattacker'] != r['by_damage']
+                                     or r['notified_in_frame'] not in (None, r['by_damage'])],
+    }
+
+
 def analyse(text, events):
     trace = parse_trace(text)
     return {phase: analyse_phase(bucket, [e for e in events if e.phase == phase])

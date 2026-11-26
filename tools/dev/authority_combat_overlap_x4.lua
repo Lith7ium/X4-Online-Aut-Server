@@ -55,13 +55,15 @@ end
 
 -- Target #4 sits at (-6000, 100000, 0). #1 faces it along +z; #2 faces it along +x (yaw 90),
 -- and the driver retries #2 at yaw -90 if its bullets miss in the control phase. Both fire from
--- 200 m, so equal flight times put both shooters' salvos into the same frames.
-local SECOND_POS = { -6200, 100000, 0 }
+-- 200 m by default, so equal flight times put both shooters' salvos into the same frames. A faster
+-- second gun can be moved out (cfg.second_range) until its first salvo lands with #1's.
+local SECOND_POS = { -6000 - (tonumber(cfg.second_range) or 200), 100000, 0 }
 local PHASES = {
+    -- Short controls leave most of #4's 1188 shield for the overlap, so it yields shield-only hits.
     { name = 'control_pilot', pre = { { 1, -6000, 100000, -200, 0 }, { 2, SECOND_POS[1], SECOND_POS[2], SECOND_POS[3], 90 } },
-      pilot = 'shoot_at', max = 1.2, impacts = 10 },
-    { name = 'control_second', second = true, max = 1.2, impacts = 10, aim_check = true },
-    { name = 'overlap', pilot = 'shoot_at', second = true, max = 1.5, impacts = 30 },
+      pilot = 'shoot_at', max = 1.2, impacts = 8 },
+    { name = 'control_second', second = true, max = 1.2, impacts = 8, aim_check = true },
+    { name = 'overlap', pilot = 'shoot_at', second = true, max = 1.5, impacts = 34 },
     -- Stock shoot refuses a weapon that already had a shoot_at controller, shoot_at still hits
     -- from a 30 m lateral offset and holds fire at 120 m. So #1 fires aligned and, once the first
     -- salvo is seen, stops while #4 moves 150 m aside: the bullets in flight pass it.
@@ -216,7 +218,7 @@ local function tick()
     if s == 'wait_registry' then
         if not state.reg_reply then return end
         log('REGISTRY ' .. state.reg_reply)
-        probe('Setup', { epoch = cfg.epoch })
+        probe('Setup', { epoch = cfg.epoch, second_loadout = cfg.second_loadout })
         state.step = 'wait_setup'
         return
     end
@@ -323,6 +325,23 @@ local function tick()
     end
     if s == 'pre_settle' then
         if now() < state.settle_until then return end
+        if cfg.restore_target == true then
+            trace('Restore')
+            state.step = 'wait_restore'
+            return
+        end
+        begin_marker(state.marker_name or ph.name)
+        state.step = 'wait_marker'
+        return
+    end
+    if s == 'wait_restore' then
+        if not state.trace_reply then return end
+        log('TRACE_STATUS ' .. state.trace_reply)
+        if split(state.trace_reply, '|')[2] ~= 'Restored' then
+            log('ERROR restore=' .. state.trace_reply)
+            state.done = true
+            return
+        end
         begin_marker(state.marker_name or ph.name)
         state.step = 'wait_marker'
         return

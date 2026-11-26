@@ -111,6 +111,23 @@
      </actions>
     </cue>
 
+    <!-- Opt-in: put #4 back to full shield and hull so every phase starts from the same state. -->
+    <cue name="Restore" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Restore'"/></conditions>
+     <actions>
+      <set_value name="$a" exact="event.param3"/>
+      <do_if value="State.$armed and @State.$target.isoperational">
+       <set_object_shield object="State.$target" exact="100"/>
+       <set_object_hull object="State.$target" exact="100"/>
+       <debug_text text="'[X4LAN] AUTH_OVERLAP_CTRL action=Restore shield=%s/%s hull=%s/%s'.[State.$target.shield,State.$target.maxshield,State.$target.hull,State.$target.maxhull]"/>
+       <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Restored|%s|%s'.[@$a.$request_id,State.$target.shield,State.$target.hull]"/>
+      </do_if>
+      <do_else>
+       <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Refused|restore'.[@$a.$request_id]"/>
+      </do_else>
+     </actions>
+    </cue>
+
     <cue name="Sweep" instantiate="true" namespace="this">
      <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Sweep'"/></conditions>
      <actions>

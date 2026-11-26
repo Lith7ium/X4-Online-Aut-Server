@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -90,7 +91,23 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='cases'):
+SECOND_LOADOUT_ID = 'x4lan_overlap_second'
+SECOND_WEAPON_PATTERN = re.compile(r'weapon_gen_s_[a-z0-9]+_0[1-9]_mk[1-9]_macro')
+
+
+def with_second_loadout(loadouts_text, weapon_macro):
+    """Add a copy of the Company Pulsar loadout whose six guns are all ``weapon_macro``."""
+    if not SECOND_WEAPON_PATTERN.fullmatch(weapon_macro):
+        raise ValueError(f'unsupported second weapon {weapon_macro!r}')
+    start = loadouts_text.index('<loadout id="x4lan_company_pulsar"')
+    end = loadouts_text.index('</loadout>', start) + len('</loadout>')
+    block = loadouts_text[start:end].replace('id="x4lan_company_pulsar"', f'id="{SECOND_LOADOUT_ID}"', 1)
+    block = re.sub(r'(<weapon macro=")[^"]+(")', rf'\g<1>{weapon_macro}\g<2>', block)
+    return loadouts_text[:end] + '\n' + block + loadouts_text[end:]
+
+
+def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='cases', second_weapon=None,
+                      second_range=None, restore_target=False):
     # Guard read-only contract on the reusable production observer modules before launching X4.
     validate_md_read_only((ROOT / 'src/authority/md/combat_observer.xml').read_text(encoding='utf-8'))
     validate_lua_read_only((ROOT / 'src/authority/lua/combat_observer.lua').read_text(encoding='utf-8'))
@@ -109,6 +126,9 @@ def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='ca
         shutil.copyfile(ROOT / rel_src, target / 'aiscripts' / dst_name)
     for dst_name, rel_src in LIBRARY_FILES:
         shutil.copyfile(ROOT / rel_src, target / 'libraries' / dst_name)
+    if second_weapon:
+        path = target / 'libraries' / 'loadouts.xml'
+        path.write_text(with_second_loadout(path.read_text(encoding='utf-8'), second_weapon), encoding='utf-8')
 
     cfg_text = (
         'X4NEON_COMBAT_OBS = {\n'
@@ -117,7 +137,10 @@ def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='ca
         f'  profile = "{int(profile)}",\n'
         f'  gamestart = "{gamestart}",\n'
         f'  epoch = "{epoch}",\n'
-        '}\n'
+        + (f'  second_loadout = "{SECOND_LOADOUT_ID}",\n' if second_weapon else '')
+        + (f'  second_range = {int(second_range)},\n' if second_range else '')
+        + ('  restore_target = true,\n' if restore_target else '')
+        + '}\n'
     )
     (target / 'ui' / 'config.lua').write_text(cfg_text, encoding='ascii')
     ui_entries = ''.join(
@@ -264,7 +287,17 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=180.0)
     parser.add_argument('--scenario', choices=('cases', 'overlap'), default='cases',
                         help='cases: the six single-shooter cases; overlap: two shooters on one registered NPC')
+    parser.add_argument('--second-weapon', help='overlap only: stock S gun macro for all six slots of the second shooter')
+    parser.add_argument('--second-range', type=int, help='overlap only: second shooter distance to #4 in metres (default 200)')
+    parser.add_argument('--restore-target', action='store_true',
+                        help='overlap only: set #4 to full shield and hull before every phase (test-only world change)')
     args = parser.parse_args(argv)
+    if (args.second_weapon or args.second_range or args.restore_target) and args.scenario != 'overlap':
+        parser.error('--second-weapon, --second-range and --restore-target require --scenario overlap')
+    if args.second_range is not None and not 100 <= args.second_range <= 1500:
+        parser.error('--second-range must be 100-1500 m')
+    if args.second_weapon and not SECOND_WEAPON_PATTERN.fullmatch(args.second_weapon):
+        parser.error(f'unsupported --second-weapon {args.second_weapon!r}')
 
     if os.name != 'nt' or sys.version_info < (3, 12):
         raise SystemExit('Python 3.12+ required on Windows for safe x4ls view/profile teardown')
@@ -319,6 +352,9 @@ def main(argv=None):
             gamestart=args.gamestart,
             epoch=EPOCH,
             scenario=args.scenario,
+            second_weapon=args.second_weapon,
+            second_range=args.second_range,
+            restore_target=args.restore_target,
         )
         profile_dir = profile_mod.prepare_fresh(
             args.profile,
@@ -452,15 +488,21 @@ def main(argv=None):
     fallbacks = [line for line in driver_lines if line.startswith('FALLBACK ')]
 
     if args.scenario == 'overlap':
-        from authority_combat_overlap_analysis import OVERLAP_PHASES, accepted as overlap_ok, analyse
+        from authority_combat_overlap_analysis import (
+            OVERLAP_PHASES, accepted as overlap_ok, analyse, damage_attribution, damage_baselines,
+        )
         by_phase = summarize_by_phase(events, readbacks, phase_victims={p: 'npc_target' for p in OVERLAP_PHASES})
         overlap = analyse(log_text, events)
+        baselines = damage_baselines(events)
+        by_damage = {phase: damage_attribution(events, phase, baselines) for phase in overlap if phase != 'miss_pilot'}
         accepted = (
             outcome == 'done' and protected_unchanged and view_removed and not still_running
             and not error_lines and overlap_ok(overlap)
         )
         result = {
-            'scenario': 'overlap', 'outcome': outcome, 'accepted': accepted,
+            'scenario': 'overlap', 'second_weapon': args.second_weapon, 'second_range': args.second_range,
+            'restore_target': args.restore_target, 'outcome': outcome, 'accepted': accepted,
+            'damage_baselines': baselines, 'damage_attribution': by_damage,
             'elapsed_s': round(time.monotonic() - started_at, 2),
             'x4_exe_sha256': sha256_file(exe_path),
             'logfile': str(copied_log) if copied_log.is_file() else None,
