@@ -2,6 +2,14 @@
 
 ## 26 November 2026
 
+A stock boarding operation on the GPU-free server reached takeover.
+Two pods closed at about 75 m per game second, attached, and delivered
+eight marines. X4 transferred ZNG-430 from Scale Plate to the player
+faction at 4.51% hull. The same registry entry, 1666, still identified
+the ship with eight crew aboard. This disposable control removed the
+target's three engines and defending crew. It had no multiplayer client
+and wrote no save. [Native boarding timeline](AUTHORITY-BOARDING-NEARBY-CONTROL-20261126.md#stationary-target-comparison)
+
 Cobalt tested the optional `-CombatCapture` switch and receipt utility
 from an extracted ZIP on Windows 11. The launcher probe covered argument
 forwarding, and a synthetic log produced the three expected sequences.
