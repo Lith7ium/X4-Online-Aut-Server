@@ -8,15 +8,13 @@ BBS-493 at (30000, 100000, 55000) m in the destination sector.
 The ship kept its registry index and its original NPC captain.
 [Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
 
-The separate ordinary jump-gate fixture stopped during staging between
-ZGH-239 and NEL-546. After the MD event correction, the provider loaded
-all 5,048 registry entries. An instrumented readback at the same paused
-game time found both ships still at their former locations. Discovery
-had succeeded, and the stock route to the unmoved target still used a
-superhighway. In a separate running trial, both planned clearances passed.
-The ships still read at their old positions 0.47 game seconds after
-placement. No starting checkpoint was published and no pilot flew this route.
-[Ordinary gate staging](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#ordinary-jump-gate-staging-attempt)
+For the ordinary ZGH-239 → NEL-546 gate, the first read of the test
+ships still showed their previous positions. Within four seconds, X4
+confirmed the intended positions and ZGH-239 as the first gate. The
+marked candidate save independently matches those positions to within
+0.60 mm. It remains unconfirmed. The first cold launch stopped at
+process discovery before loading it. No pilot flew this route.
+[Gate placement and candidate save](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#bounded-placement-verification-and-candidate-save)
 
 The ordinary boarding menu now has a native positive control. On a
 disposable provider the test activated the enabled Start Operation button
