@@ -58,6 +58,12 @@ class CompanyCombatTests(unittest.TestCase):
     def receive(self, stream):
         return json.loads(stream.readline())['receipts']
 
+    def health_request(self, credential, window, sequence):
+        request = json.loads(self.frame(credential, []))
+        del request['impacts']
+        request.update(kind='combat_health_read', window=window, sequence=sequence, after_revision=None)
+        return encode_frame(request)
+
     def test_pending_native_health_discarded_when_the_world_pauses(self):
         self.service.close()
         operation = Mock()
@@ -68,10 +74,7 @@ class CompanyCombatTests(unittest.TestCase):
                                            health_window=lambda binding: window)
         self.addCleanup(self.service.close)
         connection, stream = self.open()
-        request = json.loads(self.frame(self.first, []))
-        del request['impacts']
-        request.update(kind='combat_health_read', window=window, sequence=1, after_revision=None)
-        connection.sendall(encode_frame(request))
+        connection.sendall(self.health_request(self.first, window, 1))
         self.service.poll()
         operation.poll.assert_called_once_with()
 
@@ -84,6 +87,46 @@ class CompanyCombatTests(unittest.TestCase):
         operation.cancel.assert_called_once_with()
         operation.poll.assert_called_once_with()
         self.assertFalse(self.calls)
+
+    def test_pending_impact_discards_an_older_native_health_read(self):
+        self.service.close()
+        old_read = Mock(poll=Mock(return_value=None))
+        hit_write = Mock(poll=Mock(return_value=None))
+        new_health = dict(shield=4, maxshield=2366, hull=3600, maxhull=3600)
+        new_read = Mock(poll=Mock(return_value=new_health))
+        begin_read = Mock(side_effect=(old_read, new_read))
+        begin_impact = Mock(return_value=hit_write)
+        self.service = CompanyCombatService(self.grants.get, begin_impact,
+                                           begin_health_read=begin_read, health_window=lambda binding: 3)
+        self.addCleanup(self.service.close)
+        victim_grant = self.grant(1074)
+        victim, victim_reply = self.open()
+        victim.sendall(self.health_request(victim_grant, 3, 1))
+        self.service.poll()
+        old_read.poll.assert_called_once_with()
+
+        old_read.poll.return_value = dict(new_health, shield=30)
+        attacker, attacker_reply = self.open()
+        attacker.sendall(self.frame(self.first, [hit(1)]))
+        self.service.poll()
+        self.assertTrue(self.service.native_pending)
+        old_read.poll.assert_called_once_with()
+        old_read.cancel.assert_called_once_with()
+        stale_response = json.loads(victim_reply.readline())
+        self.assertIsNone(stale_response['health'])
+        self.assertIsNone(stale_response['revision'])
+
+        victim.sendall(self.health_request(victim_grant, 3, 2))
+        self.service.poll()
+        begin_read.assert_called_once()
+        hit_write.poll.return_value = (4, 3600)
+        self.assertTrue(self.service.settle_pending())
+        self.service.poll()
+        self.assertEqual(self.receive(attacker_reply)[0]['order'], 1)
+        fresh_response = json.loads(victim_reply.readline())
+        self.assertEqual(fresh_response['health'], new_health)
+        self.assertEqual(fresh_response['revision'], 1)
+        begin_impact.assert_called_once()
 
     def test_fifo_batches_multi_reporter_health_and_retry_versions(self):
         second, second_reply = self.open()

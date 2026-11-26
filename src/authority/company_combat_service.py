@@ -15,6 +15,7 @@ from .company_motion_frames import MAX_PEERS
 RECEIPT_HISTORY = 128
 IO_TIMEOUT = 15
 IDLE_TIMEOUT = 60
+HEALTH_READ_TIMEOUT = 2
 _LOG = logging.getLogger(__name__)
 
 
@@ -26,12 +27,13 @@ class CombatImpactRejected(Exception):
 class _Peer:
     connection: socket.socket
     deadline: float
-    identity: tuple | None = None
+    ticket: str | None = None
+    binding: tuple | None = None
     incoming: bytearray = field(default_factory=bytearray)
     outgoing: bytes = b''
-    pending: bool = False
-    health_window: int | None = None
-    last_target_hit: int = 0
+    request_pending: bool = False
+    last_health_window: int | None = None
+    last_hit_on_ship: int = 0
 
 
 @dataclass
@@ -63,17 +65,15 @@ class _History:
 @dataclass
 class _Batch:
     peer: _Peer
-    ticket: str
-    binding: tuple
     impacts: list
     receipts: list | None = None
 
 
 @dataclass
-class _NativePending:
+class _PendingImpact:
     batch: _Batch
     receipt: dict
-    poll: Callable[[], tuple | None]
+    poll_native: Callable[[], tuple | None] | None = None
 
 
 @dataclass
@@ -97,6 +97,9 @@ class CompanyCombatService:
     CombatImpactRejected if it can prove that no damage was applied. A pending
     operation owns its native receipt timeout.
 
+    Optional cockpit reads sample the current pilot ship in X4. Pending damage
+    writes take priority over those reads.
+
     A native outcome that cannot be confirmed closes the write path for this
     service. Orders increase across all shooters for one service lifetime.
     Restarting the service requires fresh admission tickets.
@@ -119,7 +122,7 @@ class CompanyCombatService:
         self._batches = deque()
         self._order = 0
         self._poisoned = False
-        self._native = None
+        self._pending_impact = None
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self._listener.bind(('127.0.0.1', 0))
@@ -140,7 +143,7 @@ class CompanyCombatService:
 
     @property
     def native_pending(self):
-        return self._native is not None
+        return self._pending_impact is not None
 
     def _check_owner(self):
         if threading.current_thread() is not self._owner:
@@ -167,66 +170,80 @@ class CompanyCombatService:
         self._peers.pop(peer.connection, None)
         peer.connection.close()
 
+    def _admitted(self, peer):
+        return peer.ticket is not None and self._lookup_current(peer.ticket) == peer.binding
+
     def _receive(self, peer):
         frame = read_frame(peer.connection, peer.incoming)
         if frame is None:
             return
-        is_health_read = frame.get('kind') == 'combat_health_read'
-        if is_health_read:
-            ticket, binding, window, sequence, after = decode_health_request(frame)
+        if frame.get('kind') == 'combat_health_read':
+            ticket, binding, window, sequence, after_revision = decode_health_request(frame)
+            request = _HealthRead(peer, window, sequence, after_revision, time.monotonic() + HEALTH_READ_TIMEOUT)
+            queue = self._health_reads
         else:
             ticket, binding, impacts = decode_request(frame)
-        identity = ticket, binding
+            request = _Batch(peer, impacts)
+            queue = self._batches
         if (self._lookup_current(ticket) != binding
-                or (peer.identity is not None and peer.identity != identity)):
+                or (peer.ticket is not None and (peer.ticket, peer.binding) != (ticket, binding))):
             raise ValueError('inactive or mismatched combat admission')
-        peer.identity = identity
-        peer.pending = True
-        if is_health_read:
-            self._health_reads.append(_HealthRead(peer, window, sequence, after, time.monotonic() + 2))
-        else:
-            self._batches.append(_Batch(peer, ticket, binding, impacts))
+        peer.ticket, peer.binding = ticket, binding
+        peer.request_pending = True
+        queue.append(request)
 
-    def _read_cockpit(self, now):
-        """Read one living pilot ship directly from X4. Never reuse a hit receipt as current health."""
+    def _queue_reply(self, peer, kind, **fields):
+        peer.request_pending = False
+        if not self._admitted(peer):
+            self._drop(peer)
+            return
+        peer.outgoing = encode_frame(dict(zip(BINDING_FIELDS, peer.binding), kind=kind, **fields))
+        peer.deadline = time.monotonic() + IO_TIMEOUT
+
+    def _health_read_current(self, query):
+        return (self._begin_health_read is not None and time.monotonic() < query.deadline
+                and self._admitted(query.peer) and self._health_window(query.peer.binding) == query.window)
+
+    def _complete_health_read(self, query, health=None):
+        self._health_reads.popleft()
+        if query.operation is not None:
+            query.operation.cancel()
+        if health is not None:
+            query.peer.last_health_window = query.window
+        self._queue_reply(query.peer, 'combat_health', window=query.window, sequence=query.sequence,
+                          health=health, revision=query.sampled_revision if health is not None else None)
+
+    def _advance_health_read(self):
+        """Read the pilot ship in X4 when its last observed damage revision is stale."""
         if not self._health_reads:
             return
         query = self._health_reads[0]
         peer = query.peer
-        ticket, binding = peer.identity
+        if (peer.last_health_window == query.window and query.after_revision is not None
+                and peer.last_hit_on_ship <= query.after_revision <= self._order):
+            self._complete_health_read(query)
+            return
+        if self.native_pending and query.operation is not None:
+            # A pending damage write takes priority over a disposable snapshot.
+            self._complete_health_read(query)
+            return
+
         health = None
-        needs_read = (query.after_revision is None or peer.health_window != query.window
-                      or query.after_revision < peer.last_target_hit or query.after_revision > self._order)
         try:
-            if (needs_read and self._lookup_current(ticket) == binding and now < query.deadline
-                    and self._begin_health_read is not None and self._health_window(binding) == query.window):
+            if self._health_read_current(query):
+                if self.native_pending:
+                    return
                 if query.operation is None:
-                    if self.native_pending:
-                        return
-                    query.operation = self._begin_health_read(binding)
+                    query.operation = self._begin_health_read(peer.binding)
                     query.sampled_revision = self._order
                 result = query.operation.poll()
                 if result is None:
                     return
-                # The native read may finish after a movement or admission change.
-                if (time.monotonic() < query.deadline and self._lookup_current(ticket) == binding
-                        and self._health_window(binding) == query.window
-                        and peer.last_target_hit <= query.sampled_revision):
+                if self._health_read_current(query) and peer.last_hit_on_ship <= query.sampled_revision:
                     health = validate_live_health(result)
-                    peer.health_window = query.window
         except (OSError, ValueError):
             pass  # A missed read cannot change the game or invalidate impact receipts.
-        if query.operation is not None:
-            query.operation.cancel()
-        self._health_reads.popleft()
-        peer.pending = False
-        if self._lookup_current(ticket) != binding:
-            self._drop(peer)
-            return
-        peer.outgoing = encode_frame(dict(zip(BINDING_FIELDS, binding), kind='combat_health',
-                                          window=query.window, sequence=query.sequence, health=health,
-                                          revision=query.sampled_revision if health is not None else None))
-        peer.deadline = time.monotonic() + IO_TIMEOUT
+        self._complete_health_read(query, health)
 
     def _get_history(self, ticket, binding):
         history = self._history.get(ticket)
@@ -242,7 +259,7 @@ class CompanyCombatService:
             raise ValueError('combat admission binding changed')
         return history
 
-    def _start(self, batch, history, impact):
+    def _begin_impact(self, batch, history, impact):
         if self._order >= MAX_COUNTER:
             raise ValueError('combat order exhausted')
         self._order += 1
@@ -253,73 +270,75 @@ class CompanyCombatService:
             receipt['status'] = 'rejected'
             batch.receipts.append(receipt)
             return
-        self._resolve(batch, receipt, lambda: self._apply_impact(
-            history.binding, impact['target_index'], impact['amount']), starting=True)
+        self._advance_impact(_PendingImpact(batch, receipt))
 
-    def _finish(self, batch, receipt):
-        batch.receipts.append(receipt)
-        self._native = None
+    def _record_impact_receipt(self, impact):
+        impact.batch.receipts.append(impact.receipt)
+        self._pending_impact = None
 
-    def _resolve(self, batch, receipt, readback, *, starting):
+    def _advance_impact(self, impact):
+        receipt = impact.receipt
+        binding = impact.batch.peer.binding
         try:
-            result = readback()
-            if starting:
-                pending_poll = getattr(result, 'poll', None)
-                if callable(pending_poll):
-                    self._native = _NativePending(batch, receipt, pending_poll)
+            if impact.poll_native is None:
+                result = self._apply_impact(binding, receipt['target_index'], receipt['amount'])
+                poll_native = getattr(result, 'poll', None)
+                if callable(poll_native):
+                    impact.poll_native = poll_native
+                    self._pending_impact = impact
                     return
-            elif result is None:
-                return
+            else:
+                result = impact.poll_native()
+                if result is None:
+                    return
             if type(result) is not tuple or len(result) != 2 or not all(map(number, result)):
                 raise ValueError('invalid native combat health confirmation')
         except CombatImpactRejected:
             receipt['status'] = 'rejected'
         except BaseException as exc:
             self._poisoned = True
-            self._finish(batch, receipt)
+            self._record_impact_receipt(impact)
             if not isinstance(exc, Exception):
                 raise
             _LOG.exception('Native combat outcome unknown for impact %d at order %d', receipt['id'], receipt['order'])
             return
         else:
             receipt.update(status='confirmed', shield=result[0], hull=result[1])
+            _, epoch, _ = binding
+            target = epoch, receipt['target_index']
             for peer in self._peers.values():
-                if peer.identity is not None and peer.identity[1][1:] == (batch.binding[1], receipt['target_index']):
-                    peer.last_target_hit = receipt['order']
-        self._finish(batch, receipt)
+                if peer.binding is not None and peer.binding[1:] == target:
+                    peer.last_hit_on_ship = receipt['order']
+        self._record_impact_receipt(impact)
 
     def settle_pending(self):
         """Check only the dispatched command. Return True once no native work remains."""
         self._check_owner()
-        native = self._native
-        if native is not None:
+        impact = self._pending_impact
+        if impact is not None:
             # A command already dispatched must settle even after the pilot is gone.
-            self._resolve(native.batch, native.receipt, native.poll, starting=False)
+            self._advance_impact(impact)
         return not self.native_pending
 
-    def _advance(self):
+    def _advance_batch(self):
         if not self._batches:
             return
         batch = self._batches[0]
+        peer = batch.peer
         try:
-            if self._lookup_current(batch.ticket) != batch.binding:
+            if not self._admitted(peer):
                 raise ValueError('combat admission changed before applying impact')
-            history = self._get_history(batch.ticket, batch.binding)
+            history = self._get_history(peer.ticket, peer.binding)
             if batch.receipts is None:
                 batch.receipts = history.match_retries(batch.impacts)
             if len(batch.receipts) < len(batch.impacts):
-                self._start(batch, history, batch.impacts[len(batch.receipts)])
+                self._begin_impact(batch, history, batch.impacts[len(batch.receipts)])
             if len(batch.receipts) < len(batch.impacts):
                 return
-            if self._lookup_current(batch.ticket) != batch.binding:
-                raise ValueError('combat admission changed before issuing receipts')
-            batch.peer.outgoing = encode_frame(dict(zip(BINDING_FIELDS, batch.binding),
-                                                    kind='combat_receipts', receipts=batch.receipts))
-            batch.peer.deadline = time.monotonic() + IO_TIMEOUT
+            self._queue_reply(peer, 'combat_receipts', receipts=batch.receipts)
         except ValueError:
-            self._drop(batch.peer)
+            self._drop(peer)
         self._batches.popleft()
-        batch.peer.pending = False
 
     def _write(self, peer, now):
         try:
@@ -338,7 +357,7 @@ class CompanyCombatService:
         now = time.monotonic()
         self._accept(now)
         for peer in tuple(self._peers.values()):
-            if peer.pending:
+            if peer.request_pending:
                 continue
             try:
                 if now >= peer.deadline:
@@ -350,9 +369,9 @@ class CompanyCombatService:
         if self.native_pending:
             self.settle_pending()
         else:
-            self._advance()
+            self._advance_batch()
+        self._advance_health_read()
         now = time.monotonic()
-        self._read_cockpit(now)
         for peer in tuple(self._peers.values()):
             if peer.outgoing:
                 try:

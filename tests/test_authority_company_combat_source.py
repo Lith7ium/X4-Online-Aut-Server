@@ -193,7 +193,21 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.assertTrue(client.received.wait(2))
         replacement = self.log.with_suffix('.new')
         replacement.write_text(READY + contact(2), encoding='ascii')
-        replacement.replace(self.log)
+        try:
+            replacement.replace(self.log)
+        except PermissionError as error:
+            if sys.platform != 'win32' or error.winerror not in (5, 32):
+                raise
+            # Windows can deny replacement while the collector holds the log open.
+            # Confirm it is still tailing the admitted file and ignored the other one.
+            replacement.write_text(READY + contact(2) + contact(3), encoding='ascii')
+            with self.log.open('a', encoding='ascii') as original:
+                original.write(contact(2))
+            self.wait_for_confirmed(sender, 2)
+            result = sender.close()
+            self.assertIsNone(result['failure'])
+            self.assertEqual(result['observed'], 2)
+            return
         sender._thread.join(2)
         self.assertEqual(sender.close()['failure'], 'source_unavailable')
         self.assertEqual(len(client.batches), 1)
