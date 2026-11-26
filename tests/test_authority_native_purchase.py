@@ -273,6 +273,16 @@ class NativePurchaseProviderTests(unittest.TestCase):
                 proc.terminate()
                 proc.wait(timeout=3)
 
+    def test_purchase_checks_stock_affordability_in_whole_credits_after_clamping(self):
+        request = ET.parse(STOCK).getroot().find(".//cue[@name='Request']")
+        guard = request.find(".//set_value[@name='$tradeable']").get('exact')
+        self.assertIn('$amount == $quantity', guard)
+        self.assertIn("($ship.money / 1Cr) ge (($price * $quantity) / 1Cr)", guard)
+        self.assertIn("(player.money / 1Cr) ge (($price * $quantity) / 1Cr)", guard)
+        clamp = request.find(".//clamp_trade_amount[@buyer='$ship'][@seller='$station']")
+        self.assertEqual((clamp.get('trade'), clamp.get('amount'), clamp.get('result')),
+                         ('$offer', '$quantity', '$amount'))
+
     def test_md_stock_order_requires_physical_dock_binding(self):
         root = ET.parse(STOCK).getroot()
         guards = {node.attrib['name']: node.attrib['exact'] for node in root.iter('set_value')

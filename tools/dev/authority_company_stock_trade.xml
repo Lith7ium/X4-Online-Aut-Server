@@ -192,9 +192,10 @@
                       <do_else>
                         <clamp_trade_amount result="$amount" trade="$offer" amount="$quantity" buyer="$ship" seller="$station" bundle="false" unbundle="false"/>
                       </do_else>
+                      <!-- Stock order.trade.perform compares the basket and available funds in whole credits. -->
                       <set_value name="$tradeable" exact="$price gt 0Cr and $amount == $quantity and $offer.offeramount.{$ship} ge $quantity
                           and (if $sell then ($station.owner != faction.player and $offer.minamount le $quantity and $ship.cargo.{$ware}.count ge $quantity)
-                               else ($ship.money ge ($price * $quantity) and player.money ge ($price * $quantity)))
+                               else (($ship.money / 1Cr) ge (($price * $quantity) / 1Cr) and (player.money / 1Cr) ge (($price * $quantity) / 1Cr)))
                           and (not $live or (faction.player.hasownaccount and faction.player.money == player.money))"/>
                       <set_value name="$status" exact="'not_tradeable'"/>
                       <do_if value="event.param2 == 'Quote' and not $fixed and $tradeable">
