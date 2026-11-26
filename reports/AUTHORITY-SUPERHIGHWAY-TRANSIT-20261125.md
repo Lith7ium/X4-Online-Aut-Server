@@ -552,3 +552,33 @@ under `.local/ordinary-jump-gate/run-07-measured/flight/verified.json`
 has SHA-256
 `bc2db43854be3ff7a9313474fea3c8fe0477ae74c4c48a9edd76d6583f9af0ff`.
 The run used private same-host Linux TLS with one cockpit.
+
+### Ordinary cold rejoin after the gate flight
+
+At `f9f5bc369ce80f620b9840458a9ed6678499b353`, the regular GPU-free
+Bazzite provider cold-loaded a disposable copy of the Run 07 departure
+save, `checkpoint-ab4e77fb08fe477ca55e990817eec479`. Both its load marker
+and the ordinary pilot's fresh offer marker were observed independently.
+The fresh offer was `checkpoint-624dc3b3abc44d5ca4bd8d656240ee8a`,
+marker `31dad283a1fc0bbf19450461d43dc3b1`. The normal Linux cockpit
+claimed and took the helm of HVC-420 (1073) in
+`cluster_01_sector002_macro`. The provider's position writer was disabled
+and the pilot supplied no flight input or autopilot action.
+
+The first normal acknowledgment was sequence 2 at
+(−115193.3046875, −360.1820068359375, −78050.046875) m, **0.198 mm**
+from the independently parsed final position in the Run 07 save.
+The provider received nine samples. The pilot left cooperatively,
+and the provider paused and confirmed
+`checkpoint-726c6baf1a4844469df8804476c65783`, marker
+`2b0f00de770c746b6cf19f0644432625`, SHA-256
+`fc3091f770e00186a567fc333fcf65d10d590a744425ffdd4b88520df38f0666`.
+
+HVC-420 and KHI-630 (1074) had identical saved sector coordinates
+across the restored, offered and departure saves. KHI-630 remained
+at (−147749.01575, −228.114, −98034.0160625) m. Both processes and
+locks cleared. The original and disposable source fingerprints were
+unchanged. This was a stationary rejoin after the gate crossing.
+Private evidence in
+`.local/two-pilot-cold-rejoin/run-ordinary-gate/verified.json`
+has SHA-256 `a516c7ae0ebfba6df6152a3f4715375c9d1347e203972211e9764072cc453c8b`.
