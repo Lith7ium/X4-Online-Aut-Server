@@ -329,3 +329,28 @@ Both locks cleared. The cockpit phase did not run, so this attempt
 establishes no ordinary jump-gate passage. Private evidence is under
 `.local/ordinary-jump-gate/run-01/`. The `staged/result.json` digest is
 `f0469eeea70d243192c97bb7932ee4a20ad3b12af93b61f8857de1e94336d907`.
+
+### Corrected paused jump-gate staging
+
+Run 01's engine log gives the reason the readback could not run. During
+load, X4 rejected `prepare_route.xml:67` with
+`Found non-event condition 'check_value', event condition required!`.
+The child used that condition alone. XML schema validation had accepted
+the file. Run 01 did not establish whether its setup event was dispatched.
+
+Run 02 at `d3fc032d54a0e1fa5f90fdcc9ecb0fe16a206b7f` used separate
+UI-triggered Prepare and ReadBack cues. In a fresh private copy of the
+same source, X4 completed the 5,048-entry registry inspection. The
+Lua dispatch, Mission Director cue entry and nonce-matched reply were
+recorded for both calls at unchanged game age 465.97 s. Prepare returned
+`STAGED`. The read-only ReadBack then returned `REFUSED` with
+`saved_actor_range_or_known_path`. This combined check covers both ship
+sectors and ranges, discovery flags, and the first gate on the known
+path. The log does not identify which clause failed.
+
+The harness stopped the provider at that refusal. No starting checkpoint
+was published and no cockpit launched. The original and copied save
+retained SHA-256 `ef811ab5d7ee212c0d38230fbc48944261b096be3c2d3d34b9baa24ffb033676`.
+The provider recorded zero engine operations and zero remaining owned
+processes. Both locks cleared. Private evidence is under
+`.local/ordinary-jump-gate/run-02/`. Ordinary gate passage remains unverified.
