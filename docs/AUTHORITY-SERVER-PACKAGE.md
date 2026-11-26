@@ -471,17 +471,19 @@ projectile strikes the watched ship. That event carries X4's attacker and
 projectile fields. A damage callback can omit its attacker, so the report
 keeps the callback's attacker separate from the ship's last known attacker.
 
-For shots fired by the pilot, find an `object_attacked_object` sequence in
-the private `X4AuthorityClientCombatCapture` log and verify it as follows.
+To list the outgoing gun contacts recorded while the pilot held the helm,
+use the same checkpoint and log.
 
 ```sh
 python3 tools/dev/authority_combat_hit_evidence.py \
   --store "$provider_store" --checkpoint "$checkpoint_id" --sha256 "$checkpoint_sha256" \
   --capture-epoch "$registry_epoch" --shooter-ship-index "$ship_index" \
-  --log "$pilot_log" --sequence "$sequence"
+  --log "$pilot_log"
 ```
 
-X4 identifies the firing ship, target, damaged component and weapon in
+An empty `contacts` list means the capture was active on that ship and
+recorded no matching contact. Add `--sequence NUMBER` to inspect a single
+notification. X4 identifies the firing ship, target, damaged component and weapon in
 this notification. The component and weapon handles belong to this
 pilot's X4 process. X4 throttles the notifications during sustained fire.
 Use the target's shield and hull callbacks to measure local health loss.

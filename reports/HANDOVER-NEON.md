@@ -19,6 +19,12 @@ the ship with eight crew aboard. This disposable control removed the
 target's three engines and defending crew. It had no multiplayer client
 and wrote no save. [Native boarding timeline](AUTHORITY-BOARDING-NEARBY-CONTROL-20261126.md#stationary-target-comparison)
 
+The final fresh-world setup already in progress at the priority change
+created four fighters and CKW-492 with eight marines. Registry enrollment
+timed out after selecting 5,052 ships. The run wrote no checkpoint and
+released its processes. Its private result is in
+`.local/boarding-genesis-b5797b51/genesis.log`. Resume boarding next week.
+
 Cobalt tested the optional `-CombatCapture` switch and receipt utility
 from an extracted ZIP on Windows 11. The launcher probe covered argument
 forwarding, and a synthetic log produced the three expected sequences.

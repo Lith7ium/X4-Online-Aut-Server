@@ -1,11 +1,15 @@
 """Offline static, LuaJIT 2.1, and parser tests for read-only combat observation."""
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 import gzip
 import hashlib
+from io import StringIO
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,12 +24,13 @@ from authority.combat_observation import (
     validate_lua_read_only,
     validate_md_read_only,
 )
-from authority.checkpoints import Checkpoint
+from authority.checkpoints import Checkpoint, CheckpointStore
 from authority.combat_capture import OBSERVER_SCREEN
 from authority.load_observations import LOAD_TAG
 from test_authority_registry_availability_evidence import EPOCH, RUN, build_xml
+from tools.dev import authority_combat_hit_evidence as evidence
 from tools.dev.authority_combat_hit_evidence import (
-    read_gun_contact, read_private_gun_contact, resolve_gun_contact, resolve_hit,
+    read_gun_contact, resolve_gun_contact, resolve_hit, verify_private_gun_contacts,
 )
 
 MD_PATH = ROOT / 'src' / 'authority' / 'md' / 'combat_observer.xml'
@@ -110,14 +115,17 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         self.log = Path(directory.name) / 'engine-output.log'
         save = Path(directory.name) / 'save.xml.gz'
         ships = ('<component class="ship_s" id="[0x101]" owner="player" code="HVC-420"/>'
-                 '<component class="ship_s" id="[0x102]" owner="xenon" code="VLY-685"/>')
+                 '<component class="ship_s" id="[0x102]" owner="xenon" code="VLY-685"/>'
+                 '<component class="ship_s" id="[0x103]" owner="xenon" code="XEN-123"/>')
         marker = (b'<script name="X4AuthorityCheckpointMarker"><cue name="MarkerState"><vars>'
                   b'<value name="$marker" type="string" value="11"/><value name="$loaded" type="integer"/>'
                   b'</vars></cue></script>')
-        compressed = gzip.compress(build_xml((1, 1), definitions=ships).replace(b'</md>', marker + b'</md>'))
+        compressed = gzip.compress(build_xml((1, 1, 1), definitions=ships).replace(b'</md>', marker + b'</md>'))
         save.write_bytes(compressed)
-        self.checkpoint = Checkpoint('checkpoint-' + 'a' * 32, save, hashlib.sha256(compressed).hexdigest(),
-                                     len(compressed), RUN)
+        store = save.parent / 'checkpoints'
+        store.mkdir()
+        self.store = CheckpointStore(store)
+        self.checkpoint = self.store.publish(save, marker=RUN)
         payload = _sample_event_line(
             48, 'object_attacked_object', 10, victim='0x456', v_owner='xenon',
             ev_att='0x789', ea_code='HVC-420', ea_owner='player', ea_reg=1, ea_ctrl=1, ea_isship=1,
@@ -138,6 +146,17 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         self.request = load_tag + 'load_requested|' + self.ticket + '\n'
         self.marker = f'AUTH_MARKER load INSPECTED {RUN}\n'
         self.pause = load_tag + 'pause_observed|' + self.ticket + '\n'
+
+    def _cli(self, *options):
+        argv = [
+            'authority_combat_hit_evidence.py', '--store', str(self.store.directory),
+            '--checkpoint', self.checkpoint.checkpoint_id, '--sha256', self.checkpoint.sha256,
+            '--log', str(self.log), '--shooter-ship-index', '1', *options,
+        ]
+        output = StringIO()
+        with patch.object(sys, 'argv', argv), redirect_stdout(output):
+            evidence.main()
+        return json.loads(output.getvalue())
 
     def test_direct_target_and_weapon_bind_without_last_attacker_or_damage(self):
         self.log.write_text(self.request + self.marker + self.pause + self.private_event_line + self.event_line,
@@ -174,10 +193,10 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
 
     def test_private_contact_requires_matching_active_capture_and_saved_marker(self):
         self.log.write_text(self.capture_start + self.event_line + self.private_event_line, encoding='utf-8')
-        event = read_private_gun_contact(self.log, 48, self.checkpoint, EPOCH, 1)
-        self.assertEqual(event, self.event)
+        report = self._cli('--capture-epoch', EPOCH, '--sequence', '48')
+        self.assertEqual(report, resolve_gun_contact(self.checkpoint, self.event, shooter_ship_index=1))
         with self.assertRaisesRegex(ValueError, 'marker string'):
-            read_private_gun_contact(self.log, 48, replace(self.checkpoint, marker='e' * 32), EPOCH, 1)
+            verify_private_gun_contacts(self.log, replace(self.checkpoint, marker='e' * 32), EPOCH, 1, sequence=48)
         for lines in (
             self.private_event_line + self.capture_start,
             self.capture_start + self.event_line,
@@ -186,7 +205,50 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         ):
             with self.subTest(lines=lines), self.assertRaises(ValueError):
                 self.log.write_text(lines, encoding='utf-8')
-                read_private_gun_contact(self.log, 48, self.checkpoint, EPOCH, 1)
+                verify_private_gun_contacts(self.log, self.checkpoint, EPOCH, 1, sequence=48)
+
+    def test_private_batch_resolves_distinct_targets_with_one_log_and_registry_scan(self):
+        second = self.private_event_line.replace(' 48|', ' 51|').replace('|VLY-685|xenon|2|', '|XEN-123|xenon|3|')
+        unrelated = self.private_event_line.replace(' 48|object_attacked_object|', ' 49|weapon_fired|')
+        stopped = '[X4LAN] AUTH_COMBAT_CAPTURE stopped reason=helm_lost\n'
+        out_of_window = self.private_event_line.replace(' 48|', ' 52|')
+        self.log.write_text(self.capture_start + self.event_line + self.private_event_line + unrelated + second
+                            + stopped + out_of_window, encoding='utf-8')
+        with (patch.object(evidence, 'verify_join_snapshot', wraps=evidence.verify_join_snapshot) as registry,
+              patch.object(Path, 'open', autospec=True, side_effect=Path.open) as open_path):
+            report = self._cli('--capture-epoch', EPOCH)
+        registry.assert_called_once()
+        self.assertEqual(sum(call.args[0] == self.log for call in open_path.call_args_list), 1)
+        self.assertEqual(report['shooter'], {'index': 1, 'code': 'HVC-420'})
+        self.assertEqual(report['registry_epoch'], EPOCH)
+        self.assertEqual([row['sequence'] for row in report['contacts']], [48, 51])
+        self.assertEqual([row['target']['index'] for row in report['contacts']], [2, 3])
+
+    def test_private_quiet_batch_still_checks_saved_helm(self):
+        self.log.write_text(self.capture_start + self.event_line, encoding='utf-8')
+        report = self._cli('--capture-epoch', EPOCH)
+        self.assertEqual(report['contacts'], [])
+        self.assertEqual(report['shooter'], {'index': 1, 'code': 'HVC-420'})
+        for header, epoch, index, reason in (
+            (self.capture_start.replace('HVC-420', 'XEN-123'), EPOCH, 1, 'ship code'),
+            (self.capture_start.replace('index=1', 'index=2').replace('HVC-420', 'VLY-685'),
+             EPOCH, 2, 'Company ownership'),
+            (self.capture_start.replace('index=1', 'index=4'), EPOCH, 4, 'ship code'),
+            (self.capture_start.replace(EPOCH, 'e' * 32, 1), 'e' * 32, 1, 'registry epochs'),
+        ):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.log.write_text(header, encoding='utf-8')
+                verify_private_gun_contacts(self.log, self.checkpoint, epoch, index)
+
+    def test_generic_cli_still_requires_a_sequence(self):
+        self.log.write_text(self.request + self.marker + self.pause + self.event_line, encoding='utf-8')
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            self._cli()
+        self.assertIn('specify --sequence', stderr.getvalue())
+        self.assertEqual(self._cli('--sequence', '48')['target']['index'], 2)
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            self._cli('--capture-epoch', EPOCH)
 
     def test_rejects_events_without_a_direct_registered_company_shooter_and_target(self):
         for changes in (

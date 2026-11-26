@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 
 from authority.checkpoints import CheckpointStore
-from authority.combat_capture import DAMAGE_KINDS, captured_events, captured_outgoing_contacts, new_receipt
+from authority.combat_capture import DAMAGE_KINDS, captured_events, new_receipt, read_outgoing_capture
 from authority.combat_observation import MD_EVENT_PREFIX, parse_md_event
 from authority.load_observations import LOAD_TAG, MARKER_TAG, TICKET_FIELDS, validate_client_receipts
 from authority.marker_evidence import verify_saved_marker
@@ -75,15 +75,23 @@ def read_gun_contact(log, sequence, checkpoint):
     return _read_event(log, sequence, {GUN_CONTACT_KIND}, 'direct outgoing contact', checkpoint)
 
 
-def read_private_gun_contact(log, sequence, checkpoint, registry_epoch, shooter_ship_index):
+def verify_private_gun_contacts(log, checkpoint, registry_epoch, shooter_ship_index, *, sequence=None):
     receipt = new_receipt(checkpoint.checkpoint_id, checkpoint.sha256, registry_epoch, shooter_ship_index)
     with log.open(encoding='utf-8', errors='replace') as stream:
-        matches = [event for event in captured_outgoing_contacts(receipt, stream) if event.seq == sequence]
-    if len(matches) != 1:
-        raise ValueError('expected one direct outgoing contact inside the active shooter capture')
+        shooter_code, events = read_outgoing_capture(receipt, stream)
+    if sequence is not None:
+        events = [event for event in events if event.seq == sequence]
+        if len(events) != 1:
+            raise ValueError('expected one direct outgoing contact inside the active shooter capture')
     verify_saved_marker(checkpoint, checkpoint.marker,
                         script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
-    return matches[0]
+    shooter, contacts = _resolve_gun_contacts(checkpoint, events, registry_epoch, shooter_ship_index, shooter_code)
+    if sequence is not None:
+        return contacts[0]
+    return {
+        'checkpoint_id': checkpoint.checkpoint_id, 'checkpoint_sha256': checkpoint.sha256,
+        'registry_epoch': registry_epoch, 'shooter': shooter, 'contacts': contacts,
+    }
 
 
 def _ship_roles(event):
@@ -159,8 +167,7 @@ def resolve_hit(checkpoint, event, *, piloted_ship_index=None):
     return resolve_hits(checkpoint, [event], piloted_ship_index=piloted_ship_index)[0]
 
 
-def resolve_gun_contact(checkpoint, event, *, shooter_ship_index):
-    """Bind a throttled attacker-side observation to the offered ship registry."""
+def _gun_contact_components(event, shooter_ship_index):
     if event.kind != GUN_CONTACT_KIND or event.param2 not in ('hitbybullet', 'killmethod.hitbybullet'):
         raise ValueError('expected a direct outgoing bullet contact')
     if not math.isfinite(event.age) or event.age < 0 or event.seq <= 0 or not event.registry_epoch:
@@ -168,6 +175,8 @@ def resolve_gun_contact(checkpoint, event, *, shooter_ship_index):
     if (shooter_ship_index <= 0 or event.ev_att_reg != shooter_ship_index
             or not event.ev_att_isship or not event.ev_att_ctrl):
         raise ValueError('direct attacker was not the controlled ship at the selected shooter index')
+    if event.ev_att_owner != 'player':
+        raise ValueError('direct attacker lacks confirmed Company ownership')
     if event.victim_reg <= 0 or event.victim_reg == shooter_ship_index or event.victim_ctrl:
         raise ValueError('direct target must have a separate registered ship index')
     pair = _WEAPON_PAIR.fullmatch(event.param3)
@@ -178,21 +187,41 @@ def resolve_gun_contact(checkpoint, event, *, shooter_ship_index):
     if (not all((shooter, target, component, weapon)) or shooter == target or target != reported_target
             or component == shooter or weapon in (shooter, target, component)):
         raise ValueError('inconsistent direct component and weapon references')
-    roles = {'shooter': (shooter_ship_index, event.ev_att_code),
-             'target': (event.victim_reg, event.victim_code)}
-    snapshot, saved_ships = _saved_ships(checkpoint, {shooter_ship_index, event.victim_reg})
-    if event.registry_epoch != snapshot['epoch']:
-        raise ValueError('gun contact and checkpoint have different registry epochs')
-    identities = _verify_identities(roles, saved_ships)
-    if event.ev_att_owner != 'player' or saved_ships[shooter_ship_index]['owner'] != 'player':
-        raise ValueError('direct attacker lacks confirmed Company ownership')
+    return hex(component), hex(weapon)
+
+
+def _gun_contact_report(checkpoint, event, shooter, saved_ships, component, weapon):
+    if event.ev_att_code != shooter['code']:
+        raise ValueError('direct attacker ship code differs from the verified shooter')
+    identities = _verify_identities({'target': (event.victim_reg, event.victim_code)}, saved_ships)
     return {
         'checkpoint_id': checkpoint.checkpoint_id, 'checkpoint_sha256': checkpoint.sha256,
         'registry_epoch': event.registry_epoch, 'sequence': event.seq, 'event': event.kind,
         'game_age': event.age, 'method': 'hitbybullet',
-        'shooter': identities['shooter'], 'target': identities['target'],
-        'damaged_component': hex(component), 'weapon': hex(weapon),
+        'shooter': shooter, 'target': identities['target'],
+        'damaged_component': component, 'weapon': weapon,
     }
+
+
+def _resolve_gun_contacts(checkpoint, events, registry_epoch, shooter_ship_index, shooter_code):
+    observations = [(event, _gun_contact_components(event, shooter_ship_index)) for event in events]
+    wanted = {shooter_ship_index}
+    wanted.update(event.victim_reg for event, _ in observations)
+    snapshot, saved_ships = _saved_ships(checkpoint, wanted)
+    if registry_epoch != snapshot['epoch'] or any(event.registry_epoch != registry_epoch for event, _ in observations):
+        raise ValueError('gun contact and checkpoint have different registry epochs')
+    shooter = _verify_identities({'shooter': (shooter_ship_index, shooter_code)}, saved_ships)['shooter']
+    if saved_ships[shooter_ship_index]['owner'] != 'player':
+        raise ValueError('direct attacker lacks confirmed Company ownership')
+    contacts = [_gun_contact_report(checkpoint, event, shooter, saved_ships, *components)
+                for event, components in observations]
+    return shooter, contacts
+
+
+def resolve_gun_contact(checkpoint, event, *, shooter_ship_index):
+    """Bind a throttled attacker-side observation to the offered ship registry."""
+    _, contacts = _resolve_gun_contacts(checkpoint, [event], event.registry_epoch, shooter_ship_index, event.ev_att_code)
+    return contacts[0]
 
 
 def main():
@@ -201,17 +230,15 @@ def main():
     parser.add_argument('--checkpoint', required=True)
     parser.add_argument('--sha256', required=True, help="save digest from this pilot's load offer")
     parser.add_argument('--log', type=Path, required=True)
-    parser.add_argument('--sequence', type=int, help='select one hit; omit to verify all hits in a pilot capture')
+    parser.add_argument('--sequence', type=int, help='select one event; omit to verify all events in a private capture')
     parser.add_argument('--capture-epoch', help="verify the private capture window using the offered registry epoch")
     parser.add_argument('--piloted-ship-index', type=int,
                         help='require the hit victim to be the occupied, controlled Company ship at this admitted index')
     parser.add_argument('--shooter-ship-index', type=int,
-                        help='verify one direct bullet contact from the controlled Company shooter at this index; '
-                             'include --capture-epoch for private pilot captures')
+                        help='verify direct bullet contacts from the controlled Company shooter at this index')
     args = parser.parse_args()
-    if args.shooter_ship_index is not None and (args.shooter_ship_index <= 0 or args.sequence is None
-                                               or args.piloted_ship_index is not None):
-        parser.error('--shooter-ship-index requires a positive index and --sequence without --piloted-ship-index')
+    if args.shooter_ship_index is not None and (args.shooter_ship_index <= 0 or args.piloted_ship_index is not None):
+        parser.error('--shooter-ship-index requires a positive index without --piloted-ship-index')
     if args.capture_epoch is not None and args.piloted_ship_index is None and args.shooter_ship_index is None:
         parser.error('--capture-epoch requires --piloted-ship-index or --shooter-ship-index')
     if args.capture_epoch is None and args.sequence is None:
@@ -223,10 +250,10 @@ def main():
         if args.shooter_ship_index is not None:
             if args.capture_epoch is None:
                 event = read_gun_contact(args.log, args.sequence, checkpoint)
+                report = resolve_gun_contact(checkpoint, event, shooter_ship_index=args.shooter_ship_index)
             else:
-                event = read_private_gun_contact(args.log, args.sequence, checkpoint, args.capture_epoch,
-                                                 args.shooter_ship_index)
-            report = resolve_gun_contact(checkpoint, event, shooter_ship_index=args.shooter_ship_index)
+                report = verify_private_gun_contacts(args.log, checkpoint, args.capture_epoch,
+                                                     args.shooter_ship_index, sequence=args.sequence)
         elif args.capture_epoch is None:
             report = resolve_hit(checkpoint, read_hit(args.log, args.sequence),
                                  piloted_ship_index=args.piloted_ship_index)

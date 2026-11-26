@@ -130,7 +130,7 @@ def _incoming_damage(event, ship_index, ship_code):
 
 
 def _outgoing_gun_contact(event, ship_index, ship_code):
-    return (event.kind == 'object_attacked_object' and event.param2 == 'hitbybullet'
+    return (event.kind == 'object_attacked_object' and event.param2 in ('hitbybullet', 'killmethod.hitbybullet')
             and event.ev_att_reg == ship_index and event.ev_att_code == ship_code
             and event.ev_att_owner == 'player' and event.ev_att_isship and event.ev_att_ctrl
             and event.victim_reg > 0 and event.victim_reg != ship_index)
@@ -138,12 +138,22 @@ def _outgoing_gun_contact(event, ship_index, ship_code):
 
 def captured_outgoing_contacts(receipt, log_text):
     """Read X4's throttled gun-contact notifications at the admitted pilot's helm."""
-    return _captured_events(receipt, log_text, _outgoing_gun_contact)
+    _, contacts = read_outgoing_capture(receipt, log_text)
+    return contacts
+
+
+def read_outgoing_capture(receipt, log_text):
+    """Return the pilot's observed ship code even when no bullets hit a target."""
+    ship_codes, contacts = _captured_events(receipt, log_text, _outgoing_gun_contact)
+    if len(ship_codes) != 1:
+        raise ValueError('conflicting ship codes for the outgoing pilot capture')
+    return ship_codes.pop(), contacts
 
 
 def captured_events(receipt, log_text):
     """Read private damage callbacks on the admitted pilot's ship."""
-    return _captured_events(receipt, log_text, _incoming_damage)
+    _, hits = _captured_events(receipt, log_text, _incoming_damage)
+    return hits
 
 
 def _captured_events(receipt, log_text, matches_ship):
@@ -152,7 +162,7 @@ def _captured_events(receipt, log_text, matches_ship):
     start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
              f"checkpoint={receipt['checkpoint_id']} sha256={receipt['checkpoint_sha256']} code=")
     ship_code = None
-    observed_window = False
+    observed_ship_codes = set()
     lines = log_text.splitlines() if isinstance(log_text, str) else log_text
     for line in lines:
         _, status_marker, status = line.partition(_CAPTURE_STATUS)
@@ -162,7 +172,8 @@ def _captured_events(receipt, log_text, matches_ship):
             if status.startswith(start):
                 actor = re.fullmatch(r'([A-Z0-9]{3}-[A-Z0-9]{3}) owner=player', status[len(start):].strip())
                 if actor:
-                    ship_code, observed_window = actor[1], True
+                    ship_code = actor[1]
+                    observed_ship_codes.add(ship_code)
             continue
         source, marker, payload = line.partition(MD_EVENT_PREFIX)
         event = parse_md_event(payload) if marker and source.endswith(_EVENT_SOURCE) else None
@@ -173,11 +184,11 @@ def _captured_events(receipt, log_text, matches_ship):
                 or not matches_ship(event, receipt['piloted_ship_index'], ship_code)):
             continue
         hits.append(event)
-    if not observed_window:
+    if not observed_ship_codes:
         raise ValueError('no active pilot capture for the offered checkpoint and seat')
     if any(sequence_counts[event.seq] != 1 for event in hits):
         raise ValueError('native combat sequence repeats in one capture log')
-    return hits
+    return observed_ship_codes, hits
 
 
 def collect_hits(receipt, log_text):
