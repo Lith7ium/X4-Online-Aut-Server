@@ -148,8 +148,9 @@ local cockpit_playback = dofile(base .. 'company_cockpit_playback.lua')
 local generation = ('2'):rep(32)
 binding.slot, binding.index = 'cockpit', 73
 
-local function flight(speed, update, test)
-    local now, x, y, pending = 0, 0, 0, nil
+local function flight(speed, update, test, trace)
+    local now, actual, pending = 0, {x=0, y=0, z=0}, nil
+    local accepted_samples, confirmed_sequence, confirmed_long_write = 0, 0, false
     local native_offset, writes, faults = 0, {}, {}
     local engine = {
         cockpit = function() return {actor=cockpit, sector=sector, zone=cockpit_zone} end,
@@ -157,13 +158,14 @@ local function flight(speed, update, test)
             return {actor=target, sector=sector, zone=zone, sector_macro=binding.sector_macro, code=binding.code}
         end,
         read = function()
-            return {x=x, y=y + native_offset, z=0, yaw=0, pitch=0, roll=0}
+            return {x=actual.x, y=actual.y + native_offset, z=actual.z, yaw=0, pitch=0, roll=0}
         end,
         same_zone = function() return true end,
         write = function(actor, _, pose)
             assert(actor == target and not pending)
             pending = pose
-            writes[#writes + 1] = math.sqrt((pose.x - x)^2 + (pose.y - y)^2)
+            writes[#writes + 1] = math.sqrt(
+                (pose.x - actual.x)^2 + (pose.y - actual.y)^2 + (pose.z - actual.z)^2)
             return true
         end,
     }
@@ -172,6 +174,11 @@ local function flight(speed, update, test)
         enabled=true, own_index=cfg.own_index, target_index=binding.index, adapter=module.new(cfg, engine),
         clock=function() return now end, game=function() return now end, paused=function() return false end,
         record=function(event)
+            if event.kind == 'readback' then
+                assert(event.elapsed > 0 and event.error == 0)
+                confirmed_sequence = event.source_sequence
+                confirmed_long_write = confirmed_long_write or writes[#writes] > 50
+            end
             if test == 'native_offset' and event.kind == 'observation' and event.target.x - event.actual.x > 50 then
                 -- The independent pre-write read sees an unexpected lateral displacement.
                 native_offset = 120
@@ -180,28 +187,46 @@ local function flight(speed, update, test)
         end,
         fault=function(reason) faults[#faults + 1] = reason end,
     })
-    local function sample(seq, age, velocity)
-        return controller:sample(binding, 1, {
+    local function submit(seq, capture_time, game_time, pose, velocity)
+        local accepted, reason = controller:sample(binding, 1, {
             version=3, epoch=epoch, generation=generation, index=binding.index, sector_macro=binding.sector_macro,
-            sequence=seq, source_time=age, capture_time=age, x=speed*age, y=0, z=0, real_velocity=velocity,
-        }, age)
+            sequence=seq, source_time=game_time, capture_time=capture_time,
+            x=pose.x, y=pose.y, z=pose.z, real_velocity=velocity,
+        }, capture_time)
+        assert(accepted, reason)
+        accepted_samples = accepted_samples + 1
+    end
+    local function synthetic_sample(seq, age, velocity)
+        submit(seq, age, age, {x=speed*age, y=0, z=0}, velocity)
     end
     local velocity = {x=speed, y=0, z=0}
-    assert(sample(1, 0, velocity))
-    for frame = 1, 16 do
+    local next_row, frames = 1, 16
+    if trace then
+        frames = math.ceil((trace[#trace][2] + .2) / update)
+    else
+        synthetic_sample(1, 0, velocity)
+    end
+    for frame = 1, frames do
         now = frame * update
         if pending then
-            x, y, pending = pending.x, pending.y, nil
+            -- Expose the dispatched pose only on the subsequent receiver update.
+            actual, pending = pending, nil
         end
-        if test ~= 'one_sample' and (test ~= 'missing_velocity' or frame <= 4) then
+        if trace then
+            while trace[next_row] and trace[next_row][2] <= now do
+                local seq, capture, game, x, y, z, vx, vy, vz = unpack(trace[next_row])
+                submit(seq, capture, game, {x=x, y=y, z=z}, {x=vx, y=vy, z=vz})
+                next_row = next_row + 1
+            end
+        elseif test ~= 'one_sample' and (test ~= 'missing_velocity' or frame <= 4) then
             local rate = (test ~= 'missing_velocity' or frame ~= 4) and velocity or nil
-            assert(sample(frame + 1, now, rate))
+            synthetic_sample(frame + 1, now, rate)
         end
         if frame == 6 and test == 'long_update' then now = now + .12 end
         controller:tick(now)
         if #faults > 0 then break end
     end
-    return writes, faults
+    return writes, faults, accepted_samples, confirmed_sequence, confirmed_long_write
 end
 
 local accepted, rejected = flight(1500, .05)
@@ -212,3 +237,20 @@ for _, test in ipairs({'one_sample', 'missing_velocity', 'long_update', 'native_
 end
 accepted, rejected = flight(4000, .08)
 assert(#rejected == 1 and (#accepted == 0 or math.max(unpack(accepted)) <= 250))
+
+
+local trace = {}
+local input = assert(io.open('tests/fixtures/company_gate_flight.tsv', 'r'))
+assert(input:read('*l'):match('^sequence%s+relative_capture_s%s+relative_game_s'))
+for line in input:lines() do
+    local row = {}
+    for column in line:gmatch('%S+') do row[#row + 1] = assert(tonumber(column)) end
+    assert(#row == 9)
+    trace[#trace + 1] = row
+end
+input:close()
+assert(#trace == 44 and trace[#trace][1] == 192)
+for _, hz in ipairs({20, 30}) do
+    local _, faults, samples, last_sequence, confirmed_long_write = flight(0, 1/hz, nil, trace)
+    assert(#faults == 0 and samples == 44 and last_sequence == 192 and confirmed_long_write, hz .. ' Hz')
+end

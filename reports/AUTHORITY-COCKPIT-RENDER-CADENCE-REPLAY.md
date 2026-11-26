@@ -54,3 +54,14 @@ refused a 120 m offset. After the last usable sample, the private receiver
 issued no write beyond the five-second cutoff. These cases use a simulated
 native adapter. The production guard at `f03e7f8a` still limits each step
 to 50 m.
+
+
+## Reproduce the tracked regression
+
+The [44-sample trace](../tests/fixtures/company_gate_flight.tsv) keeps the
+recorded sequences and velocities with relative capture times, game times,
+and XYZ offsets. From the checkout root, run
+`python -m unittest discover -s tests -p test_authority_company_hull_playback_x4.py`
+with LuaJIT available on PATH. At both 20 and 30 Hz, the test uses the
+production controller and verifies a write over 50 m and the final
+sequence through next-update pose readbacks from a simulated engine.
