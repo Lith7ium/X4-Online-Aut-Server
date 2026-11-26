@@ -44,7 +44,7 @@ def event(phase, age, kind, shooter=1, **fields):
         'ev_att': f'0x10{shooter}', 'ev_att_reg': shooter, 'ev_att_owner': 'player',
         'ev_att_label': A.SHOOTER_LABELS[str(shooter)], 'ev_att_code': 'HVC-420' if shooter == 1 else 'KHI-630',
         'ev_att_ctrl': shooter == 1, 'ev_att_isship': True,
-        'last_att_label': 'company_player', 'comp': '0x9', 'amount': 26, 'shield': 100, 'hull': 2500,
+        'last_att_label': 'company_player', 'collided': False, 'comp': '0x9', 'amount': 26, 'shield': 100, 'hull': 2500,
         'param2': 'hitbybullet', 'param3': f'[component.{{0x9L}},component.{{0xab{shooter}L}}]',
     }
     return SimpleNamespace(**(values | fields))
@@ -173,6 +173,65 @@ class MixedWeaponTest(unittest.TestCase):
         self.assertFalse(A.accepted(overlap))
         self.assertEqual(A.analyse_damage(text, events, overlap, epoch=EPOCH)[1]['overlap']['assigned_hits'], 2)
         self.assertEqual(A.analyse_damage(text.replace('hs_shot=36', 'hs_shot=35'), events, overlap, epoch=EPOCH)[1], {})
+
+    def test_flagged_and_late_collisions_leave_same_target_damage_unattributed(self):
+        for mode in ('flagged', 'later', 'later_reversed'):
+            with self.subTest(mode=mode):
+                text, events = fixture(mixed=True)
+                target_row = next(row for row in events if row.phase == 'overlap' and row.kind == 'shield_damaged')
+                if mode == 'flagged':
+                    target_row.collided = True
+                else:
+                    fields = {} if mode == 'later' else dict(victim='0x101', victim_reg=1, victim_code='HVC-420',
+                        ev_att='0x9', ev_att_reg=4, ev_att_code='XEN-123')
+                    # Arrives after both damage rows, so their synchronous flags are false.
+                    events.insert(-2, event('overlap', 3.1, 'collided', **fields))
+                    for seq, row in enumerate(events, 1):
+                        row.seq = seq
+                overlap = A.analyse(text, events, epoch=EPOCH)
+                self.assertFalse(A.accepted(overlap))
+                self.assertTrue(overlap['overlap']['observer_damage_matches_trace'])
+                self.assertEqual(overlap['overlap']['observer_collision_ambiguous_ages'], [3.1])
+                self.assertEqual(overlap['overlap']['observer_collision_ambiguous_callbacks'], 2)
+                baselines, result = A.analyse_damage(text, events, overlap, epoch=EPOCH)
+                self.assertEqual(len(baselines), 2)
+                rows = result['overlap']['rows']
+                self.assertEqual([row['kind'] for row in rows], ['collision_ambiguous'] * 2)
+                self.assertEqual([row['source_by_amount'] for row in rows], [None, None])
+                self.assertEqual(result['overlap']['unassigned_callbacks'], 2)
+
+    def test_clean_frames_survive_collisions_in_another_frame_or_on_another_target(self):
+        text, events = fixture(mixed=True)
+        for row in events:
+            if row.phase == 'overlap' and row.kind == 'shield_damaged':
+                row.collided = True
+        before_miss, miss = text.split(f'{P}COMBAT_PHASE phase=miss_pilot', 1)
+        extra = []
+        for shooter, amount, bullet in ((1, 26, GATLING), (2, 36, LASER)):
+            extra.extend((fire(3.2, shooter, f'0xbb{shooter}', bullet),
+                          attack(3.3, shooter), impact(3.3, 'shield', amount, 100)))
+            events[-2:-2] = [event('overlap', 3.3, 'object_attacked_object', shooter),
+                            event('overlap', 3.3, 'shield_damaged', shooter, amount=amount)]
+        text = before_miss + '\n'.join(extra) + f'\n{P}COMBAT_PHASE phase=miss_pilot' + miss
+        events.insert(-2, event('overlap', 3.3, 'collided', shooter=2,
+                               victim='0x101', victim_reg=1, victim_code='HVC-420'))
+        for seq, row in enumerate(events, 1):
+            row.seq = seq
+        overlap = A.analyse(text, events, epoch=EPOCH)
+        self.assertTrue(A.accepted(overlap))
+        self.assertEqual(overlap['overlap']['coincident_direct_hit_frames'], ['3.3'])
+        result = A.analyse_damage(text, events, overlap, epoch=EPOCH)[1]['overlap']
+        self.assertEqual([row['source_by_amount'] for row in result['rows']], [None, None, '1', '2'])
+
+    def test_collision_only_solo_damage_cannot_calibrate_a_source(self):
+        text, events = fixture(mixed=True)
+        next(row for row in events if row.phase == 'control_pilot' and row.kind == 'shield_damaged').collided = True
+        overlap = A.analyse(text, events, epoch=EPOCH)
+        self.assertFalse(A.accepted(overlap))
+        self.assertEqual(overlap['control_pilot']['observer_damage_callbacks'], 1)
+        baselines, result = A.analyse_damage(text, events, overlap, epoch=EPOCH)
+        self.assertEqual(set(baselines), {'2'})
+        self.assertEqual(result, {})
 
     def test_depletion_and_overflow_require_unique_adjacent_callbacks_in_the_same_reported_age(self):
         def shield(seq, age, amount):

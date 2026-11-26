@@ -180,6 +180,24 @@ def _target_event(event, actors, epoch):
             and event.registry_epoch == epoch)
 
 
+def _collision_ages(events, actors, epoch):
+    """Fence same-age damage even when the collision callback arrived later."""
+    target = actors.get('4')
+    if target is None:
+        return set()
+    ages = set()
+    for event in events:
+        tracked_victim = _target_event(event, actors, epoch)
+        if event.kind == 'collided':
+            tracked_collider = (event.registry_epoch == epoch and event.ev_att_reg == 4
+                                and target == (event.ev_att, event.ev_att_code))
+            if tracked_victim or tracked_collider:
+                ages.add(event.age)
+        elif tracked_victim and event.kind in ('shield_damaged', 'hull_damaged') and event.collided:
+            ages.add(event.age)
+    return ages
+
+
 def _direct_sources(bucket, events, actors, weapon_owners, epoch):
     trace = {'attacked_object': [], 'player_attacked_object': []}
     for kind, rows in (('attacked_object', bucket['attacked']), ('player_attacked_object', bucket['player_attacked'])):
@@ -245,6 +263,11 @@ def analyse_phase(bucket, events, actors, epoch):
     projectile_weapon = {key: fire['weapon'] for key, fire in projectiles.items()}
     frames, unassigned = impact_frames(bucket['records'], projectiles)
     classified = [classify_frame(f, projectile_weapon) for f in frames]
+    collision_ages = _collision_ages(events, actors, epoch)
+    for frame in classified:
+        if _number(frame['age']) in collision_ages:
+            frame['class'] = 'collision_ambiguous'
+            frame['per_callback_ambiguous'] = True
     trace, named = _direct_sources(bucket, events, actors, weapon_owners, epoch)
     target_events = [e for e in events if _target_event(e, actors, epoch)]
     damage = [e for e in target_events if e.kind in ('shield_damaged', 'hull_damaged')]
@@ -255,13 +278,14 @@ def analyse_phase(bucket, events, actors, epoch):
                             for f in frames for c in f['callbacks'])
     damage_agrees = observer_damage == traced_damage and all(
         age is not None and amount is not None and amount > 0 for age, _, amount, _ in traced_damage)
-    damage_ages = {age for age, _, _, _ in traced_damage}
+    damage_ages = {age for age, _, _, _ in traced_damage} - collision_ages
     direct_hit_shooters = {source for age, sources in named.items() if age in damage_ages for source in sources}
     coincident = []
     agree = disagree = 0
     for frame in classified:
         direct_shooters = named.get(_number(frame['age']), set())
-        if damage_agrees and frame['bullets_needed'] >= 2 and direct_shooters == {'1', '2'}:
+        if (damage_agrees and frame['class'] != 'collision_ambiguous'
+                and frame['bullets_needed'] >= 2 and direct_shooters == {'1', '2'}):
             coincident.append(frame['age'])
         if damage_agrees and frame['class'] == 'one_shooter_count_matches' and direct_shooters:
             if direct_shooters == set(frame['shooters']):
@@ -302,6 +326,8 @@ def analyse_phase(bucket, events, actors, epoch):
         'named_attack_vs_inferred_frame': {'agree': agree, 'disagree': disagree, 'compared': agree + disagree,
                                            'unverified': len(frames) - agree - disagree},
         'observer_damage_callbacks': len(damage),
+        'observer_collision_ambiguous_ages': sorted({event.age for event in damage} & collision_ages),
+        'observer_collision_ambiguous_callbacks': sum(event.age in collision_ages for event in damage),
         'observer_damage_matches_trace': damage_agrees,
         'observer_damage_with_event_attacker': sum(1 for e in damage if e.ev_att != '0'),
         'observer_lastattacker_labels': _count(last_attackers),
@@ -351,10 +377,13 @@ def _damage_controls(text, events, trace, overlap, actors, epoch):
                 continue
             if {row.get('pmacro') for row in trace[phase]['fires']} != {bullet}:
                 continue
-            damage = _root_damage(events.get(phase, ()), actors, epoch)
+            phase_events = events.get(phase, ())
+            damage = _root_damage(phase_events, actors, epoch)
             if len(damage) != outcome['observer_damage_callbacks']:
                 continue
-            amounts = Counter(e.amount for e in damage if e.kind == 'shield_damaged' and e.shield > 0)
+            collision_ages = _collision_ages(phase_events, actors, epoch)
+            amounts = Counter(e.amount for e in damage if e.kind == 'shield_damaged' and e.shield > 0
+                              and e.age not in collision_ages)
             if set(amounts) == {amount}:
                 baselines[shooter] = {'amount': amount, 'bullet': bullet, 'phase': phase,
                                       'calibration_callbacks': amounts[amount]}
@@ -412,14 +441,19 @@ def _frame_damage_rows(frame, values):
 
 def _attribute_damage(events, damage, values, actors, epoch):
     notices = _preceding_notices(events, actors, epoch)
+    collision_ages = _collision_ages(events, actors, epoch)
     frames, rows = {}, []
     mixed = alternations = 0
     for event in damage:
         frames.setdefault(event.age, []).append(event)
     labels = {label: source for source, label in SHOOTER_LABELS.items()}
-    for frame in frames.values():
+    for age, frame in frames.items():
         sources = []
-        for event, source, kind, pair in _frame_damage_rows(frame, values):
+        if age in collision_ages:
+            classified = ((event, None, 'collision_ambiguous', None) for event in frame)
+        else:
+            classified = _frame_damage_rows(frame, values)
+        for event, source, kind, pair in classified:
             sources.append(source)
             rows.append({
                 'age': event.age, 'sequence': event.seq, 'amount': event.amount, 'kind': kind,

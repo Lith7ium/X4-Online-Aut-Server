@@ -133,3 +133,13 @@ Cobalt reported 79 of 79 damage assignments across two disposable Windows runs u
 The overlap runner now accepts a separate stock gun for the second fixture ship, a distance adjustment and an optional full-health reset of the registered Xenon target between phases. The reset requires the target's verified registry binding and that the traced projectiles have cleared. The ordinary single-shooter runner and the default overlap loadout keep their previous settings.
 
 The supplemental analyzer cross-checks solo shield amounts against the two gun profiles and the projectiles observed in each phase. It assigns overflow only when a unique adjacent shield and hull pair at the same reported game age sums to one calibrated amount and the hull piece cannot itself be a full shot. Sequence gaps, lethal clipping and competing pairs remain unresolved wherever they affect attribution. The analyzer compares assignments with `lastattacker` and preceding same-age notifications after classifying them. Overlap acceptance still requires direct, registered witnesses from both shooters at the same recorded game age and the existing miss and damage checks.
+
+
+The offline analyzer marks a target's damage as `collision_ambiguous` when
+a damage callback carries a collision flag or a collision involving that
+target appears at the same recorded game age, even after the damage rows.
+The phase summary preserves its raw damage counts and reports the affected
+ages and callback count. Those rows supply neither gun calibration nor
+overlap acceptance. Unaffected targets and game ages keep their existing
+checks. The synthetic cases exercise both event orders and unrelated
+collisions. The historical Windows trials were not rerun.
