@@ -53,6 +53,13 @@ to infiltration, then X4 reported failure. Scale Plate retained the ship.
 Pod attachment and the cause of failure are unknown. This trial started
 on the provider. [Boarding timeline](AUTHORITY-BOARDING-BASELINE-20261125.md#native-follow-up-at-the-highest-stock-thresholds)
 
+A separate reduced-defence control identified the loss of both pods.
+X4 attributed each destruction to ZNG-430 with the method
+`lowattentionattack`. Its turrets and defending crew had been removed
+before the stock operation. Both main guns remained fitted in the
+source world. The events did not identify a particular weapon.
+[Pod losses and surviving ownership](AUTHORITY-BOARDING-BASELINE-20261125.md#reduced-defence-control-still-lost-both-pods-in-low-attention)
+
 Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. His
 separate Windows run at `f0605562` passed all 15 NPC observation,
 trade capture and purchase-source fixtures with zero skips. The
