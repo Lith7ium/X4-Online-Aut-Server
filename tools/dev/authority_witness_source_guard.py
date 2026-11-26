@@ -84,9 +84,11 @@ class WitnessSourceGuard:
     """Not a writer lock; use only under the existing isolated-source fence."""
     def __init__(self,store,checkpoint):
         if not isinstance(store,CheckpointStore): raise ValueError('checkpoint store required')
-        # These existing routines perform full digest/gzip/XML and witness
-        # validation; the cached checks below cannot substitute for them.
-        confirmed=store.latest_marked_confirmed()
+        # Reopen the source as an independent reader. The publisher can reuse
+        # its XML validation for downloads; this guard verifies the saved XML
+        # itself before and after taking the file-identity snapshot.
+        source_reader = CheckpointStore(store.directory)
+        confirmed = source_reader.latest_marked_confirmed()
         if confirmed!=checkpoint or store.latest()!=checkpoint:
             raise ValueError('source not current and confirmed')
         status=registry.saved_status(checkpoint)
@@ -108,7 +110,7 @@ class WitnessSourceGuard:
             raise ValueError('source metadata differs from validated checkpoint')
         # Revalidate after snapshot so it cannot bind a different source than
         # the one validated before it. Any later writer is caller-fenced.
-        if store.latest_marked_confirmed()!=checkpoint or store.latest()!=checkpoint:
+        if source_reader.latest_marked_confirmed() != checkpoint or store.latest() != checkpoint:
             raise ValueError('source changed during initialization')
         self.check()
 
