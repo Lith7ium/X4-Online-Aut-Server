@@ -76,6 +76,13 @@ function M.new(options)
             receipt.hull, receipt.maxhull = health.hull, health.hullmax
         end
         options.on_receipt(receipt)
+        if health and attempt.authority_revision ~= nil then
+            pcall(DebugError, string.format(
+                '[X4LAN] AUTH_COMPANY_COCKPIT_HEALTH_CONFIRMED index=%d window=%d sequence=%.0f revision=%.0f'
+                .. ' server_shield=%.17g server_hull=%.17g cockpit_shield=%.17g cockpit_hull=%.17g',
+                options.index, attempt.window, attempt.sequence, attempt.authority_revision,
+                attempt.shield, attempt.hull, health.shield, health.hull))
+        end
     end
 
     local function withdraw()
@@ -113,6 +120,7 @@ function M.new(options)
         if not enabled or active or fenced or not now or request >= MAX_REQUEST or type(row) ~= 'table'
                 or row.generation ~= generation or row.window ~= window or row.epoch ~= options.epoch
                 or row.index ~= options.index or not integer(row.sequence, sequence + 1, MAX_COUNTER)
+                or (row.authority_revision ~= nil and not integer(row.authority_revision, 0, MAX_COUNTER))
                 or not number(row.maxshield, 0, MAX_COUNTER) or not number(row.shield, 0, row.maxshield)
                 or not number(row.maxhull, 0, MAX_COUNTER) or not number(row.hull, 0, row.maxhull)
                 or row.hull == 0 or not number(row.expires_at, now, now + MAX_VALIDITY)
@@ -130,6 +138,7 @@ function M.new(options)
         request, sequence = request + 1, row.sequence
         local deadline = math.min(row.expires_at, now + APPLY_VALIDITY)
         active = {request=request, generation=generation, window=window, sequence=sequence, expires_at=deadline,
+            authority_revision=row.authority_revision,
             shield=row.shield, maxshield=row.maxshield, hull=row.hull, maxhull=row.maxhull, writing=false}
         local issued, result = pcall(issue, SCREEN, 'Prepare', {
             lease=options.lease, request=request, generation=generation, window=window, sequence=sequence,
@@ -214,9 +223,14 @@ function M.motion_link(receiver)
             receiver:set_window(nil)
             return
         end
-        if #row ~= 13 or row[1] ~= 'HEALTH' then return end
+        if (#row ~= 13 and #row ~= 14) or row[1] ~= 'HEALTH' then return end
         local anchor = decimal(row[8])
         if not first or not anchor or anchor < first or anchor > last then return end
+        local authority_revision
+        if row[14] ~= nil then
+            authority_revision = row[14] == '0' and 0 or decimal(row[14])
+            if authority_revision == nil then return end
+        end
         local generation, window = row[3], decimal(row[6])
         if received_revision > revision then
             revision = received_revision
@@ -225,7 +239,8 @@ function M.motion_link(receiver)
         if receiver:set_window(generation, window) then
             receiver:apply({generation=generation, epoch=row[4], index=decimal(row[5]), window=window,
                 sequence=decimal(row[7]), expires_at=tonumber(row[9]), shield=tonumber(row[10]),
-                maxshield=tonumber(row[11]), hull=tonumber(row[12]), maxhull=tonumber(row[13])})
+                maxshield=tonumber(row[11]), hull=tonumber(row[12]), maxhull=tonumber(row[13]),
+                authority_revision=authority_revision})
         end
     end
 

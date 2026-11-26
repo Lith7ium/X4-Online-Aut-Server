@@ -1,5 +1,7 @@
 local module = assert(loadfile(arg[1]))()
 local lease, epoch, generation = ('a'):rep(32), ('b'):rep(32), ('c'):rep(32)
+local logs = {}
+function DebugError(message) logs[#logs + 1] = message end
 
 local function fixture()
     local f = {now=100, helm='0x4071', available=true, receipts={}, calls={}, read_count=0,
@@ -26,7 +28,8 @@ local function fixture()
     })
     function f:row(sequence, updates)
         local result = {generation=generation, window=3, epoch=epoch, index=1074, sequence=sequence,
-            shield=4, maxshield=2366, hull=3578, maxhull=3600, expires_at=self.now + 0.1}
+            shield=4, maxshield=2366, hull=3578, maxhull=3600, expires_at=self.now + 0.1,
+            authority_revision=6}
         for key, value in pairs(updates or {}) do result[key] = value end
         return result
     end
@@ -64,7 +67,7 @@ do
     local link = module.motion_link(f.api)
     local function packet(revision, reply, anchor)
         return {'HEALTH', tostring(revision), generation, epoch, '1074', '3', tostring(reply),
-            tostring(anchor), '100.1', '4', '2366', '3578', '3600'}
+            tostring(anchor), '100.1', '4', '2366', '3578', '3600', '0'}
     end
     link:sample(100)
     link:receive(packet(1, 1, 100))
@@ -80,6 +83,23 @@ do
     assert(#f.calls == 1)
     link:receive(packet(2, 2, 101))
     assert(f.calls[2].command == 'Prepare' and f.calls[2].args.sequence == 2)
+    assert(#logs == 0)
+    f:reply(2, 'prepared')
+    f.health.shield, f.health.hull = 4, 3578
+    f:reply(2, 'applied')
+    f:reply(2, 'applied')
+    assert(#logs == 1 and logs[1] == '[X4LAN] AUTH_COMPANY_COCKPIT_HEALTH_CONFIRMED'
+        .. ' index=1074 window=3 sequence=2 revision=0 server_shield=4 server_hull=3578 cockpit_shield=4 cockpit_hull=3578')
+    local legacy = packet(2, 3, 101)
+    legacy[14] = 'invalid'
+    link:receive(legacy)
+    assert(#f.calls == 3)
+    legacy[14] = nil
+    link:receive(legacy)
+    f:reply(3, 'prepared')
+    f:reply(3, 'applied')
+    assert(f.receipts[#f.receipts].sequence == 3 and f.receipts[#f.receipts].status == 'confirmed')
+    assert(#logs == 1)
 end
 
 do
@@ -102,6 +122,7 @@ do
     f.health.shield, f.health.hull = 4, 3578
     f:reply(1, 'applied')
     local result = f.receipts[1]
+    assert(#logs == 2 and logs[2]:find('sequence=28 revision=6', 1, true))
     assert(f.read_count == 2 and result.status == 'confirmed' and result.generation == generation
         and result.window == 3 and result.epoch == epoch and result.index == 1074 and result.sequence == 28
         and result.shield == 4 and result.hull == 3578 and result.maxshield == 2366 and result.maxhull == 3600)

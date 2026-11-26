@@ -42,7 +42,7 @@ class CompanyCockpitHealthBridgeTests(unittest.TestCase):
         bridge.deliver(lambda message: not messages.append(message))
         fields = messages[1].split('|')
         self.assertEqual(fields[:8], ['HEALTH', '1', GENERATION, EPOCH, str(INDEX), '3', '1', '2'])
-        self.assertEqual(list(map(float, fields[8:])), [102, 0, 2366, 3578, 3600])
+        self.assertEqual(list(map(float, fields[8:])), [102, 0, 2366, 3578, 3600, 0])
         self.assertIsNone(bridge.take_request())
         self.now = 102
         bridge.on_sample(dict(sequence=3, capture_time=102))
@@ -100,7 +100,7 @@ class CompanyCockpitHealthBridgeTests(unittest.TestCase):
         self.assertEqual(bridge.take_request(), (3, 1, None))
         self.assertTrue(bridge.accept_reply(3, 1, STATE))
         poll()
-        self.assertRegex(receive(), re.escape(f'HEALTH|1|{GENERATION}|{EPOCH}|{INDEX}|3|1|1|102|') + r'0\|2366\|3578\|3600$')
+        self.assertRegex(receive(), re.escape(f'HEALTH|1|{GENERATION}|{EPOCH}|{INDEX}|3|1|1|102|') + r'0\|2366\|3578\|3600\|0$')
         result = f'HEALTH_RESULT|{GENERATION}|{EPOCH}|{INDEX}|3|1|confirmed|0|2366|3578|3600'
         send(result, foreign)
         poll()
