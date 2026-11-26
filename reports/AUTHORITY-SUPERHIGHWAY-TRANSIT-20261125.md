@@ -400,3 +400,61 @@ source hashes matched. The owned provider exited and both locks cleared.
 Private evidence is under `.local/ordinary-jump-gate/run-04/`.
 The `staged/result.json` digest is
 `d896f569ac878b86217709804ae0b9a581df12d9922e7d10a0afdabf0aaa0b89`.
+
+### Bounded placement verification and candidate save
+
+Run 05 at `28b36a12ede63660b6e6c66a5940cf618a90b875` dispatched
+Place once. Its first readback at game age 467.58 s still saw both
+original positions and returned `PENDING`. Within the four-second
+real-time readback budget, X4 returned `READY_RUNNING` at 469.06 s.
+After pause, `READY_PAUSED` at 469.63 s confirmed the same ships,
+positions, discovery flags and ZGH-239 as the first known gate.
+
+The resulting marked candidate
+`checkpoint-46e883582e6a4d70bb72dd8765a40d11`, marker
+`e4f7dab6a19247c58fc0f36a2d1c1d25`, has save SHA-256
+`006d6acc6127534d521e33cc0bbfc8a71d757835d865383de41ab99259f40496`.
+Independent format-3 parsing placed HVC-420 and KHI-630 in their intended
+sectors and within 0.44 mm and 0.60 mm of the paused native positions.
+The gate child translations from the installed stock zone catalogue
+reproduce the native gate centers. Distances from the saved ship
+positions to those centers are 11.958 km and 35.658 km.
+
+The staging verifier rejected the candidate because NEL-546 lacked
+object-level `knownto="player"`. Its component carries `known="1"`
+and `read="0"`. The destination sector and KHI-630 carry both
+`knownto="player"` and `known="1"`. The earlier distance verifier
+also used the stock zone origin for gates with default offsets,
+omitting their stock child translations. The candidate remains
+unconfirmed. Cold runtime discovery and routing remain unverified.
+
+The original and working source hashes matched. The provider ended
+with zero owned processes, both locks cleared, and no cockpit launched.
+The candidate and logs are retained under
+`.local/ordinary-jump-gate/run-05/`. The `staged/result.json` digest is
+`cb3e82ea902fb0d5c447e35a8704a6723de3647f97af978eed914c3cb9bec1a3`.
+
+The private parser now reads pinned installed stock zone transforms and
+accepts the two observed gate discovery encodings. ZGH-239 carries both
+`knownto="player"` and `known="1"`. NEL-546 carries `known="1"` without
+`knownto`. The stock child translations are (−7437.5, 0, −4935.546875) m
+for ZGH-239 and (−11427.734375, 0, 5250.9765625) m for NEL-546.
+These translations reproduce the previously measured native centers
+and keep both saved distances inside the original envelopes.
+
+The read-only quarantine loader's initial preflight refused the default
+DLC configuration before starting X4, then the private adapter selected
+the matching base-game-only content. One network-isolated X4 launch
+used the candidate's exact bytes and marker and a read-only private
+profile with a writable diagnostic log. The launcher stopped before
+any save-load receipt with `multiple X4 processes in owned group`.
+The engine log is empty. The marker, positions and first known gate
+were therefore not observed in a cold X4 process. The launcher
+proved zero remaining owned processes and released both locks.
+The candidate and original hashes, manifests and pointers were
+unchanged. No confirmation, admission or publication occurred.
+
+Private quarantine evidence is in
+`.local/ordinary-jump-gate/run-05-cold-native/`. The diagnostic
+`result.json` digest is
+`d84396d81987fe21d041f5a22255d5c9e77a974882afda7adc24187d7a371415`.
