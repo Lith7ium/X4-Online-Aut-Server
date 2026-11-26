@@ -233,3 +233,11 @@ health replies. The run exercised the real Windows client bridge, the
 network DLL and the game's health receiver. The authenticated server
 connection and combat worker were outside this run. Cobalt retained the
 raw logs on Windows and published the test harness. [Windows experiment and tests](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/1bb2eace5c574f827700624ddf023773e95b58a8)
+
+## Two Linux cockpits connected to the Fedora server
+
+At `56a00bcc`, two automated X4 cockpits on Bazzite joined a GPU-free Fedora laptop over pinned TLS through a private LAN tunnel. Both pilots controlled separate Company ships in the same sector. After the second join, each cockpit independently read 2,366 shield and 3,600 hull in running window 3. Fedora recorded two admissions and 1,527 accepted motion samples across the session.
+
+HVC-420 fired for 0.25 game seconds at its local copy of KHI-630 from a verified 849.875 m. The shooter recorded twelve identified stock S Bolt Repeater Mk2 projectiles and completion of the fire command. During the following 90 real seconds the shooter's observer recorded zero shield callbacks on KHI-630 and zero outgoing direct hit reports. The passive target cockpit recorded its full-health baseline. Fedora's adapter recorded six health reads and zero damage dispatches. This run completed the two-cockpit admission and firing checks. A hit travelling from one native cockpit through Fedora to the other cockpit remains open.
+
+Both clients exited normally. After last departure Fedora paused and saved `checkpoint-f725898d3caf484aac94e03d70670c9d`, SHA-256 `41b632b4f67174fa7317f411f9c2afe33f0fc0104eee76658c486848963d2a2f`. The original save was preserved. The private run is `.local/company-duel-native/native-03/`. The native shooter log SHA-256 is `5ff67c9445b34cf3cf298c7cab58f44253804a528612b6214216009d9207ada9`. The target log SHA-256 is `c5e898380cf50f175cb24d248534090e041da7f52b5ef1bd33bbe2eceb55f437`.
