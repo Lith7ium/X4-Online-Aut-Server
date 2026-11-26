@@ -224,8 +224,8 @@ for _, outcome in ipairs({'success', 'observer_changed_zone', 'first_write', 'un
     cross_boundary(outcome)
 end
 
-local function flight(speed, update, test, trace)
-    local now, actual, pending = 0, {x=0, y=0, z=0}, nil
+local function flight(speed, update, test, trace, measured_attitude)
+    local now, actual, pending = 0, {x=0, y=0, z=0, yaw=0, pitch=0, roll=0}, nil
     local accepted_samples, confirmed_sequence, confirmed_long_write = 0, 0, false
     local native_offset, writes, faults = 0, {}, {}
     local engine = {
@@ -234,7 +234,8 @@ local function flight(speed, update, test, trace)
             return {actor=target, sector=sector, zone=zone, sector_macro=binding.sector_macro, code=binding.code}
         end,
         read = function()
-            return {x=actual.x, y=actual.y + native_offset, z=actual.z, yaw=0, pitch=0, roll=0}
+            return {x=actual.x, y=actual.y + native_offset, z=actual.z,
+                yaw=actual.yaw, pitch=actual.pitch, roll=actual.roll}
         end,
         within_radar = function() return true end,
         destination_zone = function() return zone end,
@@ -267,9 +268,11 @@ local function flight(speed, update, test, trace)
     })
     local function submit(seq, capture_time, game_time, pose, velocity)
         local accepted, reason = controller:sample(binding, 1, {
-            version=3, epoch=epoch, generation=generation, index=binding.index, sector_macro=binding.sector_macro,
+            version=measured_attitude and 4 or 3, epoch=epoch, generation=generation, index=binding.index,
+            sector_macro=binding.sector_macro,
             sequence=seq, source_time=game_time, capture_time=capture_time,
             x=pose.x, y=pose.y, z=pose.z, real_velocity=velocity,
+            attitude=measured_attitude and {yaw=capture_time, pitch=0, roll=0} or nil,
         }, capture_time)
         assert(accepted, reason)
         accepted_samples = accepted_samples + 1
@@ -305,7 +308,7 @@ local function flight(speed, update, test, trace)
         controller:tick(now)
         if #faults > 0 then break end
     end
-    return writes, faults, accepted_samples, confirmed_sequence, confirmed_long_write
+    return writes, faults, accepted_samples, confirmed_sequence, confirmed_long_write, actual.yaw
 end
 
 local accepted, rejected = flight(1500, .05)
@@ -316,6 +319,14 @@ for _, test in ipairs({'one_sample', 'missing_velocity', 'long_update', 'native_
 end
 accepted, rejected = flight(4000, .08)
 assert(#rejected == 1 and (#accepted == 0 or math.max(unpack(accepted)) <= 250))
+
+do
+    local writes, faults, _, _, confirmed_long_write, heading = flight(1500, .05, nil, nil, true)
+    assert(#faults == 0 and confirmed_long_write and math.max(unpack(writes)) > 50)
+    assert(heading > 0.4 and heading < 0.8)
+    writes, faults = flight(1500, .05, 'native_offset', nil, true)
+    assert(#faults == 1)
+end
 
 
 local trace = {}
