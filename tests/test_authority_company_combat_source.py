@@ -193,6 +193,15 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.assertTrue(client.received.wait(2))
         replacement = self.log.with_suffix('.new')
         replacement.write_text(READY + contact(2), encoding='ascii')
+        if sys.platform == 'win32':
+            # Windows refuses to replace a file that the sender's handle holds open, so
+            # the bound log cannot change underneath the current admission at all.
+            with self.assertRaises(PermissionError):
+                replacement.replace(self.log)
+            time.sleep(.3)  # Give the sender time to read anything it could still see.
+            self.assertIsNone(sender.close()['failure'])
+            self.assertEqual(len(client.batches), 1)
+            return
         replacement.replace(self.log)
         sender._thread.join(2)
         self.assertEqual(sender.close()['failure'], 'source_unavailable')
