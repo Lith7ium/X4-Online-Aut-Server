@@ -419,7 +419,7 @@ class FixtureSessionTests(unittest.TestCase):
             (3, ('first_remote_pose_received',)),
         ])
         source_factory.assert_called_once_with(playback_index=None, observed_npc=None, registered_npc_local_measurement=False,
-                                               cockpit_radar_playback=False,
+                                               cockpit_radar_playback=False, cockpit_continuous_playback=False,
                                                on_stage=note_stage)
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)

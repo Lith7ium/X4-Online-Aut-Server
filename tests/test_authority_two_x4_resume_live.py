@@ -117,8 +117,12 @@ class ParticipantTest(unittest.TestCase):
             dict(observed, registered_npc_hold_trial=True, registered_npc_alignment_trial=True),
             dict(observed, registered_npc_local_measurement=True),
             {'playback_index': 943},
-            {'cockpit_radar_playback': True},
             {'playback_index': 943, 'cockpit_radar_playback': True},
+            *(
+                {'cockpit_radar_playback': True, 'cockpit_max_pilots': limit,
+                 'cockpit_continuous_playback': continuous}
+                for limit in (1, 2, 3) for continuous in (False, True)
+            ),
         )
         registry = {'epoch': '26a1a365c66788aa06f0aeb9e18ff62e', 'operational_bits': '1' * 1073}
         with tempfile.TemporaryDirectory() as directory:
@@ -129,21 +133,40 @@ class ParticipantTest(unittest.TestCase):
             finally:
                 sale_source.close()
             for options in variants:
-                with self.subTest(options=options):
-                    source = CompanyMotionSource(**options)
-                    try:
-                        motion = company_motion_config(source, 1073, registry)
-                    finally:
-                        source.close()
-                    self.write_owned_config(path, motion + purchase)
-                    self.participant.redact()
-                    self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
+                for cockpit_health in (False, True):
+                    with self.subTest(options=options, cockpit_health=cockpit_health):
+                        source = CompanyMotionSource(**options)
+                        try:
+                            if cockpit_health:
+                                source.enable_cockpit_health()
+                            motion = company_motion_config(source, 1073, registry)
+                        finally:
+                            source.close()
+                        self.write_owned_config(path, motion + purchase)
+                        self.participant.redact()
+                        self.assertEqual(path.read_text(), 'return {authority_participant_lease="redacted",keep=1}\n')
 
     def test_malformed_motion_blocks_leave_config_untouched(self):
         base = (',authority_company_motion={port=3100,lease="' + 'a' * 32
                 + '",generation="' + 'b' * 32 + '",nonce="' + 'c' * 32 + '",index=1073')
+        radar = ',cockpit_radar_playback=true'
+        max_pilots = ',cockpit_max_pilots='
+        dynamic = radar + max_pilots + '3'
+        continuous = ',cockpit_continuous_playback=true'
         invalid = {
             'unknown field': base + ',unknown=true}',
+            'incomplete continuous': base + continuous + '}',
+            'continuous without radar': base + max_pilots + '3' + continuous + '}',
+            'missing limit before continuous': base + radar + continuous + '}',
+            'continuous before limit': base + continuous + dynamic + '}',
+            'continuous with pinned index': base + ',playback_index=943' + radar + max_pilots + '1' + continuous + '}',
+            'pinned index with non-single radar': base + ',playback_index=943' + dynamic + '}',
+            'invalid continuous limit': base + radar + max_pilots + '4' + continuous + '}',
+            'false continuous': base + dynamic + ',cockpit_continuous_playback=false}',
+            'misspelled continuous': base + dynamic + ',cockpit_continuous_playbak=true}',
+            'duplicate continuous': base + dynamic + continuous + continuous + '}',
+            'unexpected field after continuous': base + dynamic + continuous + ',unknown=true}',
+            'junk after continuous table': base + dynamic + continuous + '}junk',
             'unpaired observer': base + ',observed_npc_index=943}',
             'unpaired radar': base + ',cockpit_radar_playback=true}',
             'alignment without hold': base + ',observed_npc_index=943,observed_npc_code="MFQ-419"'

@@ -82,11 +82,14 @@ with tempfile.TemporaryDirectory() as directory:
     assert 'ui/company_motion_source.lua' in manifest
     assert 'md/authority_job_descriptor_probe.xml' in manifest
 
-    for playback_index, radar in ((None, False), (1317, False), (1317, True), (None, True)):
-        private = view / f'playback-{playback_index}-{radar}'
+    for playback_index, radar, continuous in (
+        (None, False, False), (1317, False, False), (1317, True, False), (None, True, False), (None, True, True),
+    ):
+        private = view / f'playback-{playback_index}-{radar}-{continuous}'
         (private / 'extensions').mkdir(parents=True)
         (private / '.x4ls-view').touch()
-        source = CompanyMotionSource(playback_index=playback_index, cockpit_radar_playback=radar)
+        source = CompanyMotionSource(playback_index=playback_index, cockpit_radar_playback=radar,
+                                     cockpit_continuous_playback=continuous)
         profile_id = 45850 if playback_index is not None and radar else 45841
         try:
             assets = install_fixture_overlay(
@@ -111,6 +114,9 @@ with tempfile.TemporaryDirectory() as directory:
                 assert order.index('ui/' + name) < order.index('ui/company_motion_source.lua')
         assert ('playback_index=' in config) == (playback_index is not None)
         assert ('cockpit_radar_playback=true' in config) == radar
+        assert ('cockpit_continuous_playback=true' in config) == continuous
+        if continuous:
+            assert ',cockpit_max_pilots=3,cockpit_continuous_playback=true}' in config
         if radar:
             expected_max = 1 if playback_index is not None else 3
             assert f'cockpit_max_pilots={expected_max}' in config
