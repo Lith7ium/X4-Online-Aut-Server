@@ -35,10 +35,6 @@ save check verified the marker, registry and 1,144 shield with full
 3,600 hull at last departure. The provider left no X4 process or engine
 lock.
 
-## Receipt delivery after repeated connection loss
-
-A Linux loopback regression exercised the regular sender over pinned TLS with a simulated X4 damage adapter. The server applied two 26-point hits, then the test closed three successive connections before the sender could receive their receipts. The previous sender stopped. With reconnects spaced out within the original acknowledgement deadline, the fourth connection returned the original orders 1 and 2. The same pilot then fired again and received order 3. The adapter counted exactly three writes, leaving zero shield and 3,552 hull from an initial 30 shield and 3,600 hull. A connection that stays open without delivering a receipt can still reach the original deadline. [TLS regression](../tests/test_authority_company_combat_tls.py)
-
 | Evidence | SHA-256 |
 | --- | --- |
 | Earlier audited shooter trace | `94ce09d68b2465134e5f29b56858fd7ef72c8e22064c18cb37b38a487e3d00ab` |
@@ -52,3 +48,13 @@ at receipt 23 on a sub-micro-HP difference. The successful run uses
 the native comparison tolerance for HP and exact field equality for
 retries. Its private evidence is in
 `.local/company-replay47-local/replay47-local-03/`.
+
+## Receipt delivery after repeated connection loss
+
+A Linux loopback regression exercised the regular sender over pinned TLS with a simulated X4 damage adapter. The server applied two 26-point hits, then the test closed three successive connections before the sender could receive their receipts. The previous sender stopped. With reconnects spaced out within the original acknowledgement deadline, the fourth connection returned the original orders 1 and 2. The same pilot then fired again and received order 3. The adapter counted exactly three writes, leaving zero shield and 3,552 hull from an initial 30 shield and 3,600 hull. A connection that stays open without delivering a receipt can still reach the original deadline. [TLS regression](../tests/test_authority_company_combat_tls.py)
+
+## Direct contacts from two stock primary guns
+
+The development client accepts direct root-ship hits from an unmodified S Pulse Laser Mk1 as well as the S Bolt Repeater Mk2. The installed vanilla `05.cat` and `05.dat` define the Pulse projectile as `bullet_gen_s_laser_01_mk1_macro`, with one projectile, one possible hit and 36 general damage. The observer checks the mounted gun, the projectile macro and the damage profile in the local game. The Bolt retains its original 26-point contact format.
+
+In a Linux loopback test, one ordinary sender reported a Pulse hit and a Bolt hit on a target with 80 shield and 2,000 hull. A second sender reported another Pulse hit on the same target. The simulated damage adapter received 36, 26 and 36 in that order and returned a final 0 shield and 1,982 hull. A LuaJIT test exercised the cockpit callback with simulated X4 getters. A live Pulse hit from an admitted X4 cockpit and the other pilot's view of the NPC remain to be verified. [Cockpit source checks](../tests/test_authority_company_combat_source.py) · [Two-pilot TLS test](../tests/test_authority_company_combat_tls.py)

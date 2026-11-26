@@ -119,6 +119,38 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0]['status'], 'confirmed')
         return result[0]
 
+    async def wait_for_sender(self, sender, impact_id):
+        async def confirmed():
+            while sender._last_confirmed_receipt is None or sender._last_confirmed_receipt['id'] < impact_id:
+                if not sender._thread.is_alive():
+                    self.fail('combat sender stopped before confirming its contacts')
+                await asyncio.sleep(.003)
+        await self.drive(confirmed())
+
+    async def test_two_pilots_hit_one_target_with_stock_pulse_and_bolt_guns(self):
+        await self.start(combat_enabled=True)
+        pulse = '|weapon_gen_s_laser_01_mk1_macro'
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as owned:
+            for handle, pilot, weapons, expected in (
+                (1, 1073, (pulse, ''), (2, 18, 2000)),
+                (2, 1074, (pulse,), (3, 0, 1982)),
+            ):
+                _, port = await self.link(max_combat_connections=1)
+                grant = self.grant(handle, pilot)
+                path = Path(directory) / f'pilot-{pilot}.log'
+                rows = [f'[=ERROR=] 1.0 [X4LAN] AUTH_COMPANY_GUN_STATUS armed|{_EPOCH}|{pilot}']
+                for sequence, weapon in enumerate(weapons, 1):
+                    rows.append(f'[=ERROR=] 1.1 [X4LAN] AUTH_COMPANY_GUN {_EPOCH}|{pilot}|1700|{sequence}{weapon}')
+                path.write_text('\n'.join(rows) + '\n', encoding='ascii')
+                identity = path.stat()
+                sender = CompanyCombatSender(path, port, grant, epoch=_EPOCH, index=pilot,
+                                             log_identity=(identity.st_dev, identity.st_ino))
+                owned.callback(sender.close)
+                await self.wait_for_sender(sender, len(weapons))
+                receipt = sender._last_confirmed_receipt
+                self.assertEqual((receipt['order'], receipt['shield'], receipt['hull']), expected)
+        self.assertEqual(self.calls, [(1073, 1700, 36), (1073, 1700, 26), (1074, 1700, 36)])
+
     async def test_two_reporters_over_one_public_port_with_retry_and_revocation(self):
         await self.start(combat_enabled=True)
         control, first_port = await self.link()
@@ -188,12 +220,6 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             received.extend(receipts)
             return receipts
 
-        async def settled(sender, count):
-            while sender._counts['confirmed'] < count:
-                if not sender._thread.is_alive():
-                    self.fail('combat sender stopped before recovering a settled receipt')
-                await asyncio.sleep(.003)
-
         with tempfile.TemporaryDirectory() as directory, ExitStack() as owned:
             owned.enter_context(patch.object(self.combat, '_queue_reply', drop_first_three_replies))
             owned.enter_context(patch.object(CompanyCombatClient, 'exchange', record_received))
@@ -209,7 +235,7 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             sender = CompanyCombatSender(path, port, grant, epoch=_EPOCH, index=1073,
                                          log_identity=(stat.st_dev, stat.st_ino))
             owned.callback(sender.close)
-            await self.drive(settled(sender, 2))
+            await self.wait_for_sender(sender, 2)
             self.assertEqual(len(closed_peers), 3)
             self.assertEqual(len({id(peer) for peer in closed_peers}), 3)
             self.assertTrue(all(peer.connection.fileno() == -1 for peer in closed_peers))
@@ -218,7 +244,7 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
 
             with path.open('a') as log:
                 log.write(contact(3))
-            await self.drive(settled(sender, 3))
+            await self.wait_for_sender(sender, 3)
             result = sender.close()
 
         self.assertEqual([(row['id'], row['order'], row['shield'], row['hull']) for row in received],

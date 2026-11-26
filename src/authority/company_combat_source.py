@@ -19,7 +19,11 @@ _STATUS = b'[X4LAN] AUTH_COMPANY_GUN_STATUS '
 _HEADER = rb'\[=ERROR=\]\s+[0-9.]+\s+'
 _EPOCH = re.compile(r'[0-9a-f]{32}')
 _ROW = re.compile(_HEADER + re.escape(_CONTACT)
-                  + rb'([0-9a-f]{32})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,15})')
+                  + rb'([0-9a-f]{32})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,15})'
+                  + rb'(?:\|([a-z0-9_]{1,96}))?')
+# The original contact format had no weapon field and was emitted only by the stock Bolt Repeater Mk2.
+_BOLT_REPEATER_MK2 = b'weapon_gen_s_gatling_01_mk2_macro'
+_STOCK_IMPACT_DAMAGE = {_BOLT_REPEATER_MK2: 26, b'weapon_gen_s_laser_01_mk1_macro': 36}
 _STATUS_ROW = re.compile(_HEADER + re.escape(_STATUS) + rb'(.*)')
 _BLOCK = 16 * 1024
 # The provider serializes up to one full batch per pilot. Allow four seconds
@@ -159,7 +163,10 @@ class CompanyCombatSender:
                 row = _ROW.fullmatch(line)
                 if not row or not self._counts['armed']:
                     raise ValueError('invalid Company gun contact record')
-                epoch, shooter, target, counter = row.groups()
+                epoch, shooter, target, counter, weapon_macro = row.groups()
+                amount = _STOCK_IMPACT_DAMAGE.get(weapon_macro or _BOLT_REPEATER_MK2)
+                if amount is None:
+                    raise ValueError('unrecognized Company gun contact weapon')
                 sequence = int(counter)
                 target_index = int(target)
                 if (epoch != self._epoch or int(shooter) != self._index or not 1 <= target_index <= 200000
@@ -167,7 +174,7 @@ class CompanyCombatSender:
                         or sequence > MAX_COUNTER):
                     raise ValueError('Company gun contact does not match the active sequence')
                 self._counts['observed'] = sequence
-                impacts.append({'id': sequence, 'target_index': target_index, 'amount': 26})
+                impacts.append({'id': sequence, 'target_index': target_index, 'amount': amount})
                 if len(impacts) == MAX_BATCH:
                     if not self._send(impacts):
                         return

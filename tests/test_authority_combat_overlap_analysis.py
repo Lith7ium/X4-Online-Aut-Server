@@ -13,7 +13,7 @@ P = '[Scripts] 1 *** Context:md.X4AuthorityCombatOverlapTrace.Fired<inst:1>: [X4
 EPOCH = 'a' * 32
 SETUP = f'{P}COMBAT_PROBE setup_ok p1=0x101(HVC-420,w=6) p2=0x102(KHI-630) npc_target=0x9(XEN-123)'
 GATLING = 'bullet_gen_s_gatling_01_mk2_macro'
-LASER = 'bullet_gen_s_laser_01_mk2_macro'
+LASER = 'bullet_gen_s_laser_01_mk1_macro'
 
 
 def fire(age, shooter, proj, bullet=GATLING):
@@ -329,7 +329,7 @@ class MixedWeaponTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             extensions = Path(directory)
             kwargs = dict(profile=45850, gamestart='custom_creative', epoch=EPOCH,
-                          second_weapon='weapon_gen_s_laser_01_mk2_macro')
+                          second_weapon='weapon_gen_s_laser_01_mk1_macro')
             with self.assertRaisesRegex(ValueError, 'require --scenario overlap'):
                 compose_extension(extensions, **kwargs)
             view = compose_extension(extensions, scenario='overlap', second_range=250, restore_target=True, **kwargs)

@@ -106,7 +106,9 @@ class CompanyCombatSourceTest(unittest.TestCase):
 
     def test_stale_replayed_and_malformed_rows_fail_closed(self):
         for log in (contact(1), READY + contact(1, epoch='b' * 32), READY + contact(1, target=1073),
-                    READY + contact(1) * 2, READY + contact(3)):
+                    READY + contact(1) * 2, READY + contact(3),
+                    READY + contact(1).rstrip() + '|36\n',
+                    READY + contact(1).rstrip() + '|weapon_gen_s_laser_01_mk2_macro\n'):
             with self.subTest(log=log[:50]):
                 client = Client()
                 sender = self.sender(log, client)
@@ -355,6 +357,9 @@ class CompanyCombatSourceTest(unittest.TestCase):
         events = [node for node in md.iter() if node.tag.startswith('event_object')]
         self.assertEqual([(node.tag, node.get('method')) for node in events],
                          [('event_object_attacked_object', 'killmethod.hitbybullet')])
+        contact = md.find(".//cue[@name='Contact']")
+        self.assertEqual(contact.find(".//set_value[@name='$weaponmacro']").attrib['exact'], '@$weapon.macro.id')
+        self.assertTrue(contact.find('.//raise_lua_event').attrib['param'].endswith(',$weapon,$weaponmacro]'))
         for field in ('[X4LAN]', 'lastattacker', 'event_weapon_fired', 'set_object_hull', 'set_object_shield'):
             self.assertNotIn(field, (ROOT / COMPANY_GUN_MD).read_text())
 
@@ -366,10 +371,12 @@ class CompanyCombatSourceTest(unittest.TestCase):
             IsGamePaused=function() return paused end,
             GetPlayerControlledShipID=function() return 100 end,
             GetPlayerOccupiedShipID=function() return 100 end,
-            GetNumUpgradeSlots=function() return 1 end,
-            GetUpgradeSlotCurrentComponent=function() return 200 end,
+            GetNumUpgradeSlots=function() return 2 end,
+            GetUpgradeSlotCurrentComponent=function(_, _, slot) return 199 + slot end,
             GetInstalledWeaponMod=function() return modified end,
-            GetWeaponLaunchedMacro=function() return 'bullet_gen_s_gatling_01_mk2_macro' end,
+            GetWeaponLaunchedMacro=function(gun)
+                return gun == 200 and 'bullet_gen_s_gatling_01_mk2_macro' or 'bullet_gen_s_laser_01_mk1_macro'
+            end,
         }
         package.loaded.ffi = {
             C=C, cdef=function() end, new=function() return {} end, string=function(x) return x end
@@ -381,7 +388,12 @@ class CompanyCombatSourceTest(unittest.TestCase):
         function DebugError(log) logs[#logs+1]=log end
         ConvertIDTo64Bit = tonumber
         function GetMacroData() return 'weapons' end
-        function GetLibraryEntry() return {hullshielddpshot=26} end
+        function GetLibraryEntry(_, macro)
+            if macro == 'weapon_gen_s_laser_01_mk1_macro' then
+                return {hullshielddpshot=pulse_damage or 36, isbeamweapon=beam, shieldonlydpshot=extra_channel}
+            end
+            return {hullshielddpshot=26}
+        end
         seat={controlled_actor=function() return '0x64' end}
         """)
         lua.execute((ROOT / COMPANY_GUN_UI).read_text())
@@ -389,7 +401,10 @@ class CompanyCombatSourceTest(unittest.TestCase):
         local ready=listeners['X4AuthorityCompanyGunSource.Ready']
         local contact=listeners['X4AuthorityCompanyGunSource.Contact']
         local epoch=X4LAN_CONFIG.authority_company_gun.epoch
-        local exact=epoch..'|1073|1074|0x64|0xc8'
+        local bolt='|weapon_gen_s_gatling_01_mk2_macro'
+        local pulse='|weapon_gen_s_laser_01_mk1_macro'
+        local stem=epoch..'|1073|1074|0x64|'
+        local exact=stem..'0xc8'..bolt
         local module=X4LAN_COMPANY_GUN_SOURCE
         module.tick(seat)
         contact(nil, exact)
@@ -397,11 +412,27 @@ class CompanyCombatSourceTest(unittest.TestCase):
         modified=true
         contact(nil, exact)
         modified=false
-        contact(nil, epoch..'|1073|1074|0x64|0xc9')
+        contact(nil, stem..'0xca'..bolt)  -- not mounted
+        contact(nil, stem..'0xc8'..pulse) -- wrong bullet for the reported gun
+        contact(nil, stem..'0xc9'..bolt)
+        contact(nil, stem..'0xc9') -- legacy rows require the verified Bolt projectile
+        contact(nil, stem..'0xc8|')
+        contact(nil, stem..'0xc9|weapon_gen_s_laser_01_mk2_macro')
+        pulse_damage=35
+        contact(nil, stem..'0xc9'..pulse)
+        pulse_damage=nil
+        beam=true
+        contact(nil, stem..'0xc9'..pulse)
+        beam=false
+        extra_channel=1
+        contact(nil, stem..'0xc9'..pulse)
+        extra_channel=nil
         paused=true
         contact(nil, exact)
         paused=false
         contact(nil, exact)
+        contact(nil, stem..'0xc9'..pulse)
+        contact(nil, stem..'0xc8') -- old MD callback for the stock Bolt
         module.tick(nil)
         contact(nil, exact)
         module.tick({controlled_actor=function() return '0x65' end})
@@ -411,6 +442,8 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.assertEqual(logs.splitlines(), [
             f'[X4LAN] AUTH_COMPANY_GUN_STATUS armed|{EPOCH}|1073',
             f'[X4LAN] AUTH_COMPANY_GUN {EPOCH}|1073|1074|1',
+            f'[X4LAN] AUTH_COMPANY_GUN {EPOCH}|1073|1074|2|weapon_gen_s_laser_01_mk1_macro',
+            f'[X4LAN] AUTH_COMPANY_GUN {EPOCH}|1073|1074|3',
             '[X4LAN] AUTH_COMPANY_GUN_STATUS unavailable',
         ])
         self.assertEqual(calls, 'Arm,Disarm')
