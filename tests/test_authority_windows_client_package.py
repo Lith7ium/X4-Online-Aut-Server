@@ -157,14 +157,17 @@ import authority.windows_fixture_workspace as workspace
 spec = importlib.util.spec_from_file_location('packaged_client', client_path)
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
-calls = []
+calls, places = [], []
 session.run_fixture_session = lambda **options: calls.append(options) or {}
-workspace.WindowsFixtureWorkspace = lambda *args, **options: object()
+# Record the requested view and run directories; nothing is prepared or created.
+workspace.WindowsFixtureWorkspace = lambda *args, **options: places.append(args) or object()
 client.read_connection_settings = lambda path: {}
 client.run(client.parser().parse_args(argv))
 options = calls[0]
+game, view, run = places[0][:3]
 print(json.dumps({'flag': '--combat-capture' in argv, 'combat_capture': options.get('combat_capture'),
-                  'registry': options['require_registry_snapshot']}))
+                  'registry': options['require_registry_snapshot'], 'game': str(game),
+                  'work_root': str(Path(view).parent), 'run_root': str(Path(run).parent)}))
 """
 
 
@@ -241,7 +244,7 @@ class WindowsClientPackageTest(unittest.TestCase):
                              (1074, [2, 4, 5]))
 
     @unittest.skipUnless(os.name == 'nt' and shutil.which('powershell'), 'Windows PowerShell launcher')
-    def test_extracted_launcher_passes_combat_capture_only_when_requested(self):
+    def test_extracted_launcher_resolves_work_root_and_passes_combat_capture_only_when_requested(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             archive_path = root / 'client.zip'
@@ -249,8 +252,11 @@ class WindowsClientPackageTest(unittest.TestCase):
             with ZipFile(archive_path) as archive:
                 archive.extractall(root)
             extracted = root / package.PREFIX
-            game, connection, dll = root / 'game', root / 'connection.json', root / 'inert.dll'
-            game.mkdir()
+            game = root / 'Steam Library' / 'steamapps' / 'common' / 'X4 Foundations'
+            work = root / 'work root'
+            connection, dll = root / 'connection.json', root / 'inert.dll'
+            game.mkdir(parents=True)
+            work.mkdir()
             connection.write_text('{}')
             dll.write_bytes(b'MZ synthetic test data')
             probe = root / 'probe.py'
@@ -264,24 +270,41 @@ class WindowsClientPackageTest(unittest.TestCase):
                 return subprocess.run(
                     ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                      str(extracted / 'tools/run_authority_windows_client.ps1'), '-Python', str(stub),
-                     # Explicit WorkRoot: on Windows PowerShell 5.1 the default Parent lacks PSIsContainer.
-                     '-Game', str(game), '-WorkRoot', str(root), '-ConnectionFile', str(connection),
-                     '-NetworkDll', str(dll),
+                     '-Game', str(game), '-ConnectionFile', str(connection), '-NetworkDll', str(dll),
                      '-NetworkDllSha256', hashlib.sha256(dll.read_bytes()).hexdigest(), *options],
                     cwd=extracted, env=environment, capture_output=True, text=True, timeout=60)
 
+            def accepted(*options):
+                result = launch(*options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout.strip().splitlines()[-1])
+                for key in ('game', 'work_root', 'run_root'):
+                    report[key] = os.path.normcase(report[key])
+                return report
+
+            def expected(work_root, **values):
+                return {'flag': False, 'combat_capture': None, 'registry': True,
+                        'game': os.path.normcase(str(game)), 'work_root': os.path.normcase(str(work_root)),
+                        'run_root': os.path.normcase(str(work_root)), **values}
+
             seat = ('-FreshCompanyProfile', '-CompanyShipIndex', '1074')
-            default = launch(*seat)
-            self.assertEqual(default.returncode, 0, default.stderr)
-            self.assertEqual(json.loads(default.stdout.strip().splitlines()[-1]),
-                             {'flag': False, 'combat_capture': None, 'registry': True})
-            capture = launch(*seat, '-CombatCapture')
-            self.assertEqual(capture.returncode, 0, capture.stderr)
-            self.assertEqual(json.loads(capture.stdout.strip().splitlines()[-1]),
-                             {'flag': True, 'combat_capture': True, 'registry': True})
-            refused = launch('-CombatCapture')
-            self.assertNotEqual(refused.returncode, 0)
-            self.assertIn('CombatCapture requires a Company ship selection', refused.stdout + refused.stderr)
+            # The documented command omits -WorkRoot: use the game's parent on Windows PowerShell 5.1.
+            self.assertEqual(accepted(*seat), expected(game.parent))
+            self.assertEqual(accepted(*seat, '-WorkRoot', str(work)), expected(work))
+            self.assertEqual(accepted(*seat, '-CombatCapture'),
+                             expected(game.parent, flag=True, combat_capture=True))
+            for options, message in (
+                    ((*seat, '-WorkRoot', str(root / 'missing')), 'WorkRoot must be an existing directory'),
+                    ((*seat, '-WorkRoot', str(connection)), 'WorkRoot must be an existing directory'),
+                    (('-CombatCapture',), 'CombatCapture requires a Company ship selection')):
+                with self.subTest(options=options):
+                    refused = launch(*options)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn(message, refused.stdout + refused.stderr)
+                    self.assertNotIn('"work_root"', refused.stdout)  # stopped before the client ran
+            # The launcher only names the view and run directories; it creates nothing.
+            self.assertFalse([child for folder in (game.parent, work) for child in folder.iterdir()
+                              if child.name.startswith('x4-authority-')])
 
     def test_unverified_dll_is_rejected_before_publishing(self):
         with tempfile.TemporaryDirectory() as directory:
