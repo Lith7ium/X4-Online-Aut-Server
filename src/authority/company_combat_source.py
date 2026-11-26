@@ -42,6 +42,51 @@ def _regular(info):
             and not getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
+class _GunLogError(Exception):
+    """A source failure must propagate past the transport's recoverable read errors."""
+
+
+class _GunLog:
+    """Single reader shared by the normal tail and the health wait callback."""
+
+    def __init__(self, path, stream, identity):
+        self.path = path
+        self.stream = stream
+        self.identity = identity
+        self.last_size = 0
+        self.partial_line = b''
+        self.pending_rows = []
+
+    def _read_block(self):
+        try:
+            info = self.path.lstat()
+            if (not _regular(info) or not os.path.samestat(info, self.identity)
+                    or not self.last_size <= info.st_size <= MAX_LOG):
+                raise _GunLogError('Company combat source log changed')
+            self.last_size = info.st_size
+            chunk = self.stream.read(_BLOCK)
+        except OSError as error:
+            raise _GunLogError('Company combat source log unavailable') from error
+        if not chunk:
+            return False
+        *lines, self.partial_line = (self.partial_line + chunk).split(b'\n')
+        if len(self.partial_line) > _BLOCK * 4:
+            raise _GunLogError('Company combat source log line exceeds limit')
+        self.pending_rows.extend(line.rstrip(b'\r') for line in lines if _STATUS in line or _CONTACT in line)
+        return True
+
+    def take_rows(self):
+        if not self.pending_rows and not self._read_block():
+            return None
+        rows, self.pending_rows = self.pending_rows, []
+        return rows
+
+    def has_events(self):
+        if not self.pending_rows:
+            self._read_block()
+        return bool(self.pending_rows)
+
+
 class CompanyCombatSender:
     """Tail one private native log in a dedicated worker bound to one admission."""
 
@@ -55,6 +100,7 @@ class CompanyCombatSender:
             raise ValueError('Company combat requires the verified native log identity')
         self._client = CompanyCombatClient(port, credential)
         self._health_bridge = health_bridge
+        self._finish_next_health_read = False
         self._path = path
         self._identity = log_identity
         self._epoch = epoch.encode('ascii')
@@ -86,33 +132,22 @@ class CompanyCombatSender:
             with os.fdopen(os.open(self._path, flags), 'rb', buffering=0) as stream:
                 if not os.path.samestat(before, os.fstat(stream.fileno())):
                     raise ValueError('Company combat source log changed')
-                self._tail(stream, before)
-        except (OSError, ValueError):
+                self._tail(_GunLog(self._path, stream, before))
+        except (OSError, ValueError, _GunLogError):
             self._failure = 'source_unavailable'
         finally:
             self._client.close()
 
-    def _tail(self, stream, identity):
-        carry = b''
-        max_seen = 0
+    def _tail(self, log):
         armed = b'armed|' + self._epoch + b'|' + str(self._index).encode('ascii')
         while not self._stop.is_set():
-            info = self._path.lstat()
-            if (not _regular(info) or not os.path.samestat(info, identity)
-                    or not max_seen <= info.st_size <= MAX_LOG):
-                raise ValueError('Company combat source log changed')
-            max_seen = info.st_size
-            chunk = stream.read(_BLOCK)
-            if not chunk:
-                self._read_requested_health()
-                self._stop.wait(.05)
+            lines = log.take_rows()
+            if lines is None:
+                if not self._read_requested_health(log):
+                    self._stop.wait(.05)
                 continue
-            *lines, carry = (carry + chunk).split(b'\n')
-            if len(carry) > _BLOCK * 4:
-                raise ValueError('Company combat source log line exceeds limit')
             impacts = []
             for line in lines:
-                line = line.rstrip(b'\r')
                 if _STATUS in line:
                     status = _STATUS_ROW.fullmatch(line)
                     if not status or status[1] != armed:
@@ -138,6 +173,7 @@ class CompanyCombatSender:
                     impacts = []
             if impacts and not self._send(impacts):
                 return
+            self._read_requested_health(log)
 
     def _send(self, impacts):
         deadline = time.monotonic() + _ACK_TIMEOUT
@@ -165,24 +201,34 @@ class CompanyCombatSender:
                     # The receiver reports its sampled authority order as its
                     # health revision. Keep one validated receipt for comparison.
                     self._last_confirmed_receipt = receipt
-            self._read_requested_health()
             return True
         if not self._stop.is_set():
             self._failure = 'receipt_timeout' if time.monotonic() >= deadline else 'transport_unavailable'
         return False
 
-    def _read_requested_health(self):
+    def _read_requested_health(self, log):
+        """Yield a disposable read to new contacts; give the next read a full turn."""
         if self._health_bridge is None or self._stop.is_set():
-            return
+            return False
         request = self._health_bridge.take_request()
         if request is None:
-            return
+            return False
+
+        def cancelled():
+            return self._stop.is_set() or (not self._finish_next_health_read and log.has_events())
+
+        preempted = False
         try:
-            health = self._client.read_health(*request, cancelled=self._stop.is_set)
+            health = self._client.read_health(*request, cancelled=cancelled)
         except CombatExchangeCancelled:
-            return
+            if self._stop.is_set():
+                return False
+            preempted = True
+            health = None
         except (OSError, ValueError):
             # Reads have no side effects. The game can ask again with a fresh sequence.
             health = None
         window, sequence, _ = request
         self._health_bridge.accept_reply(window, sequence, health)
+        self._finish_next_health_read = preempted
+        return preempted

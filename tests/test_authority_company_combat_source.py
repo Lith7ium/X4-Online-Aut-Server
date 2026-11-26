@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 import json
 from pathlib import Path
+import select
 import socket
 import sys
 import tempfile
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 from authority.company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, CompanyCombatSender
 from authority.company_combat_frames import BINDING_FIELDS, MAX_BATCH, encode_frame
+from authority.company_cockpit_health import CompanyCockpitHealthBridge
 
 
 EPOCH = 'a' * 32
@@ -71,13 +73,14 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.log = Path(temp.name) / 'engine.log'
 
-    def sender(self, text, client=None, *, identity=None, port=1234):
+    def sender(self, text, client=None, *, identity=None, port=1234, health_bridge=None):
         self.log.write_bytes(text.encode('ascii'))
         info = self.log.lstat()
         context = patch('authority.company_combat_source.CompanyCombatClient', return_value=client) if client else nullcontext()
         with context:
             sender = CompanyCombatSender(self.log, port, GRANT, epoch=EPOCH, index=1073,
-                                         log_identity=identity or (info.st_dev, info.st_ino))
+                                         log_identity=identity or (info.st_dev, info.st_ino),
+                                         health_bridge=health_bridge)
         self.addCleanup(sender.close)
         return sender
 
@@ -122,6 +125,125 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.wait_for_confirmed(sender, 70)
         self.assertEqual(sender.close()['confirmed'], 70)
         self.assertEqual([impact['id'] for batch in client.batches for impact in batch], list(range(1, 71)))
+
+    def ready_health_bridge(self, clock=lambda: 10):
+        bridge = CompanyCockpitHealthBridge((GRANT['generation'], EPOCH, 1073), clock=clock)
+        bridge.on_clock(3, True)
+        bridge.on_sample({'sequence': 1, 'capture_time': clock()})
+        return bridge
+
+    def test_completed_contact_preempts_outstanding_health_without_delivering_stale_reply(self):
+        bridge = self.ready_health_bridge()
+        with listening_socket() as listener:
+            sender = self.sender(READY, port=listener.getsockname()[1], health_bridge=bridge)
+            old, _ = listener.accept()
+            with old, old.makefile('rb') as stream:
+                old.settimeout(1)
+                health = json.loads(stream.readline())
+                self.assertEqual((health['kind'], health['window'], health['sequence']), ('combat_health_read', 3, 1))
+                stale = encode_frame({key: health[key] for key in (*BINDING_FIELDS, 'window', 'sequence')} | {
+                    'kind': 'combat_health', 'revision': 0,
+                    'health': {'shield': 100, 'maxshield': 100, 'hull': 1000, 'maxhull': 1000},
+                })
+                old.sendall(stale[:-1])
+                with self.log.open('ab') as log:
+                    log.write(b'[=ERROR=] 5.01 unrelated native log noise\n')
+                    log.write(contact(1).encode('ascii')[:-1])
+                self.assertFalse(select.select([old, listener], [], [], .2)[0],
+                                 'chatter or a partial contact preempted health')
+                self.assertEqual(sender._counts['observed'], 0)
+
+                with self.log.open('ab') as log:
+                    log.write(b'\n')
+                listener.settimeout(.8)
+                fresh, _ = listener.accept()
+                with fresh, fresh.makefile('rb') as hits:
+                    fresh.settimeout(1)
+                    request = json.loads(hits.readline())
+                    self.assertEqual(request['kind'], 'combat_impacts')
+                    for key in (*BINDING_FIELDS, 'ticket'):
+                        self.assertEqual(request[key], health[key])
+                    self.assertEqual(request['impacts'], [{'id': 1, 'target_index': 1074, 'amount': 26}])
+                    self.assertEqual(old.recv(1), b'')
+                    fresh.sendall(receipt(request))
+                    self.wait_for_confirmed(sender, 1)
+                    result = sender.close()
+        sent = []
+        bridge.deliver(lambda message: sent.append(message) or True)
+        self.assertFalse(any(message.startswith('HEALTH|') for message in sent))
+        self.assertEqual((bridge.stats()['delivered'], bridge.stats()['confirmed']), (0, 0))
+        self.assertEqual((result['confirmed'], result['retries'], result['failure']), (1, 0, None))
+        self.assertEqual(result['last_confirmed_receipt']['order'], 1)
+
+    def test_next_health_read_finishes_despite_another_contact_after_preemption(self):
+        now = 10
+        bridge = self.ready_health_bridge(clock=lambda: now)
+        with listening_socket() as listener:
+            sender = self.sender(READY, port=listener.getsockname()[1], health_bridge=bridge)
+            old, _ = listener.accept()
+            with old, old.makefile('rb') as stream:
+                old.settimeout(1)
+                first_read = json.loads(stream.readline())
+                self.assertEqual((first_read['kind'], first_read['sequence']), ('combat_health_read', 1))
+                with self.log.open('a', encoding='ascii') as log:
+                    log.write('unrelated native chatter\n')
+                self.assertFalse(select.select([old, listener], [], [], .15)[0],
+                                 'unrelated chatter cancelled an outstanding health read')
+                with self.log.open('a', encoding='ascii') as log:
+                    log.write(contact(1))
+
+                fresh, _ = listener.accept()
+                with fresh, fresh.makefile('rb') as stream:
+                    fresh.settimeout(1)
+                    hit = json.loads(stream.readline())
+                    self.assertEqual([row['id'] for row in hit['impacts']], [1])
+                    self.assertEqual(old.recv(1), b'')
+                    now = 11
+                    bridge.on_sample({'sequence': 2, 'capture_time': now})
+                    fresh.sendall(receipt(hit))
+                    protected = json.loads(stream.readline())
+                    self.assertEqual((protected['kind'], protected['sequence']), ('combat_health_read', 2))
+                    with self.log.open('a', encoding='ascii') as log:
+                        log.write(contact(2))
+                    self.assertFalse(select.select([fresh, listener], [], [], .15)[0],
+                                     'a second contact interrupted the protected health read')
+                    fresh.sendall(encode_frame({key: protected[key] for key in
+                                                (*BINDING_FIELDS, 'window', 'sequence')} | {
+                        'kind': 'combat_health', 'revision': 1,
+                        'health': {'shield': 75, 'maxshield': 100, 'hull': 1000, 'maxhull': 1000},
+                    }))
+                    queued_hit = json.loads(stream.readline())
+                    self.assertEqual(queued_hit['impacts'], [{'id': 2, 'target_index': 1074, 'amount': 26}])
+                    fresh.sendall(receipt(queued_hit))
+                    self.wait_for_confirmed(sender, 2)
+                    delivered = []
+                    bridge.deliver(lambda message: delivered.append(message) or True)
+                    self.assertEqual([message.split('|')[5:7] for message in delivered
+                                      if message.startswith('HEALTH|')], [['3', '2']])
+                    self.assertEqual(bridge.stats()['delivered'], 1)
+                    self.assertFalse(select.select([fresh, listener], [], [], .15)[0],
+                                     'the waiting hit was sent more than once')
+                    result = sender.close()
+        self.assertEqual((result['observed'], result['confirmed'], result['retries']), (2, 2, 0))
+        self.assertEqual(result['last_confirmed_receipt']['order'], 2)
+
+    def test_already_read_contact_batches_precede_idle_health(self):
+        count = MAX_BATCH + 1
+        bridge = self.ready_health_bridge()
+        with listening_socket() as listener:
+            sender = self.sender(READY + ''.join(contact(n) for n in range(1, count + 1)),
+                                 port=listener.getsockname()[1], health_bridge=bridge)
+            connection, _ = listener.accept()
+            with connection, connection.makefile('rb') as stream:
+                connection.settimeout(1)
+                for ids in (list(range(1, MAX_BATCH + 1)), [count]):
+                    request = json.loads(stream.readline())
+                    self.assertEqual(request['kind'], 'combat_impacts')
+                    self.assertEqual([impact['id'] for impact in request['impacts']], ids)
+                    connection.sendall(receipt(request))
+                health = json.loads(stream.readline())
+                self.assertEqual((health['kind'], health['window'], health['sequence']), ('combat_health_read', 3, 1))
+                self.assertEqual(sender.close()['confirmed'], count)
 
     def test_slow_fragmented_acknowledgement_keeps_the_healthy_connection(self):
         with listening_socket() as listener:

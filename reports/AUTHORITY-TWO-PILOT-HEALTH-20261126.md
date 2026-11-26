@@ -31,3 +31,9 @@ Both regular Linux cockpits joined a fresh copy of the same world on `97ee6898`.
 HVC completed five requests during the twelve-second shared-window measurement without confirming a shield reading. For its requests 4 through 7, Fedora entered the native adapter immediately after enqueue. Initial dispatch took 21–29 ms. The interval from dispatch return to the poll that received the answer was 1.870–1.976 seconds. The receiving poll itself took 11–29 ms. That interval includes X4's handling of the request and the time until the host next polled a ready reply. The trace cannot apportion it further.
 
 Both clients exited normally with zero shots. Fedora paused the world and confirmed the last-departure save. The original input passed its integrity check on both hosts. The change reduced unnecessary queueing. Reciprocal cockpit health and human Internet combat remain open.
+
+## Firing while the shooter's own health read is pending
+
+The regular sender used to wait for its own health reply before reading the native gun log again. In a pinned TLS loopback comparison, a synthetic adapter delayed a health read by one second. Two complete contact records were appended together while the read was outstanding. On `270810b1` the service first applied damage 1,027 ms after the append. With the revised sender it first applied damage after 74 ms. Both versions applied each reported hit once and returned the same two receipts. This comparison used synthetic log entries and damage on one machine.
+
+The sender now monitors the same open log while waiting. A complete gun event can interrupt a health read. Partial lines and unrelated messages leave it running. The next requested health read gets an uninterrupted turn so sustained fire cannot continually displace it. Impacts already read from the same block are sent before another health request. These changes follow the pinned evening build `97ee6898`.
