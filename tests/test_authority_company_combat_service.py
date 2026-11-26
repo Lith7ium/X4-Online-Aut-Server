@@ -58,11 +58,40 @@ class CompanyCombatTests(unittest.TestCase):
     def receive(self, stream):
         return json.loads(stream.readline())['receipts']
 
-    def health_request(self, credential, window, sequence):
+    def health_request(self, credential, window, sequence, after_revision=None):
         request = json.loads(self.frame(credential, []))
         del request['impacts']
-        request.update(kind='combat_health_read', window=window, sequence=sequence, after_revision=None)
+        request.update(kind='combat_health_read', window=window, sequence=sequence, after_revision=after_revision)
         return encode_frame(request)
+
+    def test_unchanged_pilot_gets_a_reply_while_another_native_read_is_pending(self):
+        self.service.close()
+        health = dict(shield=30, maxshield=2366, hull=3600, maxhull=3600)
+        first_read = Mock(poll=Mock(return_value=health))
+        slow_read = Mock(poll=Mock(return_value=None))
+        begin_read = Mock(side_effect=(first_read, slow_read))
+        self.service = CompanyCombatService(self.grants.get, self.apply, begin_health_read=begin_read,
+                                           health_window=lambda binding: 3)
+        self.addCleanup(self.service.close)
+        first, first_reply = self.open()
+        second, second_reply = self.open()
+        first.sendall(self.health_request(self.first, 3, 1))
+        self.service.poll()
+        initial = json.loads(first_reply.readline())
+        self.assertEqual(initial['health'], health)
+
+        second.sendall(self.health_request(self.second, 3, 1))
+        self.service.poll()
+        first.sendall(self.health_request(self.first, 3, 2, after_revision=initial['revision']))
+        self.service.poll()
+        unchanged = json.loads(first_reply.readline())
+        self.assertEqual((unchanged['sequence'], unchanged['health'], unchanged['revision']), (2, None, None))
+        self.assertEqual(begin_read.call_count, 2)
+        slow_read.cancel.assert_not_called()
+
+        slow_read.poll.return_value = health
+        self.service.poll()
+        self.assertEqual(json.loads(second_reply.readline())['health'], health)
 
     def test_pending_native_health_discarded_when_the_world_pauses(self):
         self.service.close()
