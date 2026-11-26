@@ -374,3 +374,29 @@ distinguish a deferred or rejected relocation. No staging checkpoint or
 cockpit run followed. The original and copied source hashes matched,
 the provider owned no remaining processes, and both locks cleared.
 Private evidence is under `.local/ordinary-jump-gate/run-03/`.
+
+### Staging with native gate centers and an ordinary resume window
+
+Run 04 at `720c63bca34abcc555a8a810e158cf82ee83bd3a` used the
+same isolated input. Native sector-frame reads put ZGH-239 at
+(82218.750, 0, 93172.852) m and NEL-546 at
+(−117970.703, 0, −79710.938) m. The planned safe points were 11.850 km
+and 35.077 km from those centers. Both fell within the original
+staging bounds before placement was requested.
+
+The stock local adapter resumed the isolated provider. X4 executed
+the explicit-coordinate placement cue at game age 467.04 s and
+returned `STAGED`. The independent running readback at 467.51 s
+still found HVC-420 at 273,280 m from ZGH-239 and KHI-630 in its
+original `cluster_06_sector001_macro`, at 11,386,880 m from NEL-546.
+All four known flags were true. RVA-280 remained the first route
+component. The plan passed, but the observed ships did not reach it
+within this readback window. The dispatch receipt does not say
+whether either warp was deferred or rejected.
+
+The harness stopped on that refusal. There was no paused placement
+receipt, staged checkpoint or cockpit launch. The original and copied
+source hashes matched. The owned provider exited and both locks cleared.
+Private evidence is under `.local/ordinary-jump-gate/run-04/`.
+The `staged/result.json` digest is
+`d896f569ac878b86217709804ae0b9a581df12d9922e7d10a0afdabf0aaa0b89`.
