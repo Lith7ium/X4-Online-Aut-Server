@@ -118,3 +118,52 @@ staged source save hashes matched
 after the run. Private evidence is in
 `.local/registered-combat-occupied/native-03/`. The terminal summary
 SHA-256 is `bef5ed9f53c09f50276bd412c4da5775b92871e2db85e81fc3bb390049865d90`.
+
+## Occupied pilot hit through the regular Linux capture
+
+At `f03e7f8a`, two native X4 9.00 instances ran on Bazzite with separate
+disposable profiles. The software-rendered provider offered a fresh
+checkpoint over pinned loopback TLS. The ordinary RADV cockpit used
+`--combat-capture`, verified the downloaded digest, observed the native
+load marker and confirmed one server resume. The pilot was admitted in
+control of HVC-420 (index 1073). The product capture armed on that seat,
+registry epoch and exact offered checkpoint.
+
+The private cockpit stimulus positioned KHI-630 (1074) 849.875 m from
+HVC-420 with both ships' starting health intact. After verifying its
+temporary NPC captain, the stimulus started one 0.25 s stock burst
+and acknowledged the native weapon release. The product observer
+recorded 21 shield damage callbacks on the occupied and controlled
+HVC-420. Each was 26 shield HP. Shields fell from 2,366 to 1,820 and hull
+stayed at 3,600. Every damage callback had an unspecified event attacker
+and reported KHI-630 as the victim's last attacker.
+
+Separately, 21 native `player_ship_hit` records identified KHI-630 as
+the event attacker. Each had a distinct projectile handle and the macro
+`bullet_gen_s_gatling_01_mk2_macro`. All 21 correlated to shield callbacks
+by game age and the post-hit shield value. The scoped batch verifier
+matched the complete ordered damage receipt to the actual offered save
+in one registry scan. The projectile records are separate from the
+damage receipt.
+
+| Checkpoint | ID | Save SHA-256 |
+| --- | --- | --- |
+| Confirmed source | `checkpoint-6e5948ba473f4b399c01fcac9ba2f7bc` | `1ceb756b1fc6080c6a6752e51d146cfc17c72762b8af9f9c1aed7bce20fa4958` |
+| Pilot offer | `checkpoint-3994b4737d1e41cdb796f7541ea18e54` | `11a866431b3d5f39dad426cc238732e04409d0ca7413b9ab56d5ee3db0565fc1` |
+| Confirmed departure | `checkpoint-c1adcfb36995455b8a545d0fa78b873f` | `0f4e93198f720f357a27a69d0dc90260e18a4d9ce729934d1a88c3a1d146132d` |
+
+The original and staged source bytes matched before and after the run.
+The provider paused after the pilot left and confirmed the departure
+save. Independent inspection found the same serialized health fields
+for both ships across the source, offer and departure. Damage capture
+was local to the pilot. Shared damage and a second human combatant
+remain untested.
+
+Both launchers returned status 0. The X4 processes ended and the host
+locks cleared. The existing resource gates stayed active. Across 381 samples,
+available memory stayed above 13.86 GiB, full memory-pressure
+`avg10` peaked at 0.00%, and both sampled cgroups recorded zero OOM
+events. Private artifacts are under
+`.local/registered-combat-capture-linux/native-01/` in
+`terminal.json`, `combat-capture.json` and
+`raw-projectile-observations.json`.
