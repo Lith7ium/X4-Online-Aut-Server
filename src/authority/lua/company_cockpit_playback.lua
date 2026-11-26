@@ -724,6 +724,7 @@ local function make_x4_record(readers_by_slot, clock)
                 'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
                 'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
             }
+            if event.continuous_playback then fields[#fields + 1] = 'playback=continuous' end
             if event.actual_attitude and event.target_attitude then
                 for _, name in ipairs({'target', 'actual'}) do
                     local angles = event[name .. '_attitude']

@@ -299,6 +299,7 @@ function M.new(options)
             assert(source and source.sequence == event.source_sequence)
             return cfg.record({
                 kind = kind, slot = binding.slot, serial = binding.serial, epoch = binding.epoch,
+                continuous_playback = continuous,
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,
