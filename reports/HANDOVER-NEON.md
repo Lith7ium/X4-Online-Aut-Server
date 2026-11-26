@@ -6,10 +6,19 @@ PvE and PvP with primary guns have priority for the weekend. Lith7ium will
 request packages when needed. Boarding work resumes next week. For player
 shots, the firing pilot's X4 confirms the hit, including hits against another
 pilot. For NPC shots, the simulation assigned to the firing NPC reports the
-result. The server books each impact once and distributes the resulting
-shield and hull values. The cross-platform human combat test is outstanding.
+result. The server books each impact once, applies it in arrival order to
+the target's current state in X4 and distributes the resulting shield and
+hull values. This also applies when several shooters report the same local
+remaining shield value. The cross-platform human combat test is outstanding.
 [Silver rk16 comparison and fork decision](AUTHORITY-SILVER-REUSE-20261124.md) ·
 [08:00 development assignments](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795676466189069)
+
+The GPU-free Fedora provider and Bazzite confirmed the same 5,048-ship
+world and matching download. During native loading the Bazzite supervisor
+stopped on sustained host-wide memory pressure with 17.01 GiB available.
+The pilot never took the helm. The server closed cleanly and the source was
+preserved. The planned live shield debit and duplicate check are outstanding.
+[Separate-host evidence](AUTHORITY-SHIELD-REPLAY-20261126.md#two-machine-attempt-at-live-shield-transfer)
 
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered

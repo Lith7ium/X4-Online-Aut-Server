@@ -70,7 +70,10 @@ the shooter's X4 instance, in both PvE and PvP. For an NPC-fired shot, the
 simulation currently assigned to that NPC confirms the hit. The central world
 authority verifies the reporting simulation's current assignment and the
 registered attacker and victim, then applies each accepted impact at most once
-and publishes the resulting state. Retries of the same impact must resolve to
+and publishes the resulting state. For simultaneous attackers, server X4
+applies confirmed impacts in arrival order to the target's current shields
+and hull. Both shots count even when both pilots observed the same local
+remaining shield value. Retries of the same impact must resolve to
 the original result. A recipient's local hit observation can support diagnosis.
 The impact identity must survive retransmission and use the shared registry
 and a shot or impact identifier in place of process-local X4 handles.
