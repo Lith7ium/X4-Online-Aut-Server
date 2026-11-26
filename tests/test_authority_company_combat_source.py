@@ -58,7 +58,8 @@ class Client:
         if len(self.batches) == 1 and self.retry:
             raise TimeoutError
         self.received.set()
-        return [{'status': 'confirmed'} for _ in impacts]
+        return [dict(impact, order=impact['id'], status='confirmed', shield=0, hull=1000)
+                for impact in impacts]
 
     def close(self):
         self.closed = True
@@ -143,6 +144,8 @@ class CompanyCombatSourceTest(unittest.TestCase):
                 self.wait_for_confirmed(sender, count)
                 result = sender.close()
             self.assertEqual((result['confirmed'], result['retries'], result['failure']), (count, 0, None))
+            self.assertEqual(result['last_confirmed_receipt'], dict(
+                id=count, target_index=1074, amount=26, order=count, status='confirmed', shield=0, hull=1000))
 
     def test_disconnected_reply_retries_the_exact_request_on_a_new_socket(self):
         with listening_socket() as listener:
@@ -174,6 +177,7 @@ class CompanyCombatSourceTest(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 1)
                 self.assertEqual(connection.recv(1024), b'')
             self.assertEqual((result['confirmed'], result['retries'], result['failure']), (0, 0, None))
+            self.assertNotIn('last_confirmed_receipt', result)
 
     def test_receipt_deadline_expires_without_idle_poll_reconnect(self):
         with listening_socket() as listener, patch('authority.company_combat_source._ACK_TIMEOUT', .25):
