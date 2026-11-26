@@ -13,7 +13,9 @@ ZGH-239 and NEL-546. After the MD event correction, the provider loaded
 all 5,048 registry entries. An instrumented readback at the same paused
 game time found both ships still at their former locations. Discovery
 had succeeded, and the stock route to the unmoved target still used a
-superhighway. No starting checkpoint was published and no pilot flew this route.
+superhighway. In a separate running trial, both planned clearances passed.
+The ships still read at their old positions 0.47 game seconds after
+placement. No starting checkpoint was published and no pilot flew this route.
 [Ordinary gate staging](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#ordinary-jump-gate-staging-attempt)
 
 The ordinary boarding menu now has a native positive control. On a
