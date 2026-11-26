@@ -1,115 +1,45 @@
-# X4 Online: authoritative-world experiment
+# Authority fork branch archive, 26 November 2026
 
-This development branch explores an alternative architecture for X4: one X4
-instance owns a shared, persistent world; a designated client may simulate an
-overlapping high-attention area and report results back. The first milestone is
-ship positions. When a player joins, the intended flow pauses the world, saves,
-transfers the checkpoint and resumes after the player has loaded it. The world
-also stops and saves when the last player leaves. All players initially share
-one player faction and one company account; separate factions and accounts are
-deferred.
+This snapshot records the 31 public branch tips before the repository was tidied. The archive commit retains their histories as Git parents. The live development branch is `test/base-game-two-pilots-20261124`.
 
-**Internal development, 24 November 2026.** A Fedora server hosted a base-game
-world for a Bazzite pilot on the LAN and a Windows pilot over the internet.
-The pilots saw each other's fighters. The Bazzite pilot selected the other
-fighter, but saw no remote movement. Damage appeared only for the shooter.
-Fedora accepted 392 movement samples, all accounted for by Bazzite, and
-saved the world after the last departure. The current development priority
-is visible movement in both cockpits. [Human flight report](reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
+To inspect an archived branch locally, fetch this tag and then show the commit in the table. To restore a branch, create it from that commit.
 
-## Original lockstep project
-
-Every player runs the whole X4 universe from the same starting snapshot. Only
-player inputs travel over the network. An opt-in native gate makes the
-simulation deterministic (fixed tick, keyed random streams, fixed engine
-ordering), and a relay compares a SHA-256 digest of every client's state each
-tick, so any divergence is caught on the tick it happens.
-
-Free for noncommercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE.md);
-see [licensing](LICENSING.md) and [notices](NOTICE.txt). This is source-available
-software with a noncommercial restriction, not an OSI open-source project.
-
-## Status
-
-- **Works on one PC:** 2 to 4 clients have held 13 to 20 minutes with zero differing
-  objects across about 543,000 compared objects ([census](reports/LOCKSTEP-CENSUS-20261028.txt)).
-  Both players fly their own ships and see each other. The 2-hour soak profile
-  (`src/lockstep/profiles/soak.lua`) has held up to 55.7 game minutes (100,200 ticks, seed
-  2222222). On three seeds the remaining splits come from the agents' pathing
-  ([findings](docs/LAUNCHER.md)). Two player identities with their own factions and
-  relayed orders held 20 minutes.
-- **Player actions:** a guard counts, blocks or relays every game write the UI makes,
-  so one client's click happens on every client at the same tick
-  ([players](docs/PLAYERS.md)).
-- **Joining a running game:** a third client loads the session's save at tick T and
-  replays to the session. In native tests on one PC with the join defaults it stays
-  census-equal to the end of each test: 58 s after a join made before the pilot window
-  starts ([hot join](reports/LOCKSTEP-HOTJOIN-20261101.txt)), and 25 s after a join
-  inside the pilot window, which still needs the opt-in `native_gate_join_in_window`
-  ([in window](reports/LOCKSTEP-JOIN-IN-WINDOW-20261104.txt)). Not yet tested across PCs.
-- **Not yet done:** a session between two PCs (especially Intel vs AMD, whose
-  approximate `rcpss`/`rsqrtss` results differ), desync recovery, and a packaged
-  release. Windows vs Linux still differs in 35 objects
-  at tick 600, so v1 is Windows-only.
-- **Pinned build:** X4 9.00 Windows (Steam build 23660954). The gate verifies the
-  exact `X4.exe` and refuses anything else. It patches only process memory at
-  runtime, never files on disk ([engine instrumentation](docs/ENGINE-INSTRUMENTATION.txt)).
-
-The earlier "replica" design (host-authoritative NPC copies, packages 7.0 to 7.5)
-was retired in November 2026. It is preserved at the Git tag `legacy/replica-7.5`.
-
-## Windows authority client
-
-In the extracted authority client package, run
-`.\tools\run_authority_windows_client.ps1 -ConnectionFile 'C:\X4Test\connection.json'`
-from PowerShell. The launcher searches Steam's configured libraries for X4.
-Pass `-Game` to select a specific installation.
-See the [Windows authority client guide](docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md)
-for the pinned build, required profile state, and optional settings.
-
-## Quick start (developers, Windows)
-
-```
-python tools/dev/bootstrap.py                    # .venv with the LuaJIT test runtime
-.venv\Scripts\python tools/dev/check.py          # Python/Lua suite (full suite targets Linux/WSL)
-python tools/dev/build_native_gate.py --zig <zig 0.15.2> --test --native-image <X4.exe>
-python tools/x4ls.py doctor                      # installation, pinned exe, Steam
-python tools/x4ls.py snapshot --out .local/snapshots/start.xml.gz
-python tools/x4ls.py session --clients 2 --overlay <built overlay> --snapshot <save>
+```sh
+git fetch origin tag archive/authority-branches-2026-11-26
+git show <commit>
+git branch <branch-name> <commit>
 ```
 
-`x4ls` starts every client windowed, each from its own game view and its own
-disposable profile, so your normal saves and settings are never touched. See
-the [launcher guide](docs/LAUNCHER.md) for overlays, Steam, and cleanup.
-
-Linux developers can run isolated simulation comparisons with the
-[local Linux validation workflow](docs/LINUX-VALIDATION.md). This is a separate
-test harness; the Windows player and UI feature set has not been ported by that workflow.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `src/authority/` | Experimental world coordination, checkpoints and motion/identity prototypes |
-| `tools/dev/authority_*` | Internal authority experiments and isolated Linux diagnostics; see `AUTHORITY-RECOVERED-LOOPBACK-SERVER.md` for the current recovery probe |
-| `src/native/engine/` | The native gate (`lockstep_gate.c` plus headers), its C tests, and the Linux gate port in `linux/` |
-| `src/native/portable_math/` | Bit-exact math shared by the Windows and Linux gates |
-| `src/lockstep/launcher/` | `x4ls`: sessions, snapshots, game views, profiles |
-| `src/lockstep/base/` | What every client extension carries: SHA-256 helper, player-faction data, transport DLL |
-| `src/rust/x4mp-agent/` | Linux fixed-tick agent used by the Linux gate work |
-| `tools/dev/native_gate_*` | In-game probe (Lua), MD fixtures, overlay builders, relay, desync watcher |
-| `tools/dev/census_*`, `compare_native_world*` | Desync analysis of session logs |
-| `tools/build_soak_overlay.py`, `tools/soak_campaign.py` | Soak overlays (profile, players, UI guard) and unattended multi-seed soaks |
-| `tools/dev/checkpoint_diff.py`, `save_diff.py`, `ui_export_census.py`, `probe_globals_check.py` | Checkpoint diffs (world part), element-by-element save diffs (join), the UI write census, the probe's static globals check |
-| `tests/` | Python/LuaJIT tests (the in-game Lua runs under LuaJIT with a mocked engine) |
-| `docs/` | Architecture, launcher, wire protocol, sandbox, scenarios |
-| `reports/` | Lockstep evidence: census, piloting, UI replay, cross-platform |
-
-## Architecture in one paragraph
-
-The gate DLL is loaded by the probe Lua inside X4. Before each simulation frame
-it asks the relay for a permit. The relay releases tick *t* only when every
-client has reported tick *t − 1* with the same state digest. Player inputs
-sampled at tick *t* are applied at *t + 3* on every client ("pilot by wire"), and
-menu actions such as autopilot, docking and orders are replayed as inputs ("UI
-replay"). More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+| Branch | Commit |
+| --- | --- |
+| `contrib/cobalt-map-visibility-20261120` | `3167327b726fc4a7e7f98a003fbd7fe062f5b834` |
+| `contrib/cobalt-windows-client-tests-20261125` | `bcf300cce50f6f7bc275bf2879c0c21675cc9933` |
+| `contrib/cobalt-windows-cockpit-correction-20261126` | `1bb2eace5c574f827700624ddf023773e95b58a8` |
+| `contrib/cobalt-windows-combat-capture-20261126` | `ce0788da9e98b496f0953198ea20e190be3720dd` |
+| `contrib/cobalt-windows-entry-review-20261126` | `5c24bc53782307696128a4bf4faa8158ff41e8e6` |
+| `contrib/cobalt-windows-native-tests-20261125` | `20f83c6cf2b4708f6940253216be0fdfcc62b289` |
+| `contrib/cobalt-windows-npc-tests-20261125` | `12604514299a193e8600c39db09e09fb434731bd` |
+| `contrib/cobalt-windows-outbound-motion-20261124` | `5866a09b7212a38f00bd9bd98a2b15cb3db724c0` |
+| `contrib/cobalt-windows-overlap-hits-20261126` | `997a31830682f8b8b723bb7ee842236c2af9d52d` |
+| `experiment/authoritative-server-20261115` | `1edb693e18e89db9df3993564418d69826c26b8f` |
+| `fixture/two-company-ships-20261124` | `0dce7e22032e381670f70f7f0f887717534b5a9b` |
+| `main` | `2b80b8084c1ec085f14c41797971552595930d7a` |
+| `review/neon-npc-reentry-20261120` | `05d9aa2853c47d926c01a8b2fc6ac4894fc486f7` |
+| `test/base-game-two-pilots-20261124` | `56a00bcc3a5c5c4e763cf2d7b0c071372513ce7f` |
+| `test/two-human-shuttles-20261124` | `0e591d191d8935914fcbc3f17487595ce0dd6f5f` |
+| `test/windows-local-udp-owner-diagnostic` | `f96933ea59c47c75a7d348d29149f853c197bb20` |
+| `trial/velocity-aware-playback-20261126` | `6f401cae42265c334692762eec495478426abe1a` |
+| `work/astra-company-observer-20261124` | `2631880895b176d233606c3d50986b40ab950701` |
+| `work/astra-company-playback-live-20261124` | `baf9b04dafb1afd235713080ef458e0047407f6a` |
+| `work/astra-company-trade-20261124` | `daf91d1df9b9ad1941fed764d559682d78acfc67` |
+| `work/neon-combat-observation` | `72c03bcd5ee574a26988bd8ca47bd4c42f60119a` |
+| `work/neon-company-cockpit-multipilot` | `00694562629550545deb0f3a5ebf43b79dea7586` |
+| `work/neon-company-cockpit-playback` | `605833ef4f2135d431c828075e43dab8b20288a7` |
+| `work/neon-indexed-hud-playback` | `7d575ef1cd904acfc3d30e6cccd5d7ca1e4c8257` |
+| `work/neon-npc-reacquisition` | `8416b817ef876c9d1d8c324c36963d81e34495b1` |
+| `work/neon-npc-ship-motion` | `9bdc17669612a7a2bc912e0137beb5da1b0852cf` |
+| `work/neon-registered-npc-path` | `032c69a8b5fe765dda8d67f2c308a8f7b563f74f` |
+| `work/neon-windows-npc-receive-playback` | `ed9ebb7277dfa7bea79b8ecb7463fa63c27e7b60` |
+| `work/neon-windows-sender-dll` | `8e2880cab4632afe20e09a4655dae4fcf63e591f` |
+| `work/quartz-company-orders` | `d21fbfeeaddd5631bae7f8faf677960379b2c11e` |
+| `work/retained-captain-pose-trial` | `2cfeda13df76b979b294fdbbc08086f5af35dddb` |
