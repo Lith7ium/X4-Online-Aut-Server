@@ -43,6 +43,10 @@ class FakeJob:
     def close(self):
         self.calls.append(('close',))
 
+    def exit_code(self):
+        self.calls.append(('exit_code',))
+        return None if self.live else self.code
+
 
 class WindowsX4ProcessTests(unittest.TestCase):
     def setUp(self):
@@ -75,6 +79,32 @@ class WindowsX4ProcessTests(unittest.TestCase):
         self.assertEqual(self.job.calls[-2:], [('stop', 2), ('close',)])
         with self.assertRaises(ValueError):
             owner.stop()
+
+    def test_owner_reads_the_exit_code_of_its_own_job(self):
+        owner = subject.WindowsX4Process(enabled=True)
+        owner.start(self.view, profile_id=45841, guard=lambda: True)
+        self.assertIsNone(owner.exit_code())
+        self.job.live, self.job.code = False, 0
+        self.assertEqual(owner.exit_code(), 0)
+        self.assertEqual(self.job.calls[-2:], [('exit_code',), ('exit_code',)])
+
+    def test_native_job_exit_code_reads_the_held_process_handle(self):
+        native = NATIVE_JOB.__new__(NATIVE_JOB)
+        native.info = subject._ProcessInfo()
+        native.info.hProcess = 33
+        queried = []
+
+        def get_exit_code(process, code):
+            queried.append(process)
+            code._obj.value = 7
+            return True
+
+        native.get_exit_code = get_exit_code
+        native.running = lambda: True
+        self.assertIsNone(native.exit_code())
+        native.running = lambda: False
+        self.assertEqual(native.exit_code(), 7)
+        self.assertEqual(queried, [33])
 
     def test_owns_running_pid_requires_the_same_live_owned_process(self):
         owner = subject.WindowsX4Process(enabled=True)

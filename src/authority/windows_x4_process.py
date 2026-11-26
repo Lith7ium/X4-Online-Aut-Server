@@ -183,13 +183,6 @@ class _Win32Job:
             return True
         raise OSError(ctypes.get_last_error(), 'WaitForSingleObject')
 
-    def exit_code(self):
-        """Read the retained root process handle. A running process returns None."""
-        self._check_thread()
-        if self._phase != 'running':
-            raise RuntimeError('X4 process has no live owner')
-        return self._job.exit_code()
-
     def owns_running_pid(self, pid):
         """Check a PID against the retained root handle and this specific job."""
         if self.closed or not self.info.hProcess or not self.job:
@@ -402,6 +395,13 @@ class WindowsX4Process:
         if self._phase != 'running':
             raise RuntimeError('X4 process is not running under this owner')
         return self._job.running()
+
+    def exit_code(self):
+        """Read the retained root process handle. A running process returns None."""
+        self._check_thread()
+        if self._phase != 'running':
+            raise RuntimeError('X4 process has no live owner')
+        return self._job.exit_code()
 
     def owns_running_pid(self, pid):
         """Sample whether a PID still names our live root in the owned job.

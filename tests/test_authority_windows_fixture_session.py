@@ -111,6 +111,7 @@ class FixtureSessionTests(unittest.TestCase):
                 test.calls.append(('process_start', view, profile_id, guard()))
                 if test.start_error: raise test.start_error
             def is_running(self): test.calls.append('process_running'); return True
+            def exit_code(self): return None
             def close(self):
                 test.calls.append('process_close')
                 if test.close_error: raise test.close_error
@@ -175,6 +176,11 @@ class FixtureSessionTests(unittest.TestCase):
              patch.object(subject, 'install_fixture_overlay', self.install):
             return subject.run_fixture_session(**options)
 
+
+    def test_fake_process_matches_the_real_owner_interface(self):
+        from authority import windows_x4_process as real
+        for name in [name for name in vars(self.process) if not name.startswith('_')]:
+            self.assertTrue(callable(getattr(real.WindowsX4Process, name, None)), name)
     def test_snapshot_join_passes_verified_staged_observations_to_load_gate(self):
         inspection = f'[X4LAN] AUTH_REGISTRY_FULL_INSPECT {self.bound.marker} 2\n'.encode('ascii')
         self.log = self.log.replace(self.registry_log, inspection + self.registry_log)
@@ -239,7 +245,7 @@ class FixtureSessionTests(unittest.TestCase):
         with patch.object(subject, 'verify_join_snapshot', return_value=snapshot), \
              patch.object(subject.time, 'monotonic', side_effect=lambda: clock[0]), \
              patch.object(self.process, 'is_running', side_effect=lambda: game_running[0]), \
-             patch.object(self.process, 'exit_code', create=True, return_value=0), \
+             patch.object(self.process, 'exit_code', return_value=0), \
              patch.object(self.session, 'continue_until_exit', create=True) as admitted:
             result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2,
                                       play_until_exit=True, deadline=101, stop_requested=stop)
