@@ -49,3 +49,17 @@ The test used one Linux observer and synthetic version 4 samples. It verifies vi
 In a separate copied-save experiment HVC-420 started stationary on KHI-630's HUD. One native velocity update along HVC-420's measured forward axis set it to 60 m/s, with constant-velocity override disabled. X4's stock target-details query, using the connection name resolved from the active HUD target, returned **60 m/s**. Over the next 2.016 game seconds, the ships' measured separation decreased from 3,000.00 m to 2,879.05 m. KHI-630 stayed stationary. An earlier 60 m/s lateral impulse moved HVC-420 by 120.63 m in 2.01 seconds. The target-details query with an empty connection name returned zero during the lateral run. The lateral run did not record the HUD's resolved connection name.
 
 This establishes a way to set forward velocity in native Linux X4 and read the value used by the stock HUD. No pilot verified the text on screen, and the networked playback option in this report does not yet set native ship velocity.
+
+## Stopping a ship with native velocity
+
+Two runs on copies of the same save tested whether a receiver can move and turn a ship while X4 also simulates its velocity. After a forward impulse of 60 m/s, the observer moved HVC-420 sideways by 1.5 m and turned it through 12°. X4 kept the original sector velocity. Its stock target-speed field changed from 60 to 58 m/s as the ship turned. During a 0.404 s real pause, game time stood still. The ship travelled 10.041 m between two pose reads. Predicting that distance using elapsed game time missed by less than 0.001 m. Using elapsed wall time missed by 24.25 m.
+
+Sending zero velocity on its own after five seconds made HVC-420 return to the last explicitly written position. The last moving read and the first stopped read were 252.41 m apart. In the second run the receiver first read the moving ship's actual position and heading and wrote that pose back in the same update. X4 confirmed the stop 8.1 ms later at the captured position, and three subsequent reads through 0.816 game seconds recorded zero further movement. The observer's own ship stayed still in both runs.
+
+These measurements concern one uncrewed ship in an aligned zone on native Linux. Continuous network playback still uses position writes. Connecting the velocity setter to it needs to account for the receiver's game clock during physical movement and its monotonic clock for the five-second loss deadline.
+
+## Separate map marker on Bazzite
+
+A private native map experiment displayed a separate cyan marker at two successive synthetic ship positions on the same sector plane. Screenshots of the two predicted 18 × 18 pixel rectangles contained 52 and 0 cyan pixels at the first position, then 0 and 53 at the second. After the sample expired both counts returned to zero. A wheel event over the marker reached the stock map and changed the camera zoom. Four internal map picks at the new zoom level located a fifth point under the stationary mouse within 0.001 UI pixels. The probe restored the mouse's original map coordinates in the same UI callback.
+
+This run used a copy of the base-game save and the pilot's normal graphics options on Bazzite. The marker has yet to follow a network pilot on screen or reproduce the height of a ship above the sector plane.
