@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4PrivateDynamicContact" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this">
+   <actions>
+    <create_group groupname="State.$sources"/>
+    <create_group groupname="State.$targets"/>
+    <set_value name="State.$count" exact="0"/>
+    <set_value name="State.$index" exact="0"/>
+    <set_value name="State.$deadline" exact="0s"/>
+    <set_value name="State.$epoch" exact="''"/>
+   </actions>
+   <cues>
+    <library name="MatchSeat" purpose="include_actions">
+     <actions>
+      <set_value name="$seat" exact="@player.controlled"/>
+      <set_value name="$matched" exact="State.$epoch != '' and player.age le State.$deadline and @md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
+       and @md.X4AuthorityShipRegistry.State.$faulted == false
+       and State.$index ge 1 and State.$index le md.X4AuthorityShipRegistry.State.$last
+       and State.$index == (State.$index)i and @$seat.isclass.ship and $seat.isoperational
+       and $seat.owner == faction.player and $seat == player.occupiedship
+       and @md.X4AuthorityShipRegistry.State.$ships.{State.$index} == $seat
+       and @md.X4AuthorityShipRegistry.State.$byship.{$seat} == State.$index"/>
+     </actions>
+    </library>
+    <library name="Emit" purpose="include_actions">
+     <actions>
+      <set_value name="State.$count" exact="State.$count + 1"/>
+      <debug_text text="'[X4LAN] DYNAMIC_CONTACT %s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
+       $kind,State.$count,player.age / 1s,$seat,$target,$targetindex,
+       @event.param,@event.param3,@$target.lastattacker,@$target.shield,@$target.hull]"/>
+     </actions>
+    </library>
+    <library name="CurrentTarget" purpose="include_actions">
+     <actions>
+      <include_actions ref="MatchSeat"/>
+      <set_value name="$target" exact="event.object"/>
+      <set_value name="$targetindex" exact="@State.$targetindex"/>
+      <set_value name="$matched" exact="$matched and State.$count lt 128 and @$target == @State.$target
+        and @$target.isclass.ship and $target.isoperational
+        and @md.X4AuthorityShipRegistry.State.$ships.{$targetindex} == $target
+        and @md.X4AuthorityShipRegistry.State.$byship.{$target} == $targetindex"/>
+     </actions>
+    </library>
+    <cue name="Arm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunSource'" control="'Arm'"/></conditions>
+     <actions>
+      <clear_group group="State.$sources"/>
+      <clear_group group="State.$targets"/>
+      <set_value name="State.$target" exact="null"/>
+      <set_value name="State.$targetindex" exact="0"/>
+      <set_value name="State.$count" exact="0"/>
+      <set_value name="State.$epoch" exact="@event.param3.$epoch"/>
+      <set_value name="State.$index" exact="@event.param3.$index"/>
+      <set_value name="State.$deadline" exact="player.age + 10s"/>
+      <include_actions ref="MatchSeat"/>
+      <do_if value="$matched"><add_to_group groupname="State.$sources" object="$seat"/></do_if>
+     </actions>
+    </cue>
+    <cue name="Disarm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunSource'" control="'Disarm'"/></conditions>
+     <actions>
+      <clear_group group="State.$sources"/>
+      <clear_group group="State.$targets"/>
+      <set_value name="State.$epoch" exact="''"/>
+     </actions>
+    </cue>
+    <cue name="Direct" instantiate="true" namespace="this">
+     <conditions><event_object_attacked_object group="State.$sources" method="killmethod.hitbybullet"/></conditions>
+     <actions>
+      <include_actions ref="MatchSeat"/>
+      <set_value name="$target" exact="@event.param"/>
+      <set_value name="$weapon" exact="@event.param3.{2}"/>
+      <set_value name="$targetindex" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
+      <do_if value="$matched and event.object == $seat and State.$count lt 128
+       and @$target.isclass.ship and $target.isoperational and $target != $seat
+       and @event.param3.{1} == $target and @$weapon.object == $seat
+       and @$weapon.macro.id == 'weapon_gen_s_gatling_01_mk2_macro'
+       and (typeof $targetindex).isnumeric and $targetindex ge 1 and $targetindex == ($targetindex)i
+       and $targetindex le md.X4AuthorityShipRegistry.State.$last
+       and @md.X4AuthorityShipRegistry.State.$ships.{$targetindex} == $target">
+       <do_if value="not @State.$target.exists and State.$targetindex == 0">
+        <set_value name="State.$target" exact="$target"/>
+        <set_value name="State.$targetindex" exact="$targetindex"/>
+        <add_to_group groupname="State.$targets" object="$target"/>
+        <set_value name="$kind" exact="'first_direct'"/>
+        <include_actions ref="Emit"/>
+       </do_if>
+       <do_elseif value="$target == State.$target and $targetindex == State.$targetindex">
+        <set_value name="$kind" exact="'direct'"/>
+        <include_actions ref="Emit"/>
+       </do_elseif>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Shield" instantiate="true" namespace="this">
+     <conditions><event_object_shield_damaged group="State.$targets"/></conditions>
+     <actions>
+      <include_actions ref="CurrentTarget"/>
+      <do_if value="$matched and @event.param3 gt 0">
+       <set_value name="$kind" exact="'shield'"/>
+       <include_actions ref="Emit"/>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Hull" instantiate="true" namespace="this">
+     <conditions><event_object_hull_damaged group="State.$targets"/></conditions>
+     <actions>
+      <include_actions ref="CurrentTarget"/>
+      <do_if value="$matched and @event.param3 gt 0">
+       <set_value name="$kind" exact="if event.object == event.param then 'root_hull' else 'component_hull'"/>
+       <include_actions ref="Emit"/>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Collision" instantiate="true" namespace="this">
+     <conditions><event_object_collided group="State.$targets"/></conditions>
+     <actions>
+      <include_actions ref="CurrentTarget"/>
+      <do_if value="$matched">
+       <set_value name="$kind" exact="'collision'"/>
+       <include_actions ref="Emit"/>
+      </do_if>
+     </actions>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>
