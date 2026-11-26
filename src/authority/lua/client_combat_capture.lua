@@ -1,5 +1,5 @@
 -- Read-only observer for a resumed Company pilot in control of the admitted ship.
--- The Windows overlay gives this capture a private Mission Director namespace.
+-- Each pilot overlay gives this capture a private Mission Director namespace.
 local M = {}
 
 local state = 'idle'
@@ -103,7 +103,7 @@ function M.tick(seat)
     if state == 'idle' then
         actor = controlled
         state = 'arming'
-        send('Arm', {epoch = cfg.epoch, watch_player_ship = false, watch_player_owned = false})
+        send('Arm', {epoch = cfg.epoch, watch_player_ship = true, watch_player_owned = false})
     elseif state == 'armed' then
         state = 'watching'
         send('Watch', {registry_index = cfg.index, label = 'admitted_pilot',

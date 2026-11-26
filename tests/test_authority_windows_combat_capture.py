@@ -235,6 +235,10 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                 self.assertNotIn('X4AuthorityCombatObserver', observer)
                 self.assertEqual(observer.count('<set_value name="State.$seq" exact="0"/>'), 1)
                 self.assertEqual(observer.count('@player.controlled == event.object'), 2)
+                contact = ElementTree.fromstring(observer).find(".//cue[@name='PlayerShipHit']/conditions/check_value")
+                self.assertEqual(contact.get('value'), 'State.$armed and State.$watch_player_ship'
+                                 ' and State.$targets.indexof.{@event.param} gt 0'
+                                 ' and @player.controlled == event.param and @player.occupiedship == event.param')
         for change in ({'combat_capture': True}, {'combat_capture': 1, 'profile_id': 45850,
                                                    'save_path': r'D:\Test\45850\save', 'seat_index': 1}):
             with self.subTest(change=change), self.assertRaises(ValueError):

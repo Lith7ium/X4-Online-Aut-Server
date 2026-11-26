@@ -51,6 +51,13 @@ def private_capture_observer(text):
             raise ValueError('unexpected private combat damage gate')
         private = private.replace(gate, gate.replace('State.$armed"',
             'State.$armed and @player.controlled == event.object and @player.occupiedship == event.object"'))
+    # X4's projectile callback is global and puts the victim in event.param.
+    projectile_gate = 'State.$armed and State.$watch_player_ship"'
+    if private.count(projectile_gate) != 1:
+        raise ValueError('unexpected private projectile contact gate')
+    private = private.replace(projectile_gate,
+        'State.$armed and State.$watch_player_ship and State.$targets.indexof.{@event.param} gt 0'
+        ' and @player.controlled == event.param and @player.occupiedship == event.param"')
     validate_md_read_only(private)
     return private
 

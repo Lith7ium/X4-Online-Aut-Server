@@ -66,7 +66,7 @@ end
 local function status(value) handlers[screen .. '.Status'](nil, value) end
 local function arm(number)
     local payload = action(number, 'Arm')
-    assert(payload.epoch == epoch and not payload.watch_player_ship and not payload.watch_player_owned)
+    assert(payload.epoch == epoch and payload.watch_player_ship and not payload.watch_player_owned)
     return payload.request_id
 end
 

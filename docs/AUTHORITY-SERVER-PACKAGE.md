@@ -453,6 +453,10 @@ python3 tools/dev/authority_combat_hit_evidence.py \
 
 Add `--sequence NUMBER` to inspect one hit from the same capture window.
 The report identifies which ship took damage in the pilot's own X4 instance.
+The original log also records X4's separate `player_ship_hit` event when a
+projectile strikes the watched ship. That event carries X4's attacker and
+projectile fields. A damage callback can omit its attacker, so the report
+keeps the callback's attacker separate from the ship's last known attacker.
 
 ## Observe a registered NPC in an internal test
 
