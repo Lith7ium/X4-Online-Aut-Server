@@ -15,7 +15,10 @@ local function config()
     local cfg = X4LAN_CONFIG and X4LAN_CONFIG.authority_combat_capture
     if type(cfg) ~= 'table' or type(cfg.epoch) ~= 'string' or not cfg.epoch:match('^%x+$')
             or #cfg.epoch ~= 32 or type(cfg.index) ~= 'number' or cfg.index < 1
-            or cfg.index ~= math.floor(cfg.index) then
+            or cfg.index ~= math.floor(cfg.index)
+            or type(cfg.checkpoint) ~= 'string' or #cfg.checkpoint ~= 43
+            or not cfg.checkpoint:match('^checkpoint%-[0-9a-f]+$')
+            or type(cfg.sha256) ~= 'string' or #cfg.sha256 ~= 64 or not cfg.sha256:match('^[0-9a-f]+$') then
         error('combat capture configuration missing or invalid')
     end
     return cfg
@@ -75,8 +78,8 @@ local function status(value)
         if fields[2] == 'Watched' and fields[3] == 'admitted_pilot' and fields[4] == actor
                 and fields[6] == 'player' and tonumber(fields[7]) == cfg.index then
             state = 'capturing'
-            log(string.format('capturing epoch=%s index=%d code=%s owner=player',
-                cfg.epoch, cfg.index, tostring(fields[5])))
+            log(string.format('capturing epoch=%s index=%d checkpoint=%s sha256=%s code=%s owner=player',
+                cfg.epoch, cfg.index, cfg.checkpoint, cfg.sha256, tostring(fields[5])))
         else
             refuse('Watch')
         end

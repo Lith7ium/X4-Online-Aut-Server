@@ -3,6 +3,7 @@ local valid, helm, paused, update = true, false, true, nil
 local incoming, events, handlers, logs = {}, {}, {}, {}
 local epoch, lease = string.rep('a', 32), string.rep('b', 32)
 local screen = 'X4AuthorityClientCombatCapture'
+local checkpoint, digest = 'checkpoint-' .. string.rep('d', 32), string.rep('e', 64)
 local mode = arg[1] or 'pause'
 package.loaded.ffi = {os = 'Windows', cdef = function() end, C = {
     IsPlayerValid = function() return valid end,
@@ -11,7 +12,7 @@ package.loaded.ffi = {os = 'Windows', cdef = function() end, C = {
 X4LAN_CONFIG = {
     authority_participant_port = 4321, authority_participant_lease = lease,
     authority_ticket = {world_epoch = epoch},
-    authority_combat_capture = mode ~= 'disabled' and {epoch = epoch, index = 1} or nil,
+    authority_combat_capture = mode ~= 'disabled' and {epoch = epoch, index = 1, checkpoint = checkpoint, sha256 = digest} or nil,
 }
 function RegisterEvent(name, handler) handlers[name] = handler end
 function AddUITriggeredEvent(name, action, values)
@@ -111,7 +112,9 @@ if mode == 'refusal' or mode == 'wrong-actor' then
 end
 status(watch.request_id .. '|Watched|admitted_pilot|0x7a1|HVC-420|player|1|0')
 update()
-assert(#events == 2 and logs[1]:find('capturing epoch=', 1, true))
+assert(#events == 2 and logs[1] == string.format(
+    '[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch=%s index=1 checkpoint=%s sha256=%s code=HVC-420 owner=player',
+    epoch, checkpoint, digest))
 if mode == 'fault' then
     command(2, 'pause', string.rep('c', 32))
     action(3, 'Disarm')
