@@ -22,7 +22,7 @@ from authority.experimental_local_host import ExperimentalLocalHost
 from authority.experimental_remote_load_client import ExperimentalRemoteLoadClient, SessionFull
 from authority.experimental_tcp_control import ExperimentalTCPControl, offer_request
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
-from authority.save_transfer import SaveOffers
+from authority.save_transfer import SaveOffer, SaveOffers, receive
 from authority.trusted_load_messages import decode_bound_offer, encode_load_claim
 from authority.trusted_marker_load_session import TrustedMarkerLoadSession
 from authority.world import WorldCoordinator
@@ -1075,6 +1075,20 @@ class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
             return await link[1](json.dumps({'version': 1, 'kind': 'choose_company_ship',
                 'attempt_id': offer.attempt_id, 'ship_index': index}).encode())
 
+        async def download(link, bound, destination):
+            offer = bound.offer
+            checkpoint = store.get(offer.checkpoint_id)
+            self.assertEqual((offer.sha256, offer.size, bound.marker),
+                             (checkpoint.sha256, checkpoint.size, checkpoint.marker))
+            transfer = SaveOffer(offer.name, offer.sha256, offer.size, offer.checkpoint_id)
+            downloaded = await asyncio.to_thread(
+                receive, '127.0.0.1', link[3], files.token, 1, transfer, destination,
+                retries=0, timeout=5, deadline=time.monotonic() + 10)
+            self.assertEqual(downloaded.parent, destination)
+            self.assertEqual(downloaded.stat().st_size, offer.size)
+            with downloaded.open('rb') as received:
+                self.assertEqual(hashlib.file_digest(received, 'sha256').hexdigest(), offer.sha256)
+
         async def admit(link, offer):
             reply = await link[1](encode_load_claim(claim_for(offer), ship_motion=True))
             self.assertEqual(reply['kind'], 'accepted')
@@ -1096,11 +1110,13 @@ class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
         host.tick()
 
         winners = [link for link, row in zip(applicants, replies) if row['kind'] == 'not_ready']
-        offers = []
+        bounds = []
         for link in winners:
             reply = await link[1](offer_request())
             self.assertEqual(reply['kind'], 'marked_offer')
-            offers.append(decode_bound_offer(json.dumps(reply).encode()).offer)
+            bounds.append(decode_bound_offer(json.dumps(reply).encode()))
+        offers = [bound.offer for bound in bounds]
+        self.assertEqual(len({offer.checkpoint_id for offer in offers}), 1)
         # Two independent connections request the same ship before either sees the outcome.
         requested_indices = (100, 100, 102, 103)
         choices = await asyncio.gather(*(choose(link, offer, index)
@@ -1115,6 +1131,8 @@ class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
                 choice = await choose(link, offer, index)
             self.assertEqual(choice['kind'], 'company_ship_chosen')
             seats[index] = (link, offer)
+        await asyncio.gather(*(download(link, bound, root / f'download-{pilot}')
+                               for pilot, (link, bound) in enumerate(zip(winners, bounds, strict=True), 1)))
         grants = {index: await admit(link, offer) for index, (link, offer) in seats.items()}
         self.assertEqual({row['index'] for row in grants.values()}, indices)
         self.assertEqual(len(world.session.ready_players), 4)
@@ -1201,15 +1219,44 @@ class FourCompanyPilotTLSTest(CompanyMotionTLSHarness):
         await fly_round(3)
         self.assertEqual((self.service.accepted_samples, self.service.samples_with_velocity), (11, 7))
 
-        replacement = await connect()
-        self.assertEqual(await replacement[1](offer_request()), {'version': 1, 'kind': 'not_ready'})
-        self.assertEqual(world.session.pending.operation, 'pause')
-        host.tick()
-        host.tick()
-        reply = await replacement[1](offer_request())
-        replacement_offer = decode_bound_offer(json.dumps(reply).encode()).offer
-        self.assertEqual((await choose(replacement, replacement_offer, departing))['kind'],
-                         'company_ship_chosen')
+        async def reserve_replacement():
+            link = await connect()
+            self.assertEqual(await link[1](offer_request()), {'version': 1, 'kind': 'not_ready'})
+            self.assertEqual(world.session.pending.operation, 'pause')
+            host.tick()
+            host.tick()
+            reply = await link[1](offer_request())
+            bound = decode_bound_offer(json.dumps(reply).encode())
+            self.assertEqual((await choose(link, bound.offer, departing))['kind'], 'company_ship_chosen')
+            self.assertNotEqual(bound.offer.checkpoint_id, departed_offer.checkpoint_id)
+            return link, bound
+
+        abandoned, abandoned_bound = await reserve_replacement()
+        abandoned_offer = abandoned_bound.offer
+        self.assertIn(abandoned_offer.name, files.offered)
+        confirmed = store.latest_confirmed()
+        self.assertEqual(confirmed.checkpoint_id, abandoned_offer.checkpoint_id)
+        survivors = world.session.ready_players
+        self.assertEqual(len(survivors), 3)
+        self.assertNotIn(abandoned_offer.connection_handle, self.service._grants)
+
+        await abandoned[0]()  # Full control EOF while the fourth pilot still has a pending load.
+        await drive_control(lambda: len(world.session.players) == 3)
+        self.assertNotIn(abandoned_offer.name, files.offered)
+        self.assertEqual(world.session.ready_players, survivors)
+        self.assertEqual(world.session.pending.operation, 'resume')
+        world._participants.resume.reset_mock()
+        with patch.object(engine, 'resume'):
+            host.tick()
+        self.assertEqual(world.session.state, 'running')
+        self.assertIsNone(world.session.pending)
+        self.assertEqual(store.latest_confirmed(), confirmed)
+        world._participants.resume.assert_called_once_with(tuple(handle for handle, _ in survivors))
+
+        replacement, replacement_bound = await reserve_replacement()
+        replacement_offer = replacement_bound.offer
+        self.assertNotEqual(replacement_offer.name, abandoned_offer.name)
+        await download(replacement, replacement_bound, root / 'download-replacement')
         replacement_grant = await admit(replacement, replacement_offer)
         self.assertEqual(replacement_grant['index'], departing)
         self.assertNotEqual(replacement_grant['generation'], grants[departing]['generation'])
