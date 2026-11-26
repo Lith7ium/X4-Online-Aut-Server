@@ -6,6 +6,7 @@ local own_zone
 local owner, docked, docking, stored, pilot, assigned, ai
 local controlled, occupied, contained, cockpit_sector, target_sector, target_zone, destination_zone
 local player, paused, observed, guarded, writes, actual, requested, fault_write, active_pilot
+local cockpit_pose, radar_range
 
 local c = {
     IsPlayerValid = function() return player end,
@@ -25,7 +26,11 @@ local c = {
         return ({[1]=own_zone, [2]=target_zone})[id]
     end,
     GetObjectIDCode = function() return 'ABC-123' end,
-    GetObjectPositionInSector = function(id) assert(id == target); return actual end,
+    GetObjectPositionInSector = function(id)
+        if id == cockpit then return cockpit_pose end
+        assert(id == target)
+        return actual
+    end,
     GetZoneAt = function(id, offset)
         assert(id == sector and type(offset[0].x) == 'number')
         offset[0].x = -100 -- As a zone conversion must not change the setter's sector coordinates.
@@ -57,6 +62,7 @@ ConvertStringToLuaID = tostring
 ConvertIDTo64Bit = tonumber
 function GetComponentData(id, field)
     if id == tostring(sector) and field == 'macro' then return 'sector_a' end
+    if id == tostring(cockpit) and field == 'maxradarrange' then return radar_range end
     assert(id == tostring(target) and field == 'owner')
     return owner, docked, docking, stored, pilot, assigned, ai
 end
@@ -80,6 +86,7 @@ local function reset()
     cockpit_sector, target_sector, target_zone, destination_zone = sector, sector, zone, zone
     player, paused, observed, guarded, fault_write = true, false, true, true, false
     active_pilot, own_zone = true, cockpit_zone
+    cockpit_pose, radar_range = {x=0, y=5, z=-7, yaw=0, pitch=0, roll=0}, 5000
     writes, actual, requested = 0, {x=20, y=5, z=-7, yaw=.5, pitch=.1, roll=-.2}, nil
 end
 local destination = {x=23, y=5, z=-7, yaw=99, pitch=99, roll=99}
@@ -227,6 +234,7 @@ local function flight(speed, update, test, trace)
         read = function()
             return {x=actual.x, y=actual.y + native_offset, z=actual.z, yaw=0, pitch=0, roll=0}
         end,
+        within_radar = function() return true end,
         destination_zone = function() return zone end,
         write = function(actor, _, pose)
             assert(actor == target and not pending)
@@ -239,6 +247,7 @@ local function flight(speed, update, test, trace)
     reset()
     local controller = cockpit_playback.new({
         enabled=true, own_index=cfg.own_index, target_index=binding.index, adapter=module.new(cfg, engine),
+        trial_first_contact=test == 'first_contact_trace',
         clock=function() return now end, game=function() return now end, paused=function() return false end,
         record=function(event)
             if event.kind == 'readback' then
@@ -282,7 +291,8 @@ local function flight(speed, update, test, trace)
         if trace then
             while trace[next_row] and trace[next_row][2] <= now do
                 local seq, capture, game, x, y, z, vx, vy, vz = unpack(trace[next_row])
-                submit(seq, capture, game, {x=x, y=y, z=z}, {x=vx, y=vy, z=vz})
+                local missing = test == 'first_contact_trace' and next_row == 1
+                submit(seq, capture, game, {x=x, y=y, z=z}, not missing and {x=vx, y=vy, z=vz} or nil)
                 next_row = next_row + 1
             end
         elseif test ~= 'one_sample' and (test ~= 'missing_velocity' or frame <= 4) then
@@ -318,6 +328,124 @@ end
 input:close()
 assert(#trace == 44 and trace[#trace][1] == 192)
 for _, hz in ipairs({20, 30}) do
-    local _, faults, samples, last_sequence, confirmed_long_write = flight(0, 1/hz, nil, trace)
-    assert(#faults == 0 and samples == 44 and last_sequence == 192 and confirmed_long_write, hz .. ' Hz')
+    for _, mode in ipairs({'complete_rates', 'first_contact_trace'}) do
+        local _, faults, samples, last_sequence, confirmed_long_write = flight(0, 1/hz, mode, trace)
+        assert(#faults == 0 and samples == 44 and last_sequence == 192 and confirmed_long_write,
+               mode .. ' at ' .. hz .. ' Hz')
+    end
+end
+
+-- A verified local baseline followed by a coherent first velocity sample may
+-- align once. This uses the regular receiving controller and the native FFI
+-- adapter rather than calling an alignment setter directly.
+local function first_contact(outcome)
+    reset()
+    own_zone = zone
+    local enabled = outcome ~= 'disabled'
+    local clock, records, faults, steps = 10, {}, {}, {}
+    local controller = cockpit_playback.new({
+        enabled=true, trial_first_contact=enabled,
+        own_index=cfg.own_index, target_index=binding.index, adapter=module.new_x4(cfg),
+        clock=function() return clock end, game=function() return clock end, paused=function() return paused end,
+        record=function(event) records[#records + 1] = event; return true end,
+        fault=function(reason) faults[#faults + 1] = reason end,
+    })
+    local function sample(sequence, x, capture, rate, token)
+        return {version=3, epoch=epoch, index=binding.index, generation=token or generation,
+                sector_macro=binding.sector_macro, sequence=sequence, source_time=capture, capture_time=capture,
+                x=x, y=5, z=-7, real_velocity=rate}
+    end
+    local function tick(at, apply)
+        if requested and apply then
+            actual, requested = native_readback(requested), nil
+        end
+        clock = at
+        controller:tick(at)
+    end
+    local function found_readback(position)
+        for _, event in ipairs(records) do
+            if event.kind:find('readback', 1, true) and event.actual and event.actual.x == position
+                    and event.elapsed and event.elapsed > 0 then
+                return event
+            end
+        end
+    end
+
+    local baseline_x = outcome == 'distant_baseline' and -31 or 20
+    if outcome == 'pilot_absent' then active_pilot = false end
+    controller:sample(binding, 1, sample(1, baseline_x, 1), clock)
+    tick(10.001)
+    assert(writes == 0, 'a velocity-less baseline cannot move a ship')
+    local advance = outcome == 'step_limit' and 251 or 171
+    local delta = outcome == 'capture_gap' and .251 or .114
+    local arrival = outcome == 'arrival_gap' and 10.251 or 10.114
+    local rate = outcome == 'lateral' and {x=0,y=1500,z=0} or {x=advance/delta,y=0,z=0}
+    if outcome == 'pilot_expired' then active_pilot = false end
+    if outcome == 'view_withdrawn' then observed = false end
+    if outcome == 'destination_out_of_radar' then radar_range = 150 end
+    if outcome == 'baseline_out_of_radar' then radar_range, cockpit_pose.x = 50, 190 end
+    if outcome == 'wrong_zone' then destination_zone = cockpit_zone end
+    if outcome == 'wrong_sector' then destination_zone = 7 end
+    local next_sample = sample(2, 20 + advance, 1 + delta, rate,
+                               outcome == 'generation_changed' and ('3'):rep(32) or nil)
+    clock = arrival
+    controller:sample(binding, 1, next_sample, arrival)
+    tick(arrival)
+
+    if outcome ~= 'confirmed' and outcome ~= 'wrong_readback' then
+        for i = 1, 4 do tick(arrival + i * .03) end
+        assert(writes == 0, outcome .. ' wrote an unapproved native alignment')
+        return
+    end
+
+    assert(writes == 1 and actual.x == 20 and requested.x == 191, outcome .. ' missed the bounded first contact')
+    assert(not found_readback(191), 'the requested pose was treated as an actual native readback')
+    check_attitude(native_readback(requested), actual)
+
+    if outcome == 'wrong_readback' then
+        actual = native_readback(requested)
+        requested, actual.x = nil, 201
+        tick(arrival + .05)
+        assert(#faults > 0 and not found_readback(191), 'wrong actual pose confirmed an alignment')
+        clock = arrival + .06
+        controller:sample(binding, 1, next_sample, clock)
+        tick(arrival + .10)
+        assert(writes == 1, 'uncertain native write was repeated')
+        return
+    end
+
+    tick(arrival + .05, true)
+    local confirmed = found_readback(191)
+    assert(confirmed and confirmed.source_sequence == 2 and writes == 1 and #faults == 0,
+           'native first contact requires independent readback on a later update')
+    clock = arrival + .06
+    controller:sample(binding, 1, next_sample, clock)
+    tick(arrival + .07)
+    assert(writes == 1, 'duplicate velocity sample reissued first-contact alignment')
+
+    for frame = 1, 9 do
+        if requested then
+            steps[#steps + 1] = math.abs(requested.x - actual.x)
+            actual, requested = native_readback(requested), nil
+        end
+        clock = arrival + .07 + frame * .05
+        controller:sample(binding, 1, sample(2 + frame, 191 + frame * 10, 1 + delta + frame * .05,
+                          {x=200,y=0,z=0}), clock)
+        controller:tick(clock)
+    end
+    local regular_readback = false
+    for _, event in ipairs(records) do
+        if event.kind == 'readback' and event.source_sequence > 2 and event.elapsed > 0 then
+            regular_readback = true
+            break
+        end
+    end
+    assert(writes > 1 and #faults == 0 and #steps > 0 and math.max(unpack(steps)) <= 50 and regular_readback,
+           'verified first contact did not continue through ordinary playback')
+end
+
+for _, outcome in ipairs({'confirmed', 'disabled', 'distant_baseline', 'step_limit', 'lateral', 'generation_changed',
+        'capture_gap', 'arrival_gap', 'pilot_absent', 'pilot_expired', 'view_withdrawn', 'destination_out_of_radar',
+        'baseline_out_of_radar', 'wrong_zone', 'wrong_sector', 'wrong_readback'}) do
+    first_contact(outcome)
 end

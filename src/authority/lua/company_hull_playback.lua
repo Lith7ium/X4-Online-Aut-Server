@@ -171,7 +171,7 @@ function M.new(options)
         enabled = true, buffer = checked_buffer, sample_version = 3, frame = binding.sector_macro,
         max_age = PREDICTION_SECONDS, max_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP,
         step_guard = velocity_steps and step_guard or nil,
-        buffer_options = {delay = .15, horizon = PREDICTION_SECONDS,
+        buffer_options = {delay = .15, horizon = PREDICTION_SECONDS, start_at_first_pair = cfg.start_at_first_pair,
                           stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
         read = function()

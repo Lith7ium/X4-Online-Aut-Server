@@ -95,7 +95,8 @@ function M.new(options)
  options = options or {}
  assert(type(options) == 'table', 'options must be a table')
  local known = {delay=true, horizon=true, stale=true, teleport_distance=true,
-  clock_leak=true, slew=true, dimensions=true, hold_only=true, deferred_arrival=true, clock_basis=true}
+  clock_leak=true, slew=true, dimensions=true, hold_only=true, deferred_arrival=true, clock_basis=true,
+  start_at_first_pair=true}
  for key in pairs(options) do assert(known[key], 'unknown motion option') end
  local cfg = {delay=options.delay or .15, horizon=options.horizon or .35,
   stale=options.stale or .75, teleport_distance=options.teleport_distance or 10000,
@@ -104,6 +105,9 @@ function M.new(options)
  if clock_basis == nil then clock_basis = 'source_time' end
  assert(clock_basis == 'source_time' or clock_basis == 'capture_time', 'invalid motion clock basis')
  local capture_clock = clock_basis == 'capture_time'
+ local start_at_first_pair = options.start_at_first_pair
+ assert(start_at_first_pair == nil or (type(start_at_first_pair) == 'boolean' and capture_clock),
+  'first-contact startup requires capture-clock motion')
  local dimensions = options.dimensions or 6
  assert(not capture_clock or dimensions == 3, 'capture motion requires XYZ dimensions')
  assert(dimensions == 3 or dimensions == 6, 'invalid motion dimensions')
@@ -190,7 +194,16 @@ function M.new(options)
   -- d(selected remote render time)/d(observer time). A snap or repeated clock value
   -- has no established derivative. A moving lag changes the displayed rate.
   local clock_factor
-  if not lag or not lag_at or math.abs(wanted_lag - lag) > 1 then
+  if start_at_first_pair and not lag then
+   -- The receiver has already placed the ship at this first sample. Hold
+   -- until its next measured rate is available, then play from that pose.
+   -- Subsequent updates slew back to the ordinary interpolation delay.
+   local first = samples[1]
+   if #samples == 1 then
+    return {frame=first.frame, source_sequence=first.sequence, pose=copy(first.pose), phase='held'}
+   end
+   lag = math.max(wanted_lag, now - first.time)
+  elseif not lag or not lag_at or math.abs(wanted_lag - lag) > 1 then
    lag = wanted_lag
   else
    local elapsed = now - lag_at

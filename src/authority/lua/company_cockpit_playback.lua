@@ -2,6 +2,7 @@
 -- Reuses X4LAN_COMPANY_HULL_PLAYBACK (X4LAN_MOTION_BUFFER + X4LAN_MOTION_PLAYBACK) and X4LAN_COMPANY_HULL_PLAYBACK_X4.
 local M = {}
 local MAX_STEP = 50
+local FIRST_CONTACT_DISTANCE, FIRST_CONTACT_AGE = 250, .25
 local READBACK_TOLERANCE = 3
 local COCKPIT_SLOTS = {'cockpit', 'cockpit2', 'cockpit3'}
 
@@ -12,6 +13,32 @@ end
 
 local function hex32(value)
     return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
+end
+
+local function watermark(sample, arrival)
+    return {sequence = sample.sequence, capture_time = sample.capture_time, source_time = sample.source_time,
+            arrival = arrival}
+end
+
+local function alignment(sample, written_at, first_contact)
+    return {target = {x = sample.x, y = sample.y, z = sample.z}, sequence = sample.sequence,
+            source_time = sample.source_time, capture_time = sample.capture_time, generation = sample.generation,
+            written_at = written_at, first_contact = first_contact}
+end
+
+local function first_contact_matches(previous, sample, arrival, now)
+    local elapsed = sample.capture_time - previous.capture_time
+    local velocity = sample.real_velocity
+    if elapsed <= 0 or elapsed > FIRST_CONTACT_AGE or now - previous.arrival > FIRST_CONTACT_AGE
+            or arrival < previous.arrival or type(velocity) ~= 'table' then return false end
+    local squared_error = 0
+    for _, axis in ipairs({'x', 'y', 'z'}) do
+        local rate = velocity[axis]
+        if type(rate) ~= 'number' or not (math.abs(rate) <= 5000) then return false end
+        local residual = sample[axis] - previous.position[axis] - rate * elapsed
+        squared_error = squared_error + residual * residual
+    end
+    return squared_error <= MAX_STEP ^ 2
 end
 
 function M.new(options)
@@ -38,7 +65,7 @@ function M.new(options)
     local binding, session, controller
     local active_index = nil
     local active_generation = nil
-    local pending_align = nil
+    local pending_align, first_contact
     local last_tick_now = nil
     local closed = false
 
@@ -87,9 +114,13 @@ function M.new(options)
     end
 
     local function stop_track()
+        if pending_align and pending_align.first_contact then
+            -- Its native setter may have succeeded; a second alignment is unsafe.
+            closed = true
+        end
         if controller then controller:stop(); controller = nil end
         if session then session:close(); session = nil end
-        pending_align = nil
+        pending_align, first_contact = nil, nil
     end
 
     local function same_hull(observed, current)
@@ -109,8 +140,9 @@ function M.new(options)
             stop_track()
             return false
         end
+        local initial = pending_align.first_contact
         local actual = session:read()
-        if not actual then
+        if not actual or (initial and not session:first_contact_in_range(actual, pending_align.target)) then
             stop_track()
             options.fault('alignment_read_failed')
             return false
@@ -133,17 +165,21 @@ function M.new(options)
             game_time = options.game(),
             actual = actual,
             target = pending_align.target,
-            phase = 'reacquire_aligned',
+            phase = initial and 'first_contact_aligned' or 'reacquire_aligned',
             error = err,
             elapsed = elapsed,
         }
         stats.readbacks = stats.readbacks + 1
-        options.record(rec)
-        pending_align = nil
-        if err > READBACK_TOLERANCE then
+        local recorded = options.record(rec)
+        if err > READBACK_TOLERANCE or (initial and recorded ~= true) then
             stop_track()
             options.fault('alignment_readback_out_of_bounds')
             return false
+        end
+        pending_align = nil
+        if initial then
+            emit('first_contact_confirmed', {index = rec.index, error = err, sequence = rec.source_sequence})
+            return true
         end
         -- Close the alignment session so the next velocity sample opens a fresh controller on this aligned pose.
         stop_track()
@@ -181,10 +217,11 @@ function M.new(options)
         active_generation = verified.generation
     end
 
-    local function new_controller(verified, active_session)
+    local function new_controller(verified, active_session, start_at_first_pair)
         stats.binds = stats.binds + 1
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
+            start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
@@ -210,6 +247,33 @@ function M.new(options)
         }))
     end
 
+    local function start_first_contact(verified, native_session, previous, sample, arrival)
+        local candidate = new_controller(verified, native_session, true)
+        local ok, reason = candidate:push(verified, sample, arrival)
+        if not ok then
+            candidate:stop()
+            native_session:close()
+            return false, reason
+        end
+        local function still_fresh(native_position)
+            return options.clock() - previous.arrival <= FIRST_CONTACT_AGE
+                and dist3(native_position, previous.position) <= MAX_STEP
+        end
+        local aligned, failure = native_session:align(sample, still_fresh)
+        if not aligned then
+            if failure == 'unconfirmed' then closed = true end
+            candidate:stop()
+            native_session:close()
+            return false, 'first_contact_refused'
+        end
+        accept_binding(verified)
+        controller, session = candidate, native_session
+        stats.alignments = stats.alignments + 1
+        pending_align = alignment(sample, options.clock(), true)
+        last_by_index_gen[watermark_key(verified.index, verified.generation)] = watermark(sample, arrival)
+        return true, 'aligned'
+    end
+
     local ctrl = {}
 
     function ctrl:close()
@@ -230,6 +294,9 @@ function M.new(options)
 
     function ctrl:view(observed, serial)
         if closed then return end
+        if first_contact and (first_contact.serial ~= serial or not same_hull(observed, first_contact)) then
+            first_contact = nil
+        end
         if not binding then return end
         if observed == nil or not same_view(observed, serial) then
             local prev_index = binding.index
@@ -253,6 +320,9 @@ function M.new(options)
         if closed or not observed then return end
         if target_index ~= nil and observed.index ~= target_index then return end
         mark_revoked(observed.index, generation)
+        if first_contact and first_contact.index == observed.index and first_contact.generation == generation then
+            first_contact = nil
+        end
         local matches_active = (active_index == observed.index and active_generation == generation)
         local matches_binding = (binding and same_view(observed, serial) and binding.generation == generation)
         if matches_active or matches_binding then
@@ -284,6 +354,7 @@ function M.new(options)
     function ctrl:tick(update_started_at)
         if closed then return end
         if paused() then
+            first_contact = nil
             if controller or pending_align then
                 local idx = binding and binding.index or active_index
                 stop_track()
@@ -312,6 +383,7 @@ function M.new(options)
         if closed or not observed or observed.index == own_index then return false, 'ineligible' end
         if target_index ~= nil and observed.index ~= target_index then return false, 'other_target' end
         if paused() then
+            first_contact = nil
             if controller or pending_align then
                 local idx = binding and binding.index or active_index
                 stop_track()
@@ -359,7 +431,8 @@ function M.new(options)
             return false, 'generation_mismatch'
         end
 
-        if pending_align then return true, 'alignment_pending' end
+        if pending_align and not pending_align.first_contact then return true, 'alignment_pending' end
+        if pending_align and not same_view(observed, serial) then return false, 'binding_changed' end
 
         local wkey = watermark_key(ship_index, sample.generation)
         local last = last_by_index_gen[wkey]
@@ -395,7 +468,16 @@ function M.new(options)
             end
             local gap = dist3({x = sample.x, y = sample.y, z = sample.z}, actual)
             local align_allowed = reacquire_by_index[ship_index] == true or replacing_generation
+            local previous = first_contact
+            first_contact = nil
             if gap > MAX_STEP then
+                local initial = previous and not align_allowed and gap <= FIRST_CONTACT_DISTANCE
+                    and previous.serial == serial and same_hull(previous, probe_binding)
+                    and previous.generation == sample.generation
+                    and first_contact_matches(previous, sample, arrival, now)
+                if initial then
+                    return start_first_contact(probe_binding, temp_session, previous, sample, arrival)
+                end
                 if not align_allowed or not allow_reacquire_align or type(temp_session.align) ~= 'function' then
                     temp_session:close()
                     stats.refusals_over_50m = stats.refusals_over_50m + 1
@@ -417,18 +499,8 @@ function M.new(options)
                 session = temp_session
                 stats.alignments = stats.alignments + 1
                 stats.reacquisitions = stats.reacquisitions + 1
-                pending_align = {
-                    written_at = now,
-                    target = {x = sample.x, y = sample.y, z = sample.z},
-                    generation = sample.generation,
-                    sequence = sample.sequence,
-                    source_time = sample.source_time,
-                    capture_time = sample.capture_time,
-                }
-                last_by_index_gen[wkey] = {
-                    sequence = sample.sequence, capture_time = sample.capture_time,
-                    source_time = sample.source_time, arrival = arrival,
-                }
+                pending_align = alignment(sample, now, false)
+                last_by_index_gen[wkey] = watermark(sample, arrival)
                 emit('reacquire_aligned', {
                     index = ship_index, dist = gap, sequence = sample.sequence,
                     mode = observed.mode or slot_name,
@@ -436,12 +508,21 @@ function M.new(options)
                 return true, 'aligned'
             end
             if not sample.real_velocity then
+                -- A fresh velocity-less baseline can identify the first contact.
+                -- It cannot grant the normal post-loss reacquisition permission.
+                if options.trial_first_contact == true and not align_allowed and not last and not active_index then
+                    if sample.version == 3 and sample.epoch == observed.epoch and sample.index == ship_index
+                            and sample.sector_macro == observed.sector_macro and temp_session.first_contact_in_range
+                            and temp_session:first_contact_in_range(actual, sample) then
+                        first_contact = probe_binding
+                        first_contact.position = {x = sample.x, y = sample.y, z = sample.z}
+                        first_contact.arrival, first_contact.capture_time = arrival, sample.capture_time
+                    end
+                else
+                    accept_binding(probe_binding)
+                end
                 temp_session:close()
-                accept_binding(probe_binding)
-                last_by_index_gen[wkey] = {
-                    sequence = sample.sequence, capture_time = sample.capture_time,
-                    source_time = sample.source_time, arrival = arrival,
-                }
+                last_by_index_gen[wkey] = watermark(sample, arrival)
                 return true, 'baseline_recorded'
             end
             local candidate = new_controller(probe_binding, temp_session)
@@ -469,10 +550,7 @@ function M.new(options)
             end
             if not sample.real_velocity then return true, 'waiting_for_velocity' end
         end
-        last_by_index_gen[wkey] = {
-            sequence = sample.sequence, capture_time = sample.capture_time,
-            source_time = sample.source_time, arrival = arrival,
-        }
+        last_by_index_gen[wkey] = watermark(sample, arrival)
         return true, 'accepted'
     end
 
@@ -497,6 +575,7 @@ function M.new_multi(options)
             own_index = options.own_index,
             allow_reacquire_align = options.allow_reacquire_align,
             playback = options.playback,
+            trial_first_contact = options.trial_first_contact,
             adapter = adapter,
             clock = options.clock,
             game = options.game,
@@ -646,6 +725,7 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
         own_index = config.index,
         target_index = config.playback_index,
         allow_reacquire_align = true,
+        trial_first_contact = config.trial_first_contact == true,
         adapter = adapter,
         clock = clock,
         game = function() return ffi.C.GetCurrentGameTime() end,
@@ -678,6 +758,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
         slot_names = slot_names,
         own_index = config.index,
         allow_reacquire_align = true,
+        trial_first_contact = config.trial_first_contact == true,
         adapters = adapters,
         clock = clock,
         game = function() return ffi.C.GetCurrentGameTime() end,

@@ -132,3 +132,29 @@ roster removal, incorrect XYZ or zone, and rejection of a first-write
 crossing, an unknown zone and a zone from another sector. The Windows
 baseline above predates this change. A native crossing with the updated
 receiver and a two-pilot live crossing are separate tests.
+
+## First contact with a fast pilot
+
+The isolated receiver can opt in with `trial_first_contact = true` in its
+cockpit playback configuration. A velocity-less first packet must identify
+a visible, roster-listed pilot within 50 m of the local ship position. The
+next packet must identify the same ship, view and pilot grant. Both its
+capture interval and the age of the first packet at dispatch must be at most
+250 ms. The newer velocity must explain the displacement between packets to
+within 50 m. Both the current and requested positions must be inside the
+receiving cockpit’s radar range and the native move must stay in the original
+zone and sector.
+
+The receiver can then align the ship once over a distance up to 250 m. It
+reads back identity and XYZ on a later update. After that check it holds
+the aligned pose until the next velocity sample, then starts playing from
+that pose and returns to its ordinary interpolation delay. This avoids
+extrapolating a high-speed step from a single reported velocity.
+
+The LuaJIT regression reproduces a 171 m first contact at 1,500 m/s with a
+simulated engine. It also replays the complete 44-sample recorded trajectory
+with its first velocity removed at 20 and 30 Hz, through sequence 192.
+Loss of the pilot, inconsistent direction, stale packets, an out-of-range
+destination and incorrect native readback are covered. The earlier native
+8.5 km run started with velocity available. This first-contact trial still
+requires a live X4 receiver.

@@ -137,22 +137,31 @@ function M.new(options, engine)
             return self:guard()
         end
 
-        function session:align(target)
+        function session:first_contact_in_range(actual, target)
+            if not position(actual) or not position(target) or not is_pilot() or not eligible() then return false end
+            local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
+            return dx * dx + dy * dy + dz * dz <= VELOCITY_STEP_LIMIT ^ 2
+                and engine.within_radar(original_cockpit.actor, actual, target)
+        end
+
+        function session:align(target, first_contact_guard)
             if pending_zone or not position(target) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             if engine.destination_zone(original_target.sector, target) ~= confirmed_zone or not eligible() then
                 return false
             end
+            if first_contact_guard and (not self:first_contact_in_range(actual, target)
+                    or first_contact_guard(actual) ~= true) then return false end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
             })
-            if not ok or dispatched ~= true then
+            if not ok or dispatched ~= true or not self:guard() then
                 closed = true
-                return false
+                return false, 'unconfirmed'
             end
-            return self:guard()
+            return true
         end
 
         function session:close()
@@ -239,6 +248,17 @@ function M.new_x4(options)
             local value = read(actor)
             return {x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z),
                     yaw = tonumber(value.yaw), pitch = tonumber(value.pitch), roll = tonumber(value.roll)}
+        end,
+        within_radar = function(cockpit_actor, actual, destination)
+            local ship = ref(cockpit_actor)
+            local radius = ship and GetComponentData(ship, 'maxradarrange')
+            if not finite(radius) or radius <= 0 then return false end
+            local origin = read(cockpit_actor)
+            local function inside(point)
+                local dx, dy, dz = point.x - origin.x, point.y - origin.y, point.z - origin.z
+                return dx * dx + dy * dy + dz * dz <= radius * radius
+            end
+            return inside(actual) and inside(destination)
         end,
         destination_zone = function(sector, destination)
             -- The stock query can change its offset argument to zone space.
