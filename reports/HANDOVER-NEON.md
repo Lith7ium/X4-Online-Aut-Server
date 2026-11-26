@@ -10,10 +10,10 @@ The ship kept its registry index and its original NPC captain.
 
 The separate ordinary jump-gate fixture stopped during staging between
 ZGH-239 and NEL-546. After the MD event correction, the provider loaded
-all 5,048 registry entries and ran both staging and readback at the same
-paused game time. Readback refused the route. It did not report which
-distance, sector, discovery or path predicate failed. No starting
-checkpoint was published and no pilot flew this route.
+all 5,048 registry entries. An instrumented readback at the same paused
+game time found both ships still at their former locations. Discovery
+had succeeded, and the stock route to the unmoved target still used a
+superhighway. No starting checkpoint was published and no pilot flew this route.
 [Ordinary gate staging](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#ordinary-jump-gate-staging-attempt)
 
 The ordinary boarding menu now has a native positive control. On a
