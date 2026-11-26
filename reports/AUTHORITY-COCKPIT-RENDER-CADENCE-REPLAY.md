@@ -156,8 +156,30 @@ simulated engine. It also replays the complete 44-sample recorded trajectory
 with its first velocity removed at 20 and 30 Hz, through sequence 192.
 Loss of the pilot, inconsistent direction, stale packets, an out-of-range
 destination and incorrect native readback are covered. The earlier native
-8.5 km run started with velocity available. This first-contact trial still
-requires a live X4 receiver.
+8.5 km run started with velocity available.
+
+### First contact in a native Bazzite cockpit
+
+A separate run used the receiver at `f328ea20` and the copied two-ship
+save on Fedora. The observer identified HVC-420 on its radar. The fixture
+enrolled the recorded pilot and delivered 44 movement reports. Before each
+of the first two deliveries the observer confirmed the actor, sector,
+pilot membership and a positive current radar range.
+
+The first report had no velocity. The second arrived 106.44 ms later,
+124.62 ms apart in recorded capture time. It authorized one 146.899 m
+alignment. On a later update, 5.13 ms after the write, native X4 reported
+the same actor, sector and zone with 0.00281 m of position error.
+All 44 reports were accepted through sequence 192. The following 116
+ordinary playback readbacks had a maximum position error of 0.00391 m
+and a maximum gap of 57.16 ms. The route remained in one internal zone.
+Flight between independently flown Linux and Windows cockpits over the
+internet still needs verification with this change.
+
+Fedora paused and confirmed departure checkpoint
+`checkpoint-ff729fab4a66408b9c88e6b135152b26` with SHA-256
+`da1df283f79ec981a0e8b1e71ecf2fa9980ab8ac5eace7440e90d02f3d613776`.
+Both processes exited successfully. The original save hashes were preserved.
 
 ### Reproduce on a Windows receiver
 
