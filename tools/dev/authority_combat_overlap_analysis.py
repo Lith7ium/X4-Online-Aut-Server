@@ -180,6 +180,16 @@ def _target_event(event, actors, epoch):
             and event.registry_epoch == epoch)
 
 
+def _registered_last_attacker(event, actors):
+    """Resolve the target's sampled last attacker independently of who fired this round."""
+    source = str(event.last_att_reg)
+    if (source in SHOOTER_LABELS and actors.get(source) == (event.last_att, event.last_att_code)
+            and event.last_att_label == SHOOTER_LABELS[source] and event.last_att_owner == 'player'
+            and event.last_att_isship and event.last_att_ctrl == (source == '1')):
+        return source
+    return None
+
+
 def _collision_ages(events, actors, epoch):
     """Fence same-age damage even when the collision callback arrived later."""
     target = actors.get('4')
@@ -207,6 +217,7 @@ def _direct_sources(bucket, events, actors, weapon_owners, epoch):
             actor, _ = actors.get(source, (None, None))
             age = _number(row.get('age'))
             if (source in SHOOTER_LABELS and target is not None and row.get('victim') == target
+                    and row.get('comp') == target
                     and row.get('method') in BULLET_METHODS and age is not None
                     and weapon_owners.get(row.get('weapon')) == {source}
                     and (row.get('source') == actor if kind == 'attacked_object' else source == '1')):
@@ -293,15 +304,25 @@ def analyse_phase(bucket, events, actors, epoch):
             else:
                 disagree += 1
     inferred_by_age = {_number(f['age']): f['shooters'] for f in classified if f['class'] == 'one_shooter_count_matches'}
-    label_index = {label: index for index, label in SHOOTER_LABELS.items()}
     la_agree = la_disagree = 0
+    coincident_ages = {_number(age) for age in coincident}
+    coincident_callbacks = []
     for e in damage:
+        last_attacker = _registered_last_attacker(e, actors)
         shooters = inferred_by_age.get(e.age)
-        if damage_agrees and shooters:
-            if label_index.get(e.last_att_label) in shooters:
+        if damage_agrees and shooters and last_attacker is not None:
+            if last_attacker in shooters:
                 la_agree += 1
             else:
                 la_disagree += 1
+        if e.age in coincident_ages:
+            # Both shooters made contact at this age. Neither the frame nor the
+            # sampled last attacker identifies an individual projectile.
+            coincident_callbacks.append({
+                'age': e.age, 'sequence': e.seq, 'kind': e.kind, 'amount': e.amount,
+                'component': e.comp, 'lastattacker': last_attacker,
+                'last_attack_time': e.last_att_time if e.last_att_time >= 0 else None,
+            })
     last_attackers = [e.last_att_label for e in damage]
     callbacks = sum(f['callbacks'] for f in classified)
     return {
@@ -323,6 +344,7 @@ def analyse_phase(bucket, events, actors, epoch):
         'direct_hit_shooters': sorted(direct_hit_shooters),
         'direct_contact_frames': len(named),
         'coincident_direct_hit_frames': coincident,
+        'coincident_damage_callbacks': coincident_callbacks,
         'named_attack_vs_inferred_frame': {'agree': agree, 'disagree': disagree, 'compared': agree + disagree,
                                            'unverified': len(frames) - agree - disagree},
         'observer_damage_callbacks': len(damage),
@@ -446,7 +468,6 @@ def _attribute_damage(events, damage, values, actors, epoch):
     mixed = alternations = 0
     for event in damage:
         frames.setdefault(event.age, []).append(event)
-    labels = {label: source for source, label in SHOOTER_LABELS.items()}
     for age, frame in frames.items():
         sources = []
         if age in collision_ages:
@@ -459,7 +480,8 @@ def _attribute_damage(events, damage, values, actors, epoch):
                 'age': event.age, 'sequence': event.seq, 'amount': event.amount, 'kind': kind,
                 'source_by_amount': source, 'overflow_hull_sequence': None if pair is None else pair.seq,
                 'overflow_hull_amount': None if pair is None else pair.amount,
-                'lastattacker': labels.get(event.last_att_label), 'preceding_same_age_notification': notices[event.seq],
+                'lastattacker': _registered_last_attacker(event, actors),
+                'preceding_same_age_notification': notices[event.seq],
             })
         mixed += {'1', '2'} <= set(sources)
         alternations += any(a is not None and b is not None and a == c and a != b

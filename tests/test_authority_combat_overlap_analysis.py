@@ -44,7 +44,9 @@ def event(phase, age, kind, shooter=1, **fields):
         'ev_att': f'0x10{shooter}', 'ev_att_reg': shooter, 'ev_att_owner': 'player',
         'ev_att_label': A.SHOOTER_LABELS[str(shooter)], 'ev_att_code': 'HVC-420' if shooter == 1 else 'KHI-630',
         'ev_att_ctrl': shooter == 1, 'ev_att_isship': True,
-        'last_att_label': 'company_player', 'collided': False, 'comp': '0x9', 'amount': 26, 'shield': 100, 'hull': 2500,
+        'last_att': '0x101', 'last_att_code': 'HVC-420', 'last_att_label': 'company_player',
+        'last_att_owner': 'player', 'last_att_reg': 1, 'last_att_ctrl': True, 'last_att_isship': True,
+        'last_att_time': age, 'collided': False, 'comp': '0x9', 'amount': 26, 'shield': 100, 'hull': 2500,
         'param2': 'hitbybullet', 'param3': f'[component.{{0x9L}},component.{{0xab{shooter}L}}]',
     }
     return SimpleNamespace(**(values | fields))
@@ -142,6 +144,18 @@ class OverlapFrameTest(unittest.TestCase):
                 self.assertEqual(analysis['overlap']['direct_hit_shooters'], ['1'])
                 self.assertEqual(analysis['overlap']['coincident_direct_hit_frames'], [])
 
+    def test_contact_on_surface_element_does_not_confirm_root_damage(self):
+        text, events = fixture()
+        contact = attack(3.1, 2)
+        text = text.replace(contact, contact.replace('comp=0x9', 'comp=0xf'))
+        for row in events:
+            if (row.phase, row.kind, row.ev_att_reg) == ('overlap', 'object_attacked_object', 2):
+                row.comp = '0xf'
+                row.param3 = row.param3.replace('{0x9L}', '{0xfL}')
+        result = A.analyse(text, events, epoch=EPOCH)
+        self.assertFalse(A.accepted(result))
+        self.assertEqual(result['overlap']['coincident_damage_callbacks'], [])
+
     def test_incoincident_observer_ages_and_unmatched_health_fail_acceptance(self):
         text, events = fixture()
         second = next(row for row in events if (row.phase, row.kind, row.ev_att_reg)
@@ -156,6 +170,19 @@ class OverlapFrameTest(unittest.TestCase):
 
 
 class MixedWeaponTest(unittest.TestCase):
+    def test_equal_guns_preserve_callback_order_and_stale_attacker_time(self):
+        log, events = fixture()
+        first, second = [row for row in events if row.phase == 'overlap' and row.kind == 'shield_damaged']
+        first.last_att_time = first.age - .5
+        second.last_att = '0x999'  # The role label still names the pilot.
+        result = A.analyse(log, events, epoch=EPOCH)
+        self.assertTrue(A.accepted(result))
+        callbacks = result['overlap']['coincident_damage_callbacks']
+        self.assertEqual([row['sequence'] for row in callbacks], [first.seq, second.seq])
+        self.assertEqual([row['lastattacker'] for row in callbacks], ['1', None])
+        self.assertEqual([row['last_attack_time'] for row in callbacks], [first.age - .5, second.age])
+        self.assertEqual(A.analyse_damage(log, events, result, epoch=EPOCH)[1], {})
+
     def test_mixed_damage_is_independent_of_lastattacker_and_cannot_replace_direct_witness(self):
         text, events = fixture(mixed=True)
         overlap = A.analyse(text, events, epoch=EPOCH)
