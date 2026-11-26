@@ -51,7 +51,13 @@ def load_trajectory(path):
         data = json.loads(path.read_text(encoding='utf-8'))
         rows = data['samples'] if isinstance(data, dict) else data
     samples = []
+    track = None
     for row in rows:
+        identity = tuple(row.get(key) for key in ('epoch', 'index', 'generation', 'sector_macro'))
+        if track is None:
+            track = identity
+        elif identity != track:
+            raise ValueError('trajectory must contain a single ship, generation and sector')
         velocity = row.get('real_velocity')
         if isinstance(velocity, (list, tuple)):
             velocity = dict(zip('xyz', velocity))
@@ -68,6 +74,36 @@ def load_trajectory(path):
                 and after['source_time'] >= before['source_time']):
             raise ValueError(f'trajectory is not increasing at sequence {after["sequence"]}')
     return samples
+
+
+def source_position_error(samples, *, position_only_baseline=False):
+    """Score the next captured XYZ on one replay trajectory, before receiver placement."""
+    hold_errors, projection_errors = [], []
+    skipped = 0
+    first_gap = None
+    for before, after in zip(samples, samples[1:]):
+        elapsed = after['capture_time'] - before['capture_time']
+        displacement = [after[axis] - before[axis] for axis in 'xyz']
+        hold = math.hypot(*displacement)
+        velocity = before['real_velocity']
+        if first_gap is None:
+            if position_only_baseline:
+                velocity = None
+            first_gap = {'sequences': [before['sequence'], after['sequence']], 'capture_dt_s': elapsed,
+                         'displacement_m': hold, 'previous_velocity_available': velocity is not None}
+        if velocity is None:
+            skipped += 1
+            continue
+        hold_errors.append(hold)
+        projection_errors.append(math.hypot(*(delta - velocity[axis] * elapsed
+                                              for axis, delta in zip('xyz', displacement))))
+
+    def stats(errors):
+        return {'mean': statistics.fmean(errors) if errors else None, 'max': max(errors, default=None)}
+
+    return {'compared_pairs': len(hold_errors), 'skipped_no_previous_velocity': skipped,
+            'first_gap': first_gap, 'hold_previous_position_error_m': stats(hold_errors),
+            'project_previous_velocity_error_m': stats(projection_errors)}
 
 
 def synthetic_trajectory(count=44, speed=1524.0, seed_interval=0.127):
@@ -394,6 +430,11 @@ def main(argv=None):
     if bool(args.trajectory) == args.synthetic:
         raise SystemExit('pass exactly one of --trajectory or --synthetic')
     samples = synthetic_trajectory() if args.synthetic else load_trajectory(args.trajectory)
+    source_error = {
+        'input_trajectory': source_position_error(samples),
+        # The client clears the first rate before sending a new grant's baseline.
+        'with_position_only_baseline': source_position_error(samples, position_only_baseline=True),
+    }
     if args.bind_sample is None:
         args.bind_sample = 0 if args.trial_first_contact else 1
     if args.trial_first_contact and (args.bind_sample != 0 or len(samples) < 2):
@@ -413,6 +454,8 @@ def main(argv=None):
                           'path_m': round(sum(math.dist([a[k] for k in 'xyz'], [b[k] for k in 'xyz'])
                                               for a, b in zip(samples, samples[1:])), 1),
                           'with_velocity': sum(s['real_velocity'] is not None for s in samples),
+                          'source_trajectory': 'synthetic' if args.synthetic else 'recorded',
+                          'source_position_error': source_error,
                           'x4_running': cockpit.x4_running() if os.name == 'nt' else None}, indent=1))
         return 0
     if os.name != 'nt':
@@ -441,7 +484,8 @@ def main(argv=None):
     before = protected()
     out.mkdir(parents=True)
     result = {'options': {k: v for k, v in vars(args).items() if k != 'trajectory'},
-              'trajectory_private': bool(args.trajectory), 'game': str(game), 'view': str(view),
+              'trajectory_private': bool(args.trajectory), 'source_position_error': source_error,
+              'game': str(game), 'view': str(view),
               'outcome': 'started'}
     ctypes.windll.user32.SetProcessDPIAware()
     try:
@@ -463,6 +507,7 @@ def main(argv=None):
         (out / 'result.json').write_text(json.dumps(result, indent=1, sort_keys=True))
     receiver = result.get('velocity_receiver', {})
     print(json.dumps({'outcome': result['outcome'], 'accepted': receiver.get('accepted'),
+                      'source_position_error': source_error,
                       'binds': receiver.get('binds'), 'writes': receiver.get('writes'),
                       'pre_bind_refusals': len(receiver.get('pre_bind_refusals', [])),
                       'steps_over_50m': len(receiver.get('steps_over_50m', [])),

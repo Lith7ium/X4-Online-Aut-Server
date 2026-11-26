@@ -1,4 +1,6 @@
 """Offline checks for the native Windows velocity receiver runner and its trace hook."""
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 import math
 from pathlib import Path
@@ -43,6 +45,52 @@ class VelocityReceiverRunnerTests(unittest.TestCase):
             path.write_text(json.dumps(rows), encoding='utf-8')
             with self.assertRaises(ValueError):
                 runner.load_trajectory(path)
+
+    def test_source_error_uses_previous_velocity_and_capture_clock_on_shared_pairs(self):
+        samples = [dict(sequence=1, capture_time=0, source_time=0, x=0, y=0, z=0, real_velocity=None),
+                   dict(sequence=2, capture_time=1, source_time=2, x=10, y=0, z=0,
+                        real_velocity={'x': 3, 'y': 0, 'z': 0}),
+                   dict(sequence=3, capture_time=3, source_time=5, x=18, y=0, z=0, real_velocity=None)]
+        result = runner.source_position_error(samples)
+        self.assertEqual(result['first_gap'], {'sequences': [1, 2], 'capture_dt_s': 1,
+                                              'displacement_m': 10, 'previous_velocity_available': False})
+        self.assertEqual(result['compared_pairs'], 1)
+        self.assertEqual(result['skipped_no_previous_velocity'], 1)
+        self.assertEqual(result['hold_previous_position_error_m'], {'mean': 8.0, 'max': 8.0})
+        self.assertEqual(result['project_previous_velocity_error_m'], {'mean': 2.0, 'max': 2.0})
+        empty = runner.source_position_error(samples[:2])
+        self.assertEqual(empty['compared_pairs'], 0)
+        self.assertEqual(empty['hold_previous_position_error_m'], {'mean': None, 'max': None})
+        self.assertEqual(empty['project_previous_velocity_error_m'], {'mean': None, 'max': None})
+
+    def test_mixed_trajectory_identity_is_rejected(self):
+        rows = runner.synthetic_trajectory(count=2)
+        rows[0]['sector_macro'], rows[1]['sector_macro'] = 'sector_a', 'sector_b'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'samples.json'
+            path.write_text(json.dumps(rows), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'single ship, generation and sector'):
+                runner.load_trajectory(path)
+
+    def test_preflight_reports_the_recorded_replay_with_position_only_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dll = Path(tmp) / 'test.dll'
+            dll.write_bytes(b'monotonic')
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(runner.main(['--out', tmp, '--trajectory',
+                    str(ROOT / 'tests/fixtures/company_gate_flight.tsv'), '--network-dll', str(dll),
+                    '--trial-first-contact', '--preflight']), 0)
+        report = json.loads(stdout.getvalue())
+        self.assertEqual(report['source_trajectory'], 'recorded')
+        self.assertEqual(report['with_velocity'], 44)
+        raw = report['source_position_error']['input_trajectory']
+        self.assertEqual((raw['compared_pairs'], raw['skipped_no_previous_velocity']), (43, 0))
+        self.assertTrue(raw['first_gap']['previous_velocity_available'])
+        error = report['source_position_error']['with_position_only_baseline']
+        self.assertEqual((error['compared_pairs'], error['skipped_no_previous_velocity']), (42, 1))
+        self.assertEqual(error['first_gap']['sequences'], [143, 144])
+        self.assertFalse(error['first_gap']['previous_velocity_available'])
 
     def test_placement_starts_on_the_remote_preserves_steps_and_clears_the_own_ship(self):
         samples = runner.synthetic_trajectory()

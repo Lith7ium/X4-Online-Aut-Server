@@ -174,3 +174,11 @@ The runner places sample zero at the resting ship. It requires a later
 first-contact readback from the same X4 ship, then ordinary playback
 through the last sequence. Its results list separately any crossings for
 which a subsequent native read confirmed the requested zone and position.
+
+Preflight and the run receipt report position error for the input trajectory.
+For each successive pair with a previous velocity, they score holding the
+previous XYZ and projecting it with that sample's velocity over the capture
+interval. Both errors use the same pairs. The receipt also scores the input
+with the position-only baseline the client sends on admission and records
+the first capture interval and displacement separately. These measurements
+use no receiving cockpit readbacks.
