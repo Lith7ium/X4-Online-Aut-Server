@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -362,6 +362,57 @@ class WindowsFixtureWorkspaceTests(unittest.TestCase):
         self.assertFalse(self.run_directory.exists())
         self.assertEqual(self.acl_targets, [])
         self.assertEqual({path: path.read_text() for path in self.documents.glob('*/*')}, occupied)
+
+    def test_reads_active_steam_account_from_current_user(self):
+        registry = MagicMock(REG_DWORD=4)
+        with patch.dict(sys.modules, {'winreg': registry}):
+            with self.subTest('active account'):
+                registry.QueryValueEx.return_value = (123456, 4)
+                self.assertEqual(subject._active_steam_account_id(), 123456)
+                registry.OpenKey.assert_called_with(registry.HKEY_CURRENT_USER, subject.steam.KEY)
+                self.assertEqual(registry.QueryValueEx.call_args.args[1], 'ActiveUser')
+            for value in ((0, 4), ('123456', 1), (True, 4)):
+                with self.subTest(value=value):
+                    registry.QueryValueEx.return_value = value
+                    self.assertIsNone(subject._active_steam_account_id())
+            registry.QueryValueEx.side_effect = FileNotFoundError
+            self.assertIsNone(subject._active_steam_account_id())
+
+    def test_human_graphics_use_active_account_and_write_only_the_fresh_profile(self):
+        current = self.documents / '123456' / 'config.xml'
+        current.parent.mkdir()
+        normal_settings = b'<root><res_width>1920</res_width><autosave>true</autosave></root>'
+        current.write_bytes(normal_settings)
+        other = self.documents / '234567' / 'config.xml'
+        other.parent.mkdir()
+        other.write_text('<root><res_width>2560</res_width></root>')
+        reserved = self.documents / str(subject.PROFILE_ID)
+        reserved.mkdir()
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory,
+            fresh_company_profile=True, use_pilot_graphics=True)
+        with patch.object(subject, '_active_steam_account_id', return_value=123456):
+            workspace.prepare()
+        created = (workspace.profile_directory / 'config.xml').read_text()
+        self.assertIn('<res_width>1920</res_width>', created)
+        self.assertIn('<autosave>false</autosave>', created)
+        self.assertEqual(current.read_bytes(), normal_settings)
+        self.assertEqual(list(reserved.iterdir()), [])
+        self.assertEqual(list(workspace.save_dir.iterdir()), [])
+
+    def test_explicit_graphics_config_bypasses_steam_lookup(self):
+        source = self.root / 'X4 settings' / 'config.xml'
+        source.parent.mkdir()
+        source.write_text('<root><res_width>2560</res_width></root>')
+        workspace = subject.WindowsFixtureWorkspace(
+            self.game, self.view_container, self.run_directory,
+            use_pilot_graphics=True, graphics_config=source)
+        with patch.object(subject, '_active_steam_account_id') as account:
+            workspace.prepare()
+        account.assert_not_called()
+        self.assertEqual(workspace.profile_id, subject.PROFILE_ID)
+        self.assertIn('<res_width>2560</res_width>',
+                      (workspace.profile_directory / 'config.xml').read_text())
 
     def test_prepare_requires_windows_before_mutating(self):
         with patch.object(subject, '_is_windows', return_value=False):

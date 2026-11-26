@@ -368,6 +368,12 @@ priority over idle Company ships in its three observation slots. A visible
 pilot you target gets first priority. Position updates still require a
 visible ship. Older providers use HUD and proximity selection.
 
+Interactive Linux and Windows pilots use their own X4 graphics settings in
+their private test profiles. With multiple regular profiles, select the
+desired `config.xml` using `--graphics-config PATH` on Linux or
+`-GraphicsConfig PATH` in PowerShell. A new pilot profile with no saved
+preferences uses X4's display defaults.
+
 The Linux launcher allows up to an hour to connect and join. Once admitted,
 close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
 add `--timeout SECONDS` (up to 3600), which covers both joining and playing.

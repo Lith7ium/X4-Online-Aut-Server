@@ -57,6 +57,10 @@ profile, starting with `45841` and then checking the reserved Company test
 IDs. Occupied profiles can stay in place. The run report records the selected
 `profile_id`. If every reserved slot is occupied, setup stops before joining.
 
+An interactive Company launch reads the active Steam account's X4 graphics
+settings into the new test profile. You can also pass the full path to your
+normal `config.xml` with `-GraphicsConfig`.
+
 Compare the archive SHA-256 with the build operator's value. The optional
 connection check contacts both authenticated server services with the supplied
 file. It can run before opening X4.

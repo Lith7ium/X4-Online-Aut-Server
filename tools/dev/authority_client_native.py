@@ -32,6 +32,7 @@ from authority.client_seat_overlay import REFUSALS
 from authority.company_motion_source import CompanyMotionSource, validate_npc_observation, validate_playback_index
 from authority.company_npc_measurement import validate_measurement_trial
 from authority.company_purchase_source import CompanyPurchaseSource
+from lockstep.launcher import profile as x4_profile
 import authority_client_stage as stage_cli
 import authority_download_load_live as download
 import authority_load_live as load
@@ -317,6 +318,13 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
             shared_key=bytes.fromhex(stage_cli._read_secret_file(args.shared_key_file, 64)),
             file_token=stage_cli._read_secret_file(args.file_token_file, 32))
         library_digest = args.native_library_sha256
+    case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
+    if player_mode and args.timeout is None and software_vulkan_icd is None:
+        config_home = Path(os.environ.get('XDG_CONFIG_HOME', ''))
+        if not config_home.is_absolute():
+            config_home = home / '.config'
+        case_options['graphics_xml'] = x4_profile.human_graphics_xml(
+            config_home / 'EgoSoft' / 'X4', source=getattr(args, 'graphics_config', None))
     join_deadline = time.monotonic() + (MAX_NATIVE_BUDGET if args.timeout is None else args.timeout)
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     result = dict(success=False, scope='one private Linux native client; cooperative load/control; no gameplay proof',
@@ -355,7 +363,6 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         with client_connection(**connection_settings, deadline=join_deadline,
                 keepalive_interval=args.keepalive_interval, **channel_options) as owner:
             try:
-                case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
                 case, profile, binds, lock = snapshot.prepare_case(out, game, home, **case_options)
                 if any((profile/'save').iterdir()):
                     raise ValueError('private_save_directory_not_empty')
