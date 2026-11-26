@@ -101,13 +101,19 @@ class CompanyCockpitHealthBridgeTests(unittest.TestCase):
         self.assertTrue(bridge.accept_reply(3, 1, STATE))
         poll()
         self.assertRegex(receive(), re.escape(f'HEALTH|1|{GENERATION}|{EPOCH}|{INDEX}|3|1|1|102|') + r'0\|2366\|3578\|3600$')
-        result = f'HEALTH_RESULT|{GENERATION}|{EPOCH}|{INDEX}|3|1|confirmed'
+        result = f'HEALTH_RESULT|{GENERATION}|{EPOCH}|{INDEX}|3|1|confirmed|0|2366|3578|3600'
         send(result, foreign)
         poll()
         self.assertEqual(bridge.stats()['confirmed'], 0)
+        send(result.replace('|3578|', '|3000|'))
+        poll()
+        self.assertNotIn('last_confirmed_readback', bridge.stats())
         send(result)
         poll()
         self.assertEqual(bridge.stats()['confirmed'], 1)
+        readback = bridge.stats()['last_confirmed_readback']
+        self.assertEqual(readback['cockpit'], readback['server'])
+        self.assertEqual((readback['revision'], readback['cockpit']['hull']), (0, 3578))
         self.now = 101
         self.assertEqual(bridge.take_request(), (3, 2, 0))
         self.assertTrue(bridge.accept_reply(3, 2, STATE))  # A new TLS stream can serve a fresh equal-revision read.

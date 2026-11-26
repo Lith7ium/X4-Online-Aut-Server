@@ -458,6 +458,10 @@ the ship in X4. The client can correct either value upward or downward and
 reads back the result from the game. Idle polls with an acknowledged revision
 reuse no health values and require no native read. The first live Linux and
 Windows cockpit readbacks through this path are outstanding.
+In the pilot launcher's result, `company_cockpit_health.last_confirmed_readback`
+records the server values alongside the local game's shield and hull, the
+motion window and the revision. It appears after the first matching native
+confirmation. The separate `delivered` count records delivery to the game.
 Use this option on a disposable combat world.
 
 Add `--combat-capture` to the normal Linux pilot command to record shield

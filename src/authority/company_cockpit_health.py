@@ -1,6 +1,8 @@
 """One admission-bound snapshot between the combat worker and owned X4 UDP."""
 import re
 import threading
+from copy import deepcopy
+from math import isclose
 
 from .company_motion_frames import MAX_COUNTER
 from .company_npc_measurement import native_capture_now
@@ -20,6 +22,17 @@ def _safe_health(state):
             and state['shield'] <= state['maxshield'] and 0 < state['hull'] <= state['maxhull'])
 
 
+def _matches_readback(server, cockpit):
+    if (server['maxshield'], server['maxhull']) != (cockpit['maxshield'], cockpit['maxhull']):
+        return False
+    for key in ('shield', 'hull'):
+        # The native setters convert an absolute value to a percentage. A zero shield stays exactly zero.
+        tolerance = 0 if server[key] == 0 else max(.0001, server[key] * 2e-7)
+        if not isclose(cockpit[key], server[key], rel_tol=0, abs_tol=tolerance):
+            return False
+    return True
+
+
 class CompanyCockpitHealthBridge:
     """The motion owner stages fresh requests and delivers responses to its X4 peer."""
 
@@ -32,6 +45,7 @@ class CompanyCockpitHealthBridge:
         self._lock = threading.Lock()
         self._window = self._sample = self._pending = self._ready = self._sent = None
         self._after_revision = self._last_dispatched = None
+        self._last_confirmed = None
         self._revision = self._sequence = 0
         self._next_request = self._active_since = 0.0
         self._clear = self._closed = False
@@ -123,7 +137,7 @@ class CompanyCockpitHealthBridge:
             body = (f'HEALTH|{self._revision}|{self.generation}|{self.epoch}|{self.index}|'
                     f'{window}|{sequence}|{sample}|{fields}')
             # Keep the send one-shot. A fresh read is needed after a lost native receipt.
-            self._ready, self._sent = None, (window, sequence, revision)
+            self._ready, self._sent = None, (window, sequence, revision, values)
         if send(body):
             with self._lock:
                 self._last_dispatched = str(window), str(sequence)
@@ -131,11 +145,11 @@ class CompanyCockpitHealthBridge:
 
     def native_result(self, fields):
         """Consume a receipt from the unchanged, verified owned X4 UDP peer."""
-        if len(fields) != 7:
+        if len(fields) not in (7, 11):
             return
-        _, generation, epoch, index, window, sequence, status = fields
+        _, generation, epoch, index, window, sequence, status = fields[:7]
         if ((generation, epoch, index) != (self.generation, self.epoch, str(self.index))
-                or status not in ('confirmed', 'rejected', 'unknown')):
+                or status not in ('confirmed', 'rejected', 'unknown') or (status == 'confirmed') != (len(fields) == 11)):
             return
         with self._lock:
             if status == 'unknown' and not self._closed and (window, sequence) == self._last_dispatched:
@@ -147,13 +161,27 @@ class CompanyCockpitHealthBridge:
             self._expire(self._clock())
             if self._sent is not None and (window, sequence) == tuple(map(str, self._sent[:2])):
                 if status == 'confirmed':
-                    self._after_revision = self._sent[2]
+                    _, _, revision, expected_values = self._sent
+                    server = dict(zip(_FIELDS, expected_values))
+                    try:
+                        cockpit = dict(zip(_FIELDS, map(float, fields[7:])))
+                    except ValueError:
+                        return
+                    if not _safe_health(dict(cockpit, revision=revision)) or not _matches_readback(server, cockpit):
+                        return
+                    self._after_revision = revision
+                    self._last_confirmed = dict(
+                        window=int(window), sequence=int(sequence), revision=revision,
+                        server=server, cockpit=cockpit)
                 self._pending = self._sent = None
                 self._counts[status] += 1
 
     def stats(self):
         with self._lock:
-            return dict(self._counts)
+            result = dict(self._counts)
+            if self._last_confirmed is not None:
+                result['last_confirmed_readback'] = deepcopy(self._last_confirmed)
+            return result
 
     def close(self):
         with self._lock:

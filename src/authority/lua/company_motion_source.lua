@@ -175,8 +175,14 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
             controlled_actor=function() return seat and seat:controlled_actor() end,
             read_health=X4LAN_COMBAT_OBSERVER.read_lua_health,
             on_receipt=function(row)
-                net:send(prefix .. table.concat({'HEALTH_RESULT', row.generation, row.epoch, row.index,
-                    row.window, string.format('%.0f', row.sequence), row.status}, '|'))
+                local fields = {'HEALTH_RESULT', row.generation, row.epoch, row.index,
+                    row.window, string.format('%.0f', row.sequence), row.status}
+                if row.status == 'confirmed' then
+                    for _, key in ipairs({'shield', 'maxshield', 'hull', 'maxhull'}) do
+                        fields[#fields + 1] = string.format('%.17g', row[key])
+                    end
+                end
+                net:send(prefix .. table.concat(fields, '|'))
             end,
         }))
     end
