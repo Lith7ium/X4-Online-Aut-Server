@@ -2,6 +2,15 @@
 
 ## 26 November 2026
 
+For the player-facing view of this fork, start with the
+[current gameplay status](../docs/AUTHORITATIVE-STATUS.md).
+In the latest Fedora test a reserved target pilot received its new shield
+value on its own TLS connection and after reconnecting. An independent
+Windows cockpit fixture demonstrated downward and upward corrections.
+Both ships' damage survived last-departure saving in the Fedora test.
+[Reserved pilot hit](AUTHORITY-SHIELD-REPLAY-20261126.md#hit-on-a-reserved-pilot-over-tls) ·
+[Windows cockpit](AUTHORITY-SHIELD-REPLAY-20261126.md#windows-cockpit-correction-with-fixture-server-values)
+
 PvE and PvP with primary guns have priority for the weekend. Lith7ium will
 request packages when needed. Boarding work resumes next week. For player
 shots, the firing pilot's X4 confirms the hit, including hits against another

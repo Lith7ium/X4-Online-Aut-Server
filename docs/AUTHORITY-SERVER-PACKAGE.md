@@ -456,8 +456,9 @@ can request its own living ship's current shield and hull on the combat
 connection. After a confirmed hit or a connection gap, the provider reads
 the ship in X4. The client can correct either value upward or downward and
 reads back the result from the game. Idle polls with an acknowledged revision
-reuse no health values and require no native read. The first live Linux and
-Windows cockpit readbacks through this path are outstanding.
+require no native read. A Windows cockpit applied lower and higher
+fixture-supplied values in a native test. The full path from the authenticated
+server to human Linux and Windows cockpits still needs a joint test.
 In the pilot launcher's result, `company_cockpit_health.last_confirmed_readback`
 records the server values alongside the local game's shield and hull, the
 motion window and the revision. It appears after the first matching native

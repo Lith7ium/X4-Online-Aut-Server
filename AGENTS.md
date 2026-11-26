@@ -2,7 +2,9 @@
 
 - This branch explores an authoritative-world alternative for X4 9.00 on top
   of the existing lockstep project. Read README.md and
-  docs/AUTHORITY-INVESTIGATION.md; docs/ARCHITECTURE.md describes the original
+  docs/AUTHORITATIVE-STATUS.md for the current implementation and evidence.
+  docs/AUTHORITY-INVESTIGATION.md records the starting investigation. The
+  file docs/ARCHITECTURE.md describes the original
   lockstep design. Read docs/LAUNCHER.md before running X4.
 - Never load, write or delete the player's normal X4 profile, saves or settings.
   Use the launcher's disposable profiles. Never modify or redistribute Egosoft

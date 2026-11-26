@@ -20,6 +20,10 @@ installed-before/
 *.zip
 *.tar.gz
 *.bundle
+# X4 compressed save slots copied outside the disposable test directory
+save_[0-9][0-9][0-9].xml.gz
+autosave_[0-9][0-9].xml.gz
+quicksave.xml.gz
 *.user
 *.swp
 CLAUDE.local.md

@@ -161,3 +161,75 @@ or pilot TCP connection in this codec test. The source save remained
 intact and the server process and lock were released.
 The private raw witness is `.local/live-shield-bridge/codec-native-02/native-witness.txt`
 (SHA-256 `ee8f0a80cf5230d0ec0f5c6bd4277054cb3bc988aac75302286f06967945a13d`).
+
+## Hit on a reserved pilot over TLS
+
+At `4e7dd6c8` two scripted protocol pilots on Bazzite joined one running
+GPU-free Fedora X4 world through the regular pinned TLS service over the
+private SSH tunnel. They verified their separate checkpoint offers and held
+active movement grants for HVC-420 (1073) and KHI-630 (1074). B kept its combat
+connection open for the initial and post-hit health reads. A's regular combat
+sender read a scripted gun contact for KHI-630 and submitted a 26-point hit.
+
+| KHI-630 observation | Revision or receipt order | Shield | Hull |
+| --- | ---: | ---: | ---: |
+| B's first native read | 0 | 2,366 / 2,366 | 3,600 / 3,600 |
+| A's confirmed hit receipt | 1 | 2,340 | 3,600 |
+| B's fresh read on the same combat connection | 1 | 2,340 / 2,366 | 3,600 / 3,600 |
+| B's fresh read after reopening its combat connection | 1 | 2,340 / 2,366 | 3,600 / 3,600 |
+
+A replayed the exact first report and received the original receipt with
+order 1. B's intervening request with revision 1 reported no update. The
+native adapter recorded one damage call against KHI-630 and three fresh
+health reads for B. The two post-hit native reads completed 1.743 and
+3.774 seconds after the server settled A's hit.
+
+In the same session A and B then submitted one 26-point report each against
+the registered NPC freighter MFQ-419 (943). The disposable baseline measured
+29.999999702 shield and 6,400 hull. The first receipt carried
+3.999999701976776 shield and 6,400 hull. The second carried zero shield
+and 6,377.999999701977 hull. A separate native read confirmed the final
+health to the precision of the private log. The adapter recorded three
+damage calls for the entire session.
+
+The regular last-pilot departure saved
+`checkpoint-062684a012974e12830d7ecd85c6076d` with marker
+`26754b3dd6c1a417cf7f38f759438cd5` and SHA-256
+`4dfbcc819a4f1a326206ed8b1f7604ba5e86ca063337158f8740fcefbab41882`.
+Independent inspection read 2,340 root shield on KHI-630 and zero shield
+with 6,378 hull on MFQ-419. The provider exited 0 with the world paused
+after two admissions and 142 movement samples. The sealed input retained
+its checksum. Fedora closed the TLS listeners and released the engine lock.
+Fedora's available RAM bottomed at 4.219 GiB. Full memory pressure and OOM
+counter increments stayed at zero.
+
+The private runner exited 1 during its optional NPC comparison. It used
+exact equality between the production hull receipt and a private line
+formatted to nine decimal places. The values differed by about
+`2.36e-11` HP. An offline recheck of the original evidence passed using
+the log's precision. The test exercised the product sender, TLS, native
+damage and native health reads with scripted contacts and protocol pilots.
+Native client gun capture, the result in two human cockpits and a public
+WAN run remain open.
+
+Private artifacts are under
+`.local/live-shield-bridge/pinned-4e7dd6c8/checkout/.local/live-shield-bridge/reserved-victim-native-01/`.
+`terminal.json` is the original driver result and
+`independent-verification.json` records the offline recheck.
+`fedora-evidence/` contains the raw adapter journal, native witness,
+provider/server results, memory samples and their checksum manifest.
+
+## Windows cockpit correction with fixture server values
+
+Cobalt ran the opt-in receiver in X4 9.00 on Windows with a living,
+occupied scout, ZPO-868. Independent Mission Director reads confirmed
+shield/hull changed from 1,196/1,400 to 478.4/770 and then to
+1,076.4/1,190. A deliberately delayed pre-gap update produced no
+command or receipt and the hull stayed at 1,190. A fresh baseline after
+the gap set 777.4/980. Three updates were confirmed by the native receiver.
+
+The source was a local fixture that supplied the movement window and
+health replies. The run exercised the real Windows client bridge, the
+network DLL and the game's health receiver. The authenticated server
+connection and combat worker were outside this run. Cobalt retained the
+raw logs on Windows and published the test harness. [Windows experiment and tests](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/1bb2eace5c574f827700624ddf023773e95b58a8)

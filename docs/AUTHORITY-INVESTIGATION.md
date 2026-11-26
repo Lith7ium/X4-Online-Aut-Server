@@ -1,5 +1,7 @@
 # Authoritative X4 investigation: initial assessment
 
+For current gameplay capabilities and test results, see the [authoritative-server status](AUTHORITATIVE-STATUS.md).
+
 Status: prototype and assessment, 15 November 2026. Native read-only fleet
 transport has been observed locally, but a complete fleet scan remains
 unproven. A one-ship native warp experiment observed delayed position application
