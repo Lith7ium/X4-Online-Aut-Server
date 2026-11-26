@@ -1,7 +1,7 @@
 """Opt-in, read-only combat capture for an admitted Windows Company pilot.
 
 Diagnostic runs only. The overlay installs the native X4AuthorityCombatObserver
-and a small UI module that, after the seat gate admits the pilot, arms it on
+and a small UI module that, after a confirmed participant resume and helm check, arms it on
 the offered world's registry epoch and watches only the admitted registry
 index. The observer's AUTH_COMBAT_OBS lines in the pilot's own log are the
 evidence. The local receipt binds the checkpoint offered to this pilot (ID and
@@ -16,16 +16,38 @@ from pathlib import Path
 import re
 import tempfile
 
-from .combat_observation import FORBIDDEN_LUA_MUTATION_CALLS, MD_EVENT_PREFIX, parse_md_event
+from .combat_observation import (FORBIDDEN_LUA_MUTATION_CALLS, MD_EVENT_PREFIX, parse_md_event,
+                                 validate_md_read_only)
 
 FORMAT = 1
 DAMAGE_KINDS = ('shield_damaged', 'hull_damaged')
-OBSERVER_SCREEN = 'X4AuthorityCombatObserver'
-CONTROLS = frozenset({'Arm', 'Watch'})
+OBSERVER_SCREEN = 'X4AuthorityClientCombatCapture'
+CONTROLS = frozenset({'Arm', 'Watch', 'Disarm'})
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _HEX64 = re.compile(r'[0-9a-f]{64}')
 _CHECKPOINT = re.compile(r'checkpoint-[0-9a-f]{32}')
 _FIELDS = frozenset({'format', 'checkpoint_id', 'checkpoint_sha256', 'registry_epoch', 'piloted_ship_index', 'hits'})
+
+
+def private_capture_observer(text):
+    """Give the client capture its own observer state and one sequence per log."""
+    source = 'X4AuthorityCombatObserver'
+    reset = '      <set_value name="State.$seq" exact="0"/>\n'
+    if f'<mdscript name="{source}"' not in text or text.count(reset) != 1:
+        raise ValueError('unexpected source for the private client combat observer')
+    private = text.replace(source, OBSERVER_SCREEN).replace(reset, '')
+    watch = 'State.$armed and @$ship.exists and $ship.isclass.ship'
+    if private.count(watch) != 1:
+        raise ValueError('unexpected private combat watch gate')
+    private = private.replace(watch, watch + ' and @player.controlled == $ship and @player.occupiedship == $ship')
+    for event in ('shield_damaged', 'hull_damaged'):
+        gate = f'<event_object_{event} group="State.$targets"/>\n      <check_value value="State.$armed"/>'
+        if private.count(gate) != 1:
+            raise ValueError('unexpected private combat damage gate')
+        private = private.replace(gate, gate.replace('State.$armed"',
+            'State.$armed and @player.controlled == event.object and @player.occupiedship == event.object"'))
+    validate_md_read_only(private)
+    return private
 
 
 def _code(lua_text):
@@ -33,13 +55,13 @@ def _code(lua_text):
 
 
 def validate_capture_lua(lua_text):
-    """The capture module may only send Arm and Watch to the observer screen."""
+    """The capture module may only send Arm, Watch and Disarm to the observer screen."""
     code = _code(lua_text)
     found = [call for call in FORBIDDEN_LUA_MUTATION_CALLS if call != 'AddUITriggeredEvent' and call in code]
     sends = re.findall(r'AddUITriggeredEvent\(([^,]*),', code)
     controls = set(re.findall(r"\bsend\('([^']*)'", code))
     if found or sends != [repr(OBSERVER_SCREEN)] or not controls or not controls <= CONTROLS:
-        raise ValueError('combat capture may only arm and watch the read-only observer')
+        raise ValueError('combat capture may only control its private read-only observer')
     return {'read_only': True, 'controls': sorted(controls)}
 
 

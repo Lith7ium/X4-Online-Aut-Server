@@ -23,8 +23,7 @@ import re
 import stat
 
 from .trusted_load_messages import encode_bound_offer
-from .combat_capture import capture_config, validate_capture_lua
-from .combat_observation import validate_md_read_only
+from .combat_capture import capture_config, private_capture_observer, validate_capture_lua
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
@@ -208,8 +207,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         load_name = 'ui/authority_download_load_probe.lua'
         files[load_name] = extend_seat_gate(files[load_name].decode('utf-8'), seat_index,
                                             full_registry, company_motion=company_motion is not None,
-                                            company_purchases=company_purchase is not None,
-                                            combat_capture=combat_capture).encode('utf-8')
+                                            company_purchases=company_purchase is not None).encode('utf-8')
         for target, source in (
                 ('ui/authority_registry_resolve_string.lua',
                  'tools/dev/authority_registry_resolve_string.lua'),
@@ -316,13 +314,13 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                                            if 'ui/' + name not in ui_files]
     if combat_capture:
         observer = _source(ROOT / 'src/authority/md/combat_observer.xml', 1024 * 1024)
-        validate_md_read_only(observer.decode('utf-8'))
+        observer = private_capture_observer(observer.decode('utf-8')).encode('utf-8')
         capture = _source(ROOT / 'src/authority/lua/client_combat_capture.lua', 1024 * 1024)
         validate_capture_lua(capture.decode('utf-8'))
         config = config[:-2] + capture_config(full_registry, seat_index) + '}\n'
-        files['md/combat_observer.xml'] = observer
+        files['md/client_combat_capture.xml'] = observer
         files['ui/client_combat_capture.lua'] = capture
-        ui_files.insert(ui_files.index('ui/authority_download_load_probe.lua'), 'ui/client_combat_capture.lua')
+        ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/client_combat_capture.lua')
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

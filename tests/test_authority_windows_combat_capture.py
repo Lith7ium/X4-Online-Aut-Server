@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,7 +19,8 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 from authority.checkpoints import Checkpoint
 from authority.client_seat_overlay import extend_seat_gate
 from authority.combat_capture import (
-    capture_config, collect_hits, new_receipt, validate_capture_lua, verifier_arguments, write_receipt,
+    capture_config, collect_hits, new_receipt, private_capture_observer, validate_capture_lua,
+    verifier_arguments, write_receipt,
 )
 from authority.combat_observation import MD_EVENT_PREFIX, validate_md_read_only
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
@@ -159,7 +162,7 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                 config = (target / 'ui/config.lua').read_text()
                 probe = (target / 'ui/authority_download_load_probe.lua').read_text()
                 scripts = [entry.get('name') for entry in ElementTree.parse(target / 'ui.xml').iter('file')]
-                added = {'md/combat_observer.xml', 'ui/client_combat_capture.lua'}
+                added = {'md/client_combat_capture.xml', 'ui/client_combat_capture.lua'}
                 if not capture:
                     self.assertFalse(added & set(manifest))
                     self.assertNotIn('authority_combat_capture', config)
@@ -168,10 +171,14 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                 self.assertLessEqual(added, set(manifest))
                 self.assertIn(',authority_combat_capture={epoch="' + '1' * 32 + '",index=1}}', config)
                 self.assertLess(scripts.index('ui/client_combat_capture.lua'),
-                                scripts.index('ui/authority_download_load_probe.lua'))
-                self.assertLess(probe.index('X4LAN_AUTHORITY_SELECTED_SEAT=client_seat'),
-                                probe.index('X4LAN_COMBAT_CAPTURE.arm(client_seat)'))
-                self.assertEqual((target / 'md/combat_observer.xml').read_bytes(), OBSERVER_MD.read_bytes())
+                                scripts.index('ui/authority_two_x4_participant_probe.lua'))
+                self.assertNotIn('X4LAN_COMBAT_CAPTURE', probe)
+                observer = (target / 'md/client_combat_capture.xml').read_text()
+                self.assertEqual(observer, private_capture_observer(OBSERVER_MD.read_text()))
+                self.assertIn('<mdscript name="X4AuthorityClientCombatCapture"', observer)
+                self.assertNotIn('X4AuthorityCombatObserver', observer)
+                self.assertEqual(observer.count('<set_value name="State.$seq" exact="0"/>'), 1)
+                self.assertEqual(observer.count('@player.controlled == event.object'), 2)
         for change in ({'combat_capture': True}, {'combat_capture': 1, 'profile_id': 45850,
                                                    'save_path': r'D:\Test\45850\save', 'seat_index': 1}):
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -182,79 +189,30 @@ class CombatCaptureOverlayTest(unittest.TestCase):
         text = ("local full_registry_inspect=nil\n"
                 "  assert(full_registry_inspect:guard(),'full registry guard lost before admission')\n")
         registry = {'epoch': EPOCH, 'issued_count': 2, 'operational_bits': '10'}
-        selected = '  X4LAN_AUTHORITY_SELECTED_SEAT=client_seat\n'
-        plain = extend_seat_gate(text, 1, registry)
-        self.assertEqual(extend_seat_gate(text, 1, registry, combat_capture=True),
-                         plain.replace(selected, selected + '  X4LAN_COMBAT_CAPTURE.arm(client_seat)\n'))
+        self.assertNotIn('X4LAN_COMBAT_CAPTURE', extend_seat_gate(text, 1, registry))
         self.assertEqual(capture_config(registry, 1), f',authority_combat_capture={{epoch="{EPOCH}",index=1}}')
         for index in (0, 2, 3, True):
             with self.subTest(index=index), self.assertRaises(ValueError):
                 capture_config(registry, index)
         validate_md_read_only(OBSERVER_MD.read_text(encoding='utf-8'))
         source = CAPTURE_LUA.read_text(encoding='utf-8')
-        self.assertEqual(validate_capture_lua(source)['controls'], ['Arm', 'Watch'])
+        self.assertEqual(validate_capture_lua(source)['controls'], ['Arm', 'Disarm', 'Watch'])
         for unsafe in (source + 'SetObjectHull(ship, 1)\n',
-                       source.replace("send('Watch'", "send('Disarm'"),
-                       source.replace("AddUITriggeredEvent('X4AuthorityCombatObserver'", "AddUITriggeredEvent('Other'"),
-                       source + "AddUITriggeredEvent('X4AuthorityCombatObserver', 'Arm', {})\n"):
+                       source.replace("send('Watch'", "send('Snapshot'"),
+                       source.replace("AddUITriggeredEvent('X4AuthorityClientCombatCapture'", "AddUITriggeredEvent('Other'"),
+                       source + "AddUITriggeredEvent('X4AuthorityClientCombatCapture', 'Arm', {})\n"):
             with self.subTest(unsafe=unsafe[-60:]), self.assertRaises(ValueError):
                 validate_capture_lua(unsafe)
 
 
-class CombatCaptureLuaTest(unittest.TestCase):
-    def load(self, index=1):
-        try:
-            from lupa.luajit21 import LuaRuntime
-        except ImportError:
-            self.skipTest('lupa with LuaJIT 2.1 is not installed')
-        lua = LuaRuntime(unpack_returned_tuples=True)
-        sent, logs, handlers = [], [], {}
-        lua.globals().DebugError = logs.append
-        lua.globals().RegisterEvent = lambda name, handler: handlers.__setitem__(name, handler)
-        lua.globals().AddUITriggeredEvent = lambda screen, control, values: sent.append(
-            (screen, control, dict(values.items())))
-        lua.execute(f'X4LAN_CONFIG={{authority_combat_capture={{epoch="{EPOCH}",index={index}}}}}')
-        module = lua.execute(CAPTURE_LUA.read_text(encoding='utf-8'))
-        return module, sent, logs, handlers['X4AuthorityCombatObserver.Status']
-
-    def test_arms_on_offered_epoch_then_watches_only_the_admitted_index(self):
-        module, sent, logs, status = self.load()
-        self.assertFalse(module.arm(None))
-        self.assertEqual(sent, [])
-        self.assertTrue(module.arm('seat'))
-        self.assertTrue(module.arm('seat'))  # one Arm request until the observer answers
-        self.assertEqual(sent, [('X4AuthorityCombatObserver', 'Arm', {
-            'epoch': EPOCH, 'watch_player_ship': True, 'watch_player_owned': False, 'request_id': 1})])
-        status(None, f'7|Armed|{EPOCH}|{EPOCH}')  # another request is ignored
-        self.assertEqual(module.state(), 'arming')
-        status(None, f'1|Armed|{EPOCH}|{EPOCH}')
-        self.assertTrue(module.arm('seat'))
-        self.assertEqual(sent[1], ('X4AuthorityCombatObserver', 'Watch', {
-            'registry_index': 1, 'label': 'admitted_pilot', 'as_target': True, 'as_source': False,
-            'watch_weapons': False, 'request_id': 2}))
-        status(None, '2|Watched|admitted_pilot|0x7a1|HVC-420|player|1|0')
-        self.assertEqual(module.state(), 'capturing')
-        self.assertTrue(module.arm('seat'))
-        self.assertEqual(len(sent), 2)
-        self.assertEqual(logs, [f'[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch={EPOCH} index=1 '
-                                'code=HVC-420 owner=player'])
-
-    def test_refusals_stop_the_capture_without_further_requests(self):
-        for armed, watched in ((f'1|Armed|{EPOCH}', None), (f'1|Armed|{EPOCH}|{"9" * 32}', None),
-                               (f'1|Armed|{EPOCH}|{EPOCH}', '2|WatchRefused|admitted_pilot'),
-                               (f'1|Armed|{EPOCH}|{EPOCH}', '2|Watched|admitted_pilot|0x7b2|VLY-685|xenon|2|0')):
-            with self.subTest(armed=armed, watched=watched):
-                module, sent, logs, status = self.load()
-                module.arm('seat')
-                status(None, armed)
-                if watched is not None:
-                    module.arm('seat')
-                    status(None, watched)
-                self.assertEqual(module.state(), 'failed')
-                self.assertFalse(module.arm('seat'))
-                self.assertEqual(len(sent), 1 if watched is None else 2)
-                self.assertEqual(len(logs), 1)
-                self.assertIn('AUTH_COMBAT_CAPTURE refused', logs[0])
+class CombatCaptureLifecycleTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('luajit'), 'LuaJIT is not installed')
+    def test_participant_controls_private_capture_on_the_live_helm(self):
+        script = ROOT / 'tests/authority_windows_combat_capture_lifecycle.lua'
+        for scenario in ('pause', 'refusal', 'wrong-actor', 'wrong-epoch', 'fault',
+                         'player-loss', 'helm-loss', 'disabled'):
+            with self.subTest(scenario=scenario):
+                subprocess.run(['luajit', script, scenario], cwd=ROOT, check=True, timeout=10)
 
 
 if __name__ == '__main__':

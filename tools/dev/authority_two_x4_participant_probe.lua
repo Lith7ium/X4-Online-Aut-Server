@@ -5,6 +5,7 @@ local ffi=require('ffi');ffi.cdef[[bool IsPlayerValid(void);]]
 local net,state,engine,next_hello,failed=nil,nil,nil,0,false
 local company_motion, company_purchase, company_fleet
 local admitted_seat
+local capture = cfg.authority_combat_capture and X4LAN_COMBAT_CAPTURE
 local running, sources_running=false,false
 local function set_sources_running(value)
  if sources_running==value then return end
@@ -18,8 +19,19 @@ local function stop_undock()
  if company_purchase and company_purchase.stop_undock then company_purchase:stop_undock() end
 end
 
+local function update_capture(seat)
+ if not capture then return end
+ local ok=pcall(capture.tick,seat)
+ if not ok then
+  pcall(capture.stop)
+  capture=nil
+  DebugError('[X4LAN] AUTH_COMBAT_CAPTURE unavailable')
+ end
+end
+
 local function frame()
  if not ffi.C.IsPlayerValid() then
+  update_capture(nil)
   if admitted_seat then stop_undock() end
   set_sources_running(false)
   return
@@ -72,7 +84,11 @@ local function frame()
   local lease,epoch,id,op=packet:match('^CMD|([0-9a-f]+)|([0-9a-f]+)|(%d+)|([a-z]+)$')
   assert(lease==cfg.authority_participant_lease and epoch==cfg.authority_ticket.world_epoch)
   assert(id and #id<=16 and not id:match('^0') and (op=='pause' or op=='resume'))
-  if op=='pause' then running=false;set_sources_running(false) end
+  if op=='pause' then
+   running=false
+   update_capture(nil)
+   set_sources_running(false)
+  end
   assert(state:submit('isolated-client',epoch,tonumber(id),op))
  end
  assert(state:on_update())
@@ -80,6 +96,11 @@ local function frame()
  local helm_running=running and admitted_seat~=nil and admitted_seat:ready()
  if admitted_seat and X4LAN_AUTHORITY_SELECTED_SEAT~=admitted_seat then stop_undock() end
  if running and sources_running and not helm_running then stop_undock() end
+ if capture then
+  local capturing=helm_running and X4LAN_AUTHORITY_SELECTED_SEAT==admitted_seat
+                    and not ffi.C.IsGamePaused()
+  update_capture(capturing and admitted_seat or nil)
+ end
  set_sources_running(helm_running)
  if company_fleet then
   company_fleet:prepare(admitted_seat)
@@ -97,6 +118,7 @@ SetScript('onUpdate',function()
  if not ok then
   failed=true
   pcall(stop_undock)
+  if capture then pcall(capture.stop) end
   if company_motion then pcall(company_motion.set_running,company_motion,false) end
   if company_purchase then pcall(company_purchase.set_running,company_purchase,false) end
   if company_fleet then pcall(company_fleet.set_running,company_fleet,false) end
