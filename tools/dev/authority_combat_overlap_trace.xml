@@ -121,6 +121,16 @@
      </actions>
     </cue>
 
+    <cue name="DodgeVerified" instantiate="true" namespace="this">
+     <conditions>
+      <event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'DodgeVerified'"/>
+      <check_value value="State.$armed and @State.$target.isoperational"/>
+     </conditions>
+     <actions>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_DODGE age=%s target=%s'.[player.age / 1s,State.$target]"/>
+     </actions>
+    </cue>
+
     <cue name="Disarm" instantiate="true" namespace="this">
      <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Disarm'"/></conditions>
      <actions>
@@ -179,7 +189,7 @@
     <cue name="SourceAttacked" instantiate="true" namespace="this">
      <conditions>
       <event_object_attacked_object group="State.$sgroup"/>
-      <check_value value="State.$armed"/>
+      <check_value value="State.$armed and event.param == State.$target and event.param2 == killmethod.hitbybullet"/>
      </conditions>
      <actions>
       <set_value name="$weapon" exact="@event.param3.{2}"/>
@@ -190,7 +200,7 @@
     <cue name="PlayerAttacked" instantiate="true" namespace="this">
      <conditions>
       <event_player_attacked_object/>
-      <check_value value="State.$armed"/>
+      <check_value value="State.$armed and event.param == State.$target and event.param2 == killmethod.hitbybullet"/>
      </conditions>
      <actions>
       <set_value name="$weapon" exact="@event.param3.{2}"/>

@@ -1,19 +1,25 @@
-"""Per-impact attribution analysis for the overlapping primary-gun run.
+"""Compare direct attack witnesses and projectile disappearance in one native run.
 
 Reads the AUTH_OVERLAP_* trace lines and the observer's events from one native log. The game
 names no attacker on shield or hull callbacks. Native runs show that a bullet still exists
 during its own impact callbacks and is gone at the next observation (the next impact frame or
-a sweep). So the bullets seen gone at the next observation are the candidates for the previous
-impact frame. That is an inference per frame, never per callback: when one frame holds several
-callbacks, nothing says which callback belongs to which bullet.
+a sweep). Disappearance is only a frame-level heuristic. Acceptance uses
+direct attack events and independent observations of target damage.
 """
+from collections import Counter
+import math
 import re
 
 PHASE_PREFIX = '[X4LAN] AUTH_COMBAT_PHASE '
 TRACE_PREFIX = '[X4LAN] AUTH_OVERLAP_'
+PROBE_SETUP = '[X4LAN] AUTH_COMBAT_PROBE setup_ok '
 FIELD = re.compile(r'(\w+)=(\S*)')
-# Bullets reach #4 in about 0.1 s (200 m) or 0.12 s (250 m) at 2100 m/s. A bullet first seen
-# gone later than this was not a hit in the frame just before.
+ACTOR = re.compile(r'(0x[0-9a-f]+)\(([A-Z0-9]{3}-[A-Z0-9]{3})(?:,w=\d+)?\)')
+WEAPON_PAIR = re.compile(r'\[component\.\{(0x[0-9a-f]+)L\},\s*component\.\{(0x[0-9a-f]+)L\}\]')
+BULLET_METHODS = {'hitbybullet', 'killmethod.hitbybullet'}
+SHOOTER_LABELS = {'1': 'company_player', '2': 'second_shooter'}
+# The nominal flight is about 0.1 s from 200 m. Longer observation gaps
+# cannot distinguish hits from unrelated disappearances in this fixture.
 MAX_FLIGHT_S = 0.5
 OVERLAP_PHASES = ('control_pilot', 'control_second', 'control_second_yawfix', 'overlap', 'miss_pilot')
 
@@ -22,20 +28,36 @@ def _fields(text):
     return dict(FIELD.findall(text))
 
 
+def _number(raw):
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _gone(ids):
     out = []
     for item in filter(None, (ids or '').split(';')):
         parts = item.split(':')
         if len(parts) == 3:
-            try:
-                out.append({'shooter': parts[0], 'projectile': parts[1], 'flight_s': float(parts[2])})
-            except ValueError:
-                continue
+            out.append({'shooter': parts[0], 'projectile': parts[1], 'flight_s': _number(parts[2])})
     return out
 
 
+def fixture_actors(text):
+    rows = [_fields(line.split(PROBE_SETUP, 1)[1]) for line in text.splitlines() if PROBE_SETUP in line]
+    if len(rows) != 1:
+        return {}
+    parsed = {index: ACTOR.fullmatch(rows[0].get(field, ''))
+              for index, field in (('1', 'p1'), ('2', 'p2'), ('4', 'npc_target'))}
+    if not all(parsed.values()) or len({match[1] for match in parsed.values()}) != 3:
+        return {}
+    return {index: match.groups() for index, match in parsed.items()}
+
+
 def parse_trace(text):
-    """Return {phase: {'fires', 'records', 'attacked', 'player_attacked', 'ctrl'}} in log order."""
+    """Collect fixture trace records by phase, preserving their trace order."""
     phase = 'unlabelled'
     phases = {}
     for line in text.splitlines():
@@ -47,7 +69,8 @@ def parse_trace(text):
         if TRACE_PREFIX not in line:
             continue
         kind, _, rest = line.split(TRACE_PREFIX, 1)[1].partition(' ')
-        bucket = phases.setdefault(phase, {'fires': [], 'records': [], 'attacked': [], 'player_attacked': [], 'ctrl': []})
+        bucket = phases.setdefault(phase, {'fires': [], 'records': [], 'attacked': [], 'player_attacked': [],
+                                           'dodges': []})
         f = _fields(rest)
         if kind == 'FIRE':
             bucket['fires'].append(f)
@@ -59,8 +82,8 @@ def parse_trace(text):
             bucket['attacked'].append(f)
         elif kind == 'PLAYER_ATTACKED':
             bucket['player_attacked'].append(f)
-        else:
-            bucket['ctrl'].append(rest.strip())
+        elif kind == 'DODGE':
+            bucket['dodges'].append(f)
     return phases
 
 
@@ -71,34 +94,48 @@ def _count(values):
     return out
 
 
-def impact_frames(records):
+def impact_frames(records, projectiles):
     """Group impact callbacks by frame and attach the bullets seen gone at the next observation."""
     frames = []
     pending = None
     unassigned = []
     for rec in records:
-        is_new_frame = rec['record'] == 'IMPACT' and (not frames or frames[-1]['age'] != rec.get('age') or pending is None)
-        if rec['record'] == 'SWEEP' or is_new_frame:
-            gone = rec['gone_list']
-            closing_sweep = rec['record'] == 'SWEEP' and rec.get('tag', '').endswith('_end')
-            if pending is not None:
-                if closing_sweep:
-                    # Too late to separate the last frame's hits from expired misses.
-                    pending['observed_by'] = 'end_sweep'
-                    pending['bullets'] = gone
-                else:
-                    pending['observed_by'] = 'next_frame' if rec['record'] == 'IMPACT' else 'stop_sweep'
-                    pending['bullets'] = [g for g in gone if g['flight_s'] <= MAX_FLIGHT_S]
-                    unassigned += [g for g in gone if g['flight_s'] > MAX_FLIGHT_S]
-                pending = None
+        age = _number(rec.get('age'))
+        gone = rec['gone_list']
+        sweep = rec['record'] == 'SWEEP'
+        same_age = pending is not None and age == pending['time']
+        if same_age:
+            unassigned.extend(gone)
+            if sweep or gone:
+                pending['observed_by'] = 'same_age_stop_sweep' if sweep else 'same_age_removal'
+        elif pending is not None:
+            if pending['observed_by'] is not None:
+                unassigned.extend(gone)
+            elif age is None or pending['time'] is None or age <= pending['time']:
+                pending['observed_by'] = 'invalid_age_boundary'
+                unassigned.extend(gone)
+            elif sweep and rec.get('tag', '').endswith('_end'):
+                pending['observed_by'] = 'end_sweep'
+                unassigned.extend(gone)
             else:
-                unassigned += gone
-            if rec['record'] == 'SWEEP':
-                continue
-            pending = {'age': rec.get('age'), 'callbacks': [], 'bullets': None, 'observed_by': None}
-            frames.append(pending)
-        if rec['record'] == 'IMPACT':
-            frames[-1]['callbacks'].append(rec)
+                pending['observed_by'] = 'stop_sweep' if sweep else 'next_frame'
+                for bullet in gone:
+                    fire = projectiles.get(bullet['projectile'])
+                    flight = bullet['flight_s']
+                    if (fire is not None and fire['shooter'] == bullet['shooter']
+                            and fire['time'] < pending['time'] and flight is not None
+                            and 0 < flight <= MAX_FLIGHT_S):
+                        pending['bullets'].append(bullet)
+                    else:
+                        unassigned.append(bullet)
+            pending = None
+        else:
+            unassigned.extend(gone)
+        if not sweep:
+            if pending is None:
+                pending = {'age': rec.get('age'), 'time': age, 'callbacks': [], 'bullets': [], 'observed_by': None}
+                frames.append(pending)
+            pending['callbacks'].append(rec)
     return frames, unassigned
 
 
@@ -113,9 +150,10 @@ def classify_frame(frame, projectile_weapon):
     shooters = sorted({b['shooter'] for b in bullets})
     if frame['observed_by'] in (None, 'end_sweep'):
         label = 'unresolved_last_frame'
-    elif frame['observed_by'] == 'stop_sweep' and not bullets:
-        # The stop sweep ran in the impact's own frame, before its bullets were deleted.
+    elif frame['observed_by'] == 'same_age_stop_sweep':
         label = 'unresolved_stop_sweep_same_frame'
+    elif frame['observed_by'] in ('same_age_removal', 'invalid_age_boundary'):
+        label = 'unresolved_age_boundary'
     elif not bullets:
         label = 'no_bullet_seen_gone'
     elif len(shooters) > 1:
@@ -135,30 +173,106 @@ def classify_frame(frame, projectile_weapon):
     }
 
 
-def analyse_phase(bucket, events):
-    fires = bucket['fires']
-    projectile_weapon = {f.get('proj'): f.get('weapon') for f in fires}
-    frames, unassigned = impact_frames(bucket['records'])
-    classified = [classify_frame(f, projectile_weapon) for f in frames]
-    named = {}
-    for source, rows in (('attacked_object', bucket['attacked']), ('player_attacked_object', bucket['player_attacked'])):
+def _target_event(event, actors, epoch):
+    return (actors.get('4') == (event.victim, event.victim_code) and event.victim_reg == 4
+            and event.victim_label == 'npc_target' and event.victim_owner == 'xenon'
+            and event.registry_epoch == epoch)
+
+
+def _direct_sources(bucket, events, actors, weapon_owners, epoch):
+    trace = {'attacked_object': [], 'player_attacked_object': []}
+    for kind, rows in (('attacked_object', bucket['attacked']), ('player_attacked_object', bucket['player_attacked'])):
         for row in rows:
-            named.setdefault(row.get('age'), set()).add(row.get('weapon_shooter'))
+            source = row.get('weapon_shooter')
+            target, _ = actors.get('4', (None, None))
+            actor, _ = actors.get(source, (None, None))
+            age = _number(row.get('age'))
+            if (source in SHOOTER_LABELS and target is not None and row.get('victim') == target
+                    and row.get('method') in BULLET_METHODS and age is not None
+                    and weapon_owners.get(row.get('weapon')) == {source}
+                    and (row.get('source') == actor if kind == 'attacked_object' else source == '1')):
+                trace[kind].append((age, source, row.get('comp'), row['weapon']))
+    # Each eligible witness must also appear as a direct attacker-side event in the
+    # reusable observer. The player-only event may corroborate #1 but cannot supply #2.
+    direct_trace = set(trace['attacked_object'])
+    named = {}
+    for event in events:
+        source = str(event.ev_att_reg)
+        if (event.kind != 'object_attacked_object' or source not in SHOOTER_LABELS
+                or event.param2 not in BULLET_METHODS or not _target_event(event, actors, epoch)
+                or actors.get(source) != (event.ev_att, event.ev_att_code)
+                or event.ev_att_label != SHOOTER_LABELS[source] or event.ev_att_owner != 'player'
+                or not event.ev_att_isship or event.ev_att_ctrl != (source == '1')):
+            continue
+        pair = WEAPON_PAIR.fullmatch(event.param3)
+        if pair and (event.age, source, *pair.groups()) in direct_trace:
+            named.setdefault(event.age, set()).add(source)
+    return trace, named
+
+
+def _verified_miss(bucket, target_events, actors):
+    before = [e for e in target_events if e.kind == 'snapshot' and e.param2 == 'before_miss_pilot']
+    after = [e for e in target_events if e.kind == 'snapshot' and e.param2 == 'after_miss_pilot']
+    if len(before) != 1 or len(after) != 1 or len(bucket['dodges']) != 1:
+        return False
+    start, end = before[0], after[0]
+    dodge = bucket['dodges'][0]
+    dodge_age = _number(dodge.get('age'))
+    fire_ages = [_number(row.get('age')) for row in bucket['fires']]
+    return (
+        dodge.get('target') == actors['4'][0] and dodge_age is not None and bool(fire_ages)
+        and all(age is not None and start.age <= age < dodge_age for age in fire_ages)
+        and end.age > dodge_age and start.param3 in {'1', 'true'} and end.param3 in {'1', 'true'}
+        and start.maxshield > 0 and start.maxhull > 0 and end.maxshield == start.maxshield
+        and end.maxhull == start.maxhull and 0 <= start.shield <= end.shield <= end.maxshield
+        and 0 < start.hull == end.hull <= end.maxhull
+    )
+
+
+def analyse_phase(bucket, events, actors, epoch):
+    fires = bucket['fires']
+    projectiles, weapon_owners = {}, {}
+    repeated = Counter(f.get('proj') for f in fires)
+    for fire in fires:
+        shooter, weapon, projectile = (fire.get(key) for key in ('shooter', 'weapon', 'proj'))
+        age = _number(fire.get('age'))
+        if (shooter not in SHOOTER_LABELS or not weapon or age is None or not projectile or projectile in ('0', 'null')
+                or fire.get('exists') not in {'1', 'true'} or repeated[projectile] != 1):
+            continue
+        projectiles[projectile] = dict(fire, time=age)
+        weapon_owners.setdefault(weapon, set()).add(shooter)
+    projectile_weapon = {key: fire['weapon'] for key, fire in projectiles.items()}
+    frames, unassigned = impact_frames(bucket['records'], projectiles)
+    classified = [classify_frame(f, projectile_weapon) for f in frames]
+    trace, named = _direct_sources(bucket, events, actors, weapon_owners, epoch)
+    target_events = [e for e in events if _target_event(e, actors, epoch)]
+    damage = [e for e in target_events if e.kind in ('shield_damaged', 'hull_damaged')]
+    other_victims = [e for e in events if e.kind in ('shield_damaged', 'hull_damaged')
+                     and not _target_event(e, actors, epoch)]
+    observer_damage = Counter((e.age, e.kind.removesuffix('_damaged'), e.amount, e.comp) for e in damage)
+    traced_damage = Counter((f['time'], c.get('kind'), _number(c.get('amount')), c.get('comp'))
+                            for f in frames for c in f['callbacks'])
+    damage_agrees = observer_damage == traced_damage and all(
+        age is not None and amount is not None and amount > 0 for age, _, amount, _ in traced_damage)
+    damage_ages = {age for age, _, _, _ in traced_damage}
+    direct_hit_shooters = {source for age, sources in named.items() if age in damage_ages for source in sources}
+    coincident = []
     agree = disagree = 0
     for frame in classified:
-        if frame['class'] == 'one_shooter_count_matches' and frame['age'] in named:
-            if named[frame['age']] <= set(frame['shooters']):
+        direct_shooters = named.get(_number(frame['age']), set())
+        if damage_agrees and frame['bullets_needed'] >= 2 and direct_shooters == {'1', '2'}:
+            coincident.append(frame['age'])
+        if damage_agrees and frame['class'] == 'one_shooter_count_matches' and direct_shooters:
+            if direct_shooters == set(frame['shooters']):
                 agree += 1
             else:
                 disagree += 1
-    damage = [e for e in events if e.kind in ('shield_damaged', 'hull_damaged') and e.victim_label == 'npc_target']
-    other_victims = [e for e in events if e.kind in ('shield_damaged', 'hull_damaged') and e.victim_label != 'npc_target']
-    inferred_by_age = {f['age']: f['shooters'] for f in classified if f['class'] == 'one_shooter_count_matches'}
-    label_index = {'company_player': '1', 'second_shooter': '2'}
+    inferred_by_age = {_number(f['age']): f['shooters'] for f in classified if f['class'] == 'one_shooter_count_matches'}
+    label_index = {label: index for index, label in SHOOTER_LABELS.items()}
     la_agree = la_disagree = 0
     for e in damage:
-        shooters = inferred_by_age.get(f'{e.age:g}') or inferred_by_age.get(str(e.age))
-        if shooters:
+        shooters = inferred_by_age.get(e.age)
+        if damage_agrees and shooters:
             if label_index.get(e.last_att_label) in shooters:
                 la_agree += 1
             else:
@@ -166,11 +280,11 @@ def analyse_phase(bucket, events):
     last_attackers = [e.last_att_label for e in damage]
     callbacks = sum(f['callbacks'] for f in classified)
     return {
-        'shots_by_shooter': _count(f.get('shooter') for f in fires),
-        'weapons_by_shooter': {s: len({f.get('weapon') for f in fires if f.get('shooter') == s})
-                               for s in sorted({f.get('shooter') for f in fires})},
-        'bullet_object_on_fire': _count(f.get('exists') for f in fires),
-        'bullet_macros': sorted({f.get('pmacro') for f in fires}),
+        'shots_by_shooter': _count(f.get('shooter', '?') for f in fires),
+        'weapons_by_shooter': {s: len({f.get('weapon') for f in fires if f.get('shooter', '?') == s})
+                               for s in sorted({f.get('shooter', '?') for f in fires})},
+        'bullet_object_on_fire': _count(f.get('exists', '?') for f in fires),
+        'bullet_macros': sorted({f.get('pmacro', '?') for f in fires}),
         'impact_callbacks': callbacks,
         'impact_amounts': sorted({a for f in classified for a in f['amounts']}),
         'frames': len(classified),
@@ -180,22 +294,30 @@ def analyse_phase(bucket, events):
         'frame_classes': _count(f['class'] for f in classified),
         'bullets_gone_without_impact_frame': len(unassigned),
         'unassigned_by_shooter': _count(g['shooter'] for g in unassigned),
-        'named_attack_events': {'attacked_object': _count(a.get('weapon_shooter') for a in bucket['attacked']),
-                                'player_attacked_object': _count(a.get('weapon_shooter') for a in bucket['player_attacked'])},
-        'named_attack_vs_inferred_frame': {'agree': agree, 'disagree': disagree},
+        'named_attack_events': {kind: _count(source for _, source, _, _ in rows) for kind, rows in trace.items()},
+        'direct_hit_shooters': sorted(direct_hit_shooters),
+        'direct_contact_frames': len(named),
+        'coincident_direct_hit_frames': coincident,
+        'named_attack_vs_inferred_frame': {'agree': agree, 'disagree': disagree, 'compared': agree + disagree,
+                                           'unverified': len(frames) - agree - disagree},
         'observer_damage_callbacks': len(damage),
+        'observer_damage_matches_trace': damage_agrees,
         'observer_damage_with_event_attacker': sum(1 for e in damage if e.ev_att != '0'),
         'observer_lastattacker_labels': _count(last_attackers),
         'observer_lastattacker_switches': sum(1 for a, b in zip(last_attackers, last_attackers[1:]) if a != b),
-        'lastattacker_vs_inferred_frame': {'agree': la_agree, 'disagree': la_disagree},
+        'lastattacker_vs_inferred_frame': {'agree': la_agree, 'disagree': la_disagree,
+                                          'compared_callbacks': la_agree + la_disagree,
+                                          'unverified_callbacks': len(damage) - la_agree - la_disagree},
         'observer_other_victim_damage': _count(e.victim_label for e in other_victims),
+        'miss_dodge_and_health_verified': len(projectiles) == len(fires) and _verified_miss(bucket, target_events, actors),
         'frame_detail': classified,
     }
 
 
-def analyse(text, events):
+def analyse(text, events, *, epoch=None):
     trace = parse_trace(text)
-    return {phase: analyse_phase(bucket, [e for e in events if e.phase == phase])
+    actors = fixture_actors(text)
+    return {phase: analyse_phase(bucket, [e for e in events if e.phase == phase], actors, epoch)
             for phase, bucket in trace.items() if phase in OVERLAP_PHASES}
 
 
@@ -204,9 +326,13 @@ def accepted(by_phase):
     second = by_phase.get('control_second_yawfix') or by_phase.get('control_second', {})
     both = by_phase.get('overlap', {})
     miss = by_phase.get('miss_pilot', {})
-    return (
-        set(pilot.get('shots_by_shooter', {})) == {'1'} and pilot.get('impact_callbacks', 0) > 0
-        and set(second.get('shots_by_shooter', {})) == {'2'} and second.get('impact_callbacks', 0) > 0
-        and set(both.get('shots_by_shooter', {})) == {'1', '2'} and both.get('impact_callbacks', 0) > 0
-        and miss.get('shots_by_shooter', {}).get('1', 0) > 0 and miss.get('impact_callbacks', 1) == 0
-    )
+    for phase in (pilot, second, both, miss):
+        if not phase.get('observer_damage_matches_trace'):
+            return False
+    if any(phase.get('observer_other_victim_damage') for phase in by_phase.values()):
+        return False
+    return (set(pilot.get('shots_by_shooter', {})) == {'1'} and pilot.get('direct_hit_shooters') == ['1']
+            and set(second.get('shots_by_shooter', {})) == {'2'} and second.get('direct_hit_shooters') == ['2']
+            and set(both.get('shots_by_shooter', {})) == {'1', '2'} and bool(both.get('coincident_direct_hit_frames'))
+            and set(miss.get('shots_by_shooter', {})) == {'1'} and miss.get('impact_callbacks') == 0
+            and miss.get('direct_contact_frames') == 0 and miss.get('miss_dodge_and_health_verified') is True)

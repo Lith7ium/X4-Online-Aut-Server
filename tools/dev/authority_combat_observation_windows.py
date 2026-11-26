@@ -443,7 +443,7 @@ def main(argv=None):
     project_errors = [
         line.strip()
         for line in log_text.splitlines()
-        if any(tok in line for tok in (EXTENSION_ID, 'X4AuthorityCombatObserver', 'X4AuthorityCombatProbe', 'X4AuthorityCombatOverlapTrace', 'combat_observer', 'x4neon.combat.shoot_at'))
+        if any(tok in line for tok in (EXTENSION_ID, 'X4AuthorityCombatObserver', 'X4AuthorityCombatProbe', 'X4AuthorityCombatOverlapTrace', 'authority_combat_overlap_x4', 'combat_observer', 'x4neon.combat.shoot_at'))
         and ('[=ERROR=]' in line or 'Error in MD cue' in line or 'Error in AI script' in line or 'Error while executing' in line)
         and 'Could not find signature file' not in line
     ]
@@ -454,10 +454,15 @@ def main(argv=None):
     if args.scenario == 'overlap':
         from authority_combat_overlap_analysis import OVERLAP_PHASES, accepted as overlap_ok, analyse
         by_phase = summarize_by_phase(events, readbacks, phase_victims={p: 'npc_target' for p in OVERLAP_PHASES})
-        overlap = analyse(log_text, events)
+        overlap = analyse(log_text, events, epoch=EPOCH)
+        driver_errors = [line.split('[X4LAN] AUTH_COMBAT_DRIVER ', 1)[1].strip()
+                         for line in log_text.splitlines() if '[X4LAN] AUTH_COMBAT_DRIVER ERROR ' in line]
+        outside_phase_damage = [event.seq for event in events if event.phase not in overlap
+                                and event.kind in ('shield_damaged', 'hull_damaged')]
         accepted = (
             outcome == 'done' and protected_unchanged and view_removed and not still_running
-            and not error_lines and overlap_ok(overlap)
+            and not project_errors and not error_lines and not driver_errors and not outside_phase_damage
+            and overlap_ok(overlap)
         )
         result = {
             'scenario': 'overlap', 'outcome': outcome, 'accepted': accepted,
@@ -468,7 +473,8 @@ def main(argv=None):
             'protected_unchanged': protected_unchanged, 'view_removed': view_removed,
             'x4_running_after': still_running,
             'project_error_count': len(project_errors), 'project_errors': project_errors[:20],
-            'driver_errors': error_lines, 'weapon_profiles': weapon_profiles, 'fallbacks': fallbacks,
+            'driver_errors': driver_errors or error_lines, 'weapon_profiles': weapon_profiles, 'fallbacks': fallbacks,
+            'outside_phase_damage_sequences': outside_phase_damage,
             'driver_lines': driver_lines, 'probe_lines': probe_lines,
             'overlap': overlap, 'phases': by_phase,
         }

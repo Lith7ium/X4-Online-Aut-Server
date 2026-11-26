@@ -12,6 +12,9 @@ local ffi = require('ffi')
 local C = ffi.C
 local function declare(text) pcall(ffi.cdef, text) end
 declare('typedef uint64_t UniverseID;')
+if not pcall(ffi.typeof, 'UIPosRot') then
+    ffi.cdef('typedef struct { float x,y,z,yaw,pitch,roll; } UIPosRot;')
+end
 declare([[typedef struct {
     const char* Name; const char* RawName; const char* Ware; uint32_t Quality; const char* PropertyType;
     float DamageFactor; float CoolingFactor; float ReloadFactor; float SpeedFactor; float LifeTimeFactor;
@@ -28,6 +31,7 @@ for _, text in ipairs({
     'UniverseID GetPlayerOccupiedShipID(void);',
     'bool IsValidComponent(UniverseID componentid);',
     'bool IsComponentOperational(UniverseID componentid);',
+    'UIPosRot GetObjectPositionInSector(UniverseID componentid);',
     'size_t GetNumUpgradeSlots(UniverseID componentid, const char* macroname, const char* upgradetypename);',
     'UniverseID GetUpgradeSlotCurrentComponent(UniverseID componentid, const char* upgradetypename, size_t slot);',
     'bool GetInstalledWeaponMod(UniverseID weaponid, UIWeaponMod* weaponmod);',
@@ -53,6 +57,14 @@ local function check_profile()
     assert(text:match('/' .. tostring(cfg.profile) .. '/save$'), 'not disposable profile ' .. tostring(cfg.profile))
 end
 
+local function check_dodge_position(ship, x)
+    local actor = ConvertIDTo64Bit(ship)
+    assert(C.IsValidComponent(actor) and C.IsComponentOperational(actor), 'miss target is unavailable')
+    local p = C.GetObjectPositionInSector(actor)
+    assert(math.abs(p.x - x) < 1 and math.abs(p.y - 100000) < 1 and math.abs(p.z) < 1,
+        'miss target position was not observed')
+end
+
 -- Target #4 sits at (-6000, 100000, 0). #1 faces it along +z; #2 faces it along +x (yaw 90),
 -- and the driver retries #2 at yaw -90 if its bullets miss in the control phase. Both fire from
 -- 200 m, so equal flight times put both shooters' salvos into the same frames.
@@ -72,7 +84,9 @@ local PHASES = {
 local WATCH_PLAN = {
     { index = 1, label = 'company_player', as_target = true, as_source = true, watch_weapons = true },
     { index = 2, label = 'second_shooter', as_target = true, as_source = true, watch_weapons = true },
+    { index = 3, label = 'company_npc_target', as_target = true },
     { index = 4, label = 'npc_target', as_target = true, as_source = false, watch_weapons = false },
+    { index = 5, label = 'npc_attacker', as_target = true },
 }
 
 local state = {
@@ -111,7 +125,12 @@ local observer = combat_obs.new({
 })
 
 RegisterEvent('X4AuthorityShipRegistry.Correlated', function(_, value) state.reg_reply = tostring(value) end)
-RegisterEvent('X4AuthorityCombatProbe.Result', function(_, value) state.probe_reply = tostring(value) end)
+RegisterEvent('X4AuthorityCombatProbe.Result', function(_, value)
+    state.probe_reply = tostring(value)
+    if state.dodge_request and state.probe_reply:match('^' .. state.dodge_request .. '|') then
+        state.dodge_reply = state.probe_reply
+    end
+end)
 RegisterEvent('X4AuthorityCombatObserver.Status', function(_, value) state.obs_status = tostring(value) end)
 RegisterEvent('X4AuthorityCombatOverlapTrace.Status', function(_, value) state.trace_reply = tostring(value) end)
 RegisterEvent('X4AuthorityCombatObserver.Event', function(_, value)
@@ -138,6 +157,7 @@ local function observer_ctrl(control, args)
     state.obs_status = nil
     args.request_id = next_req()
     AddUITriggeredEvent('X4AuthorityCombatObserver', control, args)
+    return args.request_id
 end
 
 local function log_weapon_profile(label, actor_str)
@@ -238,15 +258,18 @@ local function tick()
     if s == 'wait_seat_settle' then
         if now() < state.settle_until then return end
         local p1 = ConvertIDTo64Bit(state.ships[1])
-        log('SEAT_CHECK p1_match_ctrl=' .. tostring(C.GetPlayerControlledShipID() == p1) .. ' p1_match_occ=' .. tostring(C.GetPlayerOccupiedShipID() == p1))
+        assert(C.GetPlayerControlledShipID() == p1 and C.GetPlayerOccupiedShipID() == p1, 'pilot helm was not confirmed')
+        log('SEAT_CHECK p1_match_ctrl=true p1_match_occ=true')
         log_weapon_profile('company_player', state.ships[1])
         log_weapon_profile('second_shooter', state.ships[2])
-        observer_ctrl('Arm', { epoch = cfg.epoch, watch_player_ship = true, watch_player_owned = true })
+        state.obs_request = observer_ctrl('Arm', { epoch = cfg.epoch, watch_player_ship = true, watch_player_owned = true })
         state.step = 'wait_arm'
         return
     end
     if s == 'wait_arm' then
         if not state.obs_status then return end
+        assert(state.obs_status == string.format('%s|Armed|%s|%s', state.obs_request, cfg.epoch, cfg.epoch),
+            'observer registry epoch was not confirmed')
         log('OBS_STATUS ' .. state.obs_status)
         state.watch_idx = 0
         state.step = 'watch_next'
@@ -260,13 +283,17 @@ local function tick()
             state.step = 'wait_trace_arm'
             return
         end
-        observer_ctrl('Watch', { registry_index = w.index, label = w.label, as_target = w.as_target,
+        state.obs_request = observer_ctrl('Watch', { registry_index = w.index, label = w.label, as_target = w.as_target,
             as_source = w.as_source, watch_weapons = w.watch_weapons })
         state.step = 'wait_watch'
         return
     end
     if s == 'wait_watch' then
         if not state.obs_status then return end
+        local w, reply = WATCH_PLAN[state.watch_idx], split(state.obs_status, '|')
+        assert(tonumber(reply[1]) == state.obs_request and reply[2] == 'Watched' and reply[3] == w.label
+            and reply[4] == state.ships[w.index] and reply[5] == state.codes[w.index] and tonumber(reply[7]) == w.index,
+            'observer did not watch the registered fixture ship')
         log('OBS_STATUS ' .. state.obs_status)
         state.step = 'watch_next'
         return
@@ -329,6 +356,21 @@ local function tick()
     end
     if s == 'wait_marker' then
         if not state.probe_reply then return end
+        if ph.dodge then
+            check_dodge_position(state.ships[4], -6000)
+            state.obs_request = observer_ctrl('Snapshot', { tag = 'before_miss_pilot' })
+            state.step = 'wait_miss_snapshot'
+            return
+        end
+        start_phase_fire(ph)
+        state.step = 'run'
+        return
+    end
+    if s == 'wait_miss_snapshot' then
+        if not state.obs_status then return end
+        local reply = split(state.obs_status, '|')
+        assert(tonumber(reply[1]) == state.obs_request and reply[2] == 'SnapshotDone' and reply[3] == 'before_miss_pilot',
+            'miss baseline snapshot was not confirmed')
         start_phase_fire(ph)
         state.step = 'run'
         return
@@ -337,11 +379,22 @@ local function tick()
         local elapsed = now() - state.phase_start
         local c = state.counts
         local impacts = c.shield + c.hull
+        if state.dodge_request then
+            if not state.dodge_reply then
+                assert(elapsed < ph.max, 'miss target movement was not acknowledged')
+                return
+            end
+            assert(state.dodge_reply == state.dodge_request .. '|Repositioned|4', 'miss target movement was refused')
+            state.dodge_request = nil
+            check_dodge_position(state.ships[4], ph.dodge[2])
+            trace('DodgeVerified')
+        end
         if not state.stop_sent then
             if ph.dodge and not state.dodged and c.shots1 > 0 then
                 state.dodged = true
                 probe('FireControl', { mode = 'stop', shooter = 1 })
                 local d = ph.dodge
+                state.dodge_request = state.req_id + 1
                 probe('Reposition', { index = d[1], x = d[2], y = d[3], z = d[4], yaw = d[5] })
                 log(string.format('DODGE phase=%s elapsed=%.3f shots1=%d', state.phase, elapsed, c.shots1))
                 return
