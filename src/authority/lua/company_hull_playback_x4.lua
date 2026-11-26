@@ -140,8 +140,9 @@ function M.new(options, engine)
         function session:first_contact_in_range(actual, target)
             if not position(actual) or not position(target) or not is_pilot() or not eligible() then return false end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
-            return dx * dx + dy * dy + dz * dz <= VELOCITY_STEP_LIMIT ^ 2
-                and engine.within_radar(original_cockpit.actor, actual, target)
+            local range = observer.current_radar_range and observer:current_radar_range(index)
+            return finite(range) and range > 0 and dx * dx + dy * dy + dz * dz <= VELOCITY_STEP_LIMIT ^ 2
+                and engine.within_radar(original_cockpit.actor, actual, target, range)
         end
 
         function session:align(target, first_contact_guard)
@@ -249,10 +250,7 @@ function M.new_x4(options)
             return {x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z),
                     yaw = tonumber(value.yaw), pitch = tonumber(value.pitch), roll = tonumber(value.roll)}
         end,
-        within_radar = function(cockpit_actor, actual, destination)
-            local ship = ref(cockpit_actor)
-            local radius = ship and GetComponentData(ship, 'maxradarrange')
-            if not finite(radius) or radius <= 0 then return false end
+        within_radar = function(cockpit_actor, actual, destination, radius)
             local origin = read(cockpit_actor)
             local function inside(point)
                 local dx, dy, dz = point.x - origin.x, point.y - origin.y, point.z - origin.z

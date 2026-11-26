@@ -62,7 +62,6 @@ ConvertStringToLuaID = tostring
 ConvertIDTo64Bit = tonumber
 function GetComponentData(id, field)
     if id == tostring(sector) and field == 'macro' then return 'sector_a' end
-    if id == tostring(cockpit) and field == 'maxradarrange' then return radar_range end
     assert(id == tostring(target) and field == 'owner')
     return owner, docked, docking, stored, pilot, assigned, ai
 end
@@ -71,6 +70,9 @@ local observer = {}
 function observer:matches(seen_epoch, seen_sector, index, actor, code)
     return observed and seen_epoch == epoch and seen_sector == 'sector_a'
         and index == 73 and actor == '0x02' and code == 'ABC-123'
+end
+function observer:current_radar_range(index)
+    if index == binding.index then return radar_range end
 end
 function observer:is_active_pilot(index)
     return active_pilot and index == binding.index
@@ -344,7 +346,7 @@ local function first_contact(outcome)
     local enabled = outcome ~= 'disabled'
     local clock, records, faults, steps = 10, {}, {}, {}
     local controller = cockpit_playback.new({
-        enabled=true, trial_first_contact=enabled,
+        enabled=true, trial_first_contact=enabled, allow_reacquire_align=outcome == 'non_roster_baselines',
         own_index=cfg.own_index, target_index=binding.index, adapter=module.new_x4(cfg),
         clock=function() return clock end, game=function() return clock end, paused=function() return paused end,
         record=function(event) records[#records + 1] = event; return true end,
@@ -371,6 +373,22 @@ local function first_contact(outcome)
         end
     end
 
+    if outcome == 'non_roster_baselines' then
+        active_pilot = false
+        for sequence = 1, 2 do
+            clock = 10 + sequence * .03
+            assert(controller:sample(binding, 1, sample(sequence, 20, 1 + sequence * .03), clock))
+            controller:tick(clock)
+        end
+        assert(writes == 0)
+        controller:view(nil, 2)
+        clock = 10.18
+        assert(not controller:sample(binding, 3, sample(3, 191, 1.18, {x=1425,y=0,z=0}), clock))
+        controller:tick(clock)
+        assert(writes == 0, 'velocity-less non-roster baselines granted a large reacquisition write')
+        return
+    end
+
     local baseline_x = outcome == 'distant_baseline' and -31 or 20
     if outcome == 'pilot_absent' then active_pilot = false end
     controller:sample(binding, 1, sample(1, baseline_x, 1), clock)
@@ -392,7 +410,7 @@ local function first_contact(outcome)
     controller:sample(binding, 1, next_sample, arrival)
     tick(arrival)
 
-    if outcome ~= 'confirmed' and outcome ~= 'wrong_readback' then
+    if outcome ~= 'confirmed' and outcome ~= 'wrong_readback' and outcome ~= 'expired_readback' then
         for i = 1, 4 do tick(arrival + i * .03) end
         assert(writes == 0, outcome .. ' wrote an unapproved native alignment')
         return
@@ -401,6 +419,17 @@ local function first_contact(outcome)
     assert(writes == 1 and actual.x == 20 and requested.x == 191, outcome .. ' missed the bounded first contact')
     assert(not found_readback(191), 'the requested pose was treated as an actual native readback')
     check_attitude(native_readback(requested), actual)
+
+    if outcome == 'expired_readback' then
+        tick(arrival + 5.01, true)
+        assert(actual.x == 191 and not found_readback(191) and faults[1] == 'first_contact_readback_expired',
+               'a correct pose read after expiry confirmed an uncertain first contact')
+        clock = arrival + 5.02
+        assert(not controller:sample(binding, 1, sample(3, 210, 1 + delta + 5.02, {x=200,y=0,z=0}), clock))
+        tick(clock + .03)
+        assert(writes == 1, 'the controller wrote again after the first-contact readback expired')
+        return
+    end
 
     if outcome == 'wrong_readback' then
         actual = native_readback(requested)
@@ -446,6 +475,7 @@ end
 
 for _, outcome in ipairs({'confirmed', 'disabled', 'distant_baseline', 'step_limit', 'lateral', 'generation_changed',
         'capture_gap', 'arrival_gap', 'pilot_absent', 'pilot_expired', 'view_withdrawn', 'destination_out_of_radar',
-        'baseline_out_of_radar', 'wrong_zone', 'wrong_sector', 'wrong_readback'}) do
+        'baseline_out_of_radar', 'wrong_zone', 'wrong_sector', 'wrong_readback', 'expired_readback',
+        'non_roster_baselines'}) do
     first_contact(outcome)
 end

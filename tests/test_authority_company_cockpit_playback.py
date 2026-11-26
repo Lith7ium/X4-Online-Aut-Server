@@ -1160,9 +1160,9 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             local epoch = ('a'):rep(32)
             local pinned = {epoch = epoch, issued_count = 20, nonce = ('f'):rep(32)}
             local received, issued
-            local calls = 0
+            local calls, now = 0, 10
             local multi = observer_mod.new_multi(pinned, 1, 3, {
-                clock = function() return 10 end,
+                clock = function() return now end, read_radar_range = true,
                 probe = function() return {mode = 'multi'} end,
                 parse_actor = tonumber,
                 verify_radar_actor = function(actor, sector, code)
@@ -1192,19 +1192,23 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             assert(calls == 2)
             received(nil, stale .. '|' .. epoch .. '|MULTI|1|2,0x2a,sector_macro,ABC-100,radar')
             assert(reader:current() == nil)
-            received(nil, fresh .. '|' .. epoch .. '|MULTI|2|3,0x2b,sector_macro,ABC-300,radar;4,0x2a,sector_macro,ABC-400,radar')
+            received(nil, fresh .. '|' .. epoch .. '|MULTI|2|3,0x2b,sector_macro,ABC-300,radar;4,0x2a,sector_macro,ABC-400,radar|780')
             assert(reader:current().index == 4)
+            assert(issued.read_radar_range and reader:current_radar_range(4) == 780)
+            assert(reader:current_radar_range(3) == nil)
+            now = 10.26
+            assert(reader:current_radar_range(4) == nil)
             assert(multi:set_pilot_roster({4, 21}))
             reader:tick()
             assert(calls == 3 and issued.pilot1 == 4 and issued.pilot2 == 0 and issued.pilot3 == 0)
             received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|2'
-                .. '|21,0x2a,sector_macro,ABC-401,radar;4,0x2a,sector_macro,ABC-400,radar')
+                .. '|21,0x2a,sector_macro,ABC-401,radar;4,0x2a,sector_macro,ABC-400,radar|780')
             assert(reader:current().index == 4 and multi.readers.cockpit2:current() == nil)
             assert(multi:set_pilot_roster({21}))
             assert(not reader:is_active_pilot(4) and not reader:is_active_pilot(21))
             reader:tick()
             assert(calls == 4 and issued.pilot1 == 0 and issued.pilot2 == 0 and issued.pilot3 == 0)
-            received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|0|-')
+            received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|0|-|0')
             assert(reader:current() == nil)
             assert(multi:set_pilot_roster({}))
             multi:close()

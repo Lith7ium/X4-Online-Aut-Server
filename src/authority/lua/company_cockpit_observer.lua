@@ -263,6 +263,13 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
         local eligible = pending == request and probe ~= nil
         pending = nil
         if not eligible or #row > 1024 then clear_all(); return end
+        local radar_range
+        if engine.read_radar_range then
+            local response, meters = row:match('^(.*)|(%d+)$')
+            radar_range = tonumber(meters)
+            if not radar_range or radar_range >= math.huge then clear_all(); return end
+            row = response
+        end
         local id, actual_epoch, status, count_text, entries_text =
             row:match('^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([^|]*)$')
         local reported = tonumber(count_text)
@@ -304,6 +311,7 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
                             candidates[#candidates + 1] = {
                                 hull = hull,
                                 mode = final_mode,
+                                radar_range = radar_range,
                                 deadline = request.deadline,
                                 row = {
                                     epoch = epoch, sector_macro = sector, index = index,
@@ -362,6 +370,7 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
             pending = {id = id, probe = probe, deadline = now + FRESHNESS}
             local ok, issued = pcall(engine.issue, {
                 request_id = id, epoch = epoch, count = count, own = own_index,
+                read_radar_range = engine.read_radar_range,
                 mode = 'multi', max_pilots = max_pilots, hud_mode = probe.hud_mode or 'none',
                 pilot1 = roster[1] or 0, pilot2 = roster[2] or 0, pilot3 = roster[3] or 0,
             })
@@ -391,6 +400,15 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
             inspect()
             local entry = slots[slot_idx]
             return entry and entry.mode or nil
+        end
+        function reader:current_radar_range(index)
+            local _, now = inspect()
+            local entry = slots[slot_idx]
+            -- Use the current range from this very ship observation. HUD
+            -- visibility alone is insufficient to authorize an alignment.
+            if entry and entry.row.index == index and now - (entry.deadline - FRESHNESS) <= .25 then
+                return entry.radar_range
+            end
         end
         function reader:is_active_pilot(index)
             for _, pilot_index in ipairs(roster) do
@@ -672,6 +690,7 @@ function M.new_multi_x4(pinned, own_index, registry_ready, options)
         return {mode = 'multi', hud_hull = hud_hull, hud_mode = hud_mode}
     end
     return M.new_multi(pinned, own_index, max_pilots, {
+        read_radar_range = options.read_radar_range == true or nil,
         clock = options.clock or GetCurRealTime,
         probe = probe,
         parse_actor = h.resolve.parse_hex,

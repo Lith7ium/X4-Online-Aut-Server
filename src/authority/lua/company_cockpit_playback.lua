@@ -141,6 +141,11 @@ function M.new(options)
             return false
         end
         local initial = pending_align.first_contact
+        if initial and now - pending_align.arrival >= prediction_seconds then
+            stop_track()
+            options.fault('first_contact_readback_expired')
+            return false
+        end
         local actual = session:read()
         if not actual or (initial and not session:first_contact_in_range(actual, pending_align.target)) then
             stop_track()
@@ -270,6 +275,7 @@ function M.new(options)
         controller, session = candidate, native_session
         stats.alignments = stats.alignments + 1
         pending_align = alignment(sample, options.clock(), true)
+        pending_align.arrival = arrival
         last_by_index_gen[watermark_key(verified.index, verified.generation)] = watermark(sample, arrival)
         return true, 'aligned'
     end
@@ -510,8 +516,9 @@ function M.new(options)
             if not sample.real_velocity then
                 -- A fresh velocity-less baseline can identify the first contact.
                 -- It cannot grant the normal post-loss reacquisition permission.
-                if options.trial_first_contact == true and not align_allowed and not last and not active_index then
-                    if sample.version == 3 and sample.epoch == observed.epoch and sample.index == ship_index
+                if options.trial_first_contact == true and not align_allowed and not active_index then
+                    if (not last or previous) and sample.version == 3
+                            and sample.epoch == observed.epoch and sample.index == ship_index
                             and sample.sector_macro == observed.sector_macro and temp_session.first_contact_in_range
                             and temp_session:first_contact_in_range(actual, sample) then
                         first_contact = probe_binding
