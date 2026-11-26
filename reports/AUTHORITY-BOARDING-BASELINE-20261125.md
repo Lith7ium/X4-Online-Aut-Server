@@ -249,6 +249,52 @@ save hashes remained unchanged. Raw logs, the provider result and
 `independent-ui.json` are in
 `.local/native-boarding-crew-seed/stock-start-04/`.
 
+## Reduced-defence control still lost both pods in low attention
+
+One isolated Linux provider at `ba6f325a` loaded a fresh copy of the same
+confirmed checkpoint. Before issuing the operation, the private fixture
+removed ZNG-430's 13 marine and 11 service templates, destroyed its 11
+turret components and set its hull to 30%. Native readback after the
+setup confirmed the same operational ZNG-430 (`0x41f82`, sealed index
+1666), the same NPC captain (`0x41f85`) and the same Scale Plate owner.
+At stock start the target had zero fitted or operational turrets, zero
+marine or service defenders, 30% hull and 100% shields. The setup left the
+main weapons and engines alone. The staged source had two primary
+destroyer weapons and three engines. Their live status and
+post-setup attack strength were outside this measurement. The prior
+stock resistance reading of 558 preceded the setup.
+
+At game time 571.501 s the one stock operation `0x4315` started with
+both thresholds at 100. The independent MD witness and the native
+getters confirmed eight assigned marines on ARU-541 (`0x4204b`,
+temporary index 5049). From that point the fixture only observed the
+stock simulation at 1×.
+
+| Game time | Native observation |
+| --- | --- |
+| 591.048–591.839 s | Stock requested eight marines, then emitted pod starts and showed two operational approaching pods, `0xb75ff` with five and `0xb760d` with three. |
+| 595.000 s | Pod `0xb760d` was destroyed. The event named ZNG-430 as the killer and `lowattentionattack` as the method. The operation recorded three marines killed. |
+| 602.725 s | Pod `0xb75ff` was destroyed with the same killer and method. The operation recorded eight killed, zero infiltrating and zero fighting. It entered infiltration and emitted the failure and removal signals in the same recorded game update. |
+
+There was no stock pod attachment, boarded signal or ownership transfer.
+ZNG-430 still belonged to Scale Plate at removal. The installed
+`common.xsd` defines `lowattentionattack` as an attack in low attention
+and exposes the killer and method on the destruction event. Those fields
+identify this loss path. The trace did not identify the weapons or damage
+calculation, and it did not record every actor's attention level.
+A high-attention comparison can use a nearby observer and explicitly
+require the target, attacker and approaching pods to report
+`attention >= attention.visible` and loaded collision meshes at their
+sampling points, with raw attention and attack or destruction events
+from the same game time.
+
+The provider repaused at 605.090 s, 33.083 game seconds into the bounded
+window, and exited normally. There was no participant endpoint and no
+output checkpoint. Independent verification matched the original and
+staged confirmed pointers and the source SHA-256 above. Raw logs, the
+provider result and `independent-positive.json` are in
+`.local/native-boarding-crew-seed/stock-positive-01/`.
+
 ## Evidence
 
 | Source | Reference points | SHA-256 |
