@@ -1,6 +1,6 @@
 # What you can do in the shared universe
 
-**26 November 2026 · internal development**. The last human test used two base-game Pulsar Vanguards about 3 km apart in Black Hole Sun V. A Linux player on the LAN and a Windows player on a separate internet connection saw each other's ships in the same Fedora-hosted world. The Linux player targeted the other fighter and fired. Its position appeared stationary, and the Windows pilot saw no corresponding damage. Both people left deliberately and Fedora saved the world. [Human test](../reports/AUTHORITY-BASE-GAME-HUMAN-FLIGHT-20261124.md)
+**26 November 2026 · weekend release on hold.** Two people flew in the same Fedora-hosted universe from Bazzite and Windows over the internet. Both saw the other ship move briefly at close range. Flight was jerky, orientation was wrong, and the Windows ship appeared stationary on Bazzite shortly after entering travel mode. The Bazzite pilot saw no movement on radar or the map and reported severe map corruption. The server recorded shield damage in both directions. The pilots could not confirm reciprocal damage in play. [Latest human test](../reports/AUTHORITY-HUMAN-PLAYTEST-20261126.md)
 
 | Feature | What a test established | What players still need |
 | --- | --- | --- |
