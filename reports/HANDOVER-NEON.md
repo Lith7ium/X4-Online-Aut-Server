@@ -60,6 +60,13 @@ before the stock operation. Both main guns remained fitted in the
 source world. The events did not identify a particular weapon.
 [Pod losses and surviving ownership](AUTHORITY-BOARDING-BASELINE-20261125.md#reduced-defence-control-still-lost-both-pods-in-low-attention)
 
+Three nearby-observer preparations stopped before the next stock
+boarding operation. X4 automatically armed the scout, a broad weapon
+query included the target's turrets, and the final readiness check ran
+before the deferred scout disarm. The latest ordering fix passed
+offline trace tests. High-attention pod flight and takeover remain open.
+[Nearby-observer controls](AUTHORITY-BOARDING-NEARBY-CONTROL-20261126.md)
+
 Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. His
 separate Windows run at `f0605562` passed all 15 NPC observation,
 trade capture and purchase-source fixtures with zero skips. The
