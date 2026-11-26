@@ -283,3 +283,17 @@ disposable profile. The private evidence is under
 `.local/ordered-gun-trial/ordered-native-02/fedora-evidence/`. The filtered
 native witness SHA-256 is
 `4edc269622e4dafc20907220671a5a0b30c942c03c0e596167fee164af48876c`.
+
+## Three impacts from one pilot over the regular combat connection
+
+At `0fcd169f`, two scripted pilots on Bazzite joined native Fedora X4. Pilot A submitted three fixture contacts in one TLS frame with `--trial-ordered-gun-hits` enabled. One X4 update at game age 11.8723 s processed all three. The adapter returned the intermediate shield and hull values for each hit and separately read both targets before confirming the group.
+
+| Order | Target | Shield after hit | Hull after hit |
+| --- | --- | ---: | ---: |
+| 1 | NPC MFQ-419 | 4 | 6,400 |
+| 2 | Pilot B's KHI-630 | 2,340 | 3,600 |
+| 3 | NPC MFQ-419 | 0 | 6,378 |
+
+Values are rounded to whole points in the table. The native call took 2.101 real seconds. The full exchange took 2.303 seconds. B independently read 2,340 shield and 3,600 hull at global revision 3. After the last departure, the saved world contained both final states. Its confirmed SHA-256 was `a7f6131d82d95687a0866c883390bfaea85f091c6050053ce5f59d46e1eda359`. The provider exited normally and both machines released the game.
+
+The driver expected revision 2, the order of B's hit, and stopped before resending the frame. Revision 3 correctly denotes the last settled order in the world. Duplicate handling on this exact live route remains open. The earlier direct native fixture did exercise retries. This run measured supplied contacts at the server. Player-fired burst capture is covered separately in the [two-cockpit report](AUTHORITY-TWO-COCKPIT-COMBAT-20261126.md).
