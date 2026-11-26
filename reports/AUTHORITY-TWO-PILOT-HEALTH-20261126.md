@@ -23,3 +23,11 @@ A second run kept the guns idle and used the ordinary provider settings. The tra
 Both pilots left normally. Fedora paused the world and saved a new checkpoint. Neither pilot fired. One of the two cockpits confirmed its baseline for the shared session.
 
 The follow-up changes let the server answer an unchanged revision while another pilot awaits a native read. A client that sent its full request can also keep the stream across a timeout. It validates and discards the late reply before requesting a fresh reading. A pending impact takes priority and uses a new stream if necessary. The existing two-second deadline still governs a fresh client read.
+
+## Native comparison on the evening candidate
+
+Both regular Linux cockpits joined a fresh copy of the same world on `97ee6898`. KHI confirmed 2,366 shield and 3,600 hull in its own X4 process 1.939 seconds after taking the request. For KHI's replies that needed no native read, the median time from enqueue to send on Fedora fell from 859 ms to 0.2 ms. The maximum fell from 1,777 ms to 32 ms. The earlier run recorded nine such replies and the comparison recorded eleven.
+
+HVC completed five requests during the twelve-second shared-window measurement without confirming a shield reading. For its requests 4 through 7, Fedora entered the native adapter immediately after enqueue. Initial dispatch took 21–29 ms. The interval from dispatch return to the poll that received the answer was 1.870–1.976 seconds. The receiving poll itself took 11–29 ms. That interval includes X4's handling of the request and the time until the host next polled a ready reply. The trace cannot apportion it further.
+
+Both clients exited normally with zero shots. Fedora paused the world and confirmed the last-departure save. The original input passed its integrity check on both hosts. The change reduced unnecessary queueing. Reciprocal cockpit health and human Internet combat remain open.
