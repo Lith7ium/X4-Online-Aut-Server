@@ -162,6 +162,31 @@ class VelocityReceiverRunnerTests(unittest.TestCase):
             self.assertGreater(ui.index('ui/velocity_trace.lua'), ui.index('ui/authority_company_cockpit_x4.lua'))
             self.assertIn('velocity_trace = true', (ext / 'ui' / 'config.lua').read_text(encoding='ascii'))
 
+    def test_own_track_separates_spawn_drift_and_zone_boundary_keeps_the_later_read(self):
+        identity = 'actor=0x20 sector=9ULL code=ABC-002'
+        events = [
+            'TRACE OWN pose=0,0,-49 radar_range=40000.0',
+            'TRACE BIND index=2 actor=0x20 code=ABC-002 sector=s slot=cockpit velocity_steps=true zone=7 t=1.0',
+            f'TRACE WRITE ok=true t=1.00 step=1.0 recheck=true zone_bind=7 zone_now=7 zone_target=7 target=1,0,0 '
+            f'zone_before=7 {identity} own_before=0,0,-50 own_after=0,0,-50',
+            f'TRACE READBACK seq=144 t=1.01 elapsed=0.01 error=0.0 ffi_vs_actual=0.0 ffi_error=0.0 ffi=1,0,0 '
+            f'zone=7 {identity} own=0,0,-50',
+            f'TRACE WRITE ok=true t=1.02 step=20.0 recheck=true zone_bind=7 zone_now=8 zone_target=8 target=21,0,0 '
+            f'zone_before=7 {identity} own_before=0,0,-50 own_after=0,0,-50',
+            f'TRACE READBACK seq=145 t=1.03 elapsed=0.01 error=0.0 ffi_vs_actual=0.0 ffi_error=0.0 ffi=21,0,0 '
+            f'zone=8 {identity} own=0,0,-50',
+        ]
+        report = runner.evaluate(events, dict(FINAL, own_xyz='0,0,-50'), [], ready_own='0,0,-30')
+        self.assertEqual(report['own_track']['spawn_drift_m'], 20.0)
+        self.assertEqual(report['own_track']['during_playback_m'], 0.0)
+        self.assertEqual(report['own_track']['xyz']['stream_start'], '0,0,-49')
+        boundary = report['zone_boundary']
+        self.assertEqual((boundary['zone_before'], boundary['requested_zone'], boundary['later_actual_zone']),
+                         ('7', '8', '8'))
+        self.assertEqual((boundary['actor'], boundary['later_actual_xyz']), ('0x20', '21,0,0'))
+        self.assertEqual(report['confirmed_zone_crossings'][0]['after'], '8')
+        self.assertIsNone(report['first_fault'])
+
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')
 class VelocityTraceLuaTests(unittest.TestCase):

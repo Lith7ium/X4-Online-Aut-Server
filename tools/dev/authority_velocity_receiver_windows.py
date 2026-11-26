@@ -13,6 +13,7 @@ The run reports every dispatched step over 50 m. It is accepted when there is on
 or refusal, every write and readback succeeds, and the occupied ship does not move.
 """
 import argparse
+import collections
 import ctypes
 import csv
 import itertools
@@ -122,11 +123,12 @@ def synthetic_trajectory(count=44, speed=1524.0, seed_interval=0.127):
     return samples
 
 
-def place(samples, start, own=None, bind_sample=0):
+def place(samples, start, own=None, bind_sample=0, flip=None):
     """Translate samples[bind_sample] onto start and mirror axes (distance preserving) away from own."""
     base = samples[bind_sample]
     best = None
-    for flip in (itertools.product((1, -1), repeat=3) if own else [(1, 1, 1)]):
+    candidates = [tuple(flip)] if flip else itertools.product((1, -1), repeat=3) if own else [(1, 1, 1)]
+    for flip in candidates:
         points = [tuple(start[a] + f * (s[a] - base[a]) for a, f in zip('xyz', flip)) for s in samples]
         if own:
             distances = [math.dist(p, (own['x'], own['y'], own['z'])) for p in points]
@@ -193,11 +195,45 @@ def confirmed_zone_crossings(traces):
     return crossings
 
 
-def evaluate(events, final, sent, bind_sample=0):
+def xyz_text(text):
+    return tuple(map(float, text.split(','))) if text and text not in ('none', '-') else None
+
+
+def own_track(events, writes, ready_own=None, final_own=None):
+    """Occupied-ship XYZ at READY, stream start, first and last remote write, and the final readback."""
+    stream = next((parse_trace(e)[1].get('pose') for e in events if e.startswith('TRACE OWN ')), None)
+    points = {'ready': ready_own, 'stream_start': stream,
+              'first_write_before': writes[0].get('own_before') if writes else None,
+              'last_write_after': writes[-1].get('own_after') if writes else None,
+              'final_readback': final_own}
+
+    def gap(a, b):
+        a, b = xyz_text(points[a]), xyz_text(points[b])
+        return round(math.dist(a, b), 4) if a and b else None
+    return {'xyz': points, 'spawn_drift_m': gap('ready', 'first_write_before'),
+            'during_playback_m': gap('first_write_before', 'last_write_after'),
+            'after_playback_m': gap('last_write_after', 'final_readback')}
+
+
+def zone_boundary(traces):
+    """First write requesting a zone other than the hull's current one, with the next native readback."""
+    for index, (kind, fields) in enumerate(traces):
+        if kind == 'WRITE' and fields.get('zone_target') not in (None, fields.get('zone_before')):
+            after = next((f for k, f in traces[index + 1:] if k == 'READBACK'), None) or {}
+            return {'actor': fields.get('actor'), 'code': fields.get('code'), 'sector': fields.get('sector'),
+                    'write_ok': fields['ok'], 't': float(fields['t']), 'zone_before': fields.get('zone_before'),
+                    'requested_zone': fields['zone_target'], 'requested_xyz': fields['target'],
+                    'own_before': fields.get('own_before'), 'later_seq': after.get('seq'),
+                    'later_elapsed': after.get('elapsed'), 'later_actual_zone': after.get('zone'),
+                    'later_actual_xyz': after.get('ffi')}
+    return None
+
+
+def evaluate(events, final, sent, bind_sample=0, *, ready_own=None):
     """bind_sample > 0 allows that many earlier samples to be refused before the initial bind."""
     first_bind = next((i for i, e in enumerate(events) if e.startswith('TRACE BIND ')), len(events))
     pre_bind = [e for e in events[:first_bind] if 'refused_over_50m' in e]
-    events = events[first_bind:]
+    all_events, events = events, events[first_bind:]
     traces = [t for t in map(parse_trace, events) if t is not None]
     binds = [f for k, f in traces if k == 'BIND']
     observations = [f for k, f in traces if k == 'OBS']
@@ -228,6 +264,11 @@ def evaluate(events, final, sent, bind_sample=0):
         'independent_ffi_vs_readback_m': {'max': max(ffi_gap, default=0.0)},
         'playback_events': playback_events,
         'pre_bind_refusals': pre_bind,
+        'own_track': own_track(all_events, writes, ready_own, final.get('own_xyz')),
+        'zone_boundary': zone_boundary(traces),
+        'zone_targets': dict(collections.Counter(f.get('zone_target') for f in writes)),
+        'first_fault': next((e for e in playback_events if e.startswith('PLAYBACK_FAULT')
+                             or any(k in e for k in ('refused_over_50m', 'track_stopped', 'closed_uncertain'))), None),
         'final': final,
     }
     faults = [e for e in playback_events if e.startswith('PLAYBACK_FAULT')
@@ -321,7 +362,7 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
         assert started.get('status') == 'stream_started', started
         own = next((parse_trace(e)[1] for e in bridge.events if e.startswith('TRACE OWN ')), None)
         own_pose = dict(zip('xyz', map(float, own['pose'].split(',')))) if own else None
-        placed, placement = place(samples, r0, own_pose, args.bind_sample)
+        placed, placement = place(samples, r0, own_pose, args.bind_sample, args.flip)
         placement['own_radar_range_m'] = float(own['radar_range']) if own else None
         placement['bind_sample'] = args.bind_sample
 
@@ -362,7 +403,7 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
             [float(final[a]) for a in 'xyz'], [last[a] for a in 'xyz']), 3)
         done = bridge.request('done', pump=pump)
         assert done.get('status') == 'done', done
-        report = evaluate(list(bridge.events), final, sent, args.bind_sample)
+        report = evaluate(list(bridge.events), final, sent, args.bind_sample, ready_own=ready.get('own_xyz'))
         if args.trial_first_contact:
             contacts = [parsed[1] for event in bridge.events
                         if (parsed := parse_trace(event)) and parsed[0] == 'FIRST_CONTACT']
@@ -422,6 +463,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=240.0)
     parser.add_argument('--trial-first-contact', action='store_true',
                         help='use the live pilot roster and verify one bounded alignment from sample zero')
+    parser.add_argument('--flip', type=lambda text: tuple(int(v) for v in text.split(',')),
+                        help='fixed per-axis mirror, e.g. 1,1,-1, to repeat an earlier path')
     parser.add_argument('--bind-sample', type=int,
                         help='sample placed on the resting hull; 0 is the velocity-less V3 baseline')
     parser.add_argument('--preflight', action='store_true', help='check inputs and placement, no launch')
