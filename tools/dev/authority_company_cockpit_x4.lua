@@ -65,6 +65,10 @@ local function dist3(a, b)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
+local function own_xyz(p)
+    return ('%.4f,%.4f,%.4f'):format(p.x, p.y, p.z)
+end
+
 local function fmt_pose(p)
     return ('x=%.4f y=%.4f z=%.4f yaw=%.4f pitch=%.4f roll=%.4f'):format(
         p.x, p.y, p.z, p.yaw, p.pitch, p.roll)
@@ -165,11 +169,19 @@ local function init_production_stack(clock_base)
     end
 
     -- Real production X4LAN_COMPANY_COCKPIT_OBSERVER (HUD target first, radar fallback without lock!)
-    state.cockpit_reader = assert(X4LAN_COMPANY_COCKPIT_OBSERVER.new_x4(pinned, 1, available, {
-        radar_fallback = true,
-        target_index = 2,
-        clock = clock_fn,
-    }))
+    local pilot_roster
+    if cfg.trial_first_contact then
+        pilot_roster = X4LAN_COMPANY_COCKPIT_OBSERVER.new_multi_x4(pinned, 1, available, {
+            max_pilots = 1, read_radar_range = true, clock = clock_fn,
+        })
+        state.cockpit_reader = pilot_roster.readers.cockpit
+    else
+        state.cockpit_reader = assert(X4LAN_COMPANY_COCKPIT_OBSERVER.new_x4(pinned, 1, available, {
+            radar_fallback = true,
+            target_index = 2,
+            clock = clock_fn,
+        }))
+    end
 
     -- Independent map slot reader observing the 3rd Company ship in a separate sector
     local map_binding = {
@@ -195,6 +207,7 @@ local function init_production_stack(clock_base)
         own_index = 1,
         target_index = 2,
         allow_reacquire_align = true,
+        trial_first_contact = cfg.trial_first_contact == true,
         adapter = adapter,
         clock = clock_fn,
         game = function() return tonumber(C.GetCurrentGameTime()) or 0 end,
@@ -205,6 +218,12 @@ local function init_production_stack(clock_base)
                 state.last_readback_err = ev.error
                 if ev.error > state.max_readback_err then state.max_readback_err = ev.error end
                 if ev.elapsed < state.min_readback_elapsed then state.min_readback_elapsed = ev.elapsed end
+                if ev.phase == 'first_contact_aligned' then
+                    local independent = read_pose(state.remote_actor)
+                    log(('TRACE FIRST_CONTACT seq=%d code=%s actor=%s elapsed=%.6f error=%.6f ffi_error=%.6f')
+                        :format(ev.source_sequence, ffi.string(C.GetObjectIDCode(state.remote_actor)), state.remote_hex,
+                                ev.elapsed, ev.error, dist3(independent, ev.target)))
+                end
                 if ev.kind == 'alignment_readback' then
                     state.alignment_readback_err = ev.error
                     state.alignment_readback_elapsed = ev.elapsed
@@ -231,7 +250,7 @@ local function init_production_stack(clock_base)
     local prefix = 'C|' .. cfg.udp_lease .. '|' .. cfg.udp_generation .. '|'
     state.stream = assert(X4LAN_COMPANY_OBSERVER_STREAM.new(
         {cockpit = state.cockpit_reader, map = map_reader},
-        state.epoch, state.udp_net, prefix, clock_fn, state.playback_ctrl
+        state.epoch, state.udp_net, prefix, clock_fn, state.playback_ctrl, pilot_roster
     ))
 end
 
@@ -285,6 +304,12 @@ local function step_active_req()
             }, state.clock_fn())
             finish_req(req.seq, 'gen_injected', ('ok=%s reason=%s'):format(tostring(ok), tostring(reason)))
             return
+        elseif op == 'probe_pilot' and cfg.trial_first_contact then
+            local reader = state.cockpit_reader
+            local range = reader:current_radar_range(2)
+            finish_req(req.seq, 'pilot_probed', ('active=%s range=%s'):format(
+                tostring(reader:is_active_pilot(2)), tostring(range or 0)))
+            return
         elseif op == 'probe_state' then
             local rpose = read_pose(state.remote_actor)
             local opose = read_pose(state.own_actor)
@@ -293,12 +318,12 @@ local function step_active_req()
             local tgt = GetPlayerTarget()
             local mode = state.cockpit_reader and state.cockpit_reader:mode() or 'none'
             finish_req(req.seq, 'probed', (
-                'mode=%s has_target=%s %s own_disp_m=%.4f ' ..
+                'mode=%s has_target=%s %s own_xyz=%s own_disp_m=%.4f ' ..
                 'binds=%d writes=%d readbacks=%d stale_cutoffs=%d alignments=%d ' ..
                 'gen_rejects=%d refusals_50m=%d max_err=%.5f min_elapsed=%.5f ' ..
                 'align_err=%.6f align_elapsed=%.6f'
             ):format(
-                tostring(mode), tostring(tgt ~= nil), fmt_pose(rpose), odisp,
+                tostring(mode), tostring(tgt ~= nil), fmt_pose(rpose), own_xyz(opose), odisp,
                 st.binds or 0, st.writes or 0, st.readbacks or 0, st.stale_cutoffs or 0,
                 st.alignments or 0, st.generation_rejections or 0, st.refusals_over_50m or 0,
                 state.max_readback_err,
@@ -334,11 +359,11 @@ local function step_active_req()
     local odisp = dist3(state.own_init_pose, opose)
     local st = state.playback_ctrl and state.playback_ctrl:stats() or {}
     finish_req(req.seq, 'readback', (
-        'index=%s actor_hex=%s sector_macro=%s idcode=%s %s own_disp_m=%.4f ' ..
+        'index=%s actor_hex=%s sector_macro=%s idcode=%s %s own_xyz=%s own_disp_m=%.4f ' ..
         'writes=%d readbacks=%d stale_cutoffs=%d alignments=%d gen_rejects=%d refusals_50m=%d ' ..
         'max_err=%.5f min_elapsed=%.5f'
     ):format(
-        parts[3], parts[4], parts[7], parts[8], fmt_pose(rpose), odisp,
+        parts[3], parts[4], parts[7], parts[8], fmt_pose(rpose), own_xyz(opose), odisp,
         st.writes or 0, st.readbacks or 0, st.stale_cutoffs or 0, st.alignments or 0,
         st.generation_rejections or 0, st.refusals_over_50m or 0,
         state.max_readback_err,
@@ -405,10 +430,10 @@ local function frame()
         log((
             'READY own_code=%s remote_code=%s remote_hex=%s remote_sector=%s ' ..
             'remote_x=%.4f remote_y=%.4f remote_z=%.4f ' ..
-            'map_code=%s map_hex=%s map_sector=%s'
+            'map_code=%s map_hex=%s map_sector=%s own_xyz=%s'
         ):format(
             state.own_code, state.remote_code, state.remote_hex, state.remote_sector,
-            r0.x, r0.y, r0.z, state.map_code, state.map_hex, state.map_sector))
+            r0.x, r0.y, r0.z, state.map_code, state.map_hex, state.map_sector, own_xyz(state.own_init_pose)))
         return
     end
 

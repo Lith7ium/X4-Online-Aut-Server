@@ -100,7 +100,12 @@
      <do_if value="$selected.count == 0">
       <set_value name="$entries" exact="'-'"/>
      </do_if>
-     <raise_lua_event name="'X4AuthorityCompanyCockpitObserver.Result'" param="'%s|%s|MULTI|%s|%s'.[$args.$request_id,$args.$epoch,$selected.count,$entries]"/>
+     <set_value name="$reply" exact="'%s|%s|MULTI|%s|%s'.[$args.$request_id,$args.$epoch,$selected.count,$entries]"/>
+     <do_if value="@$args.$read_radar_range == true">
+      <set_value name="$range" exact="if $canobserve then @player.controlled.currentradarrange else 0m"/>
+      <set_value name="$reply" exact="$reply + '|%s'.[($range / 1m)i]"/>
+     </do_if>
+     <raise_lua_event name="'X4AuthorityCompanyCockpitObserver.Result'" param="$reply"/>
     </do_if>
     <do_else>
      <set_value name="$status" exact="'UNAVAILABLE'"/>

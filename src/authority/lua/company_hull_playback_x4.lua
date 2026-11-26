@@ -1,7 +1,7 @@
 -- Opt-in native sector-space adapter for one locally observed Company hull.
 local M = {}
 local LIMIT = 10000000
-local MAX_STEP = 50
+local MAX_STEP, VELOCITY_STEP_LIMIT = 50, 250
 local COCKPIT_SLOTS = {cockpit = true, cockpit2 = true, cockpit3 = true}
 
 local function finite(value)
@@ -22,8 +22,8 @@ local function token(value)
     return type(value) == 'string' and #value == 32 and value:match('^[0-9a-f]+$') ~= nil
 end
 
-local function same_context(a, b)
-    return a and b and a.actor == b.actor and a.sector == b.sector and a.zone == b.zone
+local function same_ship_and_sector(current, original)
+    return current and current.actor == original.actor and current.sector == original.sector
 end
 
 function M.new(options, engine)
@@ -56,38 +56,76 @@ function M.new(options, engine)
 
         local ok, original_cockpit, original_target = pcall(inspect)
         if not ok or not original_cockpit then return nil end
-        local closed = false
+        local closed, has_verified_motion = false, false
+        local confirmed_zone, pending_zone = original_target.zone, nil
         local session = {}
+
+        local function is_pilot()
+            return observer.is_active_pilot and observer:is_active_pilot(index) == true
+        end
 
         local function eligible()
             if closed then return false end
             local checked, cockpit, target = pcall(inspect)
-            if not checked or not same_context(cockpit, original_cockpit)
-                    or not same_context(target, original_target) then
+            if not checked or not same_ship_and_sector(cockpit, original_cockpit)
+                    or not same_ship_and_sector(target, original_target)
+                    or (cockpit.zone ~= original_cockpit.zone and not (has_verified_motion and is_pilot()))
+                    or (target.zone ~= confirmed_zone and target.zone ~= pending_zone)
+                    or (pending_zone and not is_pilot()) then
                 closed = true
                 return false
             end
-            return true
+            return target
         end
 
         function session:guard()
-            return eligible()
+            return eligible() and true or false
         end
 
         function session:read()
-            if not eligible() then return nil end
+            local before = eligible()
+            if not before then return nil end
             local actual = engine.read(original_target.actor)
-            if not position(actual) or not eligible() then return nil end
+            local after = eligible()
+            if not position(actual) or not after then return nil end
+            -- The setter can return while the ship is still in its original zone.
+            -- A later position is evidence only when read from the expected zone.
+            if pending_zone and (before.zone ~= pending_zone or after.zone ~= pending_zone) then
+                closed = true
+                return nil
+            end
             return actual
         end
 
-        function session:write(target, before)
-            if not position(target) or not position(before) then return false end
+        -- Called only after the controller checked the later XYZ against its
+        -- previous write and the recorder accepted that readback.
+        function session:confirm_motion()
+            if pending_zone then
+                local target = eligible()
+                if not target or target.zone ~= pending_zone then return false end
+                confirmed_zone, pending_zone = pending_zone, nil
+            end
+            has_verified_motion = true
+            return true
+        end
+
+        function session:write(target, before, recheck)
+            if pending_zone or not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
-            if dx * dx + dy * dy + dz * dz > MAX_STEP * MAX_STEP then return false end
-            if not engine.same_zone(original_target, target) or not eligible() then return false end
+            if recheck ~= nil and type(recheck) ~= 'function' then return false end
+            local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
+            if dx * dx + dy * dy + dz * dz > maximum * maximum then return false end
+            local destination_zone = engine.destination_zone(original_target.sector, target)
+            if not destination_zone then return false end
+            local crossing = destination_zone ~= confirmed_zone
+            if crossing and (not has_verified_motion or not recheck or not is_pilot()) then return false end
+            if not eligible() then return false end
+            -- The native read can differ from the playback observation. Check the
+            -- actual displacement and prediction deadline again before dispatch.
+            if recheck and recheck(actual) ~= true then return false end
+            if crossing then pending_zone = destination_zone end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
@@ -96,23 +134,35 @@ function M.new(options, engine)
                 closed = true  -- The native call may have had a partial effect.
                 return false
             end
-            return eligible()
+            return self:guard()
         end
 
-        function session:align(target)
-            if not position(target) then return false end
+        function session:first_contact_in_range(actual, target)
+            if not position(actual) or not position(target) or not is_pilot() or not eligible() then return false end
+            local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
+            local range = observer.current_radar_range and observer:current_radar_range(index)
+            return finite(range) and range > 0 and dx * dx + dy * dy + dz * dz <= VELOCITY_STEP_LIMIT ^ 2
+                and engine.within_radar(original_cockpit.actor, actual, target, range)
+        end
+
+        function session:align(target, first_contact_guard)
+            if pending_zone or not position(target) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
-            if not engine.same_zone(original_target, target) or not eligible() then return false end
+            if engine.destination_zone(original_target.sector, target) ~= confirmed_zone or not eligible() then
+                return false
+            end
+            if first_contact_guard and (not self:first_contact_in_range(actual, target)
+                    or first_contact_guard(actual) ~= true) then return false end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
             })
-            if not ok or dispatched ~= true then
+            if not ok or dispatched ~= true or not self:guard() then
                 closed = true
-                return false
+                return false, 'unconfirmed'
             end
-            return eligible()
+            return true
         end
 
         function session:close()
@@ -200,12 +250,23 @@ function M.new_x4(options)
             return {x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z),
                     yaw = tonumber(value.yaw), pitch = tonumber(value.pitch), roll = tonumber(value.roll)}
         end,
-        same_zone = function(hull, destination)
+        within_radar = function(cockpit_actor, actual, destination, radius)
+            local origin = read(cockpit_actor)
+            local function inside(point)
+                local dx, dy, dz = point.x - origin.x, point.y - origin.y, point.z - origin.z
+                return dx * dx + dy * dy + dz * dz <= radius * radius
+            end
+            return inside(actual) and inside(destination)
+        end,
+        destination_zone = function(sector, destination)
             -- The stock query can change its offset argument to zone space.
             -- Pass a throwaway copy and keep the setter in sector coordinates.
             local offset = ffi.new('UIPosRot[1]')
             offset[0].x, offset[0].y, offset[0].z = destination.x, destination.y, destination.z
-            return zone_at(hull.sector, offset) == hull.zone
+            local zone = zone_at(sector, offset)
+            if typed(zone, 'zone') and C.GetContextByClass(zone, 'sector', false) == sector then
+                return zone
+            end
         end,
         write = function(actor, sector, target_pose)
             -- GetObjectPositionInSector returns radians. SetObjectSectorPos takes degrees.
