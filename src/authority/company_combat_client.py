@@ -1,7 +1,9 @@
 """Exchange confirmed pilot impacts through an established loopback TLS bridge."""
 import errno
+import os
 import select
 import socket
+import struct
 import time
 
 from .company_combat_frames import (BINDING_FIELDS, decode_health_reply, decode_receipts,
@@ -13,6 +15,8 @@ from .trusted_load_messages import validate_ship_motion_credential
 _CONNECT_TIMEOUT = 2
 _HEALTH_TIMEOUT = 2
 _CANCEL_POLL = .05
+# Winsock uses two unsigned shorts for linger; Linux uses two native ints.
+_ABORT_LOCAL_STREAM = struct.pack('HH' if os.name == 'nt' else 'ii', 1, 0)
 _MAX_EXCHANGE_TIMEOUT = 600
 _CONNECTING = {getattr(errno, name) for name in (
     'EINPROGRESS', 'EWOULDBLOCK', 'EALREADY', 'EINTR',
@@ -76,7 +80,7 @@ class CompanyCombatClient:
         try:
             if self._late_health is not None:
                 # An impact must not wait for an expired read on this stream.
-                self.close()
+                self._abandon_health_stream()
             self._send_request(self._pending_frame, deadline, cancelled)
             frame = self._read_reply(deadline, cancelled)
             receipts = decode_receipts(frame, self._binding, impacts)
@@ -94,6 +98,7 @@ class CompanyCombatClient:
         request = dict(zip(BINDING_FIELDS, self._binding), kind='combat_health_read', ticket=self._ticket,
                        window=window, sequence=sequence, after_revision=after_revision)
         deadline = time.monotonic() + _HEALTH_TIMEOUT
+        request_sent = False
         try:
             if self._late_health is not None:
                 # Validate and discard the complete old reply before sending another request.
@@ -101,20 +106,32 @@ class CompanyCombatClient:
                 decode_health_reply(stale, self._binding, *self._late_health)
                 self._late_health = None
             self._send_request(encode_frame(request), deadline, cancelled)
-        except BaseException:
-            self.close()
-            raise
-
-        try:
+            request_sent = True
             reply = self._read_reply(deadline, cancelled)
             return decode_health_reply(reply, self._binding, window, sequence)
         except _ReceiptDeadlineExpired:
             # Only a fully written read can safely leave a response pending.
-            self._late_health = window, sequence
+            if request_sent:
+                self._late_health = window, sequence
+            else:
+                self.close()
+            raise
+        except CombatExchangeCancelled:
+            self._abandon_health_stream()
             raise
         except BaseException:
             self.close()
             raise
+
+    def _abandon_health_stream(self):
+        # A normal half-close keeps the local TLS relay waiting for the old
+        # health response. Reset this read-only stream to release its slot.
+        if self._connection is not None:
+            try:
+                self._connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _ABORT_LOCAL_STREAM)
+            except OSError:
+                pass  # Still release the socket if the platform declines the option.
+        self.close()
 
     def _send_request(self, request, deadline, cancelled):
         self._remaining(deadline, cancelled)

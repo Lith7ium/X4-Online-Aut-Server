@@ -1,9 +1,11 @@
 """Real pinned TLS and Company admissions with a synthetic damage adapter."""
 import asyncio
+from contextlib import ExitStack
 import hashlib
 from pathlib import Path
 import ssl
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock
 
@@ -70,13 +72,13 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(gateway.close)
 
-    async def link(self):
+    async def link(self, *, max_combat_connections=2):
         control, files, combat = (self.listener() for _ in range(3))
         ports = control.getsockname()[1], combat.getsockname()[1]
         tunnel = await start_client(
             control_listener=control, file_listener=files, combat_listener=combat,
             server_host='127.0.0.1', server_port=self.public_port, server_fingerprint=self.fingerprint,
-            shared_key=_KEY, max_combat_connections=2, idle_timeout=15,
+            shared_key=_KEY, max_combat_connections=max_combat_connections, idle_timeout=15,
         )
         self.addAsyncCleanup(tunnel.close)
         return ports
@@ -249,6 +251,100 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['observed'], 0)
             read.assert_called_once_with(binding)
             self.assertTrue(sent[-1].endswith('|4|2366|3600|3600'))
+
+    async def test_four_pending_health_links_yield_to_ring_hits_at_shipped_limits(self):
+        self.combat.close()
+        pilots = (1073, 1074, 1075, 1076)
+        targets = dict(zip(pilots, pilots[1:] + pilots[:1]))
+        self.health = {index: (2366, 3600) for index in pilots}
+        first_application = None
+
+        def apply(binding, target, amount):
+            nonlocal first_application
+            if first_application is None:
+                first_application = time.monotonic()
+            return self.apply(binding, target, amount)
+
+        def begin_read(binding):
+            def poll():
+                if not self.calls:
+                    return None  # The initial read cannot complete before a real service application.
+                shield, hull = self.health[binding[2]]
+                return dict(shield=shield, maxshield=2366, hull=hull, maxhull=3600)
+            return Mock(poll=poll)
+
+        self.combat = CompanyCombatService(self.motion.current_combat_grant, apply,
+                                           begin_health_read=begin_read, health_window=lambda binding: 1)
+        self.addCleanup(self.combat.close)
+        await self.start(combat_enabled=True)  # The gateway defaults to four combat relays.
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as owned:
+            senders, logs, bridges = {}, {}, {}
+            for handle, index in enumerate(pilots, 1):
+                _, port = await self.link(max_combat_connections=1)
+                grant = self.grant(handle, index)
+                binding = grant['generation'], grant['epoch'], index
+                self.assertEqual(self.motion.current_combat_grant(derive_combat_ticket(grant['ticket'])), binding)
+                bridges[index] = CompanyCockpitHealthBridge(binding)
+                bridges[index].on_clock(1, True)
+                log = logs[index] = Path(directory) / f'{index}.log'
+                log.write_text(f'[=ERROR=] 1.0 [X4LAN] AUTH_COMPANY_GUN_STATUS armed|{_EPOCH}|{index}\n')
+                info = log.stat()
+                sender = CompanyCombatSender(log, port, grant, epoch=_EPOCH, index=index,
+                                             log_identity=(info.st_dev, info.st_ino), health_bridge=bridges[index])
+                senders[index] = sender
+                owned.callback(sender.close)
+
+            deadline = None
+            sequence = 0
+            async with asyncio.timeout(7):
+                while True:
+                    sequence += 1
+                    for bridge in bridges.values():
+                        bridge.on_sample(dict(sequence=sequence, capture_time=time.monotonic()))
+                    self.motion.poll()
+                    self.combat.poll()
+                    health = self.combat._health_reads
+                    if deadline is None and len(health) == len(pilots):
+                        self.assertEqual({query.peer.binding[2] for query in health}, set(pilots))
+                        self.assertTrue(all(query.sequence == 1 for query in health))
+                        deadline = health[0].deadline
+                        for index, target in targets.items():
+                            with logs[index].open('ab') as stream:
+                                stream.write(f'[=ERROR=] 1.1 [X4LAN] AUTH_COMPANY_GUN {_EPOCH}|{index}|{target}|1\n'.encode())
+                    if first_application is not None:
+                        self.assertLess(first_application, deadline,
+                                        'hit transport waited for the abandoned health query deadline')
+                    for bridge in bridges.values():
+                        frames = []
+                        bridge.deliver(lambda frame: frames.append(frame) is None)
+                        for frame in frames:
+                            if frame.startswith('HEALTH|'):
+                                fields = frame.split('|')
+                                bridge.native_result(['HEALTH_RESULT', *fields[2:7], 'confirmed', *fields[9:]])
+                    if (all(sender._counts['confirmed'] == 1 for sender in senders.values())
+                            and all(bridge.stats().get('last_confirmed_readback', {}).get('server', {})
+                                    .get('shield') == 2340 for bridge in bridges.values())):
+                        break
+                    await asyncio.sleep(.005)
+            results = {index: sender.close() for index, sender in senders.items()}
+
+        self.assertCountEqual(self.calls, [(index, target, 26) for index, target in targets.items()])
+        self.assertEqual(self.health, {index: (2340, 3600) for index in pilots})
+        orders = []
+        for index, target in targets.items():
+            row = results[index]
+            self.assertEqual((row['observed'], row['confirmed'], row['failure']), (1, 1, None))
+            receipt = row['last_confirmed_receipt'].copy()
+            orders.append(receipt.pop('order'))
+            self.assertEqual(receipt, dict(id=1, target_index=target, amount=26, status='confirmed',
+                                           shield=2340, hull=3600))
+            report = bridges[index].stats()['last_confirmed_readback']
+            self.assertGreater(report['sequence'], 1)
+            self.assertEqual(report['window'], 1)
+            self.assertEqual(report['cockpit'], report['server'])
+            self.assertEqual((report['server']['shield'], report['server']['hull']), (2340, 3600))
+        self.assertCountEqual(orders, range(1, 5))
 
 
 if __name__ == '__main__':

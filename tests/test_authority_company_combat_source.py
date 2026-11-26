@@ -164,7 +164,8 @@ class CompanyCombatSourceTest(unittest.TestCase):
                     for key in (*BINDING_FIELDS, 'ticket'):
                         self.assertEqual(request[key], health[key])
                     self.assertEqual(request['impacts'], [{'id': 1, 'target_index': 1074, 'amount': 26}])
-                    self.assertEqual(old.recv(1), b'')
+                    with self.assertRaises(ConnectionResetError):
+                        old.recv(1)
                     fresh.sendall(receipt(request))
                     self.wait_for_confirmed(sender, 1)
                     result = sender.close()
@@ -197,7 +198,8 @@ class CompanyCombatSourceTest(unittest.TestCase):
                     fresh.settimeout(1)
                     hit = json.loads(stream.readline())
                     self.assertEqual([row['id'] for row in hit['impacts']], [1])
-                    self.assertEqual(old.recv(1), b'')
+                    with self.assertRaises(ConnectionResetError):
+                        old.recv(1)
                     now = 11
                     bridge.on_sample({'sequence': 2, 'capture_time': now})
                     fresh.sendall(receipt(hit))

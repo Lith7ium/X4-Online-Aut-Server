@@ -88,7 +88,8 @@ class LateHealthTransportTest(unittest.TestCase):
                     receipt = dict(request['impacts'][0], status='confirmed', shield=74, hull=1000, order=1)
                     fresh.sendall(encode_frame(dict({key: request[key] for key in BINDING_FIELDS},
                                                    kind='combat_receipts', receipts=[receipt])))
-                self.assertEqual(old.recv(1), b'')
+                with self.assertRaises(ConnectionResetError):
+                    old.recv(1)
 
         server = self.worker.submit(serve)
         with self.assertRaises(TimeoutError):
@@ -123,7 +124,8 @@ class LateHealthTransportTest(unittest.TestCase):
         def serve():
             with self.accept() as peer:
                 self.read(peer)
-                self.assertEqual(peer.recv(1), b'')
+                with self.assertRaises(ConnectionResetError):
+                    peer.recv(1)
 
         server = self.worker.submit(serve)
         with self.assertRaises(TimeoutError):
