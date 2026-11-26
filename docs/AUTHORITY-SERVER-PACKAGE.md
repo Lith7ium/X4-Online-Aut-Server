@@ -442,9 +442,17 @@ python3 tools/dev/authority_combat_capture_receipt.py \
   --out "$pilot_run/combat-receipt.json"
 ```
 
-The receipt lists native hit sequences. The host can verify a sequence
-against the offered checkpoint with `tools/dev/authority_combat_hit_evidence.py`
-and the same pilot log. Combat replication needs a separate gameplay test.
+On the host, use the pilot's original log and the checkpoint offered at admission
+to verify every captured hit in a single scan of the saved universe.
+
+```sh
+python3 tools/dev/authority_combat_hit_evidence.py \
+  --store "$provider_store" --checkpoint "$checkpoint_id" --sha256 "$checkpoint_sha256" \
+  --capture-epoch "$registry_epoch" --piloted-ship-index "$ship_index" --log "$pilot_log"
+```
+
+Add `--sequence NUMBER` to inspect one hit from the same capture window.
+The report identifies which ship took damage in the pilot's own X4 instance.
 
 ## Observe a registered NPC in an internal test
 

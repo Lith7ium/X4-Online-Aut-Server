@@ -7,8 +7,8 @@ index. The observer's AUTH_COMBAT_OBS lines in the pilot's own log are the
 evidence. The local receipt binds the checkpoint offered to this pilot (ID and
 save digest), that registry epoch and the admitted index to the captured
 native hit sequences. It holds no ticket, lease, key or private path, and it
-never decides damage: tools/dev/authority_combat_hit_evidence.py with
---piloted-ship-index verifies each sequence against the provider's store.
+never decides damage. The host can verify the capture window and all its hits
+against the provider's store in one pass over the offered save.
 """
 import json
 import os
@@ -111,8 +111,8 @@ def _ship(isship, index, code):
     return {'index': index, 'code': code} if isship and index > 0 else None
 
 
-def collect_hits(receipt, log_text):
-    """Record damage callbacks from a text stream or an in-memory log, in order."""
+def captured_events(receipt, log_text):
+    """Read private damage callbacks from the offered checkpoint's active helm windows."""
     validate_receipt(receipt)
     hits, sequence_counts = [], {}
     start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
@@ -131,15 +131,27 @@ def collect_hits(receipt, log_text):
                     ship_code, observed_window = actor[1], True
             continue
         source, marker, payload = line.partition(MD_EVENT_PREFIX)
-        event = parse_md_event(payload) if marker else None
+        event = parse_md_event(payload) if marker and source.endswith(_EVENT_SOURCE) else None
         if event is None:
             continue
         sequence_counts[event.seq] = sequence_counts.get(event.seq, 0) + 1
-        if (not ship_code or not source.endswith(_EVENT_SOURCE) or event.kind not in DAMAGE_KINDS
+        if (not ship_code or event.kind not in DAMAGE_KINDS
                 or event.registry_epoch != receipt['registry_epoch'] or event.victim_reg != receipt['piloted_ship_index']
                 or event.victim_code != ship_code or event.victim_owner != 'player'
                 or not event.victim_ctrl or not event.victim_occ):
             continue
+        hits.append(event)
+    if not observed_window:
+        raise ValueError('no active pilot capture for the offered checkpoint and seat')
+    if any(sequence_counts[event.seq] != 1 for event in hits):
+        raise ValueError('native combat sequence repeats in one capture log')
+    return hits
+
+
+def collect_hits(receipt, log_text):
+    """Record damage callbacks from a text stream or an in-memory log, in order."""
+    hits = []
+    for event in captured_events(receipt, log_text):
         hits.append({
             'sequence': event.seq, 'event': event.kind, 'victim_code': event.victim_code,
             'victim_occupied_by_player': event.victim_occ, 'victim_controlled_by_player': event.victim_ctrl,
@@ -148,11 +160,6 @@ def collect_hits(receipt, log_text):
             'last_attacker': _ship(event.last_att_isship, event.last_att_reg, event.last_att_code),
             'amount': event.amount, 'shield_after': event.shield, 'hull_after': event.hull,
         })
-    if not observed_window:
-        raise ValueError('no active pilot capture for the offered checkpoint and seat')
-    if any(sequence_counts[hit['sequence']] != 1 for hit in hits):
-        # The independent verifier retrieves each selected event by sequence from the same file.
-        raise ValueError('native combat sequence repeats in one capture log')
     return dict(receipt, hits=hits)
 
 
@@ -167,14 +174,18 @@ def validate_receipt(receipt):
     return receipt
 
 
-def verifier_arguments(receipt, store, log, sequence):
-    """Arguments for authority_combat_hit_evidence.py for one captured sequence."""
+def verifier_arguments(receipt, store, log, sequence=None):
+    """Recheck one sequence or the whole capture window against the original log and save."""
     validate_receipt(receipt)
-    if sequence not in {hit['sequence'] for hit in receipt['hits']}:
+    if sequence is not None and sequence not in {hit['sequence'] for hit in receipt['hits']}:
         raise ValueError('sequence was not captured on the admitted ship')
-    return ['--store', str(store), '--checkpoint', receipt['checkpoint_id'],
-            '--sha256', receipt['checkpoint_sha256'], '--log', str(log),
-            '--sequence', str(sequence), '--piloted-ship-index', str(receipt['piloted_ship_index'])]
+    arguments = ['--store', str(store), '--checkpoint', receipt['checkpoint_id'],
+                 '--sha256', receipt['checkpoint_sha256'], '--log', str(log),
+                 '--capture-epoch', receipt['registry_epoch'],
+                 '--piloted-ship-index', str(receipt['piloted_ship_index'])]
+    if sequence is not None:
+        arguments.extend(['--sequence', str(sequence)])
+    return arguments
 
 
 def write_receipt(path, receipt):

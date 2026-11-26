@@ -147,6 +147,49 @@ class CombatCaptureReceiptTest(unittest.TestCase):
             with self.subTest(checkpoint=checkpoint, digest=digest), self.assertRaisesRegex(ValueError, 'no active'):
                 collect_hits(new_receipt(checkpoint, digest, EPOCH, 1), _pilot_log(self.sha256))
 
+    def test_all_hits_use_one_offered_registry_scan(self):
+        receipt = collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1),
+                               self.log.read_text(encoding='utf-8'))
+        arguments = verifier_arguments(receipt, self.directory / 'store', self.log)
+        self.assertNotIn('--sequence', arguments)
+        with patch.object(verifier, 'verify_join_snapshot', wraps=verifier.verify_join_snapshot) as scan:
+            report = self.verify(arguments)
+        scan.assert_called_once()
+        self.assertEqual([hit['sequence'] for hit in report['hits']], [2, 5])
+        self.assertEqual([hit['event'] for hit in report['hits']], ['shield_damaged', 'hull_damaged'])
+        self.assertTrue(all(hit['victim'] == {'index': 1, 'code': 'HVC-420'} for hit in report['hits']))
+
+    def test_single_sequence_refuses_hit_from_another_capture_window(self):
+        original = self.log.read_text(encoding='utf-8')
+        receipt = collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1), original)
+        arguments = verifier_arguments(receipt, self.directory / 'store', self.log, 2)
+        for current, replacement in ((CHECKPOINT_ID, 'checkpoint-' + 'f' * 32),
+                                     (self.sha256, '1' * 64)):
+            with self.subTest(changed_window_field=current), self.assertRaises(SystemExit):
+                self.log.write_text(original.replace(current, replacement, 1), encoding='utf-8')
+                self.verify(arguments)
+
+    def test_only_private_observer_duplicates_invalidate_capture_sequence(self):
+        original = self.log.read_text(encoding='utf-8')
+        duplicate = _log_line(_sample_event_line(2, 'shield_damaged', 9.51, **PILOT,
+                                                  amount=1.0, shield=4747.0))
+        stop = f'[X4LAN] AUTH_COMBAT_CAPTURE stopped epoch={EPOCH} index=1'
+        generic_row = duplicate.replace('[X4AuthorityClientCombatCapture] ', '').replace(
+            'md.X4AuthorityClientCombatCapture.', 'md.X4AuthorityCombatObserver.')
+        mixed = original.replace(stop, generic_row + '\n' + stop)
+        self.log.write_text(mixed, encoding='utf-8')
+        receipt = collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1), mixed)
+        self.assertEqual([hit['sequence'] for hit in receipt['hits']], [2, 5])
+        report = self.verify(verifier_arguments(receipt, self.directory / 'store', self.log, 2))
+        self.assertEqual((report['sequence'], report['amount']), (2, 52.0))
+
+        repeated = original.replace(stop, duplicate + '\n' + stop)
+        self.log.write_text(repeated, encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'repeats'):
+            collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1), repeated)
+        with self.assertRaises(SystemExit):
+            self.verify(verifier_arguments(receipt, self.directory / 'store', self.log, 2))
+
     def test_streamed_capture_accepts_reordered_json_and_preserves_output_on_invalid_data(self):
         receipt = new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1)
         with self.log.open(encoding='utf-8') as lines:

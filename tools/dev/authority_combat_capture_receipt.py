@@ -1,9 +1,9 @@
 """Write the local receipt for one opt-in pilot combat capture after X4 stops.
 
 Use the ``combat_capture`` block from the pilot's fixture result (checkpoint ID,
-save digest, registry epoch, admitted index) and that pilot's own log. Each
-listed sequence can then be checked with authority_combat_hit_evidence.py and
---piloted-ship-index. Nothing is uploaded; the receipt is never overwritten.
+save digest, registry epoch, admitted index) and that pilot's own log. The
+host can check the active capture with authority_combat_hit_evidence.py using
+--capture-epoch and --piloted-ship-index.
 """
 import argparse
 import json
