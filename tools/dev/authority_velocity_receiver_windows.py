@@ -413,8 +413,10 @@ def main(argv=None):
                           'path_m': round(sum(math.dist([a[k] for k in 'xyz'], [b[k] for k in 'xyz'])
                                               for a, b in zip(samples, samples[1:])), 1),
                           'with_velocity': sum(s['real_velocity'] is not None for s in samples),
-                          'x4_running': cockpit.x4_running()}, indent=1))
+                          'x4_running': cockpit.x4_running() if os.name == 'nt' else None}, indent=1))
         return 0
+    if os.name != 'nt':
+        parser.error('a native receiver run requires Windows')
     out = Path(args.out).resolve()
     if out.exists():
         raise SystemExit(f'{out} already exists; use a fresh output directory')

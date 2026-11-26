@@ -158,3 +158,19 @@ Loss of the pilot, inconsistent direction, stale packets, an out-of-range
 destination and incorrect native readback are covered. The earlier native
 8.5 km run started with velocity available. This first-contact trial still
 requires a live X4 receiver.
+
+### Reproduce on a Windows receiver
+
+From this experiment branch, use a built Windows UDP module that exports
+`monotonic` and a fresh output path. The isolated runner admits two loopback
+protocol pilots. The native cockpit receives its radar roster through the
+movement service. The other pilot supplies the recorded trajectory.
+
+```powershell
+py tools/dev/authority_velocity_receiver_windows.py --trial-first-contact --trajectory tests/fixtures/company_gate_flight.tsv --network-dll $NetworkDll --out $FreshOutput
+```
+
+The runner places sample zero at the resting ship. It requires a later
+first-contact readback from the same X4 ship, then ordinary playback
+through the last sequence. Its results list separately any crossings for
+which a subsequent native read confirmed the requested zone and position.
