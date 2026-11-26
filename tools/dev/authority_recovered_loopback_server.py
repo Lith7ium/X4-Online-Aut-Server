@@ -529,8 +529,10 @@ def verify_witness_source(store, checkpoint, guard, source_scripts, *, check_sou
         if guard is None or not callable(check_source) or check_source() is not True:
             raise ValueError('bounded witness source check failed')
     elif guard is None:
-        # Create diagnostics start from a registry without a sealed witness.
-        if store.latest_marked_confirmed()!=checkpoint or live.sha(checkpoint.path)!=checkpoint.sha256:
+        # The initial registry has no sealed witness. Validate it independently
+        # of the XML result retained by the store that published the save.
+        source_reader = CheckpointStore(store.directory)
+        if source_reader.latest_marked_confirmed() != checkpoint or live.sha(checkpoint.path) != checkpoint.sha256:
             raise ValueError('witness diagnostic source changed')
     elif guard.check() is not True:
         raise ValueError('witness source guard did not confirm source')
