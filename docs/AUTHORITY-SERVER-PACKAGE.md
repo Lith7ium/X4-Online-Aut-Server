@@ -565,6 +565,11 @@ unrecognized local record leaves the purchase unresolved. The host can
 recover durable purchase decisions from a verified checkpoint with its
 purchase-ledger sidecar. Keep the checkpoint and sidecar together.
 
+If the server confirmed a purchase just before the pilot disconnected,
+the receipt can miss that cockpit. After rejoining, reopen the Company
+trade window to check the current balance and cargo before placing
+another order. Reconnecting does not automatically display that earlier receipt.
+
 Use this path in the disposable fixture. A live two-player purchase and
 reconnect still require validation.
 

@@ -145,6 +145,10 @@ purchase unresolved. The server retains supported purchase decisions with its
 verified checkpoints. This route has offline integration coverage. A live
 two-player Windows purchase awaits verification.
 
+If you disconnect while waiting for a receipt, reopen the Company trade
+window after rejoining. Check the balance and cargo before ordering again.
+A confirmed purchase can be saved even if its receipt missed your cockpit.
+
 For the separate server-confirmed departure experiment, use a matching
 build that lists `-CompanyUndockTest` in addition to `-CompanyPurchases`.
 The previously distributed `d0756d51` Windows package predates this
