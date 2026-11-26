@@ -513,3 +513,42 @@ The cockpit engine log digest is
 `31ef6e4d60e411a67b63074e7cada9c25f37de73ba1ad07970beadcb73ed4c51`.
 The provider result digest is
 `7bedf1deeb9a571b8eb5c21ed5f9208a3ff808c1dc31243f5beabe42e98bd9a3`.
+
+### Verified ordinary gate movement and departure save
+
+The private Run 06 cockpit observer still treated the old superhighway
+sector `cluster_06_sector001_macro` as its only permitted destination.
+That check rejected the ordinary jump-gate destination before the
+observer could log or send the first destination sample. The private
+ordinary gate wrapper now pins `cluster_01_sector002_macro` and logs
+a bounded reason if a sample uses an unexpected sector or returns to
+the origin. No product movement checks changed. An offline replay
+used the recorded origin sample and simulated destination samples
+to confirm the normal boundary velocity reset and both refusals.
+
+One Run 07 flight at `d3038126da9dcd86479dc11829d12fe2ebd23e68`
+used a disposable copy of the confirmed Run 06 starting checkpoint.
+There was no additional staging. The real Linux cockpit verified
+the stock route after admission, then used stock autopilot once.
+X4's gate event recorded the same controlled HVC-420 actor
+`0x4266e` crossing ZGH-239 to NEL-546 at game age 491.022 s.
+The cockpit acknowledged origin sample 192, first destination sample
+193 with velocity absent, and destination sample 195 with velocity.
+
+The provider accepted 206 samples, verified nine position writes,
+and independently verified its one sector transfer for index 1073
+on sample 195. Both native readback paths and the target agreed within
+1 mm at approximately (−116681.414, −359.175, −79029.375) m in
+`cluster_01_sector002_macro`. The pilot received 205 acknowledgements
+and finished through ordinary user departure.
+
+Independent parsing of the marked save confirmed HVC-420 (1073)
+and KHI-630 (1074) in the destination sector. The provider ended
+paused at `checkpoint-ab4e77fb08fe477ca55e990817eec479`, SHA-256
+`d5b74c0d7d720f5c0ee74bf043399a3173bfe5dfc5879402defa5e57a4acba06`.
+Both processes and locks cleared, and the confirmed source and its
+copy matched their starting bytes and pointers. The private proof
+under `.local/ordinary-jump-gate/run-07-measured/flight/verified.json`
+has SHA-256
+`bc2db43854be3ff7a9313474fea3c8fe0477ae74c4c48a9edd76d6583f9af0ff`.
+The run used private same-host Linux TLS with one cockpit.
