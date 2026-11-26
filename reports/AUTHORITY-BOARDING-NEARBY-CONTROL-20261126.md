@@ -27,3 +27,30 @@ left no owned processes. The source and its disposable copy retained
 their original confirmed save. The private engine log is under
 `.local/native-boarding-crew-seed/nearby-observer/run-01/` and has
 SHA-256 `231627bd9e5922ccf37ac22c830b731a19a1bf64dc7512626bc37d7e01cfed2e`.
+
+## Run-02 stopped at the target equipment check
+
+The single corrected attempt used the same source and provider revision.
+X4 returned 13 operational components for the broad `class.weapon`
+query and 11 for the turret query at the untouched target. The fixture
+had required two results from the broad query and refused before
+changing the target or creating the scout. A deferred diagnostic then
+tried to read the uncreated observer and recorded an unset property.
+The terminal readback still showed 100% hull and shields, 11 turrets,
+13 defending marines, and 11 service crew. No stock operation started.
+
+An offline parse of the original save found exactly two primary
+`weapon_tel_l_destroyer_01_mk1_macro` children of ZNG-430 at
+`con_weapon_01` and `con_weapon_02`, separate from the eight turret
+and three missile-turret children. The private fixture now filters the
+operational search by the primary macro, direct ship context, and
+non-turret class before comparing the same two runtime objects. It
+guards observer diagnostics on the existence of that observer. That
+revision has only been checked offline. Deferred observer disarm, helm
+entry, high-attention physics readiness, pod attention and the stock
+boarding outcome remain unmeasured.
+
+The provider opened no client endpoint and wrote no checkpoint. The
+original and cloned source remained unchanged and owned processes were
+reaped. The private `nearby-observer/run-02/` engine log SHA-256 is
+`c81ceb599a64a916269c7e86a4d0eb5692d591fe7eb55f6c5f33a9713975f554`.
