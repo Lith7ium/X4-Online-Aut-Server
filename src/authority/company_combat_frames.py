@@ -77,16 +77,63 @@ def validate_impacts(impacts, shooter_index):
     return impacts
 
 
-def decode_request(frame):
-    if frame.keys() != {'kind', 'ticket', 'impacts', *BINDING_FIELDS} or frame['kind'] != 'combat_impacts':
-        raise ValueError('invalid Company combat request')
+def _request_binding(frame):
     generation, epoch, shooter_index = (frame[key] for key in BINDING_FIELDS)
     ticket = frame['ticket']
     if (type(ticket) is not str or not _TICKET.fullmatch(ticket)
             or any(type(token) is not str or not _TOKEN.fullmatch(token) for token in (generation, epoch))
             or not _index(shooter_index)):
         raise ValueError('invalid Company combat binding')
-    return ticket, (generation, epoch, shooter_index), validate_impacts(frame['impacts'], shooter_index)
+    return ticket, (generation, epoch, shooter_index)
+
+
+def decode_request(frame):
+    if frame.keys() != {'kind', 'ticket', 'impacts', *BINDING_FIELDS} or frame['kind'] != 'combat_impacts':
+        raise ValueError('invalid Company combat request')
+    ticket, binding = _request_binding(frame)
+    return ticket, binding, validate_impacts(frame['impacts'], binding[2])
+
+
+def validate_health_request(window, sequence):
+    if any(type(value) is not int or not 1 <= value <= MAX_COUNTER for value in (window, sequence)):
+        raise ValueError('invalid cockpit health window or sequence')
+
+
+def decode_health_request(frame):
+    if (frame.keys() != {'kind', 'ticket', 'window', 'sequence', 'after_revision', *BINDING_FIELDS}
+            or frame['kind'] != 'combat_health_read'):
+        raise ValueError('invalid cockpit health request')
+    ticket, binding = _request_binding(frame)
+    validate_health_request(frame['window'], frame['sequence'])
+    after = frame['after_revision']
+    if after is not None and not (type(after) is int and 0 <= after <= MAX_COUNTER):
+        raise ValueError('invalid cockpit health revision')
+    return ticket, binding, frame['window'], frame['sequence'], after
+
+
+def validate_live_health(health):
+    if (type(health) is not dict or health.keys() != {'shield', 'maxshield', 'hull', 'maxhull'}
+            or not all(map(number, health.values())) or health['shield'] > health['maxshield']
+            or not 0 < health['hull'] <= health['maxhull']):
+        raise ValueError('invalid living ship health')
+    return health
+
+
+def decode_health_reply(frame, binding, window, sequence):
+    if (frame.keys() != {'kind', 'window', 'sequence', 'health', 'revision', *BINDING_FIELDS}
+            or frame['kind'] != 'combat_health' or type(frame['shooter_index']) is not int
+            or tuple(frame[key] for key in BINDING_FIELDS) != binding):
+        raise ValueError('invalid cockpit health reply')
+    validate_health_request(frame['window'], frame['sequence'])
+    if (frame['window'], frame['sequence']) != (window, sequence):
+        raise ValueError('cockpit health reply does not match the current request')
+    if frame['health'] is not None:
+        if type(frame['revision']) is not int or not 0 <= frame['revision'] <= MAX_COUNTER:
+            raise ValueError('invalid cockpit health revision')
+        return dict(validate_live_health(frame['health']), revision=frame['revision'])
+    if frame['revision'] is not None:
+        raise ValueError('cockpit health revision without native data')
+    return None
 
 
 def decode_receipts(frame, binding, impacts):

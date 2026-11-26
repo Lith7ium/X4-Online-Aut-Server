@@ -1,4 +1,4 @@
-"""Opt-in stock damage RPC to a running, owned provider X4."""
+"""Opt-in stock damage and health observation RPC to a running provider X4."""
 
 from dataclasses import dataclass
 import hashlib
@@ -21,6 +21,8 @@ _MAX_PACKET = 512
 _MAX_INDEX = 200000
 _MAX_SERIAL = 2**31 - 1
 _MAX_AMOUNT = 2**53 - 1
+_HEALTH_TIMEOUT = 2
+_HEALTH_FIELDS = ('shield', 'maxshield', 'hull', 'maxhull')
 
 
 class NativeGunDamageUncertain(RuntimeError):
@@ -45,12 +47,52 @@ class _Impact:
         return self.health
 
 
+@dataclass
+class _HealthRead:
+    provider: 'NativeGunDamageProvider'
+    binding: tuple
+    deadline: float
+    response_prefix: bytes
+    health: dict | None = None
+    error: ValueError | None = None
+
+    def poll(self):
+        if self.health is None and self.error is None:
+            self.provider._poll_health(self)
+        if self.error is not None:
+            raise self.error
+        return None if self.health is None else dict(self.health)
+
+    def cancel(self):
+        if self.provider._health_active is self:
+            self.provider._finish_health(error=ValueError('native health read cancelled'))
+
+
 def _bounded_index(value):
     return type(value) is int and 0 < value <= _MAX_INDEX
 
 
 def _bounded_amount(value):
     return type(value) in (int, float) and 0 < value <= _MAX_AMOUNT and math.isfinite(value)
+
+
+def _valid_binding(binding):
+    return (type(binding) is tuple and len(binding) == 3
+            and all(type(token) is str and _TOKEN.fullmatch(token) for token in binding[:2])
+            and _bounded_index(binding[2]))
+
+
+def _health_sample(fields):
+    if (len(fields) != 6 or fields[0] != 'observed' or not _ACTOR.fullmatch(fields[1])
+            or int(fields[1], 16) == 0):
+        raise ValueError('invalid native health receipt')
+    try:
+        shield, maxshield, hull, maxhull = values = tuple(map(float, fields[2:]))
+    except ValueError:
+        raise ValueError('invalid native health receipt numbers') from None
+    if not (0 <= shield <= maxshield <= _MAX_AMOUNT and 0 < hull <= maxhull <= _MAX_AMOUNT):
+        raise ValueError('invalid native living ship health')
+    return dict(zip(_HEALTH_FIELDS, values, strict=True))
 
 
 def _read_health(fields, amount):
@@ -86,7 +128,8 @@ class NativeGunDamageProvider:
     is_current checks the assignment and can_fire adds input freshness before
     dispatch. world_current optionally fences which world can settle the
     receipt, even if the firing pilot has departed since dispatch. The owner
-    pumps the returned operation without blocking TLS or motion.
+    pumps the returned operation without blocking TLS or motion. Damage takes
+    precedence over cancellable, read-only health observations.
     """
 
     def __init__(self, is_current, *, can_fire=None, world_current=None, timeout=4, clock=time.monotonic):
@@ -107,8 +150,8 @@ class NativeGunDamageProvider:
             self._socket.close()
             raise
         self._lease = secrets.token_hex(16)
-        self._serial = 0
-        self._peer = self._process = self._guard = self._staged_md = self._active = None
+        self._serial = self._health_serial = 0
+        self._peer = self._process = self._guard = self._staged_md = self._active = self._health_active = None
         self._fenced = False
 
     def install(self, case):
@@ -137,9 +180,10 @@ class NativeGunDamageProvider:
         if any(path.exists() or path.is_symlink() for path in (cue, driver, reader)):
             raise FileExistsError('native damage overlay scripts already present')
         xml = (scripts / cue.name).read_bytes()
-        if xml.count(b'__PROVIDER_LEASE__') != 1:
-            raise ValueError('native damage cue must have one lease binding')
-        xml = xml.replace(b'__PROVIDER_LEASE__', self._lease.encode('ascii'))
+        for marker in (b'__PROVIDER_LEASE__', b'__PROVIDER_HEALTH_LEASE__'):
+            if xml.count(marker) != 1:
+                raise ValueError('native damage and health cues require separate lease guards')
+            xml = xml.replace(marker, self._lease.encode('ascii'))
         files = {
             cue: xml,
             driver: (scripts / driver.name).read_bytes(),
@@ -155,7 +199,7 @@ class NativeGunDamageProvider:
    local lib = assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    company_gun_damage_tick = X4LAN_AUTHORITY_COMPANY_GUN_DAMAGE.new(
        "{self._lease}", assert(lib.open('127.0.0.1',{port})), lib.monotonic,
-       C.IsGamePaused, X4LAN_COMBAT_OBSERVER.read_lua_health)
+       C.IsGamePaused, X4LAN_COMBAT_OBSERVER.read_lua_health, engine.game_time)
   end
   company_gun_damage_tick()
  end
@@ -189,6 +233,8 @@ class NativeGunDamageProvider:
 
     def close(self):
         self._socket.close()
+        if self._health_active is not None:
+            self._finish_health(error=ValueError('native health adapter closed during read'))
         if self._active is not None:
             self._finish(error=NativeGunDamageUncertain('native damage adapter closed during impact'))
 
@@ -213,9 +259,7 @@ class NativeGunDamageProvider:
                 return
 
     def begin_impact(self, binding, target_index, amount):
-        if (type(binding) is not tuple or len(binding) != 3
-                or not all(type(token) is str and _TOKEN.fullmatch(token) for token in binding[:2])
-                or not _bounded_index(binding[2]) or not _bounded_index(target_index)
+        if (not _valid_binding(binding) or not _bounded_index(target_index)
                 or target_index == binding[2] or not _bounded_amount(amount)):
             raise CombatImpactRejected('invalid native impact binding or amount')
         if self._fenced:
@@ -229,6 +273,8 @@ class NativeGunDamageProvider:
         if (self._is_current(binding) is not True
                 or (self._can_fire is not None and self._can_fire(binding) is not True)):
             raise CombatImpactRejected('native impact requires a current firing assignment')
+        if self._health_active is not None:
+            self._finish_health(error=ValueError('native health read superseded by an impact'))
         self._serial += 1
         generation, epoch, source_index = binding
         identity = f'{self._lease}|{self._serial}|{generation}|{epoch}|{source_index}|{target_index}'
@@ -246,6 +292,79 @@ class NativeGunDamageProvider:
                 raise failure from error
             raise
         return attempt
+
+    def _health_current(self, binding):
+        return (self._can_fire is not None and self._is_current(binding) is True
+                and self._can_fire(binding) is True
+                and (self._world_current is None or self._world_current(binding[1]) is True))
+
+    def begin_health_read(self, binding):
+        """Sample only the caller's current registered Company ship."""
+        if (not _valid_binding(binding) or self._active is not None or self._socket.fileno() < 0
+                or self._process is None or self._health_serial >= _MAX_SERIAL):
+            raise ValueError('native health read unavailable')
+        if self._health_active is not None:
+            if self._clock() < self._health_active.deadline:
+                raise ValueError('native health read already pending')
+            self._finish_health(error=ValueError('native health read expired'))
+        try:
+            self._discover_peer()
+            if self._peer is None or not self._owns_peer(self._peer) or not self._health_current(binding):
+                raise ValueError('native health read requires a current running Company helm')
+        except Exception as error:
+            raise ValueError('native health read endpoint or assignment unavailable') from error
+
+        self._health_serial += 1
+        generation, epoch, index = binding
+        identity = f'{self._lease}|{self._health_serial}|{generation}|{epoch}|{index}'
+        deadline = self._clock() + _HEALTH_TIMEOUT
+        packet = f'GUN_HEALTH|{identity}|{deadline:.17g}'.encode('ascii')
+        attempt = _HealthRead(self, binding, deadline, f'GUN_HEALTH_RESULT|{identity}|'.encode('ascii'))
+        self._health_active = attempt
+        try:
+            if self._socket.sendto(packet, self._peer) != len(packet):
+                raise ValueError('native health read send incomplete')
+        except BaseException as error:
+            failure = ValueError('native health read could not be sent')
+            self._finish_health(error=failure)
+            if isinstance(error, Exception):
+                raise failure from error
+            raise
+        return attempt
+
+    def _finish_health(self, *, health=None, error=None):
+        attempt, self._health_active = self._health_active, None
+        attempt.health, attempt.error = health, error
+
+    def _poll_health(self, attempt):
+        if self._health_active is not attempt:
+            raise ValueError('native health read is no longer active')
+        try:
+            if self._clock() >= attempt.deadline:
+                raise ValueError('native health read expired')
+            if not self._health_current(attempt.binding):
+                raise ValueError('native health read lost its Company helm')
+            for _ in range(32):
+                try:
+                    packet, peer = self._socket.recvfrom(_MAX_PACKET + 1)
+                except BlockingIOError:
+                    return
+                if peer != self._peer or not packet.startswith(attempt.response_prefix):
+                    continue
+                if (len(packet) > _MAX_PACKET or not self._owns_peer(peer)
+                        or self._clock() >= attempt.deadline or not self._health_current(attempt.binding)):
+                    raise ValueError('native health receipt lost its process, helm or deadline fence')
+                try:
+                    fields = packet[len(attempt.response_prefix):].decode('ascii').split('|')
+                except UnicodeError:
+                    raise ValueError('invalid native health receipt encoding') from None
+                if fields == ['refused']:
+                    raise ValueError('native registry or actor refused health read')
+                self._finish_health(health=_health_sample(fields))
+                return
+        except Exception as error:
+            failure = error if isinstance(error, ValueError) else ValueError('native health read unavailable')
+            self._finish_health(error=failure)
 
     def _finish(self, *, health=None, error=None):
         attempt, self._active = self._active, None

@@ -1636,7 +1636,14 @@ def run(args):
         if gun_damage_provider is not None:
             from authority.company_combat_service import CompanyCombatService
 
-            combat_service = CompanyCombatService(motion_service.current_combat_grant, gun_damage_provider.begin_impact)
+            def current_health_window(binding):
+                if combat_world_running() and motion_service.combat_helm_current(binding):
+                    return motion_service.window
+                return None
+
+            combat_service = CompanyCombatService(
+                motion_service.current_combat_grant, gun_damage_provider.begin_impact,
+                begin_health_read=gun_damage_provider.begin_health_read, health_window=current_health_window)
         if npc_source is not None:
             def npc_unreserved():
                 reservations = session.running_ship_reservations()

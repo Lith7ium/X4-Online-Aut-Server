@@ -89,3 +89,23 @@ native shield overflow and duplicate handling in this running test only.
 Receiving confirmed shots through normal multiplayer transport, preserving
 their identities across reconnect, and showing the server result in two
 human cockpits remain open.
+
+## First combat TLS hit in the running Fedora world
+
+At `992e77ea` two protocol pilots on Bazzite joined the GPU-free Fedora
+provider through the regular TLS service. They reserved HVC-420 (1073) and
+KHI-630 (1074) and received 36 movement acknowledgements in total. Their
+cockpits and the firing pilot's local gun record were simulated.
+
+The first pilot reported a 26-point hit on MFQ-419 (943). A separate native
+read before the shot measured 29.999999702 shield and 6,400 hull. X4 executed
+the damage call once. The sender retried twice and received an unknown
+outcome. The service suspended further damage, so the second pilot held fire.
+On last departure the native save contained 4 shield on the same MFQ-419.
+The in-session receipt did not establish the immediate hull value or identify
+which native observation failed to match.
+
+The confirmed departure checkpoint was `checkpoint-3af79e50271445f5893c073649ff1757`,
+with SHA-256 `610b678903fdf0961b15339c7309903180e6264c2eb572980c5a2679d1a3bccf`.
+The private verification is in
+`.local/live-shield-bridge/integrated-native-01/fedora-evidence/departure-verified.json`.

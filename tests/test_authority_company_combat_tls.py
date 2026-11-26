@@ -5,6 +5,7 @@ from pathlib import Path
 import ssl
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 from authority.company_combat_client import CompanyCombatClient
 from authority.company_combat_frames import encode_frame
@@ -161,6 +162,57 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             await self.hit(client, 1)
         self.assertFalse(self.calls)
         self.assertEqual(await self.drive(self.raw_exchange(control, b'ordinary\n')), b'control:ordinary\n')
+
+    async def test_victim_reads_fresh_health_before_and_after_reconnect(self):
+        self.combat.close()
+        reads = []
+
+        def begin_read(binding):
+            reads.append(binding[2])
+            shield, hull = self.health[binding[2]]
+            result = dict(shield=shield, maxshield=2366, hull=hull, maxhull=3600)
+            return Mock(poll=Mock(side_effect=[None, result]))
+
+        self.combat = CompanyCombatService(
+            self.motion.current_combat_grant, self.apply, begin_health_read=begin_read,
+            health_window=lambda binding: self.motion.window if self.motion.running else None)
+        self.addCleanup(self.combat.close)
+        await self.start(combat_enabled=True)
+        _, attacker_port = await self.link()
+        _, victim_port = await self.link()
+        attacker = CompanyCombatClient(attacker_port, self.grant(1, 1073))
+        victim_grant = self.grant(2, 1074)
+        victim = CompanyCombatClient(victim_port, victim_grant)
+        self.addCleanup(attacker.close)
+        self.addCleanup(victim.close)
+        self.motion.set_running(True)
+        window = self.motion.window
+        await self.hit(attacker, 1)
+        first = await self.drive(asyncio.to_thread(victim.read_health, window, 1))
+        self.assertEqual((first['shield'], first['hull'], first['revision']), (4, 3600, 1))
+        self.assertIsNone(await self.drive(asyncio.to_thread(victim.read_health, window, 2, first['revision'])))
+        await self.hit(attacker, 1)
+        self.assertIsNone(await self.drive(asyncio.to_thread(victim.read_health, window, 3, first['revision'])))
+        await self.hit(attacker, 2)
+        hit_again = await self.drive(asyncio.to_thread(victim.read_health, window, 4, first['revision']))
+        self.assertEqual((hit_again['shield'], hit_again['hull'], hit_again['revision']), (0, 3578, 2))
+
+        victim.close()
+        self.health[1074] = (120, 3550)  # Simulate regeneration and other game activity during a gap.
+        resumed = await self.drive(asyncio.to_thread(victim.read_health, window, 5, hit_again['revision']))
+        self.assertEqual(resumed, dict(shield=120, maxshield=2366, hull=3550, maxhull=3600, revision=2))
+        self.motion.set_running(False)
+        self.motion.set_running(True)
+        self.assertIsNone(await self.drive(asyncio.to_thread(victim.read_health, window, 6)))
+        current = self.motion.window
+        second = await self.drive(asyncio.to_thread(victim.read_health, current, 7, resumed['revision']))
+        self.assertEqual(second, resumed)
+        self.motion.revoke(2)
+        self.grant(3, 1074)
+        with self.assertRaises(ConnectionError):
+            await self.drive(asyncio.to_thread(victim.read_health, current, 8))
+        self.assertEqual(reads, [1074] * 4)
+        self.assertEqual(self.calls, [(1073, 1074, 26)] * 2)
 
 
 if __name__ == '__main__':

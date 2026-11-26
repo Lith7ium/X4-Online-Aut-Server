@@ -45,7 +45,7 @@ def _regular(info):
 class CompanyCombatSender:
     """Tail one private native log in a dedicated worker bound to one admission."""
 
-    def __init__(self, path, port, credential, *, epoch, index, log_identity):
+    def __init__(self, path, port, credential, *, epoch, index, log_identity, health_bridge=None):
         if (type(epoch) is not str or not _EPOCH.fullmatch(epoch) or type(index) is not int
                 or not 1 <= index <= 200000 or type(credential) is not dict
                 or credential.get('epoch') != epoch or credential.get('index') != index):
@@ -54,6 +54,7 @@ class CompanyCombatSender:
                 or any(type(part) is not int or part < 0 for part in log_identity) or not log_identity[1]):
             raise ValueError('Company combat requires the verified native log identity')
         self._client = CompanyCombatClient(port, credential)
+        self._health_bridge = health_bridge
         self._path = path
         self._identity = log_identity
         self._epoch = epoch.encode('ascii')
@@ -99,6 +100,7 @@ class CompanyCombatSender:
             max_seen = info.st_size
             chunk = stream.read(_BLOCK)
             if not chunk:
+                self._read_requested_health()
                 self._stop.wait(.05)
                 continue
             *lines, carry = (carry + chunk).split(b'\n')
@@ -155,7 +157,24 @@ class CompanyCombatSender:
                 return False
             for receipt in receipts:
                 self._counts[receipt['status']] += 1
+            self._read_requested_health()
             return True
         if not self._stop.is_set():
             self._failure = 'receipt_timeout' if time.monotonic() >= deadline else 'transport_unavailable'
         return False
+
+    def _read_requested_health(self):
+        if self._health_bridge is None or self._stop.is_set():
+            return
+        request = self._health_bridge.take_request()
+        if request is None:
+            return
+        try:
+            health = self._client.read_health(*request, cancelled=self._stop.is_set)
+        except CombatExchangeCancelled:
+            return
+        except (OSError, ValueError):
+            # Reads have no side effects. The game can ask again with a fresh sequence.
+            health = None
+        window, sequence, _ = request
+        self._health_bridge.accept_reply(window, sequence, health)

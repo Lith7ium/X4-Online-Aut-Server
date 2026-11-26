@@ -15,6 +15,8 @@ from authority_company_gun_damage import NativeGunDamageProvider, NativeGunDamag
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ('a' * 32, 'b' * 32, 1073)
 RECEIPT = 'applied|0x102|0x103|0|26|30|3600|4|3600|2366|3600|4.000000165|3600|2366|3600'
+HEALTH_RECEIPT = b'observed|0x102|100.25|2366|3600|3600'
+HEALTH = dict(shield=100.25, maxshield=2366, hull=3600, maxhull=3600)
 
 
 class NativeDamageTests(unittest.TestCase):
@@ -60,6 +62,17 @@ class NativeDamageTests(unittest.TestCase):
 
     def begin(self):
         return self.provider.begin_impact(BINDING, 1074, 26)
+
+    def begin_health(self):
+        return self.provider.begin_health_read(BINDING)
+
+    def health_reply_prefix(self):
+        fields = self.peer.recv(512).decode('ascii').split('|')
+        self.assertEqual(fields[0], 'GUN_HEALTH')
+        self.assertEqual(fields[1], self.provider._lease)
+        self.assertEqual(fields[3:6], [*BINDING[:2], '1073'])
+        self.assertEqual(float(fields[6]), self.now + 2)
+        return ('|'.join(('GUN_HEALTH_RESULT', *fields[1:6])) + '|').encode('ascii')
 
     def assert_no_impact(self):
         self.peer.setblocking(False)
@@ -167,6 +180,89 @@ class NativeDamageTests(unittest.TestCase):
         self.engine(lethal)
         self.assertEqual(pending.poll(), (0, 0))
 
+    def test_health_uses_fresh_read_with_exact_registry_identity(self):
+        self.hello()
+        read = self.begin_health()
+        prefix = self.health_reply_prefix()
+        self.assertIsNone(read.poll())
+        with self.assertRaisesRegex(ValueError, 'already pending'):
+            self.begin_health()
+        self.peer.send(prefix + HEALTH_RECEIPT)
+        self.assertEqual(read.poll(), HEALTH)
+        read.poll()['shield'] = 0
+        self.assertEqual(read.poll(), HEALTH)
+        current = self.begin_health()
+        current_prefix = self.health_reply_prefix()
+        self.assertNotEqual(current_prefix, prefix)
+        self.peer.send(prefix + HEALTH_RECEIPT)
+        self.assertIsNone(current.poll())
+        self.peer.send(current_prefix + HEALTH_RECEIPT.replace(b'100.25', b'50.5'))
+        self.assertEqual(current.poll(), dict(HEALTH, shield=50.5))
+
+    def test_cancelling_health_read_releases_slot_and_discards_stale_reply(self):
+        self.hello()
+        old = self.begin_health()
+        old_prefix = self.health_reply_prefix()
+        old.cancel()
+        old.cancel()
+        with self.assertRaisesRegex(ValueError, 'cancelled'):
+            old.poll()
+        new = self.begin_health()
+        new_prefix = self.health_reply_prefix()
+        self.peer.send(old_prefix + HEALTH_RECEIPT)
+        self.assertIsNone(new.poll())
+        self.peer.send(new_prefix + HEALTH_RECEIPT)
+        self.assertEqual(new.poll(), HEALTH)
+        new.cancel()
+        self.assertEqual(new.poll(), HEALTH)
+
+    def test_impact_supersedes_read_and_read_cannot_steal_impact_receipt(self):
+        self.hello()
+        read = self.begin_health()
+        prefix = self.health_reply_prefix()
+        impact = self.begin()
+        self.engine(RECEIPT)
+        self.peer.send(prefix + HEALTH_RECEIPT)
+        with self.assertRaisesRegex(ValueError, 'superseded'):
+            read.poll()
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            self.begin_health()
+        self.assertEqual(impact.poll(), (4.000000165, 3600))
+        new_read = self.begin_health()
+        new_prefix = self.health_reply_prefix()
+        self.assertIsNone(new_read.poll())
+        self.peer.send(new_prefix + HEALTH_RECEIPT)
+        self.assertEqual(new_read.poll(), HEALTH)
+
+    def test_invalid_expired_and_revoked_health_reads_do_not_fence_impacts(self):
+        self.hello()
+        for field, replacement in ((b'0x102', b'0x0'), (b'100.25', b'nan'), (b'100.25', b'2367'),
+                                   (b'|3600|3600', b'|0|3600'), (b'|3600|3600', b'|3601|3600')):
+            with self.subTest(field=field, replacement=replacement):
+                read = self.begin_health()
+                prefix = self.health_reply_prefix()
+                self.peer.send(prefix + HEALTH_RECEIPT.replace(field, replacement))
+                with self.assertRaises(ValueError):
+                    read.poll()
+        expired = self.begin_health()
+        expired_prefix = self.health_reply_prefix()
+        self.now += 2
+        self.peer.send(expired_prefix + HEALTH_RECEIPT)
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            expired.poll()
+        revoked = self.begin_health()
+        revoked_prefix = self.health_reply_prefix()
+        self.helm = False
+        self.peer.send(revoked_prefix + HEALTH_RECEIPT)
+        with self.assertRaisesRegex(ValueError, 'lost its Company helm'):
+            revoked.poll()
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            self.begin_health()
+        self.helm = True
+        impact = self.begin()
+        self.engine(RECEIPT)
+        self.assertEqual(impact.poll(), (4.000000165, 3600))
+
     def test_opt_in_overlay_contains_one_stock_write_and_archives_cue(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)
@@ -192,6 +288,10 @@ class NativeDamageTests(unittest.TestCase):
             self.assertFalse(native.findall('.//set_object_shield'))
             self.assertFalse(native.findall('.//set_object_hull'))
             self.assertNotIn('__PROVIDER_LEASE__', cue.read_text())
+            health = native.find("./cues/cue[@name='Health']")
+            self.assertIsNotNone(health)
+            self.assertFalse(health.findall('.//apply_attackstrength'))
+            self.assertNotIn('__PROVIDER_HEALTH_LEASE__', cue.read_text())
             result = self.provider.archive_cues(case, out)
             self.assertFalse(cue.exists())
             self.assertTrue(result.is_file())

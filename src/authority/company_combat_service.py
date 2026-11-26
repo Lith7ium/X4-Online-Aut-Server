@@ -7,8 +7,8 @@ import socket
 import threading
 import time
 
-from .company_combat_frames import (BINDING_FIELDS, MAX_COUNTER, decode_request, encode_frame,
-                                    number, read_frame)
+from .company_combat_frames import (BINDING_FIELDS, MAX_COUNTER, decode_health_request, decode_request,
+                                    encode_frame, number, read_frame, validate_live_health)
 from .company_combat_frames import derive_combat_ticket as derive_combat_ticket
 from .company_motion_frames import MAX_PEERS
 
@@ -30,6 +30,8 @@ class _Peer:
     incoming: bytearray = field(default_factory=bytearray)
     outgoing: bytes = b''
     pending: bool = False
+    health_window: int | None = None
+    last_target_hit: int = 0
 
 
 @dataclass
@@ -74,6 +76,17 @@ class _NativePending:
     poll: Callable[[], tuple | None]
 
 
+@dataclass
+class _HealthRead:
+    peer: _Peer
+    window: int
+    sequence: int
+    after_revision: int | None
+    deadline: float
+    operation: object | None = None
+    sampled_revision: int = 0
+
+
 class CompanyCombatService:
     """Run all methods on the owner thread, behind the experimental TLS gateway.
 
@@ -89,11 +102,17 @@ class CompanyCombatService:
     Restarting the service requires fresh admission tickets.
     """
 
-    def __init__(self, lookup_current, apply_impact):
+    def __init__(self, lookup_current, apply_impact, *, begin_health_read=None, health_window=None):
         if not callable(lookup_current) or (apply_impact is not None and not callable(apply_impact)):
             raise ValueError('invalid combat admission lookup or impact adapter')
+        if ((begin_health_read is None) != (health_window is None)
+                or (begin_health_read is not None and not all(map(callable, (begin_health_read, health_window))))):
+            raise ValueError('cockpit health requires an in-game reader and a current window')
         self._lookup_current = lookup_current
         self._apply_impact = apply_impact
+        self._begin_health_read = begin_health_read
+        self._health_window = health_window
+        self._health_reads = deque()
         self._owner = threading.current_thread()
         self._peers = {}
         self._history = {}
@@ -152,14 +171,62 @@ class CompanyCombatService:
         frame = read_frame(peer.connection, peer.incoming)
         if frame is None:
             return
-        ticket, binding, impacts = decode_request(frame)
+        is_health_read = frame.get('kind') == 'combat_health_read'
+        if is_health_read:
+            ticket, binding, window, sequence, after = decode_health_request(frame)
+        else:
+            ticket, binding, impacts = decode_request(frame)
         identity = ticket, binding
         if (self._lookup_current(ticket) != binding
                 or (peer.identity is not None and peer.identity != identity)):
             raise ValueError('inactive or mismatched combat admission')
         peer.identity = identity
         peer.pending = True
-        self._batches.append(_Batch(peer, ticket, binding, impacts))
+        if is_health_read:
+            self._health_reads.append(_HealthRead(peer, window, sequence, after, time.monotonic() + 2))
+        else:
+            self._batches.append(_Batch(peer, ticket, binding, impacts))
+
+    def _read_cockpit(self, now):
+        """Read one living pilot ship directly from X4. Never reuse a hit receipt as current health."""
+        if not self._health_reads:
+            return
+        query = self._health_reads[0]
+        peer = query.peer
+        ticket, binding = peer.identity
+        health = None
+        needs_read = (query.after_revision is None or peer.health_window != query.window
+                      or query.after_revision < peer.last_target_hit or query.after_revision > self._order)
+        try:
+            if (needs_read and self._lookup_current(ticket) == binding and now < query.deadline
+                    and self._begin_health_read is not None and self._health_window(binding) == query.window):
+                if query.operation is None:
+                    if self.native_pending:
+                        return
+                    query.operation = self._begin_health_read(binding)
+                    query.sampled_revision = self._order
+                result = query.operation.poll()
+                if result is None:
+                    return
+                # The native read may finish after a movement or admission change.
+                if (time.monotonic() < query.deadline and self._lookup_current(ticket) == binding
+                        and self._health_window(binding) == query.window
+                        and peer.last_target_hit <= query.sampled_revision):
+                    health = validate_live_health(result)
+                    peer.health_window = query.window
+        except (OSError, ValueError):
+            pass  # A missed read cannot change the game or invalidate impact receipts.
+        if query.operation is not None:
+            query.operation.cancel()
+        self._health_reads.popleft()
+        peer.pending = False
+        if self._lookup_current(ticket) != binding:
+            self._drop(peer)
+            return
+        peer.outgoing = encode_frame(dict(zip(BINDING_FIELDS, binding), kind='combat_health',
+                                          window=query.window, sequence=query.sequence, health=health,
+                                          revision=query.sampled_revision if health is not None else None))
+        peer.deadline = time.monotonic() + IO_TIMEOUT
 
     def _get_history(self, ticket, binding):
         history = self._history.get(ticket)
@@ -216,6 +283,9 @@ class CompanyCombatService:
             return
         else:
             receipt.update(status='confirmed', shield=result[0], hull=result[1])
+            for peer in self._peers.values():
+                if peer.identity is not None and peer.identity[1][1:] == (batch.binding[1], receipt['target_index']):
+                    peer.last_target_hit = receipt['order']
         self._finish(batch, receipt)
 
     def settle_pending(self):
@@ -282,6 +352,7 @@ class CompanyCombatService:
         else:
             self._advance()
         now = time.monotonic()
+        self._read_cockpit(now)
         for peer in tuple(self._peers.values()):
             if peer.outgoing:
                 try:
@@ -297,3 +368,7 @@ class CompanyCombatService:
             self._drop(peer)
         self._batches.clear()
         self._history.clear()
+        for query in self._health_reads:
+            if query.operation is not None:
+                query.operation.cancel()
+        self._health_reads.clear()

@@ -4,8 +4,9 @@ import select
 import socket
 import time
 
-from .company_combat_frames import (BINDING_FIELDS, decode_receipts, derive_combat_ticket,
-                                    encode_frame, read_frame, validate_impacts)
+from .company_combat_frames import (BINDING_FIELDS, decode_health_reply, decode_receipts,
+                                    derive_combat_ticket, encode_frame, read_frame,
+                                    validate_health_request, validate_impacts)
 from .trusted_load_messages import validate_ship_motion_credential
 
 
@@ -67,32 +68,49 @@ class CompanyCombatClient:
         elif self._pending != impacts:
             raise ValueError('retry the pending Company combat batch unchanged')
         try:
-            self._remaining(deadline, cancelled)
-            if self._connection is None:
-                self._connect(min(deadline, time.monotonic() + _CONNECT_TIMEOUT), cancelled)
-            outgoing = memoryview(self._pending_frame)
-            while outgoing:
-                self._wait_socket(deadline, cancelled, write=True)
-                try:
-                    sent = self._connection.send(outgoing)
-                except BlockingIOError:
-                    continue
-                if not sent:
-                    raise ConnectionError('Company combat stream closed while sending')
-                outgoing = outgoing[sent:]
-            while True:
-                self._wait_socket(deadline, cancelled, write=False)
-                receipt = read_frame(self._connection, self._incoming)
-                if receipt is not None:
-                    if self._incoming:
-                        raise ValueError('unexpected trailing data in Company combat receipt')
-                    receipts = decode_receipts(receipt, self._binding, impacts)
-                    self._pending = None
-                    self._pending_frame = None
-                    return receipts
+            frame = self._round_trip(self._pending_frame, deadline, cancelled)
+            receipts = decode_receipts(frame, self._binding, impacts)
+            self._pending = self._pending_frame = None
+            return receipts
         except BaseException:
             self.close()
             raise
+
+    def read_health(self, window, sequence, after_revision=None, *, cancelled=None):
+        """Request a fresh native read for this pilot's own reserved ship."""
+        validate_health_request(window, sequence)
+        if self._pending is not None:
+            raise ValueError('resolve pending impacts before reading cockpit health')
+        request = dict(zip(BINDING_FIELDS, self._binding), kind='combat_health_read', ticket=self._ticket,
+                       window=window, sequence=sequence, after_revision=after_revision)
+        try:
+            reply = self._round_trip(encode_frame(request), time.monotonic() + 2, cancelled)
+            return decode_health_reply(reply, self._binding, window, sequence)
+        except BaseException:
+            self.close()
+            raise
+
+    def _round_trip(self, request, deadline, cancelled):
+        self._remaining(deadline, cancelled)
+        if self._connection is None:
+            self._connect(min(deadline, time.monotonic() + _CONNECT_TIMEOUT), cancelled)
+        outgoing = memoryview(request)
+        while outgoing:
+            self._wait_socket(deadline, cancelled, write=True)
+            try:
+                sent = self._connection.send(outgoing)
+            except BlockingIOError:
+                continue
+            if not sent:
+                raise ConnectionError('Company combat stream closed while sending')
+            outgoing = outgoing[sent:]
+        while True:
+            self._wait_socket(deadline, cancelled, write=False)
+            reply = read_frame(self._connection, self._incoming)
+            if reply is not None:
+                if self._incoming:
+                    raise ValueError('unexpected trailing data in Company combat stream')
+                return reply
 
     def _connect(self, deadline, cancelled):
         conn = self._connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
