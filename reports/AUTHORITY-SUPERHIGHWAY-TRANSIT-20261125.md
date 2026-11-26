@@ -354,3 +354,23 @@ retained SHA-256 `ef811ab5d7ee212c0d38230fbc48944261b096be3c2d3d34b9baa24ffb0336
 The provider recorded zero engine operations and zero remaining owned
 processes. Both locks cleared. Private evidence is under
 `.local/ordinary-jump-gate/run-02/`. Ordinary gate passage remains unverified.
+
+### Instrumented staging readback
+
+Run 03 at `43939939f314e5568d00780fada5e903c1ce65ff` used the same
+source and staging bounds. Prepare returned `STAGED` at paused game age
+465.97 s. The separate readback measured HVC-420 in
+`cluster_06_sector002_macro`, 273,280 m from ZGH-239 (required 8–16 km).
+It measured KHI-630 still in `cluster_06_sector001_macro`, 11,386,880 m
+from NEL-546 (required 25–45 km in `cluster_01_sector002_macro`).
+All four discovery checks passed. The two-component known path started
+at RVA-280, a superhighway entrance, instead of ZGH-239.
+
+The requested HVC point was (92111.055, 0, 100038.875) m and the requested
+KHI point was (−147781.594, 0, −98076.977) m. The HVC point was about
+3.12 km from the stock save gate origin, also outside the staging envelope.
+The paused readback did not show either intended placement. It could not
+distinguish a deferred or rejected relocation. No staging checkpoint or
+cockpit run followed. The original and copied source hashes matched,
+the provider owned no remaining processes, and both locks cleared.
+Private evidence is under `.local/ordinary-jump-gate/run-03/`.
