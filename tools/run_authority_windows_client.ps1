@@ -10,6 +10,7 @@ param(
     [ValidateRange(1, 3600)] [int] $ObserveSeconds = 30,
     [switch] $BaseGameOnly,
     [switch] $FreshCompanyProfile,
+    [string] $GraphicsConfig,
     [switch] $ChooseCompanyShip,
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
@@ -84,6 +85,9 @@ if ($CombatCapture -and -not $companyPilot) {
     throw 'CombatCapture requires a Company ship selection or Company play option.'
 }
 $playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
+if ($PSBoundParameters.ContainsKey('GraphicsConfig') -and (-not $playUntilExit -or -not $GraphicsConfig)) {
+    throw 'Pass a nonempty GraphicsConfig path for a Company play-until-exit join.'
+}
 if ($companyPilot -and -not $playUntilExit -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
     $ObserveSeconds = 900
 }
@@ -148,6 +152,10 @@ $clientArgs = @(
 )
 if ($playUntilExit) {
     $clientArgs += '--play-until-exit'
+    if ($GraphicsConfig) {
+        $configPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($GraphicsConfig)
+        $clientArgs += @('--graphics-config', $configPath)
+    }
 } else {
     $clientArgs += @('--observe-seconds', [string]$ObserveSeconds)
 }

@@ -328,6 +328,41 @@ class FixtureCliTests(unittest.TestCase):
             cli.run(parse([*base, '--company-ship-index', '2']))
             self.assertNotIn('fresh_company_profile', workspace.call_args.kwargs)
 
+    def test_graphics_config_is_for_company_play_until_exit(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64, '--company-ship-index', '2']
+        source = self.root / 'X4 settings' / 'config.xml'
+        parse = cli.parser().parse_args
+        with (patch.object(cli, 'os') as platform,
+              patch('authority.windows_fixture_session.run_fixture_session', return_value={}),
+              patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace') as workspace):
+            platform.name = 'nt'
+            with self.assertRaisesRegex(ValueError, 'Company play-until-exit'):
+                cli.run(parse([*base, '--graphics-config', str(source)]))
+            with self.assertRaisesRegex(ValueError, 'absolute path'):
+                cli.run(parse([*base, '--play-until-exit', '--graphics-config', 'config.xml']))
+            workspace.assert_not_called()
+            cli.run(parse(base))
+            self.assertEqual(workspace.call_args.kwargs, {})
+            cli.run(parse([*base, '--play-until-exit']))
+            self.assertEqual(workspace.call_args.kwargs,
+                             {'use_pilot_graphics': True, 'graphics_config': None})
+            cli.run(parse([*base, '--play-until-exit', '--graphics-config', str(source)]))
+            self.assertEqual(workspace.call_args.kwargs,
+                             {'use_pilot_graphics': True, 'graphics_config': source})
+
+    def test_main_reports_safe_graphics_config_error(self):
+        args = ['--connection-file', str(self.connection), '--game', str(self.root / 'game'),
+                '--view-container', str(self.root / 'view'), '--out', str(self.root / 'out'),
+                '--network-dll', str(self.root / 'net.dll'), '--network-dll-sha256', 'a' * 64]
+        errors = io.StringIO()
+        with (patch.object(cli, 'run', side_effect=cli.GraphicsConfigError('Pass -GraphicsConfig.')),
+              contextlib.redirect_stderr(errors)):
+            self.assertEqual(cli.main(args), 1)
+        self.assertEqual(errors.getvalue(), 'Pass -GraphicsConfig.\n')
+
     def test_fleet_orders_require_purchase_and_reach_the_fixture_session(self):
         args = ['--isolated-fixture-test', '--connection-file', str(self.connection),
                 '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),

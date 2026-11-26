@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 from authority.file_fingerprints import fingerprint
-from lockstep.launcher import game, profile
+from lockstep.launcher import game, profile, steam
 
 
 PROFILE_ID = profile.CAPTURE_PROFILE
@@ -36,6 +36,20 @@ _SID = re.compile(r'S-1-(?:[0-9]+-){1,14}[0-9]+\Z', re.IGNORECASE)
 
 def _is_windows():
     return sys.platform == 'win32'
+
+
+def _active_steam_account_id():
+    """Read Steam's active local account ID under the current Windows user."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, steam.KEY) as key:
+            account_id, value_type = winreg.QueryValueEx(key, 'ActiveUser')
+    except FileNotFoundError:
+        return None
+    if value_type == winreg.REG_DWORD and type(account_id) is int and 0 < account_id <= 0xffffffff:
+        return account_id
+    return None
 
 
 def _ordinary(path, *, directory):
@@ -178,9 +192,12 @@ class WindowsFixtureWorkspace:
     """Own only the paths and log handle created for one private fixture run."""
 
     def __init__(self, game_directory, view_directory, run_directory, *,
-                 base_game_only=False, fresh_company_profile=False):
+                 base_game_only=False, fresh_company_profile=False,
+                 use_pilot_graphics=False, graphics_config=None):
         self.base_game_only = base_game_only
         self.fresh_company_profile = fresh_company_profile
+        self.use_pilot_graphics = use_pilot_graphics
+        self.graphics_config = graphics_config
         self.game_directory = Path(game_directory)
         self.view_directory = Path(view_directory)
         self.run_directory = Path(run_directory)
@@ -229,6 +246,11 @@ class WindowsFixtureWorkspace:
             raise ValueError('view container must be on the game drive')
         _assert_no_x4_process()
         sid = _current_sid()
+        profile_options = {}
+        if self.use_pilot_graphics:
+            account_id = _active_steam_account_id() if self.graphics_config is None else None
+            profile_options['graphics_xml'] = profile.human_graphics_xml(
+                documents_root, source=self.graphics_config, account_id=account_id)
 
         # From here onward, failures intentionally leave owned partial artifacts.
         self._state = 'preparing'
@@ -237,14 +259,14 @@ class WindowsFixtureWorkspace:
             extension_ids.update(game.dlc_ids(game_root))
         extension_ids = sorted(extension_ids)
         if self.fresh_company_profile:
-            self._prepare_fresh_profile(documents_root, extension_ids)
+            self._prepare_fresh_profile(documents_root, extension_ids, **profile_options)
         self.view_directory.mkdir()
         _restrict_directory(self.view_directory, sid)
         self.run_directory.mkdir()
         _restrict_directory(self.run_directory, sid)
         if not self.fresh_company_profile:
-            self.profile_directory = profile.prepare_fresh(PROFILE_ID, extension_ids,
-                                                           root=documents_root)
+            self.profile_directory = profile.prepare_fresh(
+                PROFILE_ID, extension_ids, root=documents_root, **profile_options)
             self.profile_id = PROFILE_ID
         self.save_dir = self.profile_directory / 'save'
         _ordinary(self.profile_directory, directory=True)
@@ -273,14 +295,14 @@ class WindowsFixtureWorkspace:
         self._state = 'prepared'
         return self
 
-    def _prepare_fresh_profile(self, documents_root, extension_ids):
+    def _prepare_fresh_profile(self, documents_root, extension_ids, **profile_options):
         for profile_id in (PROFILE_ID, *profile.PROFILES):
             candidate = documents_root / str(profile_id)
             if _exists(candidate):
                 continue
             try:
-                self.profile_directory = profile.prepare_fresh(profile_id, extension_ids,
-                                                               root=documents_root)
+                self.profile_directory = profile.prepare_fresh(
+                    profile_id, extension_ids, root=documents_root, **profile_options)
             except FileExistsError as error:
                 # Retry only if the exclusive profile mkdir lost a race.
                 if error.filename != str(candidate):

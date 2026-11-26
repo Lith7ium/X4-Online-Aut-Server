@@ -56,18 +56,19 @@ def output_path(path):
     return out
 
 
-def prepare_case(out, game, home, *, base_game_only=False, software_rendering=False):
+def prepare_case(out, game, home, *, base_game_only=False, software_rendering=False, graphics_xml=None):
     case = out / 'case'
     profile = case / 'home/.config/EgoSoft/X4/45841'
     for path in (profile / 'save', case / 'tmp', case / 'cache', case / 'data', case / 'runtime',
                  case / 'game', case / 'extensions', case / 'home/.steam'):
         path.mkdir(parents=True, exist_ok=True)
     (case / 'runtime').chmod(0o700)
-    # Only the private CPU-rendered provider uses the unattended graphics preset.
-    # Both paths avoid the color artifacts seen with chromatic aberration on RADV.
-    dimensions = PROVIDER_RENDER_SIZE if software_rendering else (800, 600)
-    graphics = config_xml(*dimensions, fast=software_rendering, disable_chromatic_aberration=True)
-    (profile / 'config.xml').write_text(graphics, encoding='ascii')
+    if graphics_xml is None:
+        # The private CPU-rendered provider uses the unattended preset. Diagnostic
+        # defaults also disable chromatic aberration to avoid color artifacts on RADV.
+        dimensions = PROVIDER_RENDER_SIZE if software_rendering else (800, 600)
+        graphics_xml = config_xml(*dimensions, fast=software_rendering, disable_chromatic_aberration=True)
+    (profile / 'config.xml').write_text(graphics_xml, encoding='utf-8')
     for name in ('root', 'steam.pid', 'sdk32', 'sdk64'):
         source = home / '.steam' / name
         if source.exists():

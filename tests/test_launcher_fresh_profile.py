@@ -1,6 +1,7 @@
 """Fresh-profile preparation never replaces an existing game profile."""
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,6 +10,37 @@ from lockstep.launcher import profile
 
 
 class FreshProfileTest(unittest.TestCase):
+    def test_two_normal_profiles_require_selection_and_keep_render_options(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for number in (12, 34, profile.CAPTURE_PROFILE):
+                folder = root / str(number)
+                folder.mkdir()
+                (folder / 'config.xml').write_text(f'<root><gamma>{number}</gamma><dlssmode>quality</dlssmode>'
+                                                  '<autosave>true</autosave><gamespeed>3</gamespeed></root>')
+            with self.assertRaisesRegex(profile.GraphicsConfigError, 'Multiple normal X4 profiles'):
+                profile.human_graphics_xml(root)
+            chosen = profile.human_graphics_xml(root, account_id=34)
+            self.assertEqual(chosen, profile.human_graphics_xml(root, source=root / '34/config.xml'))
+            fields = ET.fromstring(chosen)
+            self.assertEqual(fields.findtext('gamma'), '34')
+            self.assertEqual(fields.findtext('dlssmode'), 'quality')
+            self.assertEqual(fields.findtext('autosave'), 'false')
+            self.assertIsNone(fields.find('gamespeed'))
+
+    def test_new_account_uses_game_defaults_and_invalid_explicit_source_is_reported(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            existing = root / '12'
+            existing.mkdir()
+            (existing / 'config.xml').write_text('<root><fullscreen>false</fullscreen></root>')
+            self.assertIsNone(ET.fromstring(profile.human_graphics_xml(root, account_id=34)).find('fullscreen'))
+            with self.assertRaises(profile.GraphicsConfigError):
+                profile.human_graphics_xml(root, source=root / 'missing.xml')
+            (existing / 'config.xml').write_text('<broken')
+            with self.assertRaises(profile.GraphicsConfigError):
+                profile.human_graphics_xml(root)
+
     def test_windows_root_reparse_attributes_fail_closed(self):
         directory = 0o040700
         regular = SimpleNamespace(st_mode=directory, st_file_attributes=0x10)

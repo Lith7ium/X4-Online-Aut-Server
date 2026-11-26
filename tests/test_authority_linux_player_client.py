@@ -13,6 +13,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import xml.etree.ElementTree as ET
 
 from authority.client_seat_overlay import COMPANY_PLAYBACK_UI
 from authority.company_motion_source import CompanyMotionSource
@@ -352,6 +353,7 @@ class PlayerClientTests(unittest.TestCase):
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *option]), 0)
             self.assertEqual(run.call_args.kwargs['company_hull_playback_index'], INDEX + 1)
+
             self.assertNotIn('cockpit_radar_playback', run.call_args.kwargs)
             cockpit = ['--company-cockpit-playback-index', str(INDEX + 1)]
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
@@ -402,6 +404,17 @@ class PlayerClientTests(unittest.TestCase):
             run.assert_not_called()
             self.assertNotIn('b' * 64, stdout.getvalue())
 
+    def test_cli_accepts_graphics_config_in_interactive_mode(self):
+        arguments = ['--connection-file', 'private.json', '--display', ':1', '--out', '.local/run',
+                     '--game', '/licensed/X4 Foundations', '--graphics-config', 'my-config.xml']
+        with (patch.object(cli, 'read_connection_settings', return_value={}),
+              patch.object(native, 'run', return_value={'success': True}) as run,
+              redirect_stdout(io.StringIO())):
+            self.assertEqual(cli.main(arguments), 0)
+            self.assertEqual(run.call_args.args[0].graphics_config, Path('my-config.xml'))
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            cli.main([*arguments, '--timeout', '15'])
+
     def test_cli_reports_session_full_from_native_client(self):
         self.assertNotEqual(native.error_code(RuntimeError('session_full')), 'session_full')
         error_code = native.error_code(cli.SessionFull('private detail'))
@@ -425,6 +438,14 @@ class PlayerClientTests(unittest.TestCase):
                 out, game, home = (root / name for name in ('run', 'game', 'home'))
                 (game / 'extensions').mkdir(parents=True)
                 home.mkdir()
+                config_home = root / 'preferences'
+                stack.enter_context(patch.dict(os.environ, {'XDG_CONFIG_HOME': str(config_home)}))
+                profile_source = config_home / 'EgoSoft/X4/123456789/config.xml'
+                profile_source.parent.mkdir(parents=True)
+                saved_config = ('<root><fullscreen>true</fullscreen><res_width>2560</res_width>'
+                                '<res_height>1440</res_height><autosave>true</autosave></root>')
+                profile_source.write_text(saved_config, encoding='utf-8')
+                private_config = out / 'case/home/.config/EgoSoft/X4/45841/config.xml'
                 player = SimpleNamespace(pw_uid=os.getuid(), pw_name='test')
                 args = SimpleNamespace(timeout=timeout, display=':1', seed=1, keepalive_interval=None,
                     archived_identity_fixture=None, expected_content_sha256=None)
@@ -437,7 +458,10 @@ class PlayerClientTests(unittest.TestCase):
                 process = Mock()
                 command_budgets = []
 
-                def spawn(_command, _log, processes):
+                def spawn(command, _log, processes):
+                    bind = command.index(str(private_config))
+                    self.assertEqual(command[bind - 1:bind + 2],
+                                     ['--ro-bind', str(private_config), str(private_config)])
                     processes.append((process, 1))
 
                 def activate(_attempt, participant, *, participant_timeout):
@@ -483,10 +507,19 @@ class PlayerClientTests(unittest.TestCase):
 
                 self.assertEqual(connection.call_args.kwargs['deadline'], deadline)
                 self.assertTrue(result['success'], result)
+                graphics = ET.parse(private_config).getroot()
+                self.assertEqual(graphics.findtext('autosave'), 'false')
+                self.assertEqual(profile_source.read_text(encoding='utf-8'), saved_config)
                 if timeout is None:
+                    self.assertEqual(graphics.findtext('fullscreen'), 'true')
+                    self.assertEqual(graphics.findtext('res_width'), '2560')
+                    self.assertEqual(graphics.findtext('res_height'), '1440')
                     self.assertEqual(result['session_end'], 'game_closed')
                     self.assertEqual(command_budgets, [('pause', 30), ('resume', 30), ('resume', 30)])
                 else:
+                    self.assertEqual(graphics.findtext('fullscreen'), 'false')
+                    self.assertEqual(graphics.findtext('res_width'), '800')
+                    self.assertEqual(graphics.findtext('res_height'), '600')
                     self.assertEqual(result['session_end'], 'session_limit')
                     self.assertEqual(command_budgets, [('pause', 14), ('resume', 14)])
 

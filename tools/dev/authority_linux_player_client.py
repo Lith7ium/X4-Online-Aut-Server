@@ -11,6 +11,7 @@ from authority_client_options import (
     company_channel_options, company_trade_options, company_view_options,
     read_connection_settings, terminal_company_ship_selector,
 )
+from lockstep.launcher.profile import GraphicsConfigError
 
 
 def main(argv=None):
@@ -21,6 +22,8 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, required=True, help='new run directory under .local')
     parser.add_argument('--display', default=os.environ.get('DISPLAY'),
                         help='local X11 or Xwayland display, defaults to DISPLAY')
+    parser.add_argument('--graphics-config', type=Path,
+                        help='read graphics settings from this X4 config.xml for interactive play')
     parser.add_argument('--base-game-only', action='store_true',
                         help='exclude official DLC from the private game view and profile')
     parser.add_argument('--company-ship-index', type=int,
@@ -60,6 +63,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
+    if args.graphics_config is not None and args.timeout is not None:
+        parser.error('--graphics-config requires interactive play without --timeout')
     hold_npc = args.trial_registered_npc_hold or args.trial_registered_npc_align
     try:
         channel_options = company_channel_options(args)
@@ -94,6 +99,10 @@ def main(argv=None):
             company_options['registered_npc_alignment_trial'] = True
         result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined,
                             **company_options)
+    except GraphicsConfigError as error:
+        print(str(error), file=sys.stderr)
+        result = dict(success=False, error_class='player_client_refused',
+                      error_code='player_graphics_config_unavailable')
     except (OSError, ValueError, RuntimeError, RecursionError, KeyboardInterrupt) as error:
         known = {'explicit_unprivileged_linux_opt_in_required', 'native_main_thread_required',
                  'pinned_game_or_namespace_unavailable', 'local_x11_display_required',

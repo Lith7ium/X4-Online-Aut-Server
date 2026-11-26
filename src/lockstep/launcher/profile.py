@@ -11,6 +11,7 @@ import re
 import shutil
 import stat
 import sys
+import xml.etree.ElementTree as ET
 
 from authority.file_fingerprints import fingerprint, same_path_and_descriptor
 
@@ -94,6 +95,68 @@ def profile_dir(profile, root=None):
 FAST = {'gfxquality': 0, 'shaderquality': 0, 'shadows': 0, 'softshadows': 'false', 'ssao': 0, 'glow': 0, 'uiglow': 0,
         'distortion': 'false', 'ssr': 'false', 'texturequality': 'low', 'chromaticaberration': 'false', 'volumetric': 0,
         'pom': 'off', 'envmapprobes': 'low', 'frameratelimit': 'false', 'presentmode': 'immediate', 'nosound': 'true'}
+
+
+# X4 9.00's display options and graphics presets, including platform and
+# upscaler settings written by the game. Preserve the pilot's own enum values.
+_GRAPHICS_FIELDS = frozenset('''
+    fullscreen borderless res_width res_height antialiasing vsync upmode fsr3g
+    dlss dlssmode dlssg presentmode colorcorrection gamma fov capturehq
+    frameratelimit frameratetarget gfxquality shaderquality shadows softshadows
+    ssao glow uiglow uiglowintensity lodfactor effectdistance distortion
+    disableradar radarquality ssr ssrquality texturequality chromaticaberration
+    volumetric pom envmapprobes envmapinsideglassfactor chardensity trafficdensity
+    globallightscale stardustintensity hudscale cockpitcamerascale
+'''.split())
+
+
+class GraphicsConfigError(ValueError):
+    """An actionable, credential-free reason the player's display settings could not be read."""
+
+
+def _normal_graphics_source(root, source, account_id):
+    if source is not None:
+        return Path(source)
+    reserved = {str(number) for number in (*PROFILES, CAPTURE_PROFILE)}
+    if account_id is not None:
+        if type(account_id) is not int or not 1 <= account_id < 2**32 or str(account_id) in reserved:
+            raise GraphicsConfigError('Invalid normal X4 account for graphics settings.')
+        candidate = root / str(account_id) / 'config.xml'
+        return candidate if candidate.is_file() else None
+    if not root.is_dir():
+        return None
+    candidates = [entry / 'config.xml' for entry in root.iterdir()
+                  if entry.name.isascii() and entry.name.isdecimal() and entry.name not in reserved
+                  and not is_link_or_reparse(entry) and (entry / 'config.xml').is_file()]
+    if (root / 'config.xml').is_file():
+        candidates.append(root / 'config.xml')
+    if len(candidates) > 1:
+        raise GraphicsConfigError('Multiple normal X4 profiles found. Select your config.xml with '
+                                  '--graphics-config (PowerShell: -GraphicsConfig).')
+    return next(iter(candidates), None)
+
+
+def human_graphics_xml(profile_root, *, source=None, account_id=None):
+    """Read the pilot's saved display preferences into a new isolated configuration."""
+    result = ET.fromstring('<root><autosave>false</autosave><uisafemode>false</uisafemode></root>')
+    try:
+        config = _normal_graphics_source(Path(profile_root), source, account_id)
+        if config is not None:
+            if is_link_or_reparse(config.parent) or is_link_or_reparse(config) or not config.is_file():
+                raise GraphicsConfigError('Select a regular X4 config.xml file for graphics settings.')
+            with config.open('rb') as stream:
+                data = stream.read(1024 * 1024 + 1)
+            if len(data) > 1024 * 1024:
+                raise GraphicsConfigError('The selected X4 graphics configuration is too large.')
+            user_config = ET.fromstring(data)
+            if user_config.tag != 'root':
+                raise GraphicsConfigError('Expected an X4 config.xml with a root element named root.')
+            for setting in user_config:
+                if setting.tag in _GRAPHICS_FIELDS and setting.text is not None and not len(setting):
+                    ET.SubElement(result, setting.tag).text = setting.text
+    except (OSError, ET.ParseError) as error:
+        raise GraphicsConfigError('Could not read the selected X4 config.xml. Check the graphics config path.') from error
+    return ET.tostring(result, encoding='unicode') + '\n'
 
 
 def config_xml(width, height, fast=False, borderless=False, *, disable_chromatic_aberration=False):
@@ -234,7 +297,7 @@ def owned_save_dir(profile, root=None):
 
 
 def prepare_fresh(profile, extension_ids, *, root, width=1280, height=720,
-                  fast=False, borderless=False):
+                  fast=False, borderless=False, graphics_xml=None):
     """Create an absent disposable profile without removing existing files.
 
     This is for experiments whose supervisor exclusively controls ``root``,
@@ -250,7 +313,8 @@ def prepare_fresh(profile, extension_ids, *, root, width=1280, height=720,
                 for name in extension_ids) or
             type(width) is not int or not 320 <= width <= 16384 or
             type(height) is not int or not 200 <= height <= 16384 or
-            type(fast) is not bool or type(borderless) is not bool):
+            type(fast) is not bool or type(borderless) is not bool or
+            (graphics_xml is not None and not isinstance(graphics_xml, str))):
         raise ValueError('invalid disposable profile configuration')
     root = Path(root)
     try:
@@ -265,7 +329,7 @@ def prepare_fresh(profile, extension_ids, *, root, width=1280, height=720,
     path.mkdir()
     (path / 'save').mkdir()
     with (path / 'config.xml').open('x', encoding='utf-8', newline='\n') as output:
-        output.write(config_xml(width, height, fast, borderless))
+        output.write(config_xml(width, height, fast, borderless) if graphics_xml is None else graphics_xml)
     with (path / 'content.xml').open('x', encoding='utf-8', newline='\n') as output:
         output.write(content_xml(extension_ids))
     return path

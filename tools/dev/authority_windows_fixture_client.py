@@ -18,6 +18,7 @@ from authority_client_options import (
     read_connection_settings, terminal_company_ship_selector,
 )
 from authority.experimental_remote_load_client import SessionFull
+from lockstep.launcher.profile import GraphicsConfigError
 
 
 def read_motion_request(path):
@@ -91,6 +92,8 @@ def parser():
                         help='exclude official DLC from the private game view and profile')
     result.add_argument('--fresh-company-profile', action='store_true',
                         help='use the first unused reserved profile for an explicit Company seat join')
+    result.add_argument('--graphics-config', type=Path,
+                        help='absolute path to the normal X4 config.xml for --play-until-exit')
     result.add_argument('--require-registry-snapshot', action='store_true',
                         help='require a marked format-3 registry and check all ship entries before joining')
     result.add_argument('--timeout', type=float, default=600, help='overall deadline in seconds (max 3600)')
@@ -121,6 +124,10 @@ def run(args, *, on_stage=None):
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
     if fresh_company_profile and (not company_pilot or args.motion_config is not None):
         raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
+    use_pilot_graphics = args.play_until_exit and company_pilot and args.motion_config is None
+    graphics_config = getattr(args, 'graphics_config', None)
+    if graphics_config is not None and (not use_pilot_graphics or not graphics_config.is_absolute()):
+        raise GraphicsConfigError('--graphics-config requires an absolute path and a Company play-until-exit join')
     company_options = {**trade_options, **channel_options, **company_view_options(args)}
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
     if not args.play_until_exit:
@@ -157,6 +164,8 @@ def run(args, *, on_stage=None):
     view_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
     if fresh_company_profile:
         view_options['fresh_company_profile'] = True
+    if use_pilot_graphics:
+        view_options.update(use_pilot_graphics=True, graphics_config=graphics_config)
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
     if args.play_until_exit:
         company_options['play_until_exit'] = True
@@ -199,6 +208,9 @@ def main(argv=None):
 
     try:
         result = run(args, on_stage=report_stage)
+    except GraphicsConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 1
     except SessionFull:
         print(SessionFull.message, file=sys.stderr)
         return 1
