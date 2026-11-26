@@ -1,7 +1,7 @@
 -- Opt-in native sector-space adapter for one locally observed Company hull.
 local M = {}
 local LIMIT = 10000000
-local MAX_STEP = 50
+local MAX_STEP, VELOCITY_STEP_LIMIT = 50, 250
 local COCKPIT_SLOTS = {cockpit = true, cockpit2 = true, cockpit3 = true}
 
 local function finite(value)
@@ -81,13 +81,18 @@ function M.new(options, engine)
             return actual
         end
 
-        function session:write(target, before)
+        function session:write(target, before, recheck)
             if not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
-            if dx * dx + dy * dy + dz * dz > MAX_STEP * MAX_STEP then return false end
+            if recheck ~= nil and type(recheck) ~= 'function' then return false end
+            local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
+            if dx * dx + dy * dy + dz * dz > maximum * maximum then return false end
             if not engine.same_zone(original_target, target) or not eligible() then return false end
+            -- The native read can differ from the playback observation. Check the
+            -- actual displacement and prediction deadline again before dispatch.
+            if recheck and recheck(actual) ~= true then return false end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,

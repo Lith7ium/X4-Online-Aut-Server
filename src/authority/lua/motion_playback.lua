@@ -31,6 +31,8 @@ function M.new(options)
  assert(type(configuration.frame) == 'string' and configuration.frame ~= '')
  assert(finite(configuration.max_age) and configuration.max_age > 0 and configuration.max_age <= 30)
  assert(finite(configuration.max_step) and configuration.max_step > 0 and configuration.max_step <= 50000000)
+ local step_guard = configuration.step_guard
+ assert(step_guard == nil or type(step_guard) == 'function')
  local sample_version = configuration.sample_version
  if sample_version == nil then sample_version = 1 end
  assert(sample_version == 1 or sample_version == 3, 'invalid playback sample version')
@@ -207,7 +209,8 @@ function M.new(options)
     phase=rendered.phase, local_time=now, game_time=game_time}, 'observation_record')
    stage = 'distance'
    local step = distance(actual, target)
-   assert(finite(step) and step <= configuration.max_step, 'correction too large')
+   assert(finite(step) and step <= configuration.max_step
+    and (not step_guard or step_guard(actual, target, now, rendered.phase) == true), 'correction too large')
    if step == 0 then return end
    check()
    if clock()-fresh_arrival >= configuration.max_age then invalidate(clock(), 'stale'); return end

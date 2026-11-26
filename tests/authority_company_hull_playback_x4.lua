@@ -138,3 +138,77 @@ binding.slot = 'map'
 assert(adapter:bind(binding) == nil)
 binding.slot, binding.index = 'cockpit', cfg.own_index
 assert(adapter:bind(binding) == nil)
+
+-- Exercise the controller's velocity allowance through the native adapter.
+local base = 'src/authority/lua/'
+X4LAN_MOTION_BUFFER = dofile(base .. 'motion_buffer.lua')
+dofile(base .. 'motion_playback.lua')
+dofile(base .. 'company_hull_playback.lua')
+local cockpit_playback = dofile(base .. 'company_cockpit_playback.lua')
+local generation = ('2'):rep(32)
+binding.slot, binding.index = 'cockpit', 73
+
+local function flight(speed, update, test)
+    local now, x, y, pending = 0, 0, 0, nil
+    local native_offset, writes, faults = 0, {}, {}
+    local engine = {
+        cockpit = function() return {actor=cockpit, sector=sector, zone=cockpit_zone} end,
+        target = function()
+            return {actor=target, sector=sector, zone=zone, sector_macro=binding.sector_macro, code=binding.code}
+        end,
+        read = function()
+            return {x=x, y=y + native_offset, z=0, yaw=0, pitch=0, roll=0}
+        end,
+        same_zone = function() return true end,
+        write = function(actor, _, pose)
+            assert(actor == target and not pending)
+            pending = pose
+            writes[#writes + 1] = math.sqrt((pose.x - x)^2 + (pose.y - y)^2)
+            return true
+        end,
+    }
+    reset()
+    local controller = cockpit_playback.new({
+        enabled=true, own_index=cfg.own_index, target_index=binding.index, adapter=module.new(cfg, engine),
+        clock=function() return now end, game=function() return now end, paused=function() return false end,
+        record=function(event)
+            if test == 'native_offset' and event.kind == 'observation' and event.target.x - event.actual.x > 50 then
+                -- The independent pre-write read sees an unexpected lateral displacement.
+                native_offset = 120
+            end
+            return true
+        end,
+        fault=function(reason) faults[#faults + 1] = reason end,
+    })
+    local function sample(seq, age, velocity)
+        return controller:sample(binding, 1, {
+            version=3, epoch=epoch, generation=generation, index=binding.index, sector_macro=binding.sector_macro,
+            sequence=seq, source_time=age, capture_time=age, x=speed*age, y=0, z=0, real_velocity=velocity,
+        }, age)
+    end
+    local velocity = {x=speed, y=0, z=0}
+    assert(sample(1, 0, velocity))
+    for frame = 1, 16 do
+        now = frame * update
+        if pending then
+            x, y, pending = pending.x, pending.y, nil
+        end
+        if test ~= 'one_sample' and (test ~= 'missing_velocity' or frame <= 4) then
+            local rate = (test ~= 'missing_velocity' or frame ~= 4) and velocity or nil
+            assert(sample(frame + 1, now, rate))
+        end
+        if frame == 6 and test == 'long_update' then now = now + .12 end
+        controller:tick(now)
+        if #faults > 0 then break end
+    end
+    return writes, faults
+end
+
+local accepted, rejected = flight(1500, .05)
+assert(#accepted > 0 and math.max(unpack(accepted)) > 50 and #rejected == 0)
+for _, test in ipairs({'one_sample', 'missing_velocity', 'long_update', 'native_offset'}) do
+    accepted, rejected = flight(1500, .05, test)
+    assert(#rejected == 1, test)
+end
+accepted, rejected = flight(4000, .08)
+assert(#rejected == 1 and (#accepted == 0 or math.max(unpack(accepted)) <= 250))

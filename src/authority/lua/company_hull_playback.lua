@@ -1,6 +1,7 @@
 -- Default-off, one verified cockpit target in the same sector. No native or wire APIs.
 local M = {}
 local MAX_STEP, PREDICTION_SECONDS, READBACK_TOLERANCE = 50, 5, 3
+local VELOCITY_STEP_LIMIT, VELOCITY_INTERVAL_LIMIT = 250, .100
 M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
 -- The shared buffer's remote-capture continuity bound is independent of
 -- the local prediction deadline and tolerates different transit delays.
@@ -72,6 +73,29 @@ function M.new(options)
     for _, key in ipairs(BINDING_FIELDS) do binding[key] = claimed[key] end
     local player, terminal, refusal, last_arrival
     local rendered_source, write_source
+    local velocity_steps = cfg.velocity_steps == true
+    local velocity, sample_count, previous_update = nil, 0, nil
+    local authorize_step
+
+    local function step_guard(actual, target, now, phase)
+        local previous = previous_update
+        previous_update = {time = now, velocity = velocity, samples = sample_count}
+        local elapsed = previous and now - previous.time
+        authorize_step = function(before)
+            local dx, dy, dz = target.x - before.x, target.y - before.y, target.z - before.z
+            local squared = dx * dx + dy * dy + dz * dz
+            if squared <= MAX_STEP * MAX_STEP then return true end
+            if squared > VELOCITY_STEP_LIMIT * VELOCITY_STEP_LIMIT then return false end
+            if not previous or previous.samples < 2 or elapsed <= 0 or elapsed > VELOCITY_INTERVAL_LIMIT
+                    or (phase ~= 'interpolated' and phase ~= 'extrapolated') then
+                return false
+            end
+            local rate = previous.velocity
+            dx, dy, dz = dx - rate.x * elapsed, dy - rate.y * elapsed, dz - rate.z * elapsed
+            return dx * dx + dy * dy + dz * dz <= MAX_STEP * MAX_STEP
+        end
+        return authorize_step(actual)
+    end
 
     local function stop(reason, stage)
         if terminal then return false, terminal end
@@ -145,7 +169,8 @@ function M.new(options)
 
     player = assert(playback.new({
         enabled = true, buffer = checked_buffer, sample_version = 3, frame = binding.sector_macro,
-        max_age = PREDICTION_SECONDS, max_step = MAX_STEP,
+        max_age = PREDICTION_SECONDS, max_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP,
+        step_guard = velocity_steps and step_guard or nil,
         buffer_options = {delay = .15, horizon = PREDICTION_SECONDS,
                           stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
@@ -164,7 +189,12 @@ function M.new(options)
             end
             local position = assert(xyz(target, 1e7))
             write_source = rendered_source
-            return cfg.write(copy(binding), position, xyz(before, 1e7))
+            local authorize = authorize_step
+            authorize_step = nil
+            local function recheck(actual)
+                return expiry() == false and authorize(actual)
+            end
+            return cfg.write(copy(binding), position, xyz(before, 1e7), authorize and recheck or nil)
         end,
         record = function(event)
             local readback = event.kind == 'readback'
@@ -214,23 +244,29 @@ function M.new(options)
         if expired or (last_arrival and arrival >= last_arrival + PREDICTION_SECONDS) then
             return stop('arrival_gap', 'arrival')
         end
-        local velocity = xyz(sample.real_velocity, 5000)
-        if not velocity then
+        local incoming_velocity = xyz(sample.real_velocity, 5000)
+        if not incoming_velocity then
             -- Incomplete data cannot start a track, replace a known rate, or
             -- reset the deadline for predictions from the last complete sample.
-            if sample.real_velocity == nil then return last_arrival ~= nil, 'waiting_for_velocity' end
+            if sample.real_velocity == nil then
+                velocity, sample_count, previous_update = nil, 0, nil
+                return last_arrival ~= nil, 'waiting_for_velocity'
+            end
             return stop('invalid_velocity', 'sample')
         end
         local ok, reason = player:push({
             version = 3, frame = binding.sector_macro, sequence = sample.sequence, source_time = sample.source_time,
             capture_time = sample.capture_time, pose = {position.x, position.y, position.z},
-            real_rate = {velocity.x, velocity.y, velocity.z},
+            real_rate = {incoming_velocity.x, incoming_velocity.y, incoming_velocity.z},
         }, arrival)
         if not ok then
             if terminal then return false, terminal end
             return stop(reason == 'paused' and 'paused' or 'stale', 'arrival')
         end
         last_arrival = arrival
+        if velocity_steps then
+            velocity, sample_count = incoming_velocity, math.min(sample_count + 1, 2)
+        end
         return true
     end
 

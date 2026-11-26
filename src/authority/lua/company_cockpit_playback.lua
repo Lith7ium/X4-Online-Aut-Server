@@ -184,12 +184,12 @@ function M.new(options)
     local function new_controller(verified, active_session)
         stats.binds = stats.binds + 1
         return assert(factory.new({
-            enabled = true, own_index = own_index, binding = verified,
+            enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
-            write = function(_, target, before)
-                local ok = active_session:write(target, before)
+            write = function(_, target, before, recheck)
+                local ok = active_session:write(target, before, recheck)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok
             end,
@@ -457,14 +457,13 @@ function M.new(options)
                 })
             end
             reacquire_by_index[ship_index] = false
-        elseif not sample.real_velocity then
-            return true, 'waiting_for_velocity'
         else
             local ok, reason = controller:push(binding, sample, arrival)
             if not ok then
                 retire(reason or controller:state())
                 return false, reason
             end
+            if not sample.real_velocity then return true, 'waiting_for_velocity' end
         end
         last_by_index_gen[wkey] = {
             sequence = sample.sequence, capture_time = sample.capture_time,
