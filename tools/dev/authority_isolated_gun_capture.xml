@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Private range measurement. The normal Company overlay does not stage this file. -->
+<mdscript name="X4PrivateIsolatedGunCapture" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this">
+   <actions>
+    <create_group groupname="State.$guns"/>
+    <create_group groupname="State.$shooters"/>
+    <create_group groupname="State.$targets"/>
+    <create_group groupname="State.$rounds"/>
+    <set_value name="$armed" exact="false"/>
+    <set_value name="$used" exact="false"/>
+   </actions>
+   <cues>
+    <library name="Stop" purpose="include_actions">
+     <actions>
+      <set_value name="State.$armed" exact="false"/>
+      <clear_group group="State.$guns"/>
+      <clear_group group="State.$shooters"/>
+      <clear_group group="State.$targets"/>
+      <clear_group group="State.$rounds"/>
+      <raise_lua_event name="'X4PrivateIsolatedGunCapture.Stopped'" param="'%s|%s'.[State.$window,$reason]"/>
+     </actions>
+    </library>
+    <library name="Pair" purpose="include_actions">
+     <actions>
+      <set_value name="$source" exact="@md.X4AuthorityShipRegistry.State.$ships.{1073}"/>
+      <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{1074}"/>
+      <set_value name="$ok" exact="@md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
+       and @md.X4AuthorityShipRegistry.State.$faulted == false
+       and @md.X4AuthorityShipRegistry.State.$byship.{$source} == 1073
+       and @md.X4AuthorityShipRegistry.State.$byship.{$target} == 1074
+       and @$source.isclass.ship and $source.isoperational and $source.idcode == 'HVC-420'
+       and @$target.isclass.ship and $target.isoperational and $target.idcode == 'KHI-630'
+       and $source.owner == faction.player and $target.owner == faction.player
+       and $source.trueowner == faction.player and $target.trueowner == faction.player
+       and $source == player.ship and $source == player.controlled and $source == player.occupiedship
+       and $target != player.container and not $target.pilot.exists and not $target.assignedpilot.exists
+       and not $target.dock.exists and not $target.isinternallystored
+       and @$source.zone.isclass.zone and $target.zone == $source.zone
+       and $target.parent == $target.zone and $source.parent == $source.zone
+       and $source.sector == $target.sector and $source.sector.macro.id == 'cluster_06_sector002_macro'
+       and $source.isphysicsready and $target.isphysicsready and $target.attention ge attention.visible"/>
+      <do_if value="$ok">
+       <set_value name="$s" exact="$source.relativeposition.{$source.sector}"/>
+       <set_value name="$t" exact="$target.relativeposition.{$source.sector}"/>
+       <set_value name="$ok" exact="($s.x / 1m - 20000)^2 + ($s.y / 1m - 100000)^2 + ($s.z / 1m + 1500)^2 le 9
+        and ($t.x / 1m - 20000)^2 + ($t.y / 1m - 100000)^2 + ($t.z / 1m + 650)^2 le 9"/>
+      </do_if>
+     </actions>
+    </library>
+    <library name="WeaponsStillMatch" purpose="include_actions">
+     <actions>
+      <do_if value="$source.weapons.operational.list.count != 6">
+       <set_value name="$ok" exact="false"/>
+      </do_if>
+      <do_else>
+       <do_for_each name="$gun" in="$source.weapons.operational.list">
+        <do_if value="@$gun.object != $source or @$gun.macro.id != 'weapon_gen_s_gatling_01_mk2_macro'
+          or State.$guns.indexof.{$gun} == 0">
+         <set_value name="$ok" exact="false"/>
+        </do_if>
+       </do_for_each>
+      </do_else>
+     </actions>
+    </library>
+    <library name="Range" purpose="include_actions">
+     <actions>
+      <!-- Both endpoints are searched so the finite observation bounds are explicit. -->
+      <find_ship name="$near" space="$source.sector" multiple="true" required="false">
+       <match_distance object="$source" max="10km"/>
+      </find_ship>
+      <find_ship name="$near" space="$target.sector" multiple="true" required="false" append="true">
+       <match_distance object="$target" max="10km"/>
+      </find_ship>
+      <do_for_each name="$ship" in="$near">
+       <do_if value="$ship != $source and $ship != $target"><set_value name="$ok" exact="false"/></do_if>
+      </do_for_each>
+      <find_station name="$stations" space="$source.sector" multiple="true" required="false">
+       <match_distance object="$source" max="10km"/>
+      </find_station>
+      <find_station name="$stations" space="$target.sector" multiple="true" required="false" append="true">
+       <match_distance object="$target" max="10km"/>
+      </find_station>
+      <do_if value="$stations.count gt 0"><set_value name="$ok" exact="false"/></do_if>
+      <find_object name="$projectiles" class="class.bullet" space="$source.sector" multiple="true" required="false">
+       <match_distance object="$source" max="10km"/>
+      </find_object>
+      <find_object name="$projectiles" class="class.bullet" space="$target.sector" multiple="true" required="false" append="true">
+       <match_distance object="$target" max="10km"/>
+      </find_object>
+      <find_object name="$projectiles" class="class.missile" space="$source.sector" multiple="true" required="false" append="true">
+       <match_distance object="$source" max="10km"/>
+      </find_object>
+      <find_object name="$projectiles" class="class.missile" space="$target.sector" multiple="true" required="false" append="true">
+       <match_distance object="$target" max="10km"/>
+      </find_object>
+      <do_for_each name="$projectile" in="$projectiles">
+       <do_if value="State.$rounds.indexof.{$projectile} gt 0">
+        <set_value name="State.$positive_query" exact="true"/>
+       </do_if>
+       <do_else><set_value name="$ok" exact="false"/></do_else>
+      </do_for_each>
+     </actions>
+    </library>
+    <library name="Frame" purpose="include_actions">
+     <actions>
+      <do_if value="player.age gt State.$frame_age">
+       <set_value name="State.$frame_age" exact="player.age"/>
+       <set_value name="State.$frame" exact="State.$frame + 1"/>
+      </do_if>
+     </actions>
+    </library>
+    <library name="Emit" purpose="include_actions">
+     <actions>
+      <include_actions ref="Pair"/>
+      <do_if value="$ok"><include_actions ref="WeaponsStillMatch"/></do_if>
+      <do_if value="$ok and State.$prerolled and player.age le State.$expires and State.$seq lt 256 and player.age ge State.$frame_age">
+       <include_actions ref="Frame"/>
+       <set_value name="State.$seq" exact="State.$seq + 1"/>
+       <raise_lua_event name="'X4PrivateIsolatedGunCapture.Fact'" param="'%s|%s|%s|%s|%s|%s|1073|1074|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
+        State.$window,State.$seq,State.$frame,player.age / 1s,$kind,State.$epoch,$source,$target,
+        if @$component.exists then '%s'.[$component] else '-',
+        if @$attacker.exists then '%s'.[$attacker] else '-',
+        if $amount? then '%s'.[$amount] else '-',$target.shield,$target.hull,
+        if @$weapon.exists then '%s'.[$weapon] else '-',
+        if @$weapon.exists then $weapon.macro.id else '-',
+        if @$round.exists then '%s'.[$round] else '-',
+        if @$round.exists then $round.macro.id else '-']"/>
+      </do_if>
+      <do_else><set_value name="$reason" exact="'identity_time_or_event_limit'"/><include_actions ref="Stop"/></do_else>
+     </actions>
+    </library>
+    <cue name="Arm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4PrivateIsolatedGunCapture'" control="'Arm'"/></conditions>
+     <actions>
+      <set_value name="$args" exact="event.param3"/>
+      <do_if value="not State.$used and @$args.$source_index == 1073 and @$args.$target_index == 1074
+          and typeof @$args.$window == datatype.string and typeof @$args.$epoch == datatype.string">
+       <set_value name="State.$epoch" exact="$args.$epoch"/>
+       <set_value name="State.$window" exact="$args.$window"/>
+       <include_actions ref="Pair"/>
+       <do_if value="$ok and $target.shield == 2366 and $target.hull == 3600 and $source.weapons.operational.list.count == 6">
+        <do_for_each name="$weapon" in="$source.weapons.operational.list">
+         <do_if value="@$weapon.object != $source or @$weapon.macro.id != 'weapon_gen_s_gatling_01_mk2_macro'">
+          <set_value name="$ok" exact="false"/>
+         </do_if>
+        </do_for_each>
+       </do_if>
+       <do_else><set_value name="$ok" exact="false"/></do_else>
+       <do_if value="$ok"><include_actions ref="Range"/></do_if>
+       <do_if value="$ok">
+        <add_to_group groupname="State.$guns" list="$source.weapons.operational.list"/>
+        <add_to_group groupname="State.$shooters" object="$source"/>
+        <add_to_group groupname="State.$targets" object="$target"/>
+        <set_value name="State.$armed" exact="true"/>
+        <set_value name="State.$used" exact="true"/>
+        <set_value name="State.$quiet_started" exact="player.age"/>
+        <set_value name="State.$expires" exact="player.age + 8s"/>
+        <set_value name="State.$prerolled" exact="false"/>
+        <set_value name="State.$positive_query" exact="false"/>
+        <set_value name="State.$seq" exact="0"/>
+        <set_value name="State.$frame" exact="0"/>
+        <set_value name="State.$frame_age" exact="0s"/>
+       </do_if>
+       <do_else><set_value name="$reason" exact="'range_or_fixture_refused'"/><include_actions ref="Stop"/></do_else>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="RangeTick" instantiate="true" namespace="this" checkinterval="0.05s">
+     <conditions><check_value value="State.$armed"/></conditions>
+     <actions>
+      <include_actions ref="Pair"/>
+      <do_if value="$ok"><include_actions ref="Range"/></do_if>
+      <do_if value="not $ok or player.age gt State.$expires
+       or (not State.$prerolled and ($target.shield != 2366 or $target.hull != 3600))">
+       <set_value name="$reason" exact="'range_expired_or_health_changed_during_quiet'"/><include_actions ref="Stop"/>
+      </do_if>
+      <do_elseif value="not State.$prerolled and player.age - State.$quiet_started ge 3s">
+       <set_value name="State.$prerolled" exact="true"/>
+       <raise_lua_event name="'X4PrivateIsolatedGunCapture.Armed'" param="'%s|%s|1073|1074|%s|%s|%s|%s|%s|%s'.[
+        State.$window,State.$epoch,$source,$target,$target.shield,$target.hull,player.age / 1s,State.$expires / 1s]"/>
+      </do_elseif>
+     </actions>
+    </cue>
+    <cue name="Watermark" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4PrivateIsolatedGunCapture'" control="'Watermark'"/></conditions>
+     <actions>
+      <do_if value="State.$armed and event.param3.$window == State.$window and State.$prerolled
+       and State.$positive_query and player.age le State.$expires and player.age gt State.$frame_age + 0.025s">
+       <include_actions ref="Pair"/>
+       <do_if value="$ok"><include_actions ref="WeaponsStillMatch"/><include_actions ref="Range"/></do_if>
+       <do_if value="$ok">
+        <include_actions ref="Frame"/>
+        <!-- A native observation watermark alone does not attest hazard exclusion. -->
+        <raise_lua_event name="'X4PrivateIsolatedGunCapture.ObservationWatermark'"
+                      param="'%s|%s|%s|%s'.[State.$window,State.$frame,player.age / 1s,State.$seq]"/>
+       </do_if>
+       <do_else><set_value name="$reason" exact="'watermark_range_refused'"/><include_actions ref="Stop"/></do_else>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Disarm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4PrivateIsolatedGunCapture'" control="'Disarm'"/></conditions>
+     <actions>
+      <do_if value="State.$armed and event.param3.$window == State.$window">
+       <set_value name="$reason" exact="'disarmed'"/><include_actions ref="Stop"/>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Fired" instantiate="true" namespace="this">
+     <conditions><event_weapon_fired group="State.$guns"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$weapon" exact="event.object"/>
+      <set_value name="$round" exact="@event.param"/>
+      <do_if value="State.$prerolled and @$weapon.macro.id == 'weapon_gen_s_gatling_01_mk2_macro'
+       and @$weapon.object == player.controlled and @$round.macro.id == 'bullet_gen_s_gatling_01_mk2_macro'
+       and State.$rounds.indexof.{$round} == 0 and State.$rounds.count lt 128">
+       <add_to_group groupname="State.$rounds" object="$round"/>
+       <set_value name="$kind" exact="'fired'"/><include_actions ref="Emit"/>
+      </do_if>
+      <do_else><set_value name="$reason" exact="'early_or_unsupported_fire'"/><include_actions ref="Stop"/></do_else>
+     </actions>
+    </cue>
+    <cue name="Direct" instantiate="true" namespace="this">
+     <conditions><event_object_attacked_object group="State.$shooters"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$component" exact="@event.param3.{1}"/>
+      <set_value name="$weapon" exact="@event.param3.{2}"/>
+      <set_value name="$kind" exact="if State.$prerolled and @event.param2 == killmethod.hitbybullet
+       and @md.X4AuthorityShipRegistry.State.$ships.{1074} == event.param and $component == event.param
+       and @$weapon.object == event.object and State.$guns.indexof.{$weapon} gt 0
+       and @$weapon.macro.id == 'weapon_gen_s_gatling_01_mk2_macro' then 'direct' else 'conflict'"/>
+      <set_value name="$attacker" exact="event.object"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="VictimAttack" instantiate="true" namespace="this">
+     <conditions><event_object_attacked group="State.$targets"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$component" exact="@event.param3.{1}"/>
+      <set_value name="$weapon" exact="@event.param3.{2}"/>
+      <set_value name="$attacker" exact="@event.param"/>
+      <set_value name="$kind" exact="if State.$prerolled and @event.param2 == killmethod.hitbybullet
+       and event.object == $component and @$weapon.object == $attacker
+       and State.$guns.indexof.{$weapon} gt 0 then 'victim_attack' else 'conflict'"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="Shield" instantiate="true" namespace="this">
+     <conditions><event_object_shield_damaged group="State.$targets"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$kind" exact="if State.$prerolled then 'shield' else 'conflict'"/>
+      <set_value name="$component" exact="@event.param"/>
+      <set_value name="$attacker" exact="@event.object.lastattacker"/>
+      <set_value name="$amount" exact="@event.param3"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="Hull" instantiate="true" namespace="this">
+     <conditions><event_object_hull_damaged group="State.$targets"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$kind" exact="if event.object == event.param then 'root_hull' else 'component_hull'"/>
+      <set_value name="$component" exact="@event.param"/>
+      <set_value name="$attacker" exact="@event.object.lastattacker"/>
+      <set_value name="$amount" exact="@event.param3"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="Collision" instantiate="true" namespace="this">
+     <conditions><event_object_collided group="State.$targets"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$kind" exact="'target_collision'"/><set_value name="$attacker" exact="@event.param"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="ProjectileCollision" instantiate="true" namespace="this">
+     <conditions><event_object_collided group="State.$rounds"/><check_value value="State.$armed"/></conditions>
+     <actions>
+      <set_value name="$kind" exact="'projectile_collision'"/><set_value name="$round" exact="event.object"/>
+      <set_value name="$component" exact="@event.param"/>
+      <include_actions ref="Emit"/>
+     </actions>
+    </cue>
+    <cue name="Destroyed" instantiate="true" namespace="this">
+     <conditions><event_object_destroyed group="State.$targets"/><check_value value="State.$armed"/></conditions>
+     <actions><set_value name="$reason" exact="'target_destroyed'"/><include_actions ref="Stop"/></actions>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>
