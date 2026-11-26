@@ -17,3 +17,11 @@ The run proves delivery of one directly observed stock contact to a live target 
 Both cockpit launchers exited normally. The authority recorded two admissions, paused when both pilots left, and confirmed the marked departure checkpoint `checkpoint-a6648f13b870460eb020bee14abfa6c5`. Neither host retained an X4 process or test lock. The original checkpoint was preserved.
 
 The provider journal, two cockpit event journals, and native engine logs are retained privately. One intermediate source health read returned an error. Later source and target baselines and the separately observed post-hit target health are the reads used here. The original trial summary rejected the final correlation because its comparison used a tighter tolerance than the product receiver. A corrected audit of the same raw records compared the target response to the exact provider read and checked the independent cockpit FFI value within the product tolerance. The product launchers and normal save reported success on that run.
+
+## Stock keyboard input on an isolated range
+
+A later experiment used one admitted HVC pilot on Bazzite and the native Fedora provider. KHI's ship had no connected pilot. The test verified an empty private sector, placed the ships 850 m apart, and checked the six standard Bolt Repeaters before pressing and releasing Space on the private X4 display. X4 measured 0.376 game seconds between the key observations.
+
+The range recorded 36 firing events, one direct contact and one 26-point shield debit. The ordinary combat exchange confirmed impact 1 against KHI at authority order 1, leaving 2,340 shield and 3,600 hull. There were no supplemental hit submissions. Before the capture finished, the kernel reported a segmentation fault in the local X4 movement worker. There was no recorded scope OOM. The evidence does not identify the cause of the crash.
+
+The subsequent Fedora save file contains 2,340 shield on the registered KHI. The confirmed checkpoint still points to the earlier pilot offer. Both hosts released their X4 processes and preserved the original input. This run demonstrates one normal hit from stock keyboard input. The sustained-fire forwarding trial remains open. The evening candidate does not include the private range, scripted input or supplemental-hit experiment.
