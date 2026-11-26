@@ -12,8 +12,11 @@ HVC-420 crossed the ordinary ZGH-239 → NEL-546 jump gate under stock
 autopilot. A regular Linux cockpit and a separate GPU-free X4 provider
 ran on Bazzite. The first destination sample discarded the previous
 sector's velocity. By sample 195, velocity had resumed and the provider
-verified the transfer within 1 mm. The last-pilot save retained the
-ship in the destination sector. An earlier test observer had accepted
+verified the transfer within 1 mm. After the last-pilot save, a fresh
+provider and cockpit restored the world through regular admission. The
+pilot took the helm of HVC-420 in the destination sector. Its first
+acknowledged position was 0.20 mm from its saved position. KHI-630
+retained its own position across both saves. An earlier test observer had accepted
 only the old superhighway destination. The correction was private to
 the ordinary gate fixture. [Native gate, acknowledgements and saved world](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#verified-ordinary-gate-movement-and-departure-save)
 
