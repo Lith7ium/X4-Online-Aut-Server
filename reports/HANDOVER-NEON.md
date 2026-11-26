@@ -2,6 +2,27 @@
 
 ## 26 November 2026
 
+On a replay of 44 recorded pilot positions and velocities from an ordinary
+gate approach, a freshly aligned receiving cockpit kept up at 60 updates/s.
+At 30 updates/s it stopped after 2.700 s on a 50.344 m step. A single
+55.713 ms delayed update also stopped an otherwise 60 Hz replay. Returning
+to 60 Hz after refusal did not recover the ship. This reproduced a fast-flight
+failure offline. The human Windows run had a separate gap in publication evidence.
+[Source samples, timing and receiver readbacks](AUTHORITY-COCKPIT-RENDER-CADENCE-REPLAY.md)
+
+After buying or selling at a station, a pilot can now wait for a concurrent
+Company command to finish before the server starts undocking. Previously a
+busy provider refused the request while the cockpit still held the ship at
+its berth. The two-pilot scheduler regression checked the single departure
+and its confirmed receipt. Native two-pilot contention remains untested.
+
+Both Linux and Windows pilots can record shield and hull damage on their
+admitted ship. Capture verification now checks the original log window,
+including checkpoint ID and digest, and resolves all selected ships in one
+scan of the offered save. The private observer also records X4's separate
+projectile callback for that same helm.
+[Operator commands](../docs/AUTHORITY-SERVER-PACKAGE.md#record-hits-on-a-linux-pilots-ship)
+
 Two admitted protocol pilots each tried to spend 106 Cr from a shared
 160 Cr balance at UPV-940. The GPU-free vanilla provider booked
 EST-929's purchase, refused BBS-493's order at the same price, and
@@ -60,11 +81,11 @@ before the stock operation. Both main guns remained fitted in the
 source world. The events did not identify a particular weapon.
 [Pod losses and surviving ownership](AUTHORITY-BOARDING-BASELINE-20261125.md#reduced-defence-control-still-lost-both-pods-in-low-attention)
 
-Three nearby-observer preparations stopped before the next stock
-boarding operation. X4 automatically armed the scout, a broad weapon
-query included the target's turrets, and the final readiness check ran
-before the deferred scout disarm. The latest ordering fix passed
-offline trace tests. High-attention pod flight and takeover remain open.
+In the fourth nearby-observer run, eight marines entered two pods.
+Both pods and both ships had physics at visible attention or higher for
+the first 231 approach samples. The target then left that range, followed
+by the launch ship. The last observed stock phase was approach after 720
+game seconds. Neither attachment nor takeover was observed.
 [Nearby-observer controls](AUTHORITY-BOARDING-NEARBY-CONTROL-20261126.md)
 
 Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. His
