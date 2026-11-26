@@ -183,6 +183,18 @@ class MixedWeaponTest(unittest.TestCase):
         self.assertEqual([row['last_attack_time'] for row in callbacks], [first.age - .5, second.age])
         self.assertEqual(A.analyse_damage(log, events, result, epoch=EPOCH)[1], {})
 
+    def test_direct_source_naming_the_other_shooter_counts_as_disagreement(self):
+        text, events = fixture()
+        events = [row for row in events if not (row.phase == 'overlap' and row.ev_att_reg == 1
+                                                and 'attacked' in row.kind)]
+        overlap = A.analyse(text, events, epoch=EPOCH)['overlap']
+        buckets = overlap['direct_source_vs_lastattacker']
+        rows = overlap['callback_detail']
+        self.assertEqual(sum(buckets.values()), len(rows))
+        self.assertEqual(buckets['disagree'], sum(row['direct_sources'] == ['2'] and row['lastattacker'] == '1'
+                                                  for row in rows))
+        self.assertGreaterEqual(buckets['disagree'], 1)
+
     def test_mixed_damage_is_independent_of_lastattacker_and_cannot_replace_direct_witness(self):
         text, events = fixture(mixed=True)
         overlap = A.analyse(text, events, epoch=EPOCH)

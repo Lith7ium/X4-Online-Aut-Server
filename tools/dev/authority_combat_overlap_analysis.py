@@ -22,7 +22,8 @@ SHOOTER_LABELS = {'1': 'company_player', '2': 'second_shooter'}
 # The nominal flight is about 0.1 s from 200 m. Longer observation gaps
 # cannot distinguish hits from unrelated disappearances in this fixture.
 MAX_FLIGHT_S = 0.5
-OVERLAP_PHASES = ('control_pilot', 'control_second', 'control_second_yawfix', 'overlap', 'miss_pilot')
+OVERLAP_PHASES = ('control_pilot', 'control_second', 'control_second_yawfix', 'overlap', 'miss_pilot',
+                  'overflow_overlap')
 
 
 def _fields(text):
@@ -325,6 +326,24 @@ def analyse_phase(bucket, events, actors, epoch):
             })
     last_attackers = [e.last_att_label for e in damage]
     callbacks = sum(f['callbacks'] for f in classified)
+    frame_by_age = {_number(f['age']): f for f in classified}
+    # One row per shield or hull callback: sampled last attacker and attack time next to the
+    # direct source notification, the projectile frame, collision fencing and overflow pairing.
+    callback_detail = []
+    for e in damage:
+        frame = frame_by_age.get(e.age, {})
+        callback_detail.append({
+            'age': e.age, 'sequence': e.seq, 'kind': e.kind.removesuffix('_damaged'), 'amount': e.amount,
+            'shield_after': e.shield, 'hull_after': e.hull, 'lastattacker': _registered_last_attacker(e, actors),
+            'lastattacker_label': e.last_att_label,
+            'last_attack_time': e.last_att_time if e.last_att_time >= 0 else None,
+            'last_attack_lag_s': round(e.age - e.last_att_time, 6) if e.last_att_time >= 0 else None,
+            'direct_sources': sorted(named.get(e.age, set())), 'frame_class': frame.get('class'),
+            'frame_bullet_shooters': frame.get('shooters'), 'frame_overflow_pairs': frame.get('overflow_pairs'),
+            'collision_fenced': e.age in collision_ages,
+        })
+    single_source = [row for row in callback_detail
+                     if row['frame_class'] == 'one_shooter_count_matches' and len(row['frame_bullet_shooters'] or ()) == 1]
     return {
         'shots_by_shooter': _count(f.get('shooter', '?') for f in fires),
         'weapons_by_shooter': {s: len({f.get('weapon') for f in fires if f.get('shooter', '?') == s})
@@ -360,6 +379,21 @@ def analyse_phase(bucket, events, actors, epoch):
         'observer_other_victim_damage': _count(e.victim_label for e in other_victims),
         'miss_dodge_and_health_verified': len(projectiles) == len(fires) and _verified_miss(bucket, target_events, actors),
         'frame_detail': classified,
+        'callback_detail': callback_detail,
+        'hull_callbacks': sum(row['kind'] == 'hull' for row in callback_detail),
+        'overflow_frames': sum(1 for f in classified if f['overflow_pairs']),
+        'mixed_shooter_frames': sum(1 for f in classified if len(f['shooters'] or ()) > 1),
+        'callbacks_without_single_source': len(callback_detail) - len(single_source),
+        'lastattacker_vs_single_source_frame': {
+            'agree': sum(row['lastattacker'] == row['frame_bullet_shooters'][0] for row in single_source),
+            'disagree': sum(row['lastattacker'] not in (None, row['frame_bullet_shooters'][0]) for row in single_source),
+            'no_lastattacker': sum(row['lastattacker'] is None for row in single_source)},
+        'direct_source_vs_lastattacker': {
+            'agree': sum(row['direct_sources'] == [row['lastattacker']] for row in callback_detail),
+            'disagree': sum(len(row['direct_sources']) == 1 and row['lastattacker'] is not None
+                            and row['direct_sources'] != [row['lastattacker']] for row in callback_detail),
+            'direct_names_both': sum(row['direct_sources'] == ['1', '2'] for row in callback_detail),
+            'no_direct_source': sum(not row['direct_sources'] for row in callback_detail)},
     }
 
 
