@@ -458,3 +458,58 @@ Private quarantine evidence is in
 `.local/ordinary-jump-gate/run-05-cold-native/`. The diagnostic
 `result.json` digest is
 `d84396d81987fe21d041f5a22255d5c9e77a974882afda7adc24187d7a371415`.
+
+The final quarantine diagnostic at `d3038126` held a private load
+permit until two scans found PID 810559 with the same start identity.
+The stock uniqueness check passed and the permit was issued at 0.234 s.
+A subsequent strict check found multiple matching X4 processes before
+any load request was logged. The engine log is empty. Cleanup found
+PID 810618 and stopped it, leaving no owned processes or locks.
+The candidate stayed CURRENT-only and unchanged. This diagnostic
+loader was retired from the experiment.
+
+### Ordinary cockpit gate crossing from a newly confirmed seed
+
+Run 06 at `d3038126da9dcd86479dc11829d12fe2ebd23e68` staged a fresh
+copy of the original source. The four-second readback verified both
+placements while running and after pause. The corrected stock child
+transforms and saved discovery fields passed the independent check.
+The normal controller confirmed
+`checkpoint-c29a9eace29a4f1bad82cae606032ccb`, SHA-256
+`0d91040cefc4a31ed60f0ddcd9592f7a74600a5d5e3fa7d1fa0ac178f75d0be3`.
+
+The normal GPU-free Bazzite provider cold-loaded that checkpoint.
+A separate regular Linux cockpit received and loaded the fresh
+`checkpoint-8a71e13bf5d945c787e873548753fcf7` join offer and took
+control of HVC-420 (1073). Its read-only stock route check succeeded
+at game age 470.03 s. Stock guidance to KHI-630 and autopilot were
+confirmed once at 470.334 s. At 490.542 s X4 logged
+`event_object_entered_gate` for the same actor, `0x42657`, via
+ZGH-239 to NEL-546. Independent cockpit readback at 490.651 s showed
+that actor still occupied and controlled in
+`cluster_01_sector002_macro`. The pilot fixture supplied no poses
+or relocations.
+
+The motion publisher stopped with `motion_local_or_protocol_failure`
+around the boundary. The cockpit acknowledged origin sequence 186;
+the provider received and verified origin sequence 187. The provider
+accepted 156 samples and verified seven position writes, all before
+the sector transfer. No destination sample was acknowledged and no
+provider sector transfer was verified.
+
+The independent final save check found HVC-420 in the original
+`cluster_06_sector002_macro` and KHI-630 in the destination sector.
+The provider exited successfully and paused at marked
+`checkpoint-d4e158bbc8c043c0873815c1bd31883b`, marker
+`d52ef3eb4aa9fbf4051968b584fbce42`, SHA-256
+`38492c1d05f0a29008d7a596ad35bc4324d6199e767b8327bef729a47e2e2ca2`.
+The pilot exited with failure. Both processes and locks cleared.
+The original source and working copy remained unchanged. This
+establishes ordinary stock cockpit gate passage. The movement path
+across that boundary remains unverified.
+
+Private evidence is under `.local/ordinary-jump-gate/run-06/`.
+The cockpit engine log digest is
+`31ef6e4d60e411a67b63074e7cada9c25f37de73ba1ad07970beadcb73ed4c51`.
+The provider result digest is
+`7bedf1deeb9a571b8eb5c21ed5f9208a3ff808c1dc31243f5beabe42e98bd9a3`.
