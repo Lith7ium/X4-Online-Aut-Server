@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from xml.etree import ElementTree
 
+from authority.company_combat_frames import MAX_BATCH
 from authority.company_combat_service import CombatImpactRejected
 from authority_company_gun_damage import NativeGunDamageProvider, NativeGunDamageUncertain
 
@@ -263,6 +264,90 @@ class NativeDamageTests(unittest.TestCase):
         self.engine(RECEIPT)
         self.assertEqual(impact.poll(), (4.000000165, 3600))
 
+    def group_prefix(self, count):
+        rows = []
+        identity = None
+        while len(rows) < count:
+            packet = self.peer.recv(768)
+            self.assertLessEqual(len(packet), 512)
+            tag, lease, serial, generation, epoch, source, offset, total, deadline, *chunk = (
+                packet.decode('ascii').split('|'))
+            self.assertEqual((tag, lease, generation, epoch, source),
+                             ('GUN_GROUP', self.provider._lease, *BINDING[:2], '1073'))
+            self.assertEqual((int(offset), int(total), float(deadline)), (len(rows) + 1, count, self.now + 1))
+            rows.extend(chunk)
+            prefix = f'GUN_GROUP_RESULT|{lease}|{serial}|{generation}|{epoch}|{source}|'.encode('ascii')
+            self.assertIn(identity, (None, prefix))
+            identity = prefix
+        self.assertEqual(len(rows), count)
+        return identity, rows
+
+    def send_group(self, *impacts):
+        self.hello()
+        self.provider._ordered_hits = True
+        group = self.provider.begin_impacts(BINDING, impacts)
+        prefix, rows = self.group_prefix(len(impacts))
+        self.assertEqual(rows, [f'{target},{amount:.17g}' for target, amount in impacts])
+        return group, prefix
+
+    def test_group_opt_in_and_maximum_packet_bound(self):
+        self.hello()
+        with self.assertRaises(CombatImpactRejected):
+            self.provider.begin_impacts(BINDING, ((1074, 26),))
+        self.assert_no_impact()
+        self.provider._ordered_hits = True
+        with self.assertRaises(CombatImpactRejected):
+            self.provider.begin_impacts(BINDING, ((200000, 26),) * (MAX_BATCH + 1))
+        self.assert_no_impact()
+        request, prefix = self.send_group(*((200000, 1.234567890123456e-300),) * MAX_BATCH)
+        self.peer.send(prefix + b'refused')
+        with self.assertRaises(CombatImpactRejected):
+            request.poll()
+        self.assertFalse(self.provider._fenced)
+
+    def test_group_confirms_interleaved_distinct_targets_and_repeated_target(self):
+        request, prefix = self.send_group((1074, 26), (943, 26), (1074, 26))
+        self.peer.send(prefix + b'row|1|1074|8.01344|applied|0x102|0x103|0|26|30|3600|4|3600|2366|3600|0|3578|2366|3600')
+        self.assertIsNone(request.poll())
+        with self.assertRaises(CombatImpactRejected):
+            self.begin()
+        self.peer.send(prefix + b'row|2|943|8.01344|applied|0x102|0x104|0|26|2366|3600|2340|3600|2366|3600|2340|3600|2366|3600')
+        self.peer.send(prefix + b'row|3|1074|8.01344|applied|0x102|0x103|0|26|4|3600|0|3578|2366|3600|0|3578|2366|3600')
+        self.peer.send(prefix + b'complete')
+        self.assertEqual(request.poll(), ((4, 3600), (2340, 3600), (0, 3578)))
+        self.assert_no_impact()
+
+    def test_partial_group_never_reissues_or_accepts_a_prewrite_refusal(self):
+        request, prefix = self.send_group((1074, 26), (943, 26))
+        self.peer.send(prefix + b'row|1|1074|8.01344|' + RECEIPT.encode('ascii'))
+        self.assertIsNone(request.poll())
+        self.peer.send(prefix + b'refused')
+        with self.assertRaises(NativeGunDamageUncertain):
+            request.poll()
+        with self.assertRaises(NativeGunDamageUncertain):
+            self.begin()
+        self.assert_no_impact()
+
+    def test_group_completion_requires_every_row(self):
+        request, prefix = self.send_group((1074, 26), (943, 26))
+        self.peer.send(prefix + b'row|1|1074|8.01344|' + RECEIPT.encode('ascii'))
+        self.peer.send(prefix + b'complete')
+        with self.assertRaises(NativeGunDamageUncertain):
+            request.poll()
+        self.assertTrue(self.provider._fenced)
+        self.assert_no_impact()
+
+    def test_group_missing_terminal_receipt_fences_and_never_retransmits(self):
+        request, prefix = self.send_group((1074, 26),)
+        self.peer.send(prefix + b'row|1|1074|8.01344|' + RECEIPT.encode('ascii'))
+        self.assertIsNone(request.poll())
+        self.now += 1
+        with self.assertRaises(NativeGunDamageUncertain):
+            request.poll()
+        with self.assertRaises(NativeGunDamageUncertain):
+            self.provider.begin_impacts(BINDING, ((1074, 26),))
+        self.assert_no_impact()
+
     def test_opt_in_overlay_contains_one_stock_write_and_archives_cue(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)
@@ -284,7 +369,10 @@ class NativeDamageTests(unittest.TestCase):
             native = ElementTree.parse(cue)
             commands = native.findall('.//apply_attackstrength')
             self.assertEqual(len(commands), 1)
-            self.assertEqual(commands[0].get('hullshield'), '$args.$amount')
+            self.assertEqual(commands[0].get('hullshield'), '$amount')
+            for name in ('Impact', 'Group'):
+                self.assertIsNotNone(native.find(f"./cues/cue[@name='{name}']//include_actions[@ref='ApplyStock']"))
+            self.assertIn('engine.game_time, false)', bridge.read_text())
             self.assertFalse(native.findall('.//set_object_shield'))
             self.assertFalse(native.findall('.//set_object_hull'))
             self.assertNotIn('__PROVIDER_LEASE__', cue.read_text())
@@ -292,6 +380,8 @@ class NativeDamageTests(unittest.TestCase):
             self.assertIsNotNone(health)
             self.assertFalse(health.findall('.//apply_attackstrength'))
             self.assertNotIn('__PROVIDER_HEALTH_LEASE__', cue.read_text())
+            self.assertNotIn('__PROVIDER_GROUP_LEASE__', cue.read_text())
+            self.assertIn("@$args.$lease == '-'", cue.read_text())
             result = self.provider.archive_cues(case, out)
             self.assertFalse(cue.exists())
             self.assertTrue(result.is_file())

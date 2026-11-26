@@ -8,7 +8,7 @@ function RegisterEvent(name, callback)
     return true
 end
 function AddUITriggeredEvent(screen, action, args)
-    assert(screen == 'X4AuthorityCompanyGunDamage' and (action == 'Impact' or action == 'Health'))
+    assert(screen == 'X4AuthorityCompanyGunDamage' and (action == 'Impact' or action == 'Health' or action == 'Group'))
     args.action = action
     issued[#issued + 1] = args
     return true
@@ -41,7 +41,7 @@ local tick = X4LAN_AUTHORITY_COMPANY_GUN_DAMAGE.new(lease, {
     end
     assert(actor == '0x103')
     return receipt
-end, function() return 3.53 end)
+end, function() return 3.53 end, true)
 
 local function identity(serial)
     return table.concat({lease, serial, generation, epoch, 1073, 1074}, '|')
@@ -165,3 +165,57 @@ input = input_for(6, 4)
 tick()
 received('Result', identity(6) .. '|applied|0x102|0x103|0|' .. witness .. '|134217729,0,0,')
 assert(outputs[9] == 'GUN_RESULT|' .. identity(6) .. '|unknown')
+
+
+local function group_identity(serial)
+    return table.concat({lease, serial, generation, epoch, 1073}, '|')
+end
+
+local function group_packet(serial, offset, count, deadline, rows)
+    return table.concat({'GUN_GROUP', group_identity(serial), offset, count, deadline, rows}, '|')
+end
+
+local function group_result(serial, row)
+    received('GroupResult', group_identity(serial) .. '|' .. row)
+end
+
+local ordered = group_packet(7, 1, 3, 4, '1074,26|943,26|1074,26')
+input = ordered
+tick()
+assert(#issued == 10 and issued[10].action == 'Group' and issued[10].count == 3
+    and issued[10].target1 == 1074 and issued[10].target2 == 943 and issued[10].target3 == 1074
+    and issued[10].amount1 == 26 and issued[10].amount2 == 26 and issued[10].amount3 == 26)
+local function group_row(serial, ordinal, target, actor, hp)
+    group_result(serial, table.concat({'row', ordinal, target, '3.51', '0x104', actor, fixed_point(hp)}, '|'))
+end
+receipt.shield, receipt.hull, receipt.shieldmax, receipt.hullmax = 0, 3578, 2366, 3600
+own_health.shield, own_health.hull = 2340, 3600
+group_row(7, 1, 1074, '0x103', {26,30,3600,4,3600,2366,3600})
+group_row(7, 2, 943, '0x102', {26,2366,3600,2340,3600,2366,3600})
+group_row(7, 3, 1074, '0x103', {26,4,3600,0,3578,2366,3600})
+assert(#outputs == 9 and read_calls == 2)
+group_result(7, 'complete')
+local prefix = 'GUN_GROUP_RESULT|' .. group_identity(7) .. '|'
+assert(outputs[10] == prefix .. 'row|1|1074|3.51|applied|0x104|0x103|0|26|30|3600|4|3600|2366|3600|0|3578|2366|3600')
+assert(outputs[11]:sub(1, #(prefix .. 'row|2|943')) == prefix .. 'row|2|943')
+assert(outputs[12]:sub(1, #(prefix .. 'row|3|1074')) == prefix .. 'row|3|1074')
+assert(outputs[13] == prefix .. 'complete' and read_calls == 3)
+input = {ordered, group_packet(7, 1, 3, 4, '943,26|1074,26|1074,26')}
+tick()
+assert(#issued == 10 and #outputs == 13)
+
+local eight = ('1074,26|'):rep(7) .. '1074,26'
+input = group_packet(8, 1, 9, 4, eight)
+tick()
+assert(#issued == 10)
+input = group_packet(8, 9, 9, 4, '943,26')
+tick()
+assert(#issued == 11 and issued[11].target9 == 943)
+group_row(8, 1, 1074, '0x103', {26,30,3600,4,3600,2366,3600})
+group_result(8, 'complete')
+assert(outputs[14] == 'GUN_GROUP_RESULT|' .. group_identity(8) .. '|unknown' and #outputs == 14)
+
+input = group_packet(9, 1, 3, 4, '1074,26|943,26|1074,26')
+tick()
+group_result(9, 'refused')
+assert(outputs[15] == 'GUN_GROUP_RESULT|' .. group_identity(9) .. '|refused' and #issued == 12)

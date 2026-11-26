@@ -2,6 +2,41 @@
 <mdscript name="X4AuthorityCompanyGunDamage" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
   <cue name="State" namespace="this"/>
+  <library name="ApplyStock" purpose="include_actions">
+   <actions>
+    <set_value name="$status" exact="'unknown'"/>
+    <set_value name="$before_shield" exact="$target.shield"/>
+    <set_value name="$before_hull" exact="$target.hull"/>
+    <set_value name="$before_age" exact="player.age / 1s"/>
+    <apply_attackstrength object="$target" attacker="$source" hullshield="$amount"
+                          hullonly="0" shieldonly="0" hullnoshield="0">
+     <result killed="$killed"/>
+    </apply_attackstrength>
+    <do_if value="@$target.shield ge 0 and @$target.hull ge 0 and @$target.maxshield ge 0 and @$target.maxhull gt 0">
+     <set_value name="$after_shield" exact="$target.shield"/>
+     <set_value name="$after_hull" exact="$target.hull"/>
+     <set_value name="$max_shield" exact="$target.maxshield"/>
+     <set_value name="$max_hull" exact="$target.maxhull"/>
+     <set_value name="$witness" exact="'%s,%s,%s,%s,%s,%s,%s,%s'.[
+                      $before_age,player.age / 1s,$before_shield,$before_hull,
+                      $after_shield,$after_hull,$max_shield,$max_hull]"/>
+     <!-- Numeric UI event parameters truncate fractional HP. Split the
+          safe integer span into 26-bit blocks and keep 20 fractional bits
+          separately. Each transmitted integer fits in a signed 32-bit field. -->
+     <set_value name="$quantities" exact="[$amount,$before_shield,$before_hull,
+                               $after_shield,$after_hull,$max_shield,$max_hull]"/>
+     <set_value name="$encoded" exact="''"/>
+     <do_for_each name="$quantity" in="$quantities">
+      <set_value name="$block" exact="($quantity / 67108864.0)i"/>
+      <set_value name="$remainder" exact="$quantity - $block * 67108864.0"/>
+      <set_value name="$whole" exact="($remainder)i"/>
+      <set_value name="$fraction" exact="(($remainder - $whole) * 1048576.0)i"/>
+      <set_value name="$encoded" exact="$encoded + '%s,%s,%s,'.[$block,$whole,$fraction]"/>
+     </do_for_each>
+     <set_value name="$status" exact="'applied'"/>
+    </do_if>
+   </actions>
+  </library>
   <cue name="Impact" instantiate="true" namespace="this">
    <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunDamage'" control="'Impact'"/></conditions>
    <actions>
@@ -36,43 +71,102 @@
                     and @$target.shield ge 0 and @$target.hull gt 0">
        <set_value name="State.$lease" exact="$args.$lease"/>
        <set_value name="State.$last_serial" exact="$args.$serial"/>
-       <set_value name="$before_shield" exact="$target.shield"/>
-       <set_value name="$before_hull" exact="$target.hull"/>
-       <set_value name="$before_age" exact="player.age / 1s"/>
-       <apply_attackstrength object="$target" attacker="$source" hullshield="$args.$amount"
-                             hullonly="0" shieldonly="0" hullnoshield="0">
-        <result killed="$killed"/>
-       </apply_attackstrength>
-       <do_if value="@$target.shield ge 0 and @$target.hull ge 0 and @$target.maxshield ge 0 and @$target.maxhull gt 0">
-        <set_value name="$after_shield" exact="$target.shield"/>
-        <set_value name="$after_hull" exact="$target.hull"/>
-        <set_value name="$max_shield" exact="$target.maxshield"/>
-        <set_value name="$max_hull" exact="$target.maxhull"/>
-        <set_value name="$witness" exact="'%s,%s,%s,%s,%s,%s,%s,%s'.[
-                         $before_age,player.age / 1s,$before_shield,$before_hull,
-                         $after_shield,$after_hull,$max_shield,$max_hull]"/>
-        <!-- Numeric UI event parameters truncate fractional HP. Split the
-             safe integer span into 26-bit blocks and keep 20 fractional bits
-             separately. Each transmitted integer fits in a signed 32-bit field. -->
-        <set_value name="$quantities" exact="[$args.$amount,$before_shield,$before_hull,
-                                  $after_shield,$after_hull,$max_shield,$max_hull]"/>
-        <set_value name="$encoded" exact="''"/>
-        <do_for_each name="$quantity" in="$quantities">
-         <set_value name="$block" exact="($quantity / 67108864.0)i"/>
-         <set_value name="$remainder" exact="$quantity - $block * 67108864.0"/>
-         <set_value name="$whole" exact="($remainder)i"/>
-         <set_value name="$fraction" exact="(($remainder - $whole) * 1048576.0)i"/>
-         <set_value name="$encoded" exact="$encoded + '%s,%s,%s,'.[$block,$whole,$fraction]"/>
-        </do_for_each>
-        <set_value name="$status" exact="'applied'"/>
-       </do_if>
-       <do_else><set_value name="$status" exact="'unknown'"/></do_else>
+       <set_value name="$amount" exact="$args.$amount"/>
+       <include_actions ref="ApplyStock"/>
       </do_if>
      </do_elseif>
      <raise_lua_event name="'X4AuthorityCompanyGunDamage.Result'"
                       param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
                          $args.$lease,($args.$serial)i,$args.$generation,$args.$epoch,($args.$source)i,
                          ($args.$target)i,$status,$source,$target,$killed,$witness,$encoded]"/>
+    </do_if>
+    <cancel_cue cue="this"/>
+   </actions>
+  </cue>
+  <cue name="Group" instantiate="true" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunDamage'" control="'Group'"/></conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <do_if value="typeof $args == datatype.table and @$args.$lease == '__PROVIDER_GROUP_LEASE__'
+                  and @$args.$lease != '-' and typeof @$args.$generation == datatype.string
+                  and typeof @$args.$epoch == datatype.string
+                  and @$args.$serial ge 1 and $args.$serial le 2147483647 and ($args.$serial)i == $args.$serial
+                  and @$args.$source ge 1 and $args.$source le 200000 and ($args.$source)i == $args.$source
+                  and @$args.$count ge 1 and $args.$count le 32 and ($args.$count)i == $args.$count">
+     <set_value name="$identity" exact="'%s|%s|%s|%s|%s'.[
+         $args.$lease,($args.$serial)i,$args.$generation,$args.$epoch,($args.$source)i]"/>
+     <set_value name="$status" exact="'refused'"/>
+     <do_if value="@$args.$lease == @State.$lease and $args.$serial le @State.$last_serial">
+      <set_value name="$status" exact="'unknown'"/>
+     </do_if>
+     <do_elseif value="md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship?
+                       and @md.X4AuthorityShipRegistry.State.$faulted == false
+                       and @md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch">
+      <set_value name="$source" exact="@md.X4AuthorityShipRegistry.State.$ships.{($args.$source)i}"/>
+      <do_if value="@$source.isclass.ship and $source.isoperational
+                    and $source.owner == faction.player and $source.trueowner == faction.player
+                    and @md.X4AuthorityShipRegistry.State.$byship.{$source} == $args.$source">
+       <set_value name="$targets" exact="[]"/>
+       <set_value name="$indices" exact="[]"/>
+       <set_value name="$amounts" exact="[]"/>
+       <set_value name="$totals" exact="table[]"/>
+       <!-- Validate every row before the group can touch stock health. -->
+       <do_all exact="$args.$count" counter="$i">
+        <set_value name="$index_key" exact="'$target%s'.[$i]"/>
+        <set_value name="$amount_key" exact="'$amount%s'.[$i]"/>
+        <set_value name="$index" exact="@$args.{$index_key}"/>
+        <set_value name="$amount" exact="@$args.{$amount_key}"/>
+        <do_if value="$index ge 1 and $index le 200000 and ($index)i == $index
+                      and $index != $args.$source and $amount gt 0 and $amount le 9007199254740991L">
+         <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{$index}"/>
+         <do_if value="@$target.isclass.ship and $target.isoperational and $target != $source
+                       and @md.X4AuthorityShipRegistry.State.$byship.{$target} == $index
+                       and @$target.shield ge 0 and @$target.hull gt 0">
+          <set_value name="$total" exact="$amount + (if $totals.{$index}? then $totals.{$index} else 0)"/>
+          <!-- A possibly lethal group uses the existing serial path. -->
+          <do_if value="$total lt $target.shield + $target.hull">
+           <set_value name="$totals.{$index}" exact="$total"/>
+           <append_to_list name="$targets" exact="$target"/>
+           <append_to_list name="$indices" exact="$index"/>
+           <append_to_list name="$amounts" exact="$amount"/>
+          </do_if>
+         </do_if>
+        </do_if>
+       </do_all>
+       <do_if value="$targets.count == $args.$count">
+        <set_value name="State.$lease" exact="$args.$lease"/>
+        <set_value name="State.$last_serial" exact="$args.$serial"/>
+        <set_value name="$entry_age" exact="player.age"/>
+        <set_value name="$status" exact="'applied'"/>
+        <do_all exact="$targets.count" counter="$i">
+         <set_value name="$target" exact="$targets.{$i}"/>
+         <set_value name="$index" exact="$indices.{$i}"/>
+         <set_value name="$amount" exact="$amounts.{$i}"/>
+         <do_if value="$status == 'applied' and player.age == $entry_age
+                       and @md.X4AuthorityShipRegistry.State.$faulted == false
+                       and @md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch
+                       and @$source.isoperational and $source.owner == faction.player
+                       and $source.trueowner == faction.player
+                       and @md.X4AuthorityShipRegistry.State.$byship.{$source} == $args.$source
+                       and @md.X4AuthorityShipRegistry.State.$ships.{$args.$source} == $source
+                       and @$target.isoperational and @$target.shield ge 0 and @$target.hull gt 0
+                       and @md.X4AuthorityShipRegistry.State.$byship.{$target} == $index
+                       and @md.X4AuthorityShipRegistry.State.$ships.{$index} == $target">
+          <include_actions ref="ApplyStock"/>
+          <do_if value="$status == 'applied' and not $killed and $after_hull gt 0 and player.age == $entry_age">
+           <raise_lua_event name="'X4AuthorityCompanyGunDamage.GroupResult'"
+                            param="'%s|row|%s|%s|%s|%s|%s|%s'.[
+                               $identity,$i,$index,$entry_age / 1s,$source,$target,$encoded]"/>
+          </do_if>
+          <do_else><set_value name="$status" exact="'unknown'"/></do_else>
+         </do_if>
+         <do_else><set_value name="$status" exact="'unknown'"/></do_else>
+        </do_all>
+        <do_if value="$status == 'applied'"><set_value name="$status" exact="'complete'"/></do_if>
+       </do_if>
+      </do_if>
+     </do_elseif>
+     <raise_lua_event name="'X4AuthorityCompanyGunDamage.GroupResult'" param="$identity + '|' + $status"/>
     </do_if>
     <cancel_cue cue="this"/>
    </actions>

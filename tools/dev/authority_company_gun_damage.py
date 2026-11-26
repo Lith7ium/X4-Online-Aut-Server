@@ -1,6 +1,6 @@
 """Opt-in stock damage and health observation RPC to a running provider X4."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import math
 import os
@@ -9,7 +9,9 @@ import re
 import secrets
 import socket
 import time
+from typing import Callable
 
+from authority.company_combat_frames import MAX_BATCH
 from authority.company_combat_service import CombatImpactRejected
 from authority_tcp_job_client_live import socket_owner
 
@@ -18,6 +20,7 @@ _SCRIPT = 'authority_company_gun_damage'
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _ACTOR = re.compile(r'0[xX][0-9a-fA-F]{1,16}')
 _MAX_PACKET = 512
+_GROUP_CHUNK = 8
 _MAX_INDEX = 200000
 _MAX_SERIAL = 2**31 - 1
 _MAX_AMOUNT = 2**53 - 1
@@ -33,9 +36,9 @@ class NativeGunDamageUncertain(RuntimeError):
 class _Impact:
     provider: 'NativeGunDamageProvider'
     binding: tuple
-    amount: float
     deadline: float
     response_prefix: bytes
+    read_receipt: Callable
     health: tuple | None = None
     error: Exception | None = None
 
@@ -95,7 +98,12 @@ def _health_sample(fields):
     return dict(zip(_HEALTH_FIELDS, values, strict=True))
 
 
-def _read_health(fields, amount):
+def _same_health(first, second):
+    return all(math.isclose(a, b, rel_tol=1e-11, abs_tol=1e-6)
+               for a, b in zip(first, second, strict=True))
+
+
+def _stock_impact(fields, amount):
     if (len(fields) != 15 or fields[0] != 'applied'
             or not all(_ACTOR.fullmatch(actor) for actor in fields[1:3])):
         raise NativeGunDamageUncertain('invalid native impact receipt')
@@ -112,17 +120,62 @@ def _read_health(fields, amount):
             or shield > min(before_shield, max_shield) or hull > min(before_hull, max_hull)
             or observed_shield > observed_max_shield or observed_hull > observed_max_hull):
         raise NativeGunDamageUncertain('native stock impact reported impossible root health')
-    if (killed != (hull == 0) or killed != (observed_hull == 0)
-            or (killed and (shield != 0 or observed_shield != 0))):
-        raise NativeGunDamageUncertain('native kill does not have a matching root health readback')
-    if not all(math.isclose(first, second, rel_tol=1e-11, abs_tol=1e-6)
-               for first, second in zip(values[3:7], values[7:], strict=True)):
+    if killed != (hull == 0) or (killed and shield != 0):
+        raise NativeGunDamageUncertain('native kill does not have matching root health')
+    return source, target, values[1:3], values[3:7], values[7:]
+
+
+def _read_health(fields, amount):
+    _, _, _, after, observed = _stock_impact(fields, amount)
+    if ((after[1] == 0) != (observed[1] == 0) or (after[1] == 0 and observed[0] != 0)
+            or not _same_health(after, observed)):
         raise NativeGunDamageUncertain('native impact health readbacks disagree')
-    return observed_shield, observed_hull
+    return observed[:2]
+
+
+@dataclass
+class _GroupReceipt:
+    impacts: tuple
+    rows: list = field(default_factory=list)
+    last: dict = field(default_factory=dict)
+    source: int | None = None
+    age: float | None = None
+
+    def __call__(self, fields):
+        if fields == ['complete']:
+            if len(self.rows) != len(self.impacts) or any(
+                    not _same_health(after, observed) for _, after, observed in self.last.values()):
+                raise NativeGunDamageUncertain('incomplete or inconsistent native group')
+            # Establish each target's final read independently. Intermediate
+            # receipts retain the native health immediately after that call.
+            return tuple(after[:2] for after in self.rows)
+        position = len(self.rows)
+        if (len(fields) != 19 or fields[:2] != ['row', str(position + 1)]
+                or position >= len(self.impacts) or fields[2] != str(self.impacts[position][0])):
+            raise NativeGunDamageUncertain('native group receipt order differs')
+        target_index, amount = self.impacts[position]
+        age = float(fields[3])
+        source, target, before, after, observed = _stock_impact(fields[4:], amount)
+        if (not math.isfinite(age) or age < 0 or after[1] <= 0 or observed[1] <= 0
+                or (self.age is not None and (age != self.age or source != self.source))):
+            raise NativeGunDamageUncertain('native group game age, source or living target differs')
+        previous = self.last.get(target_index)
+        if previous is not None:
+            old_target, old_after, old_observed = previous
+            if (target != old_target or not _same_health(before, old_after[:2])
+                    or not _same_health(after[2:], old_after[2:])
+                    or not _same_health(observed, old_observed)):
+                raise NativeGunDamageUncertain('native group target history differs')
+        elif any(actor == target for actor, _, _ in self.last.values()):
+            raise NativeGunDamageUncertain('native group alias between target indices')
+        self.source, self.age = source, age
+        self.last[target_index] = target, after, observed
+        self.rows.append(after)
+        return None
 
 
 class NativeGunDamageProvider:
-    """Apply one authorized impact at a time with no post-dispatch writes retried.
+    """Run one authorized native operation at a time without retrying stock writes.
 
     The combat service owns confirmation identity, ordering and deduplication.
     is_current checks the assignment and can_fire adds input freshness before
@@ -153,9 +206,12 @@ class NativeGunDamageProvider:
         self._serial = self._health_serial = 0
         self._peer = self._process = self._guard = self._staged_md = self._active = self._health_active = None
         self._fenced = False
+        self._ordered_hits = False
 
-    def install(self, case):
+    def install(self, case, *, ordered_hits=False):
         """Stage in the newly owned registry-aware overlay before native launch."""
+        if type(ordered_hits) is not bool:
+            raise ValueError('ordered native damage requires explicit opt-in')
         extension = Path(case).absolute() / 'extensions/x4_lan_lab'
         ui, md = extension / 'ui', extension / 'md'
         if (self._staged_md is not None or extension.resolve(strict=True) != extension
@@ -180,10 +236,11 @@ class NativeGunDamageProvider:
         if any(path.exists() or path.is_symlink() for path in (cue, driver, reader)):
             raise FileExistsError('native damage overlay scripts already present')
         xml = (scripts / cue.name).read_bytes()
-        for marker in (b'__PROVIDER_LEASE__', b'__PROVIDER_HEALTH_LEASE__'):
+        for marker in (b'__PROVIDER_LEASE__', b'__PROVIDER_GROUP_LEASE__', b'__PROVIDER_HEALTH_LEASE__'):
             if xml.count(marker) != 1:
-                raise ValueError('native damage and health cues require separate lease guards')
-            xml = xml.replace(marker, self._lease.encode('ascii'))
+                raise ValueError('native combat cue lease placeholders differ')
+            value = b'-' if marker == b'__PROVIDER_GROUP_LEASE__' and not ordered_hits else self._lease.encode('ascii')
+            xml = xml.replace(marker, value)
         files = {
             cue: xml,
             driver: (scripts / driver.name).read_bytes(),
@@ -199,7 +256,7 @@ class NativeGunDamageProvider:
    local lib = assert(package.loadlib('./extensions/x4_lan_lab/native/x4lan_net.so','luaopen_x4lan_net'))()
    company_gun_damage_tick = X4LAN_AUTHORITY_COMPANY_GUN_DAMAGE.new(
        "{self._lease}", assert(lib.open('127.0.0.1',{port})), lib.monotonic,
-       C.IsGamePaused, X4LAN_COMBAT_OBSERVER.read_lua_health, engine.game_time)
+       C.IsGamePaused, X4LAN_COMBAT_OBSERVER.read_lua_health, engine.game_time, {str(ordered_hits).lower()})
   end
   company_gun_damage_tick()
  end
@@ -208,6 +265,7 @@ class NativeGunDamageProvider:
                           encoding='ascii')
         modules = ''.join(f'    <file name="ui/{path.name}" />\n' for path in (reader, driver))
         manifest.write_text(manifest_text.replace(entry, modules + entry), encoding='ascii')
+        self._ordered_hits = ordered_hits
         return [*files, bridge, manifest]
 
     def bind(self, process, guard):
@@ -262,6 +320,34 @@ class NativeGunDamageProvider:
         if (not _valid_binding(binding) or not _bounded_index(target_index)
                 or target_index == binding[2] or not _bounded_amount(amount)):
             raise CombatImpactRejected('invalid native impact binding or amount')
+        identity, deadline = self._reserve_impact(binding)
+        identity += f'|{target_index}'
+        packet = f'GUN_IMPACT|{identity}|{amount:.17g}|{deadline:.17g}'.encode('ascii')
+        attempt = _Impact(self, binding, deadline, f'GUN_RESULT|{identity}|'.encode('ascii'),
+                          lambda fields: _read_health(fields, amount))
+        return self._dispatch_impact(attempt, (packet,))
+
+    def begin_impacts(self, binding, impacts):
+        """Dispatch one ordered group. A refusal certifies zero stock calls."""
+        if (not self._ordered_hits or not _valid_binding(binding) or type(impacts) is not tuple
+                or not 1 <= len(impacts) <= MAX_BATCH
+                or any(type(row) is not tuple or len(row) != 2 or not _bounded_index(row[0])
+                       or row[0] == binding[2] or not _bounded_amount(row[1]) for row in impacts)):
+            raise CombatImpactRejected('invalid native impact group')
+        identity, deadline = self._reserve_impact(binding)
+        # The stock UDP module caps each packet. Stage all chunks before the
+        # single MD dispatch. A lost/reordered chunk never triggers a retry.
+        packets = []
+        for offset in range(0, len(impacts), _GROUP_CHUNK):
+            rows = '|'.join(f'{target},{amount:.17g}' for target, amount in impacts[offset:offset + _GROUP_CHUNK])
+            packet = f'GUN_GROUP|{identity}|{offset + 1}|{len(impacts)}|{deadline:.17g}|{rows}'.encode('ascii')
+            assert len(packet) <= _MAX_PACKET
+            packets.append(packet)
+        attempt = _Impact(self, binding, deadline, f'GUN_GROUP_RESULT|{identity}|'.encode('ascii'),
+                          _GroupReceipt(impacts))
+        return self._dispatch_impact(attempt, packets)
+
+    def _reserve_impact(self, binding):
         if self._fenced:
             raise NativeGunDamageUncertain('native damage adapter is fenced')
         if (self._active is not None or self._socket.fileno() < 0 or self._process is None
@@ -277,14 +363,15 @@ class NativeGunDamageProvider:
             self._finish_health(error=ValueError('native health read superseded by an impact'))
         self._serial += 1
         generation, epoch, source_index = binding
-        identity = f'{self._lease}|{self._serial}|{generation}|{epoch}|{source_index}|{target_index}'
-        deadline = self._clock() + self._timeout
-        packet = f'GUN_IMPACT|{identity}|{amount:.17g}|{deadline:.17g}'.encode('ascii')
-        attempt = _Impact(self, binding, amount, deadline, f'GUN_RESULT|{identity}|'.encode('ascii'))
+        identity = f'{self._lease}|{self._serial}|{generation}|{epoch}|{source_index}'
+        return identity, self._clock() + self._timeout
+
+    def _dispatch_impact(self, attempt, packets):
         self._active = attempt
         try:
-            if self._socket.sendto(packet, self._peer) != len(packet):
-                raise NativeGunDamageUncertain('native damage send was incomplete')
+            for packet in packets:
+                if self._socket.sendto(packet, self._peer) != len(packet):
+                    raise NativeGunDamageUncertain('native damage send was incomplete')
         except BaseException as error:
             failure = NativeGunDamageUncertain('native damage send outcome is unknown')
             self._finish(error=failure)
@@ -390,9 +477,13 @@ class NativeGunDamageProvider:
                     raise NativeGunDamageUncertain('native impact receipt lost its process or deadline fence')
                 fields = packet[len(attempt.response_prefix):].decode('ascii').split('|')
                 if fields == ['refused']:
+                    if isinstance(attempt.read_receipt, _GroupReceipt) and attempt.read_receipt.rows:
+                        raise NativeGunDamageUncertain('native group refused after reporting writes')
                     self._finish(error=CombatImpactRejected('native registry or actors refused before damage'))
                     return
-                health = _read_health(fields, attempt.amount)
+                health = attempt.read_receipt(fields)
+                if health is None:
+                    continue
                 if self._world_current is not None and self._world_current(attempt.binding[1]) is not True:
                     raise NativeGunDamageUncertain('native impact lost its world after dispatch')
                 self._finish(health=health)

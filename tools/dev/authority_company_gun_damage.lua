@@ -1,6 +1,7 @@
 -- Private native stock damage and health requests from the owned provider.
 local M = {}
 local screen = 'X4AuthorityCompanyGunDamage'
+local max_group, group_chunk = 32, 8
 local health_fields = {'Amount', 'BeforeShield', 'BeforeHull', 'AfterShield', 'AfterHull', 'MaxShield', 'MaxHull'}
 
 local function split(row)
@@ -60,13 +61,17 @@ local function ship_health(observed)
         and number(observed.hull, 0, observed.hullmax) and observed.hull > 0
 end
 
-function M.new(lease, net, monotonic, paused, read_health, game_time)
+function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hits)
     local active, reading, next_hello
     local last_serial, last_health_serial = 0, 0
 
     local function finish_impact(reply, reason)
         local attempt = active
         active = nil
+        if attempt.group then
+            net:send('GUN_GROUP_RESULT|' .. attempt.identity .. '|' .. reply)
+            return
+        end
         if reason and DebugError then
             local hp, readback = attempt.health, attempt.readback or {}
             local native_numbers = {}
@@ -88,7 +93,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
     end
 
     assert(RegisterEvent(screen .. '.Result', function(_, row)
-        if not active or type(row) ~= 'string' or #row > 512 then return end
+        if not active or active.group or type(row) ~= 'string' or #row > 512 then return end
         if row:sub(1, #active.identity + 1) ~= active.identity .. '|' then return end
         local fields = split(row)
         if #fields ~= 12 or paused() or monotonic() >= active.deadline then
@@ -141,6 +146,82 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
         finish_impact(table.concat({'applied', source, target, killed, table.concat(numbers, '|')}, '|'))
     end) ~= false)
 
+    if ordered_hits == true then
+        assert(RegisterEvent(screen .. '.GroupResult', function(_, row)
+            local group = active
+            if not group or not group.group or not group.dispatched or type(row) ~= 'string'
+                    or #row > 512 or row:sub(1, #group.identity + 1) ~= group.identity .. '|' then return end
+            if paused() or monotonic() >= group.deadline then
+                finish_impact('unknown')
+                return
+            end
+            local fields = split(row)
+            local status = fields[6]
+            if #fields == 12 and status == 'row' then
+                local position = #group.rows + 1
+                local expected = group.impacts[position]
+                local hp = decode_health(fields[12])
+                if not expected or index(fields[7], max_group) ~= position
+                        or index(fields[8], 200000) ~= expected.target or not number(fields[9], 0, math.huge)
+                        or not fields[10]:match('^0[xX][0-9a-fA-F]+$')
+                        or not fields[11]:match('^0[xX][0-9a-fA-F]+$')
+                        or not hp or not near(hp.Amount, expected.amount) or hp.AfterHull <= 0 then
+                    finish_impact('unknown')
+                    return
+                end
+                group.rows[position] = {fields=fields, hp=hp, target=fields[11], amount=expected.amount}
+                return
+            end
+            if #fields == 6 and status == 'refused' and #group.rows == 0 then
+                finish_impact('refused')
+                return
+            end
+            if #fields ~= 6 or status ~= 'complete' or #group.rows ~= #group.impacts then
+                finish_impact('unknown')
+                return
+            end
+
+            -- A later hit may change a target again. Read its stock health
+            -- once, after every MD write, and compare with its final MD row.
+            local observed_by_target = {}
+            for i = #group.rows, 1, -1 do
+                local result = group.rows[i]
+                if not observed_by_target[result.target] then
+                    local ok, observed = pcall(read_health, result.target)
+                    local hp = result.hp
+                    if not ok or type(observed) ~= 'table' or not observed.ok
+                            or not (near(hp.AfterShield, observed.shield) and near(hp.AfterHull, observed.hull)
+                            and near(hp.MaxShield, observed.shieldmax) and near(hp.MaxHull, observed.hullmax)) then
+                        finish_impact('unknown')
+                        return
+                    end
+                    observed_by_target[result.target] = observed
+                end
+            end
+            local prefix = 'GUN_GROUP_RESULT|' .. group.identity .. '|'
+            for i, result in ipairs(group.rows) do
+                if paused() or monotonic() >= group.deadline then
+                    finish_impact('unknown')
+                    return
+                end
+                local fields, observed = result.fields, observed_by_target[result.target]
+                local wire = {prefix .. 'row', i, fields[8], fields[9], 'applied', fields[10], fields[11], '0',
+                              string.format('%.17g', result.amount)}
+                for j = 2, #health_fields do
+                    wire[#wire + 1] = string.format('%.17g', result.hp[health_fields[j]])
+                end
+                for _, key in ipairs({'shield', 'hull', 'shieldmax', 'hullmax'}) do
+                    wire[#wire + 1] = string.format('%.17g', observed[key])
+                end
+                if net:send(table.concat(wire, '|')) ~= true then
+                    finish_impact('unknown')
+                    return
+                end
+            end
+            finish_impact('complete')
+        end) ~= false)
+    end
+
     assert(RegisterEvent(screen .. '.HealthResult', function(_, row)
         if not reading or type(row) ~= 'string' or #row > 512
                 or row:sub(1, #reading.identity + 1) ~= reading.identity .. '|' then return end
@@ -159,9 +240,56 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
         net:send('GUN_HEALTH_RESULT|' .. attempt.identity .. '|' .. reply)
     end) ~= false)
 
+    local function group_chunk_arrived(fields, now)
+        if #fields < 10 or fields[2] ~= lease then return end
+        local serial = index(fields[3], 2147483647)
+        local source = index(fields[6], 200000)
+        local offset, count = index(fields[7], max_group), index(fields[8], max_group)
+        local deadline = number(fields[9], now, now + 30)
+        if not (serial and source and token(fields[4]) and token(fields[5]) and offset and count
+                and deadline and deadline > now and offset <= count
+                and #fields == 9 + math.min(group_chunk, count - offset + 1)) then return end
+        local identity = table.concat(fields, '|', 2, 6)
+        if active then
+            if not active.group or active.dispatched or identity ~= active.identity
+                    or deadline ~= active.deadline or count ~= active.args.count
+                    or offset ~= #active.impacts + 1 then return end
+        elseif offset ~= 1 or serial <= last_serial then return end
+
+        local chunk = {}
+        for i = 10, #fields do
+            local target_text, amount_text = fields[i]:match('^([^,]+),([^,]+)$')
+            local target = target_text and index(target_text, 200000)
+            local amount = amount_text and number(amount_text, 0, 9007199254740991)
+            if not target or target == source or not amount or amount == 0 then return end
+            chunk[#chunk + 1] = {target=target, amount=amount}
+        end
+        if not active then
+            last_serial, reading = serial, nil
+            active = {group=true, identity=identity, deadline=deadline, rows={}, impacts={},
+                      args={lease=lease, serial=serial, generation=fields[4], epoch=fields[5],
+                            source=source, count=count}}
+        end
+        for _, impact in ipairs(chunk) do
+            local position = #active.impacts + 1
+            active.impacts[position] = impact
+            active.args['target' .. position] = impact.target
+            active.args['amount' .. position] = impact.amount
+        end
+        if #active.impacts == count then
+            active.dispatched = true
+            pcall(AddUITriggeredEvent, screen, 'Group', active.args)
+            return true
+        end
+    end
+
     local function dispatch(packet, now)
         if type(packet) ~= 'string' or #packet > 512 then return end
         local fields = split(packet)
+        if ordered_hits == true and fields[1] == 'GUN_GROUP' then
+            return group_chunk_arrived(fields, now)
+        end
+        if active then return end
         if #fields == 7 and fields[1] == 'GUN_HEALTH' and fields[2] == lease then
             local serial = index(fields[3], 2147483647)
             local source = index(fields[6], 200000)
@@ -198,7 +326,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
         end
         if active and now >= active.deadline then finish_impact('unknown', 'native_observations_timed_out') end
         if reading and now >= reading.deadline then reading = nil end
-        if active or paused() then return end
+        if (active and (not active.group or active.dispatched)) or paused() then return end
         local next_read
         for _ = 1, 8 do
             if not net:pending() then break end
@@ -206,7 +334,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
             if command == true then return end  -- A queued impact takes precedence over a read in this tick.
             if command then next_read = command end
         end
-        if next_read then
+        if next_read and not active then
             reading = next_read
             pcall(AddUITriggeredEvent, screen, 'Health', reading.args)
         end
