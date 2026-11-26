@@ -28,6 +28,28 @@ local function near(first, second)
         and math.abs(first - second) <= math.max(.000001, math.abs(first) * 1e-11)
 end
 
+-- MD numeric event parameters truncate floats. A string of bounded integer
+-- chunks preserves the sample without relying on MD's display rounding.
+local function decode_health(encoded)
+    if encoded:sub(-1) ~= ',' then return end
+    local chunks = {}
+    for value in encoded:gmatch('([^,]*),') do
+        if #value > 10 or not value:match('^%-?%d+$') then return end
+        chunks[#chunks + 1] = tonumber(value)
+    end
+    if #chunks ~= #health_fields * 3 then return end
+    local health = {}
+    for i, field in ipairs(health_fields) do
+        local block, whole, fraction = chunks[3*i-2], chunks[3*i-1], chunks[3*i]
+        if block < 0 or block > 134217728 or math.abs(whole) > 67108864
+                or math.abs(fraction) > 1048576 then return end
+        local value = block * 67108864 + whole + fraction / 1048576
+        if value < 0 or value > 9007199254740991 then return end
+        health[field] = value
+    end
+    return health
+end
+
 local function ship_health(observed)
     local maximum = 9007199254740991
     return type(observed) == 'table' and observed.ok and observed.owner == 'player'
@@ -55,7 +77,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
             local md_age = result and tonumber(result[11]:match('^[^,]+,([^,]+)')) or nil
             local read_age = attempt.read_age
             DebugError(string.format('[X4LAN] AUTH_COMPANY_GUN_DAMAGE_UNKNOWN serial=%d reason=%s '
-                .. 'md=%s typed=%s lua_shield=%s lua_hull=%s lua_max_shield=%s lua_max_hull=%s '
+                .. 'md=%s fixed_point=%s lua_shield=%s lua_hull=%s lua_max_shield=%s lua_max_hull=%s '
                 .. 'lua_age=%s elapsed_game_age=%s',
                 attempt.serial, reason, result and result[11] or '-', table.concat(native_numbers, ','),
                 tostring(readback.shield), tostring(readback.hull), tostring(readback.shieldmax),
@@ -65,77 +87,58 @@ function M.new(lease, net, monotonic, paused, read_health, game_time)
         net:send('GUN_RESULT|' .. attempt.identity .. '|' .. reply)
     end
 
-    local function settle_impact()
-        local attempt = active
-        if not attempt or not attempt.result then return end
-        local fields, hp = attempt.result, attempt.health
-        local status, source, target, killed, witness = fields[7], fields[8], fields[9], fields[10], fields[11]
-        if attempt.invalid then
-            finish_impact('unknown', attempt.invalid)
-        elseif paused() or monotonic() >= attempt.deadline then
-            finish_impact('unknown', 'native_observations_outside_deadline_or_running_world')
-        elseif status == 'refused' and witness == '-' and next(hp) == nil then
-            finish_impact('refused')
-        elseif status ~= 'applied' or witness == '-' then
-            finish_impact('unknown', 'md_did_not_confirm')
-        elseif not attempt.readback then
-            finish_impact('unknown', 'lua_readback_missing')
-        else
-            -- X4 may deliver a status event before the numeric parameters.
-            -- Keep one independent readback taken at status delivery and wait
-            -- for the typed values under the original, nonrenewable deadline.
-            local numbers = {}
-            for _, field in ipairs(health_fields) do
-                if hp[field] == nil then return end
-                numbers[#numbers + 1] = string.format('%.17g', hp[field])
-            end
-            local observed = attempt.readback
-            if hp.Amount ~= attempt.amount then
-                finish_impact('unknown', 'amount_mismatch')
-                return
-            end
-            if not (near(hp.AfterShield, observed.shield) and near(hp.AfterHull, observed.hull)
-                    and near(hp.MaxShield, observed.shieldmax) and near(hp.MaxHull, observed.hullmax)) then
-                finish_impact('unknown', 'health_readback_mismatch')
-                return
-            end
-            for _, field in ipairs({'shield', 'hull', 'shieldmax', 'hullmax'}) do
-                numbers[#numbers + 1] = string.format('%.17g', observed[field])
-            end
-            finish_impact(table.concat({'applied', source, target, killed, table.concat(numbers, '|')}, '|'))
-        end
-    end
-
-    for _, field in ipairs(health_fields) do
-        assert(RegisterEvent(screen .. '.' .. field, function(_, value)
-            if not active then return end
-            local value_type = type(value)
-            local hp = (value_type == 'number' or value_type == 'string')
-                and number(value, 0, 9007199254740991)
-            if active.health[field] ~= nil or not hp then
-                active.invalid = 'invalid_typed_' .. field .. '_' .. value_type
-            else
-                active.health[field] = hp
-            end
-            settle_impact()
-        end) ~= false)
-    end
-
     assert(RegisterEvent(screen .. '.Result', function(_, row)
         if not active or type(row) ~= 'string' or #row > 512 then return end
         if row:sub(1, #active.identity + 1) ~= active.identity .. '|' then return end
         local fields = split(row)
-        if active.result or #fields ~= 11 or paused() or monotonic() >= active.deadline then
+        if #fields ~= 12 or paused() or monotonic() >= active.deadline then
             finish_impact('unknown', 'invalid_native_result_or_deadline')
             return
         end
-        active.result = fields
-        if fields[7] == 'applied' then
-            active.read_age = game_time and game_time()
-            local ok, observed = pcall(read_health, fields[9])
-            if ok and type(observed) == 'table' and observed.ok then active.readback = observed end
+        local attempt = active
+        attempt.result = fields
+        local status, source, target, killed, witness, encoded = fields[7], fields[8], fields[9],
+            fields[10], fields[11], fields[12]
+        if status == 'refused' and witness == '-' and encoded == '-' then
+            finish_impact('refused')
+            return
         end
-        settle_impact()
+        if status ~= 'applied' or witness == '-' then
+            finish_impact('unknown', 'md_did_not_confirm')
+            return
+        end
+        attempt.read_age = game_time and game_time()
+        local ok, observed = pcall(read_health, target)
+        if not ok or type(observed) ~= 'table' or not observed.ok then
+            finish_impact('unknown', 'lua_readback_missing')
+            return
+        end
+        attempt.readback = observed
+        local hp = decode_health(encoded)
+        if not hp then
+            finish_impact('unknown', 'invalid_fixed_point_health')
+            return
+        end
+        attempt.health = hp
+        if not near(hp.Amount, attempt.amount) then
+            finish_impact('unknown', 'amount_mismatch')
+            return
+        end
+        if not (near(hp.AfterShield, observed.shield) and near(hp.AfterHull, observed.hull)
+                and near(hp.MaxShield, observed.shieldmax) and near(hp.MaxHull, observed.hullmax)) then
+            finish_impact('unknown', 'health_readback_mismatch')
+            return
+        end
+        -- The first number binds the wire receipt to the exact input. The
+        -- in-game amount has been checked at the fixed-point resolution.
+        local numbers = {string.format('%.17g', attempt.amount)}
+        for field = 2, #health_fields do
+            numbers[#numbers + 1] = string.format('%.17g', hp[health_fields[field]])
+        end
+        for _, field in ipairs({'shield', 'hull', 'shieldmax', 'hullmax'}) do
+            numbers[#numbers + 1] = string.format('%.17g', observed[field])
+        end
+        finish_impact(table.concat({'applied', source, target, killed, table.concat(numbers, '|')}, '|'))
     end) ~= false)
 
     assert(RegisterEvent(screen .. '.HealthResult', function(_, row)

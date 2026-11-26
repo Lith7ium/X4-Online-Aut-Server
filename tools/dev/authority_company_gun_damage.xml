@@ -18,6 +18,7 @@
      <set_value name="$target" exact="null"/>
      <set_value name="$killed" exact="false"/>
      <set_value name="$witness" exact="'-'"/>
+     <set_value name="$encoded" exact="'-'"/>
      <do_if value="@$args.$lease == @State.$lease and $args.$serial le @State.$last_serial">
       <!-- The old operation may already have changed health. Never redispatch it. -->
       <set_value name="$status" exact="'unknown'"/>
@@ -42,10 +43,6 @@
                              hullonly="0" shieldonly="0" hullnoshield="0">
         <result killed="$killed"/>
        </apply_attackstrength>
-       <!-- Numeric parameters avoid the precision loss of MD string formatting. -->
-       <raise_lua_event name="'X4AuthorityCompanyGunDamage.Amount'" param="$args.$amount"/>
-       <raise_lua_event name="'X4AuthorityCompanyGunDamage.BeforeShield'" param="$before_shield"/>
-       <raise_lua_event name="'X4AuthorityCompanyGunDamage.BeforeHull'" param="$before_hull"/>
        <do_if value="@$target.shield ge 0 and @$target.hull ge 0 and @$target.maxshield ge 0 and @$target.maxhull gt 0">
         <set_value name="$after_shield" exact="$target.shield"/>
         <set_value name="$after_hull" exact="$target.hull"/>
@@ -54,19 +51,28 @@
         <set_value name="$witness" exact="'%s,%s,%s,%s,%s,%s,%s,%s'.[
                          $before_age,player.age / 1s,$before_shield,$before_hull,
                          $after_shield,$after_hull,$max_shield,$max_hull]"/>
-        <raise_lua_event name="'X4AuthorityCompanyGunDamage.AfterShield'" param="$after_shield"/>
-        <raise_lua_event name="'X4AuthorityCompanyGunDamage.AfterHull'" param="$after_hull"/>
-        <raise_lua_event name="'X4AuthorityCompanyGunDamage.MaxShield'" param="$max_shield"/>
-        <raise_lua_event name="'X4AuthorityCompanyGunDamage.MaxHull'" param="$max_hull"/>
+        <!-- Numeric UI event parameters truncate fractional HP. Split the
+             safe integer span into 26-bit blocks and keep 20 fractional bits
+             separately. Each transmitted integer fits in a signed 32-bit field. -->
+        <set_value name="$quantities" exact="[$args.$amount,$before_shield,$before_hull,
+                                  $after_shield,$after_hull,$max_shield,$max_hull]"/>
+        <set_value name="$encoded" exact="''"/>
+        <do_for_each name="$quantity" in="$quantities">
+         <set_value name="$block" exact="($quantity / 67108864.0)i"/>
+         <set_value name="$remainder" exact="$quantity - $block * 67108864.0"/>
+         <set_value name="$whole" exact="($remainder)i"/>
+         <set_value name="$fraction" exact="(($remainder - $whole) * 1048576.0)i"/>
+         <set_value name="$encoded" exact="$encoded + '%s,%s,%s,'.[$block,$whole,$fraction]"/>
+        </do_for_each>
         <set_value name="$status" exact="'applied'"/>
        </do_if>
        <do_else><set_value name="$status" exact="'unknown'"/></do_else>
       </do_if>
      </do_elseif>
      <raise_lua_event name="'X4AuthorityCompanyGunDamage.Result'"
-                      param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
+                      param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
                          $args.$lease,($args.$serial)i,$args.$generation,$args.$epoch,($args.$source)i,
-                         ($args.$target)i,$status,$source,$target,$killed,$witness]"/>
+                         ($args.$target)i,$status,$source,$target,$killed,$witness,$encoded]"/>
     </do_if>
     <cancel_cue cue="this"/>
    </actions>

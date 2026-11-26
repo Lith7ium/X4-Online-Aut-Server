@@ -109,3 +109,24 @@ The confirmed departure checkpoint was `checkpoint-3af79e50271445f5893c073649ff1
 with SHA-256 `610b678903fdf0961b15339c7309903180e6264c2eb572980c5a2679d1a3bccf`.
 The private verification is in
 `.local/live-shield-bridge/integrated-native-01/fedora-evidence/departure-verified.json`.
+
+## Two pilots read their own live ship health
+
+At `9188e518` HVC-420 (1073) and KHI-630 (1074) held separate
+admissions in the running Fedora world. Both non-graphical pilot endpoints
+requested their own ship on the normal combat TLS connection in movement
+window 3. Server X4 resolved each ship from the saved registry in both
+directions. The two independently requested replies each contained 2,366
+shield of 2,366 and 3,600 hull of 3,600. The clients had received 37 and
+36 movement acknowledgements respectively. This verifies the native source
+of both replies. Neither endpoint ran a player cockpit.
+
+The subsequent 26-point report on MFQ-419 exposed a receipt precision
+error. Before the hit the independent read was 29.999999702 shield.
+Afterwards the independent Lua read was 3.9999997019768 shield and 6,400
+hull. The individual Mission Director numeric events arrived in Lua as
+29 and 3. The display-formatted Mission Director witness rounded the
+post-hit value to 4. Comparing the truncated event with the independent
+readback returned an unknown outcome. The provider stopped further writes.
+Private evidence is in
+`.local/live-shield-bridge/pinned-9188/checkout/.local/live-shield-bridge/integrated-native-03/terminal.json`.

@@ -45,6 +45,14 @@ follow-up collects typed health, a correlated Mission Director witness and
 an independent Lua readback on the same target.
 [Native TLS hit and saved shield](AUTHORITY-SHIELD-REPLAY-20261126.md#first-combat-tls-hit-in-the-running-fedora-world)
 
+Both protocol pilots subsequently read their own live ship from the
+running GPU-free provider over combat TLS. Each had 2,366 shield and
+3,600 hull. The diagnostic resolved the previous receipt failure:
+Mission Director delivered 3.9999997019768 shield as integer 3 in a numeric
+event, while the independent Lua getter retained the fractional value.
+Both occupied native client cockpits remain to be exercised.
+[Provider health readbacks and fractional event diagnosis](AUTHORITY-SHIELD-REPLAY-20261126.md#two-pilots-read-their-own-live-ship-health)
+
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered
 eight marines. X4 transferred ZNG-430 from Scale Plate to the player
