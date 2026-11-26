@@ -13,6 +13,7 @@ import time
 from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
+from .combat_capture import new_receipt
 from .company_motion_source import validate_npc_observation, validate_playback_index
 from .company_npc_measurement import validate_measurement_trial
 from .company_ship_selection import reserve_company_ship
@@ -114,7 +115,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
                         company_sales=False,
                         play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False, observed_npc=None,
-                        registered_npc_local_measurement=False):
+                        registered_npc_local_measurement=False, combat_capture=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -165,6 +166,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('Company undock test requires Company purchases')
     if type(company_purchases) is not bool or (company_purchases and (select_ship is None or not require_registry_snapshot)):
         raise ValueError('Company purchases require a verified selected seat')
+    if type(combat_capture) is not bool or (combat_capture and (select_ship is None or not require_registry_snapshot)):
+        raise ValueError('combat capture requires a verified selected seat')
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
@@ -190,7 +193,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
             company_source = company_client = purchase_source = fleet_source = None
-            motion_socket = motion = None
+            motion_socket = motion = capture_receipt = None
             launch_attempted = overlay_registered = False
             original = None
             cleanup_errors = []
@@ -267,6 +270,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
 
                     fleet_source = CompanyFleetSource(version=owner._company_fleet_order_version)
                     source_options['company_fleet'] = fleet_source
+                if combat_capture:
+                    capture_receipt = new_receipt(bound.offer.checkpoint_id, bound.offer.sha256,
+                                                  registry_snapshot['epoch'], seat_index)
+                    source_options['combat_capture'] = True
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
@@ -377,6 +384,10 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         result['controlled_company_ship_index'] = seat_index
                 if motion is not None:
                     result['motion_receipts'] = motion.confirmed_samples
+                if capture_receipt is not None:
+                    # Hits are read from this pilot's own log after X4 stops.
+                    result['combat_capture'] = {key: value for key, value in capture_receipt.items()
+                                                if key != 'hits'}
             except BaseException as error:
                 original = error
             finally:

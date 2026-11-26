@@ -81,6 +81,8 @@ def parser():
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
                           help='isolated test only: follow another company ship in the same cockpit sector')
+    result.add_argument('--combat-capture', action='store_true',
+                        help='diagnostic: log native shield and hull hits on the admitted Company ship (read-only)')
     result.add_argument('--base-game-only', action='store_true',
                         help='exclude official DLC from the private game view and profile')
     result.add_argument('--fresh-company-profile', action='store_true',
@@ -120,6 +122,9 @@ def run(args, *, on_stage=None):
         raise ValueError('--company-undock-test requires --company-purchases')
     company_pilot = (args.choose_company_ship or args.company_motion or args.company_purchases or
                      args.company_ship_index is not None)
+    combat_capture = getattr(args, 'combat_capture', False)
+    if combat_capture and not company_pilot:
+        raise ValueError('--combat-capture requires a Company seat join')
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
     if fresh_company_profile and (not company_pilot or args.motion_config is not None):
         raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
@@ -190,6 +195,8 @@ def run(args, *, on_stage=None):
         motion_options['cockpit_radar_playback'] = True
     if args.play_until_exit:
         motion_options['play_until_exit'] = True
+    if combat_capture:
+        motion_options['combat_capture'] = True
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
         windows_dll=args.network_dll, dll_sha256=args.network_dll_sha256,

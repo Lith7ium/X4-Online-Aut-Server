@@ -153,7 +153,8 @@ def company_purchase_config(source, index, full_registry):
     ) + '}'
 
 
-def extend_seat_gate(text, index, full_registry, *, company_motion=False, company_purchases=False):
+def extend_seat_gate(text, index, full_registry, *, company_motion=False, company_purchases=False,
+                     combat_capture=False):
     """Run seat takeover after full inspection and before pause observation."""
     if full_registry is None:
         raise ValueError('client seat requires full registry inspection')
@@ -176,4 +177,7 @@ def extend_seat_gate(text, index, full_registry, *, company_motion=False, compan
         gate += '  X4LAN_COMPANY_MOTION_SOURCE.arm(client_seat)\n'
     if company_purchases:
         gate += '  X4LAN_COMPANY_PURCHASE_SOURCE.arm(client_seat)\n'
+    if combat_capture:
+        # Opt-in diagnostic: watch only the admitted ship; failure never blocks the pilot.
+        gate += '  X4LAN_COMBAT_CAPTURE.arm(client_seat)\n'
     return text.replace(declaration, declaration + 'local client_seat=nil\n').replace(hook, hook + gate)

@@ -152,6 +152,7 @@ class FixtureSessionTests(unittest.TestCase):
             test.installed_profile_id = options['profile_id']
             test.installed_save_path = options['save_path']
             test.installed_registry_snapshot = options.get('registry_snapshot')
+            test.installed_combat_capture = options.get('combat_capture')
             test.calls.append(('install', view, options['bound_offer'] == test.bound,
                                options['participant_port'], options['participant_lease']))
             return {'ui/config.lua':'0'*64}
@@ -251,6 +252,22 @@ class FixtureSessionTests(unittest.TestCase):
             result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2)
         self.assertEqual(result['controlled_company_ship_index'], 2)
         self.assertEqual(self.installed_seat, 2)
+        self.assertIsNone(self.installed_combat_capture)
+        self.assertNotIn('combat_capture', result)
+
+    def test_combat_capture_binds_offer_registry_and_admitted_seat(self):
+        with self.assertRaisesRegex(ValueError, 'combat capture requires a verified selected seat'):
+            self.run_session(combat_capture=True)
+        self.assertNotIn('workspace_prepare', self.calls)
+        snapshot = self.prepare_company_seat()
+        with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
+            result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2,
+                                      combat_capture=True)
+        self.assertIs(self.installed_combat_capture, True)
+        self.assertEqual(result['controlled_company_ship_index'], 2)
+        self.assertEqual(result['combat_capture'], {
+            'format': 1, 'checkpoint_id': self.offer.checkpoint_id, 'checkpoint_sha256': self.offer.sha256,
+            'registry_epoch': snapshot['epoch'], 'piloted_ship_index': 2})
 
     def test_passenger_audit_keeps_the_reservation_without_claiming_control(self):
         snapshot = self.prepare_company_seat()
