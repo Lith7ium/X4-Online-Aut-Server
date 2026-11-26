@@ -82,3 +82,43 @@ No checkpoint or client endpoint was created. The source and copy were
 unchanged, and all owned processes exited. The private
 `nearby-observer/run-03/` engine log SHA-256 is
 `09156a1596b063663f29b00853cc7ac673f42e5ec9c9cdcc6dfc1127d57ee25e`.
+
+## Run-04 observed stock approach with a nearby observer
+
+One Bazzite provider at `0026960b3230df0f854f357e3f0e0bcff8b46a18`
+reopened the same disposable source. The provider bridge, cold restore,
+boarding witness and parking helpers matched the earlier revision. At
+570.65 game seconds, the new scout had zero operational weapons or
+turrets after deferred removal. At 572.422 s the avatar occupied and
+controlled that scout. ZNG-430 was at `nearby` and ARU-541 at `inzone`,
+both physics-ready. ZNG kept both original operational primary handles,
+30% hull, 100% shields, zero turrets and zero defending crew. The stock
+exports created, assigned eight marines and started one operation at
+100/100.
+
+The two stock pods from operation `0x430b` were physics-ready at
+`inzone` at the 592.997 s pod-start events. Separate stock operation
+reads identified the same pods with five and three marines. Across
+1,192 samples per pod both remained at least `visible` and
+physics-ready. The first 231 approach samples per pod, from 593.546 to
+727.518 s, also met those conditions for both ships. At 728.176 s ZNG
+first measured `adjacentzone` with physics readiness false. At
+813.521 s ARU first measured the same lower state.
+
+At 1293.44 s the observer reached its 720.018 s game-time deadline and
+X4 confirmed pause. The last reported stock phase was approach. The
+trace contained no pod attachment or destruction, infiltration,
+fighting, removal, or ownership transition. This contrasts with the
+earlier paired low-attention pod losses, but only the sampled initial
+approach had all four objects physics-ready at visible attention or
+higher. The operation was still active at the observation deadline.
+
+A private legacy `POD_STARTED` print supplied its five intended
+values with a sixth format placeholder, leaving a literal `|%s`.
+The strict archive parser rejected that record and did not produce
+a provider final-state verdict. The unmodified dedicated attention
+records, separate operation pod records and native pause line support
+the observations above. No endpoint or checkpoint was created, both
+source copies stayed unchanged, and owned processes exited. The
+private `nearby-observer/run-04/` engine log SHA-256 is
+`99439ddad179f39a4c80954caca1e4034fb1f240fefb415af4392628de6e391a`.
