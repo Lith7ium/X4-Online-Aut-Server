@@ -122,3 +122,43 @@ the observations above. No endpoint or checkpoint was created, both
 source copies stayed unchanged, and owned processes exited. The
 private `nearby-observer/run-04/` engine log SHA-256 is
 `99439ddad179f39a4c80954caca1e4034fb1f240fefb415af4392628de6e391a`.
+
+## Stationary target comparison
+
+One Bazzite provider at `f03e7f8a7327a6cc4863f401a978e635ce93b329`
+loaded the same confirmed BF225D copy. Before stock start, the private
+fixture matched and removed three operational ZNG-430 engines. At
+573.540 game seconds the target had zero operational engines and zero
+measured speed, the same two main weapons, 30% hull, 100% shields, and
+zero operational turrets or defending crew. The disarmed observer was
+occupied. ZNG-430 and ARU-541 were both physics-ready at `nearby` and
+`inzone`, respectively. The one stock operation assigned all eight
+ARU-541 marines at 100/100.
+
+| Pod | First and last sampled range to ZNG | Net closing rate over sampled interval | Stock attachment |
+| --- | --- | --- | --- |
+| Five marines | 3,606.5 m at 595.028 s to 234.938 m at 639.992 s | 75.0 m per game second | 640.260 s |
+| Three marines | 3,287.0 m at 595.028 s to 94.7656 m at 637.307 s | 75.5 m per game second | 637.573 s |
+
+Both pod-start and attachment events recorded the pod and both ships
+at visible attention or higher and physics-ready. All 1,249 paired
+target and scout samples measured 3,000.5 m between them and speeds
+effectively zero. The first stock infiltration phase readback was
+641.325 s with eight marines independently accounted for. X4 reached
+internal fighting at 1271.258 s and recorded eight fighters. At
+1286.735 s it emitted the boarded and removal events and changed
+ZNG-430's true owner from Scale Plate to player. The same registered
+ship at index 1666 had 4.50607% hull at removal. Delayed native readback
+confirmed the same ship, player ownership and eight crew.
+
+The independent verifier classified live takeover. The provider
+repaused after 714.619 game seconds of observation and exited zero.
+There was no client endpoint or output checkpoint, the original and
+copy remained unchanged, and no owned processes remained. This
+demonstrates stock attachment through takeover in the isolated
+stationary control. Run-04 had no range observations, so its
+approach delay cannot be attributed to target motion from these runs.
+
+Private artifacts are in `stationary-observer/run-01/`. The engine
+log SHA-256 is
+`5612dc666cba3f3c8b19458e6b196a211682966bb424f307f9385fcba3ba0dda`.
