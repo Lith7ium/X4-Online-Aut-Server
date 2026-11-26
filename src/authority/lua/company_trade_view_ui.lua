@@ -131,7 +131,8 @@ function TradeViewUI.install(options)
     end
 
     local function maximum_sale_quantity(context, offer)
-        if not sales_enabled or context.status ~= 'observed' or context.used or not offer or not offer.isbuyoffer
+        if not sales_enabled or context.status ~= 'observed' or context.used or not market:can_sell(context.view)
+                or not offer or not offer.isbuyoffer
                 or not offer.tradeable or offer.price_cents < 1 or offer.price_cents > max_unit_price_cents
                 or offer.price_cents % 1 ~= 0 then return 0 end
         local maximum = math.min(max_units_per_order, offer.amount, offer.cargo_units)
@@ -303,7 +304,7 @@ function TradeViewUI.install(options)
             local view = market:open(dock)
             if view then view.get_ammo_type = menu.getAmmoTypeNameByWare end
             active_context = {data = data, dock = dock, view = view, status = view and 'pending' or 'unavailable',
-                next_dock_check = 0}
+                next_dock_check = 0, sales_available = false}
         end
         return initialize(active_context, ...)
     end
@@ -324,8 +325,13 @@ function TradeViewUI.install(options)
         local footer = frame.content[#frame.content]
         if footer and type(footer.addRow) == 'function' and context.status == 'observed' and not context.used then
             local status = footer:addRow(nil, {fixed = true})
-            status[1]:setColSpan(4):createText('Company balance  ' .. credits(context.view.balance)
-                .. (sales_enabled and '' or '  ·  Purchases only'))
+            local balance_text = 'Company balance  ' .. credits(context.view.balance)
+            if not sales_enabled then
+                balance_text = balance_text .. '  ·  Purchases only'
+            elseif context.view.sale_id and not market:can_sell(context.view) then
+                balance_text = balance_text .. '  ·  Reopen trade to refresh sell offers.'
+            end
+            status[1]:setColSpan(4):createText(balance_text)
             frame.properties.y = math.min(frame.properties.y,
                 Helper.viewHeight - footer.properties.y - footer:getFullHeight() - Helper.frameBorder)
         end
@@ -355,6 +361,7 @@ function TradeViewUI.install(options)
             end
         end
         if not selected_offer or quantity < math.max(1, selected_offer.minamount) then return nil, 'stale_offer' end
+        if selling and not market:can_sell(context.view) then return nil, 'fresh_offer_required' end
         local maximum = selling and maximum_sale_quantity(context, selected_offer)
             or maximum_purchase_quantity(context, selected_offer)
         if quantity > maximum then return nil, 'stale_offer' end
@@ -390,7 +397,14 @@ function TradeViewUI.install(options)
             context.next_dock_check = now + 0.25
             if not same_dock(context.dock, current_dock(context.data)) then self:stop(); return end
         end
-        if context.view.status ~= context.status then
+        local sales_available = sales_enabled and market:can_sell(context.view)
+        if context.sales_available and not sales_available then
+            for id, quantity in pairs(context.data.orders) do
+                if quantity > 0 then context.data.orders[id] = nil end
+            end
+        end
+        if context.view.status ~= context.status or sales_available ~= context.sales_available then
+            context.sales_available = sales_available
             context.status = context.view.status
             refresh(context)
         end

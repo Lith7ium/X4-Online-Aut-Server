@@ -24,6 +24,6 @@ class CompanyTradeCaptureTests(unittest.TestCase):
     def test_opt_in_stock_sell_is_bounded_and_correlates_sale_receipts(self):
         root = Path(__file__).resolve().parents[1]
         with chdir(root):
-            for final_order in ('wrong_id', 'wrong_price', 'negative_cargo', 'price_changed', 'buy'):
+            for final_order in ('wrong_id', 'wrong_price', 'negative_cargo', 'price_changed', 'buy', 'expired'):
                 with self.subTest(final_order=final_order):
                     run_fixture(root / 'tests/authority_company_trade_view_ui.lua', 'sale', final_order)

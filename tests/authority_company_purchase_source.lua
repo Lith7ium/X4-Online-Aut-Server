@@ -265,3 +265,9 @@ sale_in = {prefix .. 'SALE_RECEIPT|' .. second_id .. '|WRN-302|refused|price_cha
 sale_source:tick()
 assert(#sale_receipts == 2 and sale_receipts[2].outcome == 'refused'
     and sale_receipts[2].price_cents == 3473 and sale_receipts[2].current_price_cents == 3501)
+
+local expiring_view = offer_sale(('f'):rep(32))
+now = expiring_view.deadline - 0.01
+assert(sale_source.market:can_sell(expiring_view) and not sale_source.market:can_sell(sale_view))
+now = expiring_view.deadline
+assert(not sale_source.market:can_sell(expiring_view) and not sale_source:request_sale(sale_terms, receive_sale))

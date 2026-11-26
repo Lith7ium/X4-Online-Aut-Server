@@ -85,6 +85,10 @@ function market:open()
     end
     return view
 end
+local sale_window_open = true
+function market:can_sell(expected)
+    return expected == view and expected.status == 'observed' and sale_window_open
+end
 function market:close() end
 function market.clock() return 0 end
 local function read_dock(ship, station)
@@ -169,6 +173,21 @@ if sale_mode then
     local buy, sell = check_dock()
     local scale = menu.getTradeContextRowContent({sell=buy, buy=sell})[4].scale
     assert(sell.active and scale.min == -12 and scale.max == 2)
+    if arg[2] == 'expired' then
+        menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, -2)
+        assert(ui:order(data).side == 'sell')
+        sale_window_open = false
+        local intent, why = ui:order(data)
+        assert(not intent and why == 'fresh_offer_required')
+        ui:tick()
+        buy, sell = unpack(data.offers)
+        scale = menu.getTradeContextRowContent({sell=buy, buy=sell})[4].scale
+        assert(not sell.active and buy.active and scale.min == 0 and scale.max == 2)
+        assert(not next(data.orders) and #sale_requests == 0)
+        menu.slidercellShipCargo(buy.id, sell.id, 'water', 0, 2)
+        assert(ui:order(data).quantity == 2 and not ui:order(data).side)
+        return
+    end
     sell.cargo_units = 90
     assert(menu.getTradeContextRowContent({sell=buy, buy=sell})[4].scale.min == -60)
     sell.cargo_units = 12

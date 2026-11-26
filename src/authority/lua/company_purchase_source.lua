@@ -147,9 +147,13 @@ local function market_client(options, prefix)
         view.page_deadline = options.clock() + 8
     end
 
+    function api:can_sell(expected_view)
+        return view ~= nil and view == expected_view and view.status == 'observed'
+            and view.sale_id ~= nil and options.clock() < view.deadline
+    end
+
     function api:take_sale(intent)
-        if not view or view.status ~= 'observed' or not view.sale_id or options.clock() >= view.deadline
-                or view.sector ~= intent.sector or view.station ~= intent.station_code then return end
+        if not self:can_sell(view) or view.sector ~= intent.sector or view.station ~= intent.station_code then return end
         local match
         for _, offer in ipairs(view.rows) do
             if offer.side == 'sell' and offer.tradeable and offer.ware == intent.ware
