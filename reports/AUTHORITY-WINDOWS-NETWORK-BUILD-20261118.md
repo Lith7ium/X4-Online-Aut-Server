@@ -36,9 +36,17 @@ the intended binary target and API implementation, not successful DLL loading
 or execution. The hash identifies this retained local artifact, not a promise
 that every build environment produces identical bytes.
 
-The Windows client guide now explicitly calls for a current-source build.
-Native Windows still needs to establish that X4 loads the DLL, resolves its
-loaded Lua runtime, and exchanges participant commands through it.
+## Later native Windows evidence
+
+Neon verified that an isolated Windows 11 X4 9.00 process loaded the
+packaged November 18 DLL, then observed 37 motion samples acknowledged by a
+local loopback service. [Native Windows sender report](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/8e2880cab4632afe20e09a4655dae4fcf63e591f/reports/AUTHORITY-WINDOWS-SENDER-DLL-20261125.md)
+
+Cobalt reported that a separate isolated Windows X4 9.00 cockpit run
+loaded the current module and measured 0.019 s absolute skew between
+X4's monotonic clock and the Python receiver. The run used a local fixture
+for the movement window and health replies. WAN transport and authenticated
+server admission were outside this test. [Native cockpit fixture](https://github.com/Lith7ium/X4-Online-Aut-Server/commit/1bb2eace5c574f827700624ddf023773e95b58a8)
 
 ## Real DLL execution under Wine
 

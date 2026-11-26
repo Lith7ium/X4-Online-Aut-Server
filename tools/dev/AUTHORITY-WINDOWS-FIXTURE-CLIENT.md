@@ -68,29 +68,28 @@ also supports manually supplied backend ports and connection settings.
 
 ## Build the current network DLL
 
-Use the existing builder with Zig 0.15.2 and a new output directory. It can
-cross-build the Windows DLL on Linux; it does not need X4 or modify an installed
-game. For example, from the checkout in PowerShell:
+Run the builder from the clone root in PowerShell with Zig 0.15.2.
+The output directory must be new and its parent must already exist.
+The tracked `src/lockstep/base/native/x4lan_net_64.dll` lacks the required
+`monotonic` function. The current `src/native/net.c` uses the Windows
+performance counter for that function.
 
 ```powershell
-python src/native/build.py --zig C:\Tools\zig\zig.exe `
-  --platform windows --out C:\X4Test\network-build-01
-(Get-FileHash C:\X4Test\network-build-01\x4lan_net_64.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+python src/native/build.py --zig C:\Tools\zig\zig.exe --platform windows --out network-build-01
+(Get-FileHash .\network-build-01\x4lan_net_64.dll -Algorithm SHA256).Hash.ToLowerInvariant()
 ```
 
-Use that built file as `--network-dll` and its digest as
-`--network-dll-sha256`. When transferring a build to another computer, compare
-the received file's digest with the value obtained from the trusted build
-machine. Computing a digest of an arbitrary downloaded DLL does not verify its
-origin. The explicit digest is an integrity check, not an API/version check.
+Pass the built file and its SHA-256 as `-NetworkDll` and `-NetworkDllSha256`
+in the PowerShell launcher, or `--network-dll` and `--network-dll-sha256`
+with the Python entry point. Share the digest from the trusted build machine
+when transferring the DLL. Build metadata such as timestamps or debug IDs
+can change the digest. The retained November 18 build has its own recorded
+SHA-256 beginning `6ad97e04`.
+[Build record and native Windows evidence](../../reports/AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md)
 
-The current source cross-build passed on Linux with Zig 0.15.2. A later isolated
-Wine run loaded that DLL through the real Windows Lua runtime and passed its
-UDP, timing and close checks. Its outer process-cleanup audit remained
-unconfirmed; no native Windows X4 run was made. Details, limits and the local
-artifact digest are in the [build record](../../reports/AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md).
-The separate [no-game module probe](AUTHORITY-WINDOWS-NETWORK-SMOKE.md) can check
-these prerequisites before arranging a game test.
+The builder needs no X4 installation. The separate
+[no-game module probe](AUTHORITY-WINDOWS-NETWORK-SMOKE.md) can check
+module loading and loopback before arranging a game test.
 
 ## Choose a company ship
 

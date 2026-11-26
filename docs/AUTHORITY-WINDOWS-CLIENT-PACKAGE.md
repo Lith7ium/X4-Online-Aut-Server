@@ -5,6 +5,21 @@ server. A run observes the join, checkpoint, and participant control. Company
 ship selection requires a matching server and client revision. The package is
 for internal diagnostic trials.
 
+## Start from a fresh clone
+
+Use Git, Python 3.11 or later, and Zig 0.15.2. In PowerShell, clone the
+active branch and run the offline native-builder checks.
+
+```powershell
+git clone --branch test/base-game-two-pilots-20261124 https://github.com/Lith7ium/X4-Online-Aut-Server.git
+Set-Location X4-Online-Aut-Server
+python -m unittest discover -s tests -p test_native_build_output.py
+```
+
+Follow the [current DLL build steps](../tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md#build-the-current-network-dll)
+to produce the two inputs for `-NetworkDll` and `-NetworkDllSha256`.
+Use the same source revision as the server operator for a shared game test.
+
 ## Build the ZIP
 
 Run this from the diagnostic checkout with Git and Python 3.11 or later.
@@ -20,11 +35,12 @@ to the retained `x4lan_net_64.dll` from the
 [November 18 build](../reports/AUTHORITY-WINDOWS-NETWORK-BUILD-20261118.md).
 The builder checks that DLL's recorded SHA-256 and the selected revision's
 two corresponding source digests. Otherwise the operator supplies a verified
-current-source build when running the package. The ZIP records the source
-commit and the DLL provenance when bundled. Share the printed ZIP SHA-256 and
-the server's private `connection.json` with the tester through a trusted
-channel. The connection file is an external input. The package uses the
-tester's installed X4, Steam, and Python.
+current-source build when running the package. The ZIP reads committed Git
+blobs, so checkout line-ending conversion does not change its inputs. The ZIP
+records the source commit and the DLL provenance when bundled. Share the
+printed ZIP SHA-256 and the server's private `connection.json` with the tester
+through a trusted channel. The connection file is an external input.
+The package uses the tester's installed X4, Steam, and Python.
 
 ## Run on Windows
 

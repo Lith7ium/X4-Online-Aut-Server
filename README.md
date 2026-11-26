@@ -24,6 +24,9 @@ Python owns the session and network protocols. Lua reads and updates the game UI
 
 ## Developer checks
 
+On Windows, use the [fresh-checkout steps](docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#start-from-a-fresh-clone)
+to build the current UDP module and run a local check before arranging a game test.
+
 Install Python 3 with virtual environment support, a C compiler (`cc`) and the standalone `luajit` command. From the repository root on Linux, run
 
 ```sh
