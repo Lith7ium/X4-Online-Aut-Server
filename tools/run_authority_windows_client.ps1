@@ -103,10 +103,12 @@ $connection = Get-Item -LiteralPath $ConnectionFile
 if (-not $gameDirectory.PSIsContainer -or $connection.PSIsContainer) {
     throw 'Use an installed X4 game directory and a private connection.json file.'
 }
-$parent = $gameDirectory.Parent
-if ($WorkRoot) {
-    $parent = Get-Item -LiteralPath $WorkRoot
+# Resolve through the provider: on Windows PowerShell 5.1 DirectoryInfo.Parent has no PSIsContainer.
+$workRootPath = if ($WorkRoot) { $WorkRoot } elseif ($gameDirectory.Parent) { $gameDirectory.Parent.FullName } else { $null }
+if (-not $workRootPath -or -not (Test-Path -LiteralPath $workRootPath -PathType Container)) {
+    throw 'WorkRoot must be an existing directory on the game drive.'
 }
+$parent = Get-Item -LiteralPath $workRootPath
 if (-not $parent.PSIsContainer -or
     [IO.Path]::GetPathRoot($parent.FullName) -ne [IO.Path]::GetPathRoot($gameDirectory.FullName)) {
     throw 'WorkRoot must be an existing directory on the game drive.'
