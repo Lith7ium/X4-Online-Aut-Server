@@ -25,7 +25,8 @@ _BLOCK = 16 * 1024
 # The provider serializes up to one full batch per pilot. Allow four seconds
 # per native impact even when the other pilots' batches are already queued.
 _ACK_TIMEOUT = COMPANY_PILOT_LIMIT * MAX_BATCH * 4 + 30
-_ATTEMPTS = 3
+_INITIAL_RECONNECT_DELAY = .25
+_MAX_RECONNECT_DELAY = 5
 
 
 def company_gun_config(full_registry, index):
@@ -177,20 +178,23 @@ class CompanyCombatSender:
 
     def _send(self, impacts):
         deadline = time.monotonic() + _ACK_TIMEOUT
-        for attempt in range(_ATTEMPTS):
-            if self._stop.is_set():
-                return False
-            if time.monotonic() >= deadline:
-                break
-            if attempt:
-                self._counts['retries'] += 1
+        reconnect_delay = _INITIAL_RECONNECT_DELAY
+        while not self._stop.is_set():
             try:
                 receipts = self._client.exchange(impacts, deadline=deadline, cancelled=self._stop.is_set)
             except CombatExchangeCancelled:
                 return False
-            except OSError:
-                if attempt + 1 < _ATTEMPTS and self._stop.wait(min(.1, max(0, deadline - time.monotonic()))):
+            except OSError as error:
+                # A dropped reply can follow a successful X4 write. Reuse its
+                # impact IDs and the original deadline across reconnects.
+                remaining = deadline - time.monotonic()
+                if self._stop.wait(min(reconnect_delay, max(0, remaining))):
                     return False
+                if time.monotonic() >= deadline:
+                    self._failure = 'receipt_timeout' if isinstance(error, TimeoutError) else 'transport_unavailable'
+                    return False
+                self._counts['retries'] += 1
+                reconnect_delay = min(_MAX_RECONNECT_DELAY, reconnect_delay * 2)
                 continue
             except ValueError:
                 self._failure = 'invalid_receipt'
@@ -202,8 +206,6 @@ class CompanyCombatSender:
                     # health revision. Keep one validated receipt for comparison.
                     self._last_confirmed_receipt = receipt
             return True
-        if not self._stop.is_set():
-            self._failure = 'receipt_timeout' if time.monotonic() >= deadline else 'transport_unavailable'
         return False
 
     def _read_requested_health(self, log):

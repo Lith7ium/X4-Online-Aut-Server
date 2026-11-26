@@ -2,12 +2,13 @@
 import asyncio
 from contextlib import ExitStack
 import hashlib
+import socket
 from pathlib import Path
 import ssl
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from authority.company_combat_client import CompanyCombatClient
 from authority.company_combat_frames import encode_frame
@@ -156,6 +157,77 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((remaining['order'], remaining['shield'], remaining['hull']), (3, 70, 2000))
         self.assertEqual(self.calls, [(1073, 1074, 26), (943, 1074, 26), (943, 1700, 10)])
         self.assertEqual(await self.drive(self.raw_exchange(control, b'alive\n')), b'control:alive\n')
+
+    async def test_settled_batch_recovers_after_three_lost_tls_receipts(self):
+        await self.start(combat_enabled=True)
+        _, port = await self.link(max_combat_connections=1)
+        grant = self.grant(1, 1073)
+        binding = grant['generation'], _EPOCH, 1073
+        ticket = derive_combat_ticket(grant['ticket'])
+        closed_peers, delivery_attempts, received = [], [], []
+        original_reply = self.combat._queue_reply
+        original_exchange = CompanyCombatClient.exchange
+
+        def drop_first_three_replies(peer, kind, **fields):
+            self.assertEqual(kind, 'combat_receipts')
+            receipts = tuple(row.copy() for row in fields['receipts'])
+            delivery_attempts.append(receipts)
+            if len(delivery_attempts) <= 3:
+                # The real service settled the batch and formed its receipt.
+                # Close this backend TCP stream before emitting any reply bytes.
+                self.assertEqual(len(self.calls), 2)
+                self.assertEqual(peer.binding, binding)
+                peer.connection.shutdown(socket.SHUT_RDWR)
+                self.combat._drop(peer)
+                closed_peers.append(peer)
+                return
+            original_reply(peer, kind, **fields)
+
+        def record_received(client, impacts, **kwargs):
+            receipts = original_exchange(client, impacts, **kwargs)
+            received.extend(receipts)
+            return receipts
+
+        async def settled(sender, count):
+            while sender._counts['confirmed'] < count:
+                if not sender._thread.is_alive():
+                    self.fail('combat sender stopped before recovering a settled receipt')
+                await asyncio.sleep(.003)
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as owned:
+            owned.enter_context(patch.object(self.combat, '_queue_reply', drop_first_three_replies))
+            owned.enter_context(patch.object(CompanyCombatClient, 'exchange', record_received))
+            owned.enter_context(patch('authority.company_combat_source._INITIAL_RECONNECT_DELAY', .025))
+            path = Path(directory) / 'engine.log'
+            status = f'[=ERROR=] 1.0 [X4LAN] AUTH_COMPANY_GUN_STATUS armed|{_EPOCH}|1073\n'
+
+            def contact(index):
+                return f'[=ERROR=] 1.1 [X4LAN] AUTH_COMPANY_GUN {_EPOCH}|1073|1074|{index}\n'
+
+            path.write_text(status + contact(1) + contact(2))
+            stat = path.stat()
+            sender = CompanyCombatSender(path, port, grant, epoch=_EPOCH, index=1073,
+                                         log_identity=(stat.st_dev, stat.st_ino))
+            owned.callback(sender.close)
+            await self.drive(settled(sender, 2))
+            self.assertEqual(len(closed_peers), 3)
+            self.assertEqual(len({id(peer) for peer in closed_peers}), 3)
+            self.assertTrue(all(peer.connection.fileno() == -1 for peer in closed_peers))
+            self.assertEqual(delivery_attempts, [tuple(received)] * 4)
+            self.assertEqual(self.motion.current_combat_grant(ticket), binding)
+
+            with path.open('a') as log:
+                log.write(contact(3))
+            await self.drive(settled(sender, 3))
+            result = sender.close()
+
+        self.assertEqual([(row['id'], row['order'], row['shield'], row['hull']) for row in received],
+                         [(1, 1, 4, 3600), (2, 2, 0, 3578), (3, 3, 0, 3552)])
+        self.assertEqual(self.calls, [(1073, 1074, 26)] * 3)
+        self.assertEqual(self.health[1074], (0, 3552))
+        self.assertEqual((result['observed'], result['confirmed'], result['failure']), (3, 3, None))
+        self.assertEqual(result['last_confirmed_receipt'], received[-1])
+        self.assertEqual(self.motion.current_combat_grant(ticket), binding)
 
     async def test_control_remains_available_when_combat_is_disabled(self):
         await self.start(combat_enabled=False)

@@ -35,6 +35,10 @@ save check verified the marker, registry and 1,144 shield with full
 3,600 hull at last departure. The provider left no X4 process or engine
 lock.
 
+## Receipt delivery after repeated connection loss
+
+A Linux loopback regression exercised the regular sender over pinned TLS with a simulated X4 damage adapter. The server applied two 26-point hits, then the test closed three successive connections before the sender could receive their receipts. The previous sender stopped. With reconnects spaced out within the original acknowledgement deadline, the fourth connection returned the original orders 1 and 2. The same pilot then fired again and received order 3. The adapter counted exactly three writes, leaving zero shield and 3,552 hull from an initial 30 shield and 3,600 hull. A connection that stays open without delivering a receipt can still reach the original deadline. [TLS regression](../tests/test_authority_company_combat_tls.py)
+
 | Evidence | SHA-256 |
 | --- | --- |
 | Earlier audited shooter trace | `94ce09d68b2465134e5f29b56858fd7ef72c8e22064c18cb37b38a487e3d00ab` |
