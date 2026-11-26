@@ -6,6 +6,7 @@ local net,state,engine,next_hello,failed=nil,nil,nil,0,false
 local company_motion, company_purchase, company_fleet
 local admitted_seat
 local capture = cfg.authority_combat_capture and X4LAN_COMBAT_CAPTURE
+local gun = cfg.authority_company_gun and X4LAN_COMPANY_GUN_SOURCE
 local running, sources_running=false,false
 local function set_sources_running(value)
  if sources_running==value then return end
@@ -20,6 +21,14 @@ local function stop_undock()
 end
 
 local function update_capture(seat)
+ if gun then
+  local ok=pcall(gun.tick,seat)
+  if not ok then
+   pcall(gun.stop)
+   gun=nil
+   DebugError('[X4LAN] AUTH_COMPANY_GUN_STATUS unavailable')
+  end
+ end
  if not capture then return end
  local ok=pcall(capture.tick,seat)
  if not ok then
@@ -96,7 +105,7 @@ local function frame()
  local helm_running=running and admitted_seat~=nil and admitted_seat:ready()
  if admitted_seat and X4LAN_AUTHORITY_SELECTED_SEAT~=admitted_seat then stop_undock() end
  if running and sources_running and not helm_running then stop_undock() end
- if capture then
+ if capture or gun then
   local capturing=helm_running and X4LAN_AUTHORITY_SELECTED_SEAT==admitted_seat
                     and not ffi.C.IsGamePaused()
   update_capture(capturing and admitted_seat or nil)
@@ -119,6 +128,7 @@ SetScript('onUpdate',function()
   failed=true
   pcall(stop_undock)
   if capture then pcall(capture.stop) end
+  if gun then pcall(gun.stop) end
   if company_motion then pcall(company_motion.set_running,company_motion,false) end
   if company_purchase then pcall(company_purchase.set_running,company_purchase,false) end
   if company_fleet then pcall(company_fleet.set_running,company_fleet,false) end

@@ -24,6 +24,7 @@ import stat
 
 from .trusted_load_messages import encode_bound_offer
 from .combat_capture import capture_config, capture_files
+from .company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, company_gun_config
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
@@ -92,7 +93,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                             participant_port, participant_lease, windows_dll, dll_sha256,
                             registry_status=None, registry_nonce=None, motion_settings=None,
                             registry_snapshot=None, seat_index=None, company_motion=None, company_purchase=None,
-                            company_fleet=None, combat_capture=False,
+                            company_fleet=None, combat_capture=False, company_combat=False,
                             profile_id=profile.CAPTURE_PROFILE):
     """Create one absent x4_lan_lab in an exclusively owned new test view.
 
@@ -128,6 +129,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         raise ValueError('client seat requires full registry inspection')
     if type(combat_capture) is not bool or (combat_capture and seat_index is None):
         raise ValueError('combat capture requires an admitted Company seat')
+    if type(company_combat) is not bool or (company_combat and (seat_index is None or company_motion is None)):
+        raise ValueError('Company combat requires Company motion')
     if (not _HEX32.fullmatch(offer.world_epoch) or
             type(participant_port) is not int or not 1 <= participant_port <= 65535 or
             type(participant_lease) is not str or not _HEX32.fullmatch(participant_lease) or
@@ -318,6 +321,11 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         config = config[:-2] + capture_config(full_registry, seat_index, offer.checkpoint_id, offer.sha256) + '}\n'
         files.update(capture_files(observer, capture))
         ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/client_combat_capture.lua')
+    if company_combat:
+        config = config[:-2] + company_gun_config(full_registry, seat_index) + '}\n'
+        files['ui/company_gun_source.lua'] = _source(ROOT / COMPANY_GUN_UI, 1024 * 1024)
+        files['md/company_gun_source.xml'] = _source(ROOT / COMPANY_GUN_MD, 1024 * 1024)
+        ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/company_gun_source.lua')
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

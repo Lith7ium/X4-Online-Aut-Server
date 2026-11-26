@@ -13,6 +13,7 @@ param(
     [switch] $ChooseCompanyShip,
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
+    [switch] $CompanyCombat,
     [switch] $CompanyPurchases,
     [switch] $CompanyUndockTest,
     [switch] $CompanyTradeView,
@@ -27,6 +28,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CompanyCombat -and -not $CompanyMotion) {
+    throw '-CompanyCombat requires -CompanyMotion'
+}
 if ($CompanyFleetOrders -and -not $CompanyPurchases) {
     throw '-CompanyFleetOrders requires -CompanyPurchases'
 }
@@ -158,6 +162,7 @@ if ($PSBoundParameters.ContainsKey('CompanyShipIndex')) {
 }
 if ($CompanyMotion) {
     $clientArgs += '--company-motion'
+    if ($CompanyCombat) { $clientArgs += '--company-combat' }
     if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {
         $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)
     } elseif ($PSBoundParameters.ContainsKey('CompanyCockpitPlaybackIndex')) {

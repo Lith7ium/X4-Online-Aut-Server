@@ -25,8 +25,9 @@ _CONNECT_TIMEOUT = 10.0
 _CLOSE_TIMEOUT = 2.0
 _HEADER = struct.Struct('!BI')
 _DATA, _EOF, _PING, _PONG = 1, 2, 3, 4
-_CONTROL, _FILE, _MOTION = 1, 2, 3
+_CONTROL, _FILE, _MOTION, _COMBAT = 1, 2, 3, 4
 _MOTION_AUTH_DOMAIN = _MAGIC + b'motion'
+_COMBAT_AUTH_DOMAIN = _MAGIC + b'combat'
 _SERVER_HANDSHAKE_HEADROOM = 8
 
 
@@ -283,6 +284,8 @@ async def _server_authenticate(reader, shared_key, services):
 def _service_key(shared_key, service):
     if service == _MOTION:
         return hmac.digest(shared_key, _MOTION_AUTH_DOMAIN, 'sha256')
+    if service == _COMBAT:
+        return hmac.digest(shared_key, _COMBAT_AUTH_DOMAIN, 'sha256')
     return shared_key
 
 
@@ -392,12 +395,12 @@ async def relay_connected_client(*, raw_socket, tls_socket, server_hostname,
 
 async def start_server(*, listener, ssl_context, shared_key, control_port, file_port,
                        max_connections=8, idle_timeout=300, motion_port=None,
-                       max_motion_connections=8):
+                       max_motion_connections=8, combat_port=None, max_combat_connections=4):
     """Start an authenticated gateway to fixed server-local TCP ports.
 
     Takes ownership of the listening socket.  The TLS context must contain the
     operator's certificate and private key; callers distribute its fingerprint.
-    The optional motion service has its own authenticated relay capacity. All
+    Optional motion and combat services have separate authenticated relay capacity. All
     incoming streams share bounded TLS/authentication headroom on the listener.
     """
     _validate_options(shared_key, max_connections, idle_timeout)
@@ -405,16 +408,24 @@ async def start_server(*, listener, ssl_context, shared_key, control_port, file_
     destinations = {_CONTROL: _port(control_port), _FILE: _port(file_port)}
     relay_slots = None
     limit = max_connections
-    if motion_port is not None:
-        _validate_limit(max_motion_connections)
-        motion_port = _port(motion_port)
-        if motion_port in destinations.values():
-            raise ValueError('motion service requires a separate local backend')
-        destinations[_MOTION] = motion_port
+    service_limits = {}
+    for service, name, port, capacity in (
+        (_MOTION, 'motion', motion_port, max_motion_connections),
+        (_COMBAT, 'combat', combat_port, max_combat_connections),
+    ):
+        if port is None:
+            continue
+        _validate_limit(capacity)
+        port = _port(port)
+        if port in destinations.values():
+            raise ValueError(f'{name} service requires a separate local backend')
+        destinations[service] = port
+        service_limits[service] = capacity
+    if service_limits:
         reliable_slots = asyncio.Semaphore(max_connections)
-        relay_slots = {_CONTROL: reliable_slots, _FILE: reliable_slots,
-                       _MOTION: asyncio.Semaphore(max_motion_connections)}
-        limit += max_motion_connections + _SERVER_HANDSHAKE_HEADROOM
+        relay_slots = {_CONTROL: reliable_slots, _FILE: reliable_slots}
+        relay_slots.update((service, asyncio.Semaphore(capacity)) for service, capacity in service_limits.items())
+        limit += sum(service_limits.values()) + _SERVER_HANDSHAKE_HEADROOM
     _validate_listener(listener, loopback=False)
     tunnel = RunningTunnel([listener], limit)
 
@@ -452,15 +463,23 @@ async def start_server(*, listener, ssl_context, shared_key, control_port, file_
 
 async def start_client(*, control_listener, file_listener, server_host, server_port,
                        server_fingerprint, shared_key, max_connections=8, idle_timeout=300,
-                       motion_listener=None, max_motion_connections=1):
+                       motion_listener=None, max_motion_connections=1,
+                       combat_listener=None, max_combat_connections=1):
     """Start local endpoints using pinned TLS to one remote gateway."""
     _validate_options(shared_key, max_connections, idle_timeout)
     _port(server_port)
     _validate_server_identity(server_host, server_fingerprint)
-    listeners = [control_listener, file_listener]
-    if motion_listener is not None:
-        _validate_limit(max_motion_connections)
-        listeners.append(motion_listener)
+    service_listeners = {_CONTROL: control_listener, _FILE: file_listener}
+    service_limits = {}
+    for service, listener, capacity in (
+        (_MOTION, motion_listener, max_motion_connections),
+        (_COMBAT, combat_listener, max_combat_connections),
+    ):
+        if listener is not None:
+            _validate_limit(capacity)
+            service_listeners[service] = listener
+            service_limits[service] = capacity
+    listeners = list(service_listeners.values())
     if len({id(listener) for listener in listeners}) != len(listeners):
         raise ValueError('separate local listeners required')
     for listener in listeners:
@@ -481,8 +500,8 @@ async def start_client(*, control_listener, file_listener, server_host, server_p
             await _close_writer(raw_writer)
             await _close_writer(tls_writer)
 
-    for listener, service in zip(listeners, (_CONTROL, _FILE, _MOTION)):
-        slots = asyncio.Semaphore(max_motion_connections) if service == _MOTION else None
+    for service, listener in service_listeners.items():
+        slots = asyncio.Semaphore(service_limits[service]) if service in service_limits else None
         tunnel._accept_tasks.append(asyncio.create_task(
             tunnel._accept(listener, lambda conn, service=service: handle(conn, service), slots=slots)))
     return tunnel

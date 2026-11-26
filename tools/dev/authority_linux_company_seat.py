@@ -6,6 +6,7 @@ import shutil
 
 from authority.checkpoints import Checkpoint
 from authority.combat_capture import capture_config, capture_files
+from authority.company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, company_gun_config
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
@@ -33,7 +34,7 @@ _MD = {
 
 
 def install(case, profile, bound, target, index, pump, *, company_motion=None, company_purchase=None,
-            company_fleet=None, software_rendered=False, combat_capture=False):
+            company_fleet=None, software_rendered=False, combat_capture=False, company_combat=False):
     """Verify the staged format-3 save and compose the gate before X4 starts."""
     offer = bound.offer
     checkpoint = Checkpoint(offer.checkpoint_id, target, offer.sha256, offer.size, bound.marker)
@@ -46,6 +47,10 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
         suffix += company_purchase_config(company_purchase, index, full)
     if combat_capture:
         suffix += capture_config(full, index, offer.checkpoint_id, offer.sha256)
+    if company_combat:
+        if company_motion is None:
+            raise ValueError('Company combat requires Company motion')
+        suffix += company_gun_config(full, index)
 
     if company_fleet is not None:
         if company_purchase is None:
@@ -74,6 +79,9 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
     if company_fleet is not None:
         ui_sources = ui_sources | COMPANY_FLEET_UI
         md_sources = md_sources | COMPANY_FLEET_MD
+    if company_combat:
+        ui_sources = ui_sources | {'company_gun_source.lua': COMPANY_GUN_UI}
+        md_sources = md_sources | {'company_gun_source.xml': COMPANY_GUN_MD}
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     if combat_capture:
         scripts = capture_files((ROOT / 'src/authority/md/combat_observer.xml').read_bytes(),
@@ -148,3 +156,7 @@ class SeatWatch:
     @property
     def seat_status(self):
         return self._receipts.seat_status
+
+    @property
+    def log_identity(self):
+        return self._identity

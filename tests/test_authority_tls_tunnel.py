@@ -1,6 +1,7 @@
 """Local TLS transport tests; all keys below are public test fixtures."""
 import asyncio
 import hashlib
+import hmac
 from pathlib import Path
 import socket
 import ssl
@@ -16,7 +17,8 @@ sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tests'), str(ROOT / 'tools/dev')]
 
 from authority.experimental_client_session import client_connection
 from authority.experimental_tls_tunnel import (
-    _MAGIC, _MOTION, _client_context, _relay, create_server_context, start_client, start_server,
+    _COMBAT, _CONTROL, _FILE, _MAGIC, _MOTION, _client_context, _relay,
+    create_server_context, start_client, start_server,
 )
 from authority_recovered_tls_gateway import RecoveredTLSGateway
 from authority_windows_fixture_client import read_connection_settings
@@ -52,19 +54,25 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
-    async def endpoint(self, prefix, arrived=None):
+    async def endpoint(self, prefix, arrived=None, disconnected=None):
         async def handler(reader, writer):
             self.backend_connections.append(prefix)
             if arrived is not None:
                 arrived.set()
             try:
                 payload = await reader.read()
+                if disconnected is not None and not payload:
+                    return  # An active shutdown aborts the stream before it sends a request.
                 writer.write(prefix + payload)
                 await writer.drain()
                 writer.write_eof()
             finally:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await writer.wait_closed()
+                finally:
+                    if disconnected is not None:
+                        disconnected.put_nowait(None)
         server = await asyncio.start_server(handler, '127.0.0.1', 0)
         self.servers.append(server)
         return server.sockets[0].getsockname()[1]
@@ -175,6 +183,152 @@ class TunnelTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
         self.assertNotIn(b'motion:', self.backend_connections)
+
+    async def test_combat_on_public_tls_port_has_four_slots_independent_of_motion_and_control(self):
+        arrivals = {name: asyncio.Event() for name in ('control', 'motion', 'combat')}
+        ended = asyncio.Queue()
+        backend_ports = {name: await self.endpoint(name.encode() + b':', arrived,
+                                                   ended if name == 'combat' else None)
+                         for name, arrived in arrivals.items()}
+        public = listener()
+        public_port = public.getsockname()[1]
+        server = await start_server(
+            listener=public, ssl_context=self.context, shared_key=b'a' * 32,
+            control_port=backend_ports['control'], file_port=await self.endpoint(b'file:'),
+            motion_port=backend_ports['motion'], combat_port=backend_ports['combat'],
+            max_connections=1, max_motion_connections=1,
+        )
+        self.tunnels.append(server)
+        control, files, motion, combat = (listener() for _ in range(4))
+        ports = {name: sock.getsockname()[1] for name, sock in
+                 (('control', control), ('motion', motion), ('combat', combat))}
+        client = await start_client(
+            control_listener=control, file_listener=files, motion_listener=motion, combat_listener=combat,
+            server_host='127.0.0.1', server_port=public_port, server_fingerprint=self.fingerprint,
+            shared_key=b'a' * 32, max_connections=1, max_motion_connections=1, max_combat_connections=5,
+        )
+        self.tunnels.append(client)
+        sessions = []
+        try:
+            for name in ('control', 'motion', 'combat', 'combat', 'combat', 'combat'):
+                reader, writer = await asyncio.open_connection('127.0.0.1', ports[name])
+                sessions.append((name, reader, writer))
+                await asyncio.wait_for(arrivals[name].wait(), 3)
+                arrivals[name].clear()
+            self.assertCountEqual(self.backend_connections, [b'control:', b'motion:'] + [b'combat:'] * 4)
+            self.assertEqual(await self.exchange(ports['combat'], b'overflow'), b'')
+            self.assertEqual(self.backend_connections.count(b'combat:'), 4)
+            for name, reader, writer in sessions[:-1]:
+                writer.write(b'payload')
+                await writer.drain()
+                writer.write_eof()
+                self.assertEqual(await asyncio.wait_for(reader.read(), 3), name.encode() + b':payload')
+            for _ in range(3):
+                await asyncio.wait_for(ended.get(), 3)
+            self.assertTrue(ended.empty())
+            await client.close()
+            self.assertEqual(await asyncio.wait_for(sessions[-1][1].read(), 3), b'')
+            await asyncio.wait_for(ended.get(), 3)
+            self.assertTrue(all(sock.fileno() == -1 for sock in (control, files, motion, combat)))
+        finally:
+            for _, _, writer in sessions:
+                writer.close()
+            await asyncio.gather(*(writer.wait_closed() for _, _, writer in sessions), return_exceptions=True)
+
+    async def test_combat_requires_its_key_domain_and_enabled_backend(self):
+        async def public_server(combat_port):
+            sock = listener()
+            port = sock.getsockname()[1]
+            self.tunnels.append(await start_server(
+                listener=sock, ssl_context=self.context, shared_key=b'a' * 32,
+                control_port=await self.endpoint(b'control:'), file_port=await self.endpoint(b'file:'),
+                motion_port=await self.endpoint(b'motion:'), combat_port=combat_port,
+            ))
+            return port
+
+        async def combat_client(port):
+            control, files, combat = (listener() for _ in range(3))
+            local_ports = control.getsockname()[1], combat.getsockname()[1]
+            self.tunnels.append(await start_client(
+                control_listener=control, file_listener=files, combat_listener=combat,
+                server_host='127.0.0.1', server_port=port, server_fingerprint=self.fingerprint,
+                shared_key=b'a' * 32,
+            ))
+            return local_ports
+
+        legacy, unsupported = await combat_client(await public_server(None))
+        self.assertEqual(await self.exchange(unsupported, b'unconfigured combat'), b'')
+        self.assertEqual(await self.exchange(legacy, b'legacy'), b'control:legacy')
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unavailable:
+            unavailable.bind(('127.0.0.1', 0))
+            _, unserved = await combat_client(await public_server(unavailable.getsockname()[1]))
+            self.assertEqual(await self.exchange(unserved, b'no backend accepted this'), b'')
+        port = await public_server(await self.endpoint(b'combat:'))
+        motion_key = hmac.digest(b'a' * 32, _MAGIC + b'motion', 'sha256')
+        combat_key = hmac.digest(b'a' * 32, _MAGIC + b'combat', 'sha256')
+        for credential, service in (
+            (b'a' * 32, _COMBAT), (motion_key, _COMBAT), (combat_key, _MOTION),
+            (combat_key, _CONTROL), (combat_key, _FILE),
+        ):
+            reader, writer = await asyncio.open_connection('127.0.0.1', port, ssl=_client_context(), server_hostname='')
+            try:
+                writer.write(_MAGIC + credential + bytes([service]))
+                await writer.drain()
+                self.assertEqual(await asyncio.wait_for(reader.read(), 3), b'')
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        self.assertEqual(self.backend_connections, [b'control:'])
+        _, local = await combat_client(port)
+        self.assertEqual(await self.exchange(local, b'contact'), b'combat:contact')
+
+    async def test_combat_cannot_alias_the_motion_backend_or_listener(self):
+        control_port = await self.endpoint(b'control:')
+        file_port = await self.endpoint(b'file:')
+        backend = await self.endpoint(b'motion:')
+        with listener() as public, listener() as control, listener() as files, listener() as motion:
+            with self.assertRaisesRegex(ValueError, 'combat service requires a separate local backend'):
+                await start_server(listener=public, ssl_context=self.context, shared_key=b'a' * 32,
+                                   control_port=control_port, file_port=file_port, motion_port=backend,
+                                   combat_port=backend)
+            with self.assertRaisesRegex(ValueError, 'separate local listeners required'):
+                await start_client(control_listener=control, file_listener=files, motion_listener=motion,
+                                   combat_listener=motion, server_host='127.0.0.1', server_port=public.getsockname()[1],
+                                   server_fingerprint=self.fingerprint, shared_key=b'a' * 32)
+
+    async def test_owned_gateway_and_client_context_publish_compatible_combat_endpoint(self):
+        options = ('127.0.0.1', 0, '127.0.0.1', None, self.fingerprint, self.context, b'a' * 32)
+        gateway = RecoveredTLSGateway(options, out=Path(self.temp.name),
+                                      control_port=await self.endpoint(b'control:'),
+                                      file_port=await self.endpoint(b'file:'), file_token='a' * 32,
+                                      combat_port=await self.endpoint(b'combat:'))
+        self.addAsyncCleanup(asyncio.to_thread, gateway.close)
+        await asyncio.to_thread(gateway.start, 3)
+        settings = read_connection_settings(gateway.connection)
+        self.assertNotIn('combat_port', settings)
+
+        def use_session():
+            options = dict(settings, deadline=time.monotonic() + 10, io_timeout=3)
+            with client_connection(**options) as legacy:
+                self.assertIsNone(legacy.combat_port)
+            with client_connection(**options, combat_enabled=True) as owner:
+                port = owner.combat_port
+                self.assertIsNone(owner.motion_port)
+                with socket.create_connection(('127.0.0.1', port), timeout=3) as conn:
+                    conn.sendall(b'contact')
+                    conn.shutdown(socket.SHUT_WR)
+                    with conn.makefile('rb') as stream:
+                        self.assertEqual(stream.read(), b'combat:contact')
+            with self.assertRaisesRegex(RuntimeError, 'unavailable for combat'):
+                _ = owner.combat_port
+            with self.assertRaises(ConnectionRefusedError):
+                socket.create_connection(('127.0.0.1', port), timeout=1)
+        await asyncio.to_thread(use_session)
+        await asyncio.to_thread(gateway.close)
+        self.assertFalse(gateway.connection.exists())
+        self.assertFalse(gateway.running)
+        with self.assertRaises(ConnectionRefusedError):
+            await asyncio.open_connection('127.0.0.1', settings['server_port'])
 
     async def test_foreground_session_exposes_motion_only_during_opt_in_context(self):
         options = ('127.0.0.1', 0, '127.0.0.1', None, self.fingerprint, self.context, b'a' * 32)

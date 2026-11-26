@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityCompanyGunDamage" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State" namespace="this"/>
+  <cue name="Impact" instantiate="true" namespace="this">
+   <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunDamage'" control="'Impact'"/></conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <do_if value="typeof $args == datatype.table and @$args.$lease == '__PROVIDER_LEASE__'
+                  and typeof @$args.$generation == datatype.string and typeof @$args.$epoch == datatype.string
+                  and @$args.$serial ge 1 and $args.$serial le 2147483647 and ($args.$serial)i == $args.$serial
+                  and @$args.$source ge 1 and $args.$source le 200000 and ($args.$source)i == $args.$source
+                  and @$args.$target ge 1 and $args.$target le 200000 and ($args.$target)i == $args.$target
+                  and $args.$source != $args.$target and @$args.$amount gt 0
+                  and $args.$amount le 9007199254740991">
+     <set_value name="$status" exact="'refused'"/>
+     <set_value name="$source" exact="null"/>
+     <set_value name="$target" exact="null"/>
+     <set_value name="$killed" exact="false"/>
+     <do_if value="@$args.$lease == @State.$lease and $args.$serial le @State.$last_serial">
+      <!-- The old operation may already have changed health. Never redispatch it. -->
+      <set_value name="$status" exact="'unknown'"/>
+     </do_if>
+     <do_elseif value="md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship?
+                       and @md.X4AuthorityShipRegistry.State.$faulted == false
+                       and @md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch">
+      <set_value name="$source" exact="@md.X4AuthorityShipRegistry.State.$ships.{($args.$source)i}"/>
+      <set_value name="$target" exact="@md.X4AuthorityShipRegistry.State.$ships.{($args.$target)i}"/>
+      <do_if value="@$source.isclass.ship and $source.isoperational
+                    and $source.owner == faction.player and $source.trueowner == faction.player
+                    and @$target.isclass.ship and $target.isoperational and $source != $target
+                    and @md.X4AuthorityShipRegistry.State.$byship.{$source} == $args.$source
+                    and @md.X4AuthorityShipRegistry.State.$byship.{$target} == $args.$target
+                    and @$target.shield ge 0 and @$target.hull gt 0">
+       <set_value name="State.$lease" exact="$args.$lease"/>
+       <set_value name="State.$last_serial" exact="$args.$serial"/>
+       <set_value name="$before_shield" exact="$target.shield"/>
+       <set_value name="$before_hull" exact="$target.hull"/>
+       <apply_attackstrength object="$target" attacker="$source" hullshield="$args.$amount">
+        <result killed="$killed"/>
+       </apply_attackstrength>
+       <!-- Numeric parameters avoid the precision loss of MD string formatting. -->
+       <raise_lua_event name="'X4AuthorityCompanyGunDamage.Amount'" param="$args.$amount"/>
+       <raise_lua_event name="'X4AuthorityCompanyGunDamage.BeforeShield'" param="$before_shield"/>
+       <raise_lua_event name="'X4AuthorityCompanyGunDamage.BeforeHull'" param="$before_hull"/>
+       <do_if value="@$target.shield ge 0 and @$target.hull ge 0 and @$target.maxshield ge 0 and @$target.maxhull gt 0">
+        <raise_lua_event name="'X4AuthorityCompanyGunDamage.AfterShield'" param="$target.shield"/>
+        <raise_lua_event name="'X4AuthorityCompanyGunDamage.AfterHull'" param="$target.hull"/>
+        <raise_lua_event name="'X4AuthorityCompanyGunDamage.MaxShield'" param="$target.maxshield"/>
+        <raise_lua_event name="'X4AuthorityCompanyGunDamage.MaxHull'" param="$target.maxhull"/>
+        <set_value name="$status" exact="'applied'"/>
+       </do_if>
+       <do_else><set_value name="$status" exact="'unknown'"/></do_else>
+      </do_if>
+     </do_elseif>
+     <raise_lua_event name="'X4AuthorityCompanyGunDamage.Result'"
+                      param="'%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'.[
+                         $args.$lease,($args.$serial)i,$args.$generation,$args.$epoch,($args.$source)i,
+                         ($args.$target)i,$status,$source,$target,$killed]"/>
+    </do_if>
+    <cancel_cue cue="this"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

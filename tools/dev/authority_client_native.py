@@ -264,12 +264,14 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
         company_sales=False,
         observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
-        registered_npc_local_measurement=False, combat_capture=False):
+        registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
     player_mode = player_settings is not None
     if type(combat_capture) is not bool or (combat_capture and not player_mode):
         raise ValueError('combat capture requires a Company pilot')
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
+    if type(company_combat) is not bool or (company_combat and not company_motion):
+        raise ValueError('Company combat requires Company motion')
     if type(company_purchases) is not bool or (company_purchases and not player_mode):
         raise ValueError('Company purchases require player mode')
     if type(company_fleet_orders) is not bool or (company_fleet_orders and not company_purchases):
@@ -322,7 +324,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = seat_watch = None
-    company_source = company_client = purchase_source = fleet_source = None
+    company_source = company_client = purchase_source = fleet_source = combat_sender = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -348,6 +350,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         else:
             download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
         motion_options = {'motion_enabled': True} if company_motion else {}
+        if company_combat:
+            motion_options['combat_enabled'] = True
         with client_connection(**connection_settings, deadline=join_deadline,
                 keepalive_interval=args.keepalive_interval, **motion_options) as owner:
             try:
@@ -442,6 +446,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     source_options = dict(software_rendered=software_vulkan_icd is not None)
                     if combat_capture:
                         source_options['combat_capture'] = True
+                    if company_combat:
+                        source_options['company_combat'] = True
                     if company_motion:
                         company_source = CompanyMotionSource(
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
@@ -540,6 +546,13 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
 
                         company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
                             owner.ship_motion_credential, company_source, validate_peer)
+                    if company_combat:
+                        from authority.company_combat_source import CompanyCombatSender
+
+                        guard(full=True)
+                        combat_sender = CompanyCombatSender(seat_watch.path, owner.combat_port,
+                            owner.ship_motion_credential, epoch=seat_watch.registry_epoch, index=index,
+                            log_identity=seat_watch.log_identity)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
                         participant.deadline, lambda: stop_requested, company_client=company_client,
@@ -574,6 +587,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 # Native ownership is fenced before owner/tunnel/thread release.
                 for number in handlers:
                     signal.signal(number, signal.SIG_IGN)
+                if combat_sender is not None:
+                    try:
+                        result['company_combat'] = combat_sender.close()
+                    except BaseException:
+                        cleanup_errors.append('company_combat_sender_cleanup_failed')
                 if company_client is not None:
                     try:
                         company_client.close()

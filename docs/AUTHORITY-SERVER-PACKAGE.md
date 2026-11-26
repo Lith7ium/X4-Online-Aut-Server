@@ -438,6 +438,22 @@ the provider must support the opt-in loss notifications.
 
 ## Record hits on a Linux pilot's ship
 
+For the experimental primary-gun transfer, enable `--company-motion
+--company-combat` on the TLS provider and Linux pilot, or `-CompanyMotion
+-CompanyCombat` on the Windows pilot. Use the same connection file and
+public TCP port as for ordinary flight. The combat stream uses the pilot's
+current ship admission. On the server, X4 applies accepted damage to the
+registered target in arrival order and returns its shield and hull values.
+The sender retries the same report IDs after a lost reply.
+
+The first source supports X4's direct bullet-contact notification for
+the unmodified vanilla S Bolt Repeater Mk2
+(`weapon_gen_s_gatling_01_mk2_macro`). X4 throttles that notification,
+so a sustained burst can produce more local hits than the server receives.
+The pilot's launcher result includes the observed and confirmed report counts.
+The target pilot's HUD still needs delivery of the authoritative health.
+Use this option on a disposable combat world.
+
 Add `--combat-capture` to the normal Linux pilot command to record shield
 and hull hits while the session is running and you control your reserved
 ship. This local diagnostic uses the regular Company seat selection.

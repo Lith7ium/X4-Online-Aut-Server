@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Read-only stock notifications for the admitted Company helm. -->
+<mdscript name="X4AuthorityCompanyGunSource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State">
+   <actions>
+    <create_group groupname="State.$sources"/>
+    <set_value name="State.$epoch" exact="''"/>
+    <set_value name="State.$index" exact="0"/>
+   </actions>
+   <cues>
+    <library name="RegistryReady" purpose="include_actions">
+     <actions>
+      <set_value name="$ready" exact="md.X4AuthorityShipRegistry.State.$epoch? and State.$epoch != ''
+        and md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
+        and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
+        and md.X4AuthorityShipRegistry.State.$last? and md.X4AuthorityShipRegistry.State.$ships?
+        and md.X4AuthorityShipRegistry.State.$byship?"/>
+     </actions>
+    </library>
+    <library name="MatchSeat" purpose="include_actions">
+     <actions>
+      <include_actions ref="RegistryReady"/>
+      <set_value name="$matched" exact="$ready and State.$index ge 1
+        and State.$index le md.X4AuthorityShipRegistry.State.$last and State.$index == (State.$index)i
+        and @$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player
+        and $ship == player.controlled and $ship == player.occupiedship
+        and @md.X4AuthorityShipRegistry.State.$ships.{State.$index} == $ship
+        and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == State.$index"/>
+     </actions>
+    </library>
+    <cue name="Arm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunSource'" control="'Arm'"/></conditions>
+     <actions>
+      <clear_group group="State.$sources"/>
+      <set_value name="$args" exact="event.param3"/>
+      <set_value name="State.$epoch" exact="@$args.$epoch"/>
+      <set_value name="State.$index" exact="@$args.$index"/>
+      <set_value name="$ship" exact="@player.controlled"/>
+      <include_actions ref="MatchSeat"/>
+      <do_if value="$matched">
+       <add_to_group groupname="State.$sources" object="$ship"/>
+       <raise_lua_event name="'X4AuthorityCompanyGunSource.Ready'"
+                        param="'%s|%s|%s'.[$args.$request,State.$epoch,State.$index]"/>
+      </do_if>
+     </actions>
+    </cue>
+    <cue name="Disarm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyGunSource'" control="'Disarm'"/></conditions>
+     <actions><clear_group group="State.$sources"/></actions>
+    </cue>
+    <cue name="Contact" instantiate="true" namespace="this">
+     <conditions>
+      <event_object_attacked_object group="State.$sources" method="killmethod.hitbybullet"/>
+     </conditions>
+     <actions>
+      <set_value name="$ship" exact="event.object"/>
+      <include_actions ref="MatchSeat"/>
+      <do_if value="$matched">
+       <set_value name="$target" exact="@event.param"/>
+       <set_value name="$weapon" exact="@event.param3.{2}"/>
+       <do_if value="@$target.isclass.ship and $target.isoperational and $target != $ship
+         and @event.param3.{1} == $target and @$weapon.object == $ship
+         and @$weapon.macro.id == 'weapon_gen_s_gatling_01_mk2_macro'">
+        <set_value name="$targetindex" exact="@md.X4AuthorityShipRegistry.State.$byship.{$target}"/>
+        <do_if value="(typeof $targetindex).isnumeric and $targetindex ge 1
+          and $targetindex le md.X4AuthorityShipRegistry.State.$last and $targetindex == ($targetindex)i
+          and @md.X4AuthorityShipRegistry.State.$ships.{$targetindex} == $target">
+         <raise_lua_event name="'X4AuthorityCompanyGunSource.Contact'"
+                          param="'%s|%s|%s|%s|%s'.[State.$epoch,State.$index,$targetindex,$ship,$weapon]"/>
+        </do_if>
+       </do_if>
+      </do_if>
+     </actions>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>

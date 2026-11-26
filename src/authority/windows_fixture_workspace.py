@@ -407,6 +407,10 @@ class WindowsFixtureWorkspace:
                     raise RuntimeError('fixture overlay file identity changed')
         return True
 
+    @property
+    def log_identity(self):
+        return self._log_identity
+
     def read_log(self):
         """Return one bounded complete-prefix snapshot from the retained log handle."""
         if self._state not in ('prepared', 'registered'):

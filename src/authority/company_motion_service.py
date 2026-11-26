@@ -3,6 +3,8 @@ from collections import deque
 from collections.abc import Callable
 import copy
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
+import hmac
 import math
 import re
 import secrets
@@ -66,6 +68,15 @@ class _Grant:
     trial_route: tuple | None = None
     cockpit_routes: dict = field(default_factory=dict)
     traffic: _MotionTraffic = field(default_factory=_MotionTraffic)
+
+    @cached_property
+    def combat_ticket(self):
+        from .company_combat_service import derive_combat_ticket
+        return derive_combat_ticket(self.ticket)
+
+    @property
+    def combat_binding(self):
+        return self.generation, self.epoch, self.index
 
     def traffic_summary(self):
         return {'participant_handle': self.handle, 'ship_index': self.index,
@@ -207,6 +218,29 @@ class CompanyMotionService:
         self._grants[handle] = self._tickets[grant.ticket] = grant
         return {'ticket': grant.ticket, 'epoch': grant.epoch, 'generation': grant.generation,
                 'index': ship_index, 'session_epoch': session_epoch}
+
+    def current_combat_grant(self, ticket):
+        """Resolve a combat credential throughout the life of its pilot's admission."""
+        self._check_owner()
+        if type(ticket) is str and _TICKET.fullmatch(ticket):
+            for grant in self._grants.values():
+                if hmac.compare_digest(ticket, grant.combat_ticket):
+                    return grant.combat_binding
+        return None
+
+    def combat_helm_current(self, binding):
+        """A running world and a recent controlled-ship sample are required to fire."""
+        self._check_owner()
+        now = time.monotonic()
+        return self.running and any(
+            grant.combat_binding == binding and grant.last_sample is not None and now < grant.visible_until
+            for grant in self._grants.values()
+        )
+
+    def combat_grant_current(self, binding):
+        """Check pilot generation and ship assignment independently of sample age."""
+        self._check_owner()
+        return any(grant.combat_binding == binding for grant in self._grants.values())
 
     def register_npc_source(self, registry_epoch, ship_index, ship_code, *, reservation_guard):
         """Register one trusted local observation for the current running world.

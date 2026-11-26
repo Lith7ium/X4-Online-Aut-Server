@@ -129,7 +129,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
                         company_sales=False,
                         play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False, observed_npc=None,
-                        registered_npc_local_measurement=False, combat_capture=False):
+                        registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -182,6 +182,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         raise ValueError('Company purchases require a verified selected seat')
     if type(combat_capture) is not bool or (combat_capture and (select_ship is None or not require_registry_snapshot)):
         raise ValueError('combat capture requires a verified selected seat')
+    if type(company_combat) is not bool or (company_combat and (not company_motion or not require_registry_snapshot)):
+        raise ValueError('Company combat requires Company motion and registry snapshot')
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
@@ -201,12 +203,14 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
         if type(profile_id) is not int or profile_id not in profile_ids:
             raise ValueError('invalid Windows fixture workspace profile')
         motion_options = {'motion_enabled': True} if company_motion else {}
+        if company_combat:
+            motion_options['combat_enabled'] = True
         with client_connection(server_host=server_host, server_port=server_port,
                 server_fingerprint=server_fingerprint, shared_key=shared_key, file_token=file_token,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
-            company_source = company_client = purchase_source = fleet_source = None
+            company_source = company_client = purchase_source = fleet_source = combat_sender = None
             motion_socket = motion = combat_binding = None
             launch_attempted = overlay_registered = False
             original = None
@@ -288,6 +292,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     combat_binding = capture_binding(bound.offer.checkpoint_id, bound.offer.sha256,
                                                      registry_snapshot['epoch'], seat_index)
                     source_options['combat_capture'] = True
+                if company_combat:
+                    source_options['company_combat'] = True
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
                     participant_lease=controller.lease, windows_dll=windows_dll, dll_sha256=dll_sha256,
@@ -347,6 +353,14 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
                     company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
                         owner.ship_motion_credential, company_source, validate_peer)
+                if company_combat:
+                    from .company_combat_source import CompanyCombatSender
+
+                    if running_guard() is not True:
+                        raise RuntimeError('Company combat source process unavailable')
+                    combat_sender = CompanyCombatSender(workspace.log_path, owner.combat_port,
+                        owner.ship_motion_credential, epoch=registry_snapshot['epoch'], index=seat_index,
+                        log_identity=workspace.log_identity)
                 first_traffic = {
                     'samples_acknowledged': 'first_own_sample_acknowledged',
                     'snapshots_received': 'first_remote_pose_received',
@@ -403,6 +417,13 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
             except BaseException as error:
                 original = error
             finally:
+                if combat_sender is not None:
+                    try:
+                        combat_result = combat_sender.close()
+                        if result is not None:
+                            result['company_combat'] = combat_result
+                    except BaseException:
+                        cleanup_errors.append('Company combat sender cleanup failed')
                 if company_client is not None:
                     try:
                         company_client.close()

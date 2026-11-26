@@ -71,13 +71,16 @@ class RecoveredTLSGateway:
     """Run the async gateway alongside the main thread's synchronous coordinator."""
 
     def __init__(self, settings, *, out, control_port, file_port, file_token,
-                 motion_port=None, max_motion_connections=8):
+                 motion_port=None, max_motion_connections=8, combat_port=None,
+                 max_combat_connections=COMPANY_PILOT_LIMIT):
         self.connection = out / 'connection.json'
         self._settings = settings
         self._control_port = control_port
         self._file_port = file_port
         self._motion_port = motion_port
         self._max_motion_connections = max_motion_connections
+        self._combat_port = combat_port
+        self._max_combat_connections = max_combat_connections
         self._file_token = file_token
         self._ready = threading.Event()
         self._failed = False
@@ -88,12 +91,15 @@ class RecoveredTLSGateway:
 
     async def _run(self, wakeup):
         _, _, _, _, _, context, key = self._settings
-        max_connections = COMPANY_RELIABLE_CONNECTIONS if self._motion_port is not None else 8
+        company_services = self._motion_port is not None or self._combat_port is not None
+        max_connections = COMPANY_RELIABLE_CONNECTIONS if company_services else 8
         tunnel = await start_server(listener=self._listener, ssl_context=context, shared_key=key,
                                     control_port=self._control_port, file_port=self._file_port,
                                     motion_port=self._motion_port,
+                                    combat_port=self._combat_port,
                                     max_connections=max_connections,
-                                    max_motion_connections=self._max_motion_connections)
+                                    max_motion_connections=self._max_motion_connections,
+                                    max_combat_connections=self._max_combat_connections)
         waiter = asyncio.create_task(tunnel.wait())
         stop = asyncio.create_task(asyncio.get_running_loop().sock_recv(wakeup, 1))
         try:

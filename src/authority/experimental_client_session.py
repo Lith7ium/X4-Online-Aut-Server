@@ -20,9 +20,13 @@ class ClientConnectionError(RuntimeError):
 
 
 class _TLSBridgeThread:
-    def __init__(self, options, *, motion_enabled=False):
+    def __init__(self, options, *, motion_enabled=False, combat_enabled=False):
         self.options = options
-        self.motion_enabled = motion_enabled
+        self.services = ['control', 'file']
+        if motion_enabled:
+            self.services.append('motion')
+        if combat_enabled:
+            self.services.append('combat')
         self.ready = threading.Event()
         self.stop_requested = threading.Event()
         self.loop = self.stop = None
@@ -40,18 +44,14 @@ class _TLSBridgeThread:
             self.ready.set()
 
     async def _serve(self):
-        listeners, tunnel = [], None
+        listeners, tunnel = {}, None
         self.loop = asyncio.get_running_loop()
         self.stop = asyncio.Event()
         try:
-            listeners.append(_listener())
-            listeners.append(_listener())
-            if self.motion_enabled:
-                listeners.append(_listener())
-            extra = {'motion_listener': listeners[2]} if self.motion_enabled else {}
-            tunnel = await start_client(control_listener=listeners[0], file_listener=listeners[1],
-                max_connections=2, **self.options, **extra)
-            self.ports = tuple(listener.getsockname()[1] for listener in listeners)
+            for service in self.services:
+                listeners[f'{service}_listener'] = _listener()
+            tunnel = await start_client(max_connections=2, **self.options, **listeners)
+            self.ports = {service: listeners[f'{service}_listener'].getsockname()[1] for service in self.services}
             self.ready.set()
             if not self.stop_requested.is_set():
                 await self.stop.wait()
@@ -63,7 +63,7 @@ class _TLSBridgeThread:
                 self.cleanup_failed = True
                 raise
             finally:
-                for listener in listeners:
+                for listener in listeners.values():
                     listener.close()
 
     def close(self):
@@ -82,21 +82,24 @@ class _TLSBridgeThread:
 @contextmanager
 def client_connection(*, server_host, server_port, server_fingerprint, shared_key,
                       file_token, file_slot, deadline, io_timeout=30, keepalive_interval=None,
-                      motion_enabled=False):
+                      motion_enabled=False, combat_enabled=False):
     """Keep one offer socket alive through native load and participant polling.
 
     All ExperimentalClientOwner methods run on the entering thread. Native
     resources must be stopped inside the with-block, before bridge shutdown.
     Closing/joining the bridge is bounded; failure never returns success.
-    When opted in, owner.motion_port exposes a loopback endpoint. The caller
-    must separately bind and authorize that stream with the admitted session.
+    Optional owner.motion_port and owner.combat_port are separate loopback
+    endpoints. The caller must bind and authorize each with the admitted session.
     """
     if type(deadline) not in (int, float) or not math.isfinite(deadline) or not 0 < deadline-time.monotonic() <= 3600:
         raise ValueError('invalid_client_deadline')
     if type(motion_enabled) is not bool:
         raise ValueError('invalid_motion_option')
+    if type(combat_enabled) is not bool:
+        raise ValueError('invalid_combat_option')
     bridge = _TLSBridgeThread(dict(server_host=server_host, server_port=server_port,
-        server_fingerprint=server_fingerprint, shared_key=shared_key), motion_enabled=motion_enabled)
+        server_fingerprint=server_fingerprint, shared_key=shared_key),
+        motion_enabled=motion_enabled, combat_enabled=combat_enabled)
     connection = owner = None
     original_error = None
     try:
@@ -108,11 +111,11 @@ def client_connection(*, server_host, server_port, server_fingerprint, shared_ke
         remaining = deadline-time.monotonic()
         if remaining <= 0:
             raise TimeoutError('client_deadline')
-        connection = socket.create_connection(('127.0.0.1', bridge.ports[0]), timeout=min(io_timeout, remaining))
+        connection = socket.create_connection(('127.0.0.1', bridge.ports['control']), timeout=min(io_timeout, remaining))
         owner = ExperimentalClientOwner(connection, enabled=True, file_host='127.0.0.1',
-            file_port=bridge.ports[1], file_token=file_token, file_slot=file_slot,
+            file_port=bridge.ports['file'], file_token=file_token, file_slot=file_slot,
             deadline=deadline, io_timeout=io_timeout, keepalive_interval=keepalive_interval,
-            motion_port=bridge.ports[2] if motion_enabled else None)
+            motion_port=bridge.ports.get('motion'), combat_port=bridge.ports.get('combat'))
         yield owner
     except BaseException as error:
         original_error = error

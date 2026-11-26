@@ -223,6 +223,12 @@ class FixtureCliTests(unittest.TestCase):
             observe = ['--observe-registered-npc', '42', 'NPC-042']
             cli.run(cli.parser().parse_args([*base, '--company-motion', *observe]))
             self.assertEqual(run_session.call_args.kwargs['observed_npc'], (42, 'NPC-042'))
+            self.assertNotIn('company_combat', run_session.call_args.kwargs)
+            cli.run(cli.parser().parse_args([*base, '--company-motion', '--company-combat', '--combat-capture']))
+            self.assertTrue(run_session.call_args.kwargs['company_combat'])
+            self.assertTrue(run_session.call_args.kwargs['combat_capture'])
+            with self.assertRaisesRegex(ValueError, '--company-combat requires --company-motion'):
+                cli.run(cli.parser().parse_args([*base, '--company-combat']))
             measure = ['--company-motion', '--company-ship-index', '1073', '--observe-registered-npc',
                        '943', 'MFQ-419', '--trial-registered-npc-measurement']
             cli.run(cli.parser().parse_args([*base, '--base-game-only', *measure]))

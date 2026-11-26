@@ -62,3 +62,30 @@ the tunnel were released. Private local evidence is in
 For another flight, measure the loading process's own pressure alongside
 host-wide PSI. The observed stop establishes the test supervisor's reason
 for stopping. It does not determine the minimum RAM for playing or hosting X4.
+
+## Server orders two hits on the same target
+
+The Fedora laptop ran one GPU-free X4 instance paused at game age 3.511 s.
+Two scripted confirmations named distinct registered ships as attackers,
+the Company Pulsar HVC-420 (1073) and the Antigone freighter MFQ-419 (943).
+The target was the existing Company Pulsar KHI-630 (1074). Its disposable
+starting state was 30 shield and 3,600 hull. For each new confirmation,
+the provider called X4's stock `apply_attackstrength` with the attacker,
+target and 26 points of normal shield-or-hull damage.
+
+| Server input, in order | Shield | Hull | Native damage calls so far |
+| --- | ---: | ---: | ---: |
+| Initial state | 30 | 3,600 | 0 |
+| HVC-420 hit (A) | 4 | 3,600 | 1 |
+| A again | 4 | 3,600 | 1 |
+| MFQ-419 hit (B) | 0 | 3,578 | 2 |
+| Late repeat of A | 0 | 3,578 | 2 |
+
+A separate Lua health readback confirmed each row. X4 also recorded MFQ-419
+as the most recent attacker after B, including after the late repeat of A.
+Both stock calls reported a surviving target and no hit to a separate module
+or surface element. The damage inputs and repeats were scripted. This proves
+native shield overflow and duplicate handling in this running test only.
+Receiving confirmed shots through normal multiplayer transport, preserving
+their identities across reconnect, and showing the server result in two
+human cockpits remain open.

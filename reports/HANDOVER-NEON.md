@@ -20,6 +20,23 @@ The pilot never took the helm. The server closed cleanly and the source was
 preserved. The planned live shield debit and duplicate check are outstanding.
 [Separate-host evidence](AUTHORITY-SHIELD-REPLAY-20261126.md#two-machine-attempt-at-live-shield-transfer)
 
+In a separate Fedora-only test X4 applied two scripted 26-point hits to
+KHI-630 in arrival order. Its 30 shield points fell to 4, then 0. Hull
+fell from 3,600 to 3,578. Repeating the first report before and after the
+second left both health values unchanged. The game recorded exactly two
+native damage calls. The two sources were distinct registered ships.
+[Serial hits and duplicate readbacks](AUTHORITY-SHIELD-REPLAY-20261126.md#server-orders-two-hits-on-the-same-target)
+
+The dedicated combat TLS stream uses the existing public port. The
+Linux and Windows senders opt in with Company motion and combat enabled.
+They start with direct X4 notifications for an unmodified vanilla S Bolt
+Repeater Mk2. The first controlled native volley had 49 damage callbacks
+but only one direct notification. Complete burst attribution and target
+cockpit health delivery are still open. The integrated loopback test used
+two real TLS clients, fresh pilot grants, a simulated damage adapter and
+a repeated report after another pilot's hit. It preserved the later damage.
+[Operator flags](../docs/AUTHORITY-SERVER-PACKAGE.md#record-hits-on-a-linux-pilots-ship)
+
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered
 eight marines. X4 transferred ZNG-430 from Scale Plate to the player

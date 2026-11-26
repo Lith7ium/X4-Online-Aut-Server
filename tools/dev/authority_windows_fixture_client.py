@@ -81,6 +81,8 @@ def parser():
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
                           help='isolated test only: follow another company ship in the same cockpit sector')
+    result.add_argument('--company-combat', action='store_true',
+                        help='report throttled stock gun contacts (requires --company-motion)')
     result.add_argument('--combat-capture', action='store_true',
                         help='diagnostic: log native shield and hull hits on the admitted Company ship (read-only)')
     result.add_argument('--base-game-only', action='store_true',
@@ -123,6 +125,9 @@ def run(args, *, on_stage=None):
     company_pilot = (args.choose_company_ship or args.company_motion or args.company_purchases or
                      args.company_ship_index is not None)
     combat_capture = getattr(args, 'combat_capture', False)
+    company_combat = getattr(args, 'company_combat', False)
+    if company_combat and not args.company_motion:
+        raise ValueError('--company-combat requires --company-motion')
     if combat_capture and not company_pilot:
         raise ValueError('--combat-capture requires a Company seat join')
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
@@ -175,6 +180,8 @@ def run(args, *, on_stage=None):
         view_options['fresh_company_profile'] = True
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
     motion_options = {'company_motion': True} if args.company_motion else {}
+    if company_combat:
+        motion_options['company_combat'] = True
     if args.company_purchases:
         motion_options['company_purchases'] = True
     if trade_view:

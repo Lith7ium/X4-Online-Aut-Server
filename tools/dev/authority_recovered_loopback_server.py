@@ -578,8 +578,14 @@ def capture_first_registry_snapshot(adapter, store, verify):
     return saved
 
 
-def settle_shutdown(control, world, store, check, *, purchases=None):
+def settle_shutdown(control, world, store, check, *, purchases=None, combat_service=None):
     """Disconnect clients and settle their last-disconnect pause/save once."""
+    if combat_service is not None:
+        while combat_service.native_pending:
+            check()
+            combat_service.settle_pending()
+            if combat_service.native_pending:
+                time.sleep(.01)
     if purchases is not None:
         while not purchases.before_world_transition():
             check()
@@ -682,7 +688,7 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
 
 
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
-          motion_service=None, pose_trial=None, purchases=None, npc_source=None):
+          motion_service=None, pose_trial=None, purchases=None, npc_source=None, combat_service=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -720,7 +726,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
                    and motion_service.running else None)
         pending = channel.pending if channel is not None else None
         now = time.monotonic()
-        tick_options = {'defer_world': True} if purchases is not None else {}
+        defer_world = purchases is not None or combat_service is not None
+        tick_options = {'defer_world': True} if defer_world else {}
         if pending is not None and (pending is not last_pose_request or now >= next_pose_wake):
             # One early wake per request per control interval. Repeated HELLOs
             # cannot spin the loop, and a new native command can wake immediately.
@@ -729,11 +736,16 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             tick_options['wake_reader'] = channel.socket
         # Defer any pause requested during socket polling until the in-flight booking is checked.
         host.tick(tick_interval, **tick_options)
-        if purchases is not None:
+        if defer_world:
             session = host._world.session
-            if session.pending is not None and purchases.before_world_transition():
-                host.tick(0)
-            if session.pending is None and session.state == 'running':
+            if session.pending is not None:
+                if combat_service is not None:
+                    combat_service.settle_pending()
+                trade_ready = purchases is None or purchases.before_world_transition()
+                combat_ready = combat_service is None or not combat_service.native_pending
+                if trade_ready and combat_ready:
+                    host.tick(0)
+            if purchases is not None and session.pending is None and session.state == 'running':
                 purchases.step()
         if motion_service is not None:
             if npc_source is not None:
@@ -741,6 +753,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             motion_service.poll()
             if pose_trial is not None and motion_service.running:
                 pose_trial.poll(motion_service)
+        if combat_service is not None and host._world.session.pending is None:
+            combat_service.poll()
         current_handles = {peer['handle'] for peer in host._control._peers.values() if peer['stage'] == 'admitted'}
         admitted += len(current_handles - admitted_handles)
         admitted_handles = current_handles
@@ -924,6 +938,9 @@ def run(args):
     company_motion = getattr(args, 'company_motion', False)
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
+    company_combat = getattr(args, 'company_combat', False)
+    if type(company_combat) is not bool or (company_combat and not company_motion):
+        raise ValueError('Company gun combat requires authenticated Company movement admission')
     npc_args = getattr(args, 'observe_registered_npc', None)
     npc_measurement = getattr(args, 'trial_registered_npc_measurement', False)
     if type(npc_measurement) is not bool or (npc_measurement and tuple(npc_args or ()) != ('943', 'MFQ-419')):
@@ -988,6 +1005,7 @@ def run(args):
         import authority_company_pose_trial as company_pose
     pose_channel = pose_trial = None
     motion_service = None
+    gun_damage_provider = combat_service = None
     purchase_provider = undock_provider = market_provider = fleet_provider = purchases = purchase_ledger = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
@@ -1348,6 +1366,18 @@ def run(args):
 
             fleet_provider = NativeFleetOrderProvider()
             protected.extend(fleet_provider.install(case))
+        if company_combat:
+            from authority_company_gun_damage import NativeGunDamageProvider
+
+            def combat_world_running():
+                return motion_service is not None and world.session.state == 'running' and world.session.pending is None
+
+            def combat_grant_current(binding):
+                return combat_world_running() and motion_service.combat_grant_current(binding)
+
+            gun_damage_provider = NativeGunDamageProvider(
+                combat_grant_current, can_fire=lambda binding: motion_service.combat_helm_current(binding))
+            protected.extend(gun_damage_provider.install(case))
         if npc_target is not None:
             npc_source = RegisteredNpcSource(npc_target.confirmed(saved_evidence), trial_measurement=npc_measurement)
             protected.extend(npc_source.install(case))
@@ -1430,7 +1460,8 @@ def run(args):
         check()
         result.update(source_checkpoint_id=checkpoint.checkpoint_id, source_sha256=checkpoint.sha256,
                       load_marker_observed=True, pause_observed=True)
-        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider, fleet_provider, npc_source)):
+        if any(provider is not None for provider in (pose_channel, undock_provider, market_provider, fleet_provider,
+                                                     gun_damage_provider, npc_source)):
             game_stat = (game/'X4').stat()
             process_identity = {'pid': identity[0], 'start_ticks': identity[1],
                                 'exe_dev': game_stat.st_dev, 'exe_ino': game_stat.st_ino}
@@ -1440,6 +1471,8 @@ def run(args):
             market_provider.bind(process_identity, check)
         if fleet_provider is not None:
             fleet_provider.bind(process_identity, check)
+        if gun_damage_provider is not None:
+            gun_damage_provider.bind(process_identity, check)
         if npc_source is not None:
             npc_source.bind(process_identity)
         if pose_channel is not None:
@@ -1600,6 +1633,10 @@ def run(args):
                 application_drops = {}
                 pose_trial.report['application_drops'] = application_drops
             motion_service = CompanyMotionService(application_drops=application_drops)
+        if gun_damage_provider is not None:
+            from authority.company_combat_service import CompanyCombatService
+
+            combat_service = CompanyCombatService(motion_service.current_combat_grant, gun_damage_provider.begin_impact)
         if npc_source is not None:
             def npc_unreserved():
                 reservations = session.running_ship_reservations()
@@ -2131,7 +2168,8 @@ def run(args):
         if tls is not None:
             gateway = RecoveredTLSGateway(tls, out=out, control_port=listener.getsockname()[1],
                                           file_port=service.port, file_token=service.token,
-                                          motion_port=motion_service.port if motion_service is not None else None)
+                                          motion_port=motion_service.port if motion_service is not None else None,
+                                          combat_port=combat_service.port if combat_service is not None else None)
             gateway.start(min(5, max(0, deadline - time.monotonic())))
         else:
             fd = os.open(endpoint, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
@@ -2145,7 +2183,8 @@ def run(args):
 
         service_deadline = None if getattr(args, 'persistent', False) else deadline
         result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
-                            purchases=purchases, npc_source=npc_source, should_stop=lambda: stop[0] or gateway_stopped()))
+                            purchases=purchases, npc_source=npc_source, combat_service=combat_service,
+                            should_stop=lambda: stop[0] or gateway_stopped()))
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -2157,7 +2196,7 @@ def run(args):
             # Stop intake, then settle the last-disconnect save before stopping X4.
             listener.close()
             listener = None
-            saved = settle_shutdown(control, world, store, check, purchases=purchases)
+            saved = settle_shutdown(control, world, store, check, purchases=purchases, combat_service=combat_service)
             control = None
         if failed_gateway:
             raise RuntimeError('TLS gateway stopped while serving')
@@ -2205,6 +2244,16 @@ def run(args):
                 result['registered_npc_observation'] = npc_source.stats()
             except (OSError, RuntimeError, ValueError) as error:
                 errors.append('registered NPC source cleanup: ' + type(error).__name__)
+        if combat_service is not None:
+            try:
+                combat_service.close()
+            except OSError as error:
+                errors.append('Company combat service cleanup: ' + type(error).__name__)
+        if gun_damage_provider is not None:
+            try:
+                gun_damage_provider.close()
+            except OSError as error:
+                errors.append('native gun damage cleanup: ' + type(error).__name__)
         if motion_service is not None:
             result['company_motion_samples_received'] = motion_service.accepted_samples
             result['company_motion_samples_with_velocity'] = motion_service.samples_with_velocity
@@ -2307,6 +2356,8 @@ def run(args):
                     pose_overlay.archive_cue(case, out)
                 if purchase_provider is not None:
                     purchase_provider.archive_cues(case, out)
+                if gun_damage_provider is not None:
+                    gun_damage_provider.archive_cues(case, out)
                 if undock_provider is not None:
                     undock_provider.archive_cue(case, out)
                 if market_provider is not None:
@@ -2388,6 +2439,8 @@ def main(argv=None, *, display_hostname=None):
                        help='read the saved company ship positions after a cold restart')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the separate participant-bound TLS movement channel')
+    parser.add_argument('--company-combat', action='store_true',
+                        help='enable dedicated TLS delivery of confirmed Company primary-gun hits')
     parser.add_argument('--trial-registered-npc-measurement', action='store_true',
                         help='receive bounded read-only cockpit measurements for the private MFQ-419 trial')
     parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),

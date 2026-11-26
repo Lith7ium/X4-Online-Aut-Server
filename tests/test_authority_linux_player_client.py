@@ -287,6 +287,13 @@ class PlayerClientTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[0].timeout, 45)
             self.assertTrue(run.call_args.kwargs['company_motion'])
             self.assertNotIn('company_hull_playback_index', run.call_args.kwargs)
+            self.assertNotIn('company_combat', run.call_args.kwargs)
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', '--company-combat', '--combat-capture']), 0)
+            self.assertTrue(run.call_args.kwargs['company_combat'])
+            self.assertTrue(run.call_args.kwargs['combat_capture'])
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                cli.main([*args, '--company-combat'])
             option = ['--company-hull-playback-index', str(INDEX + 1)]
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', *option]), 0)

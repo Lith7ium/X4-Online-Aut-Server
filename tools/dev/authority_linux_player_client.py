@@ -26,6 +26,8 @@ def main(argv=None):
                         help='choose a specific free index instead of prompting')
     parser.add_argument('--company-motion', action='store_true',
                         help='opt into the server’s separate authenticated company motion channel')
+    parser.add_argument('--company-combat', action='store_true',
+                        help='report throttled stock gun contacts (requires --company-motion)')
     parser.add_argument('--combat-capture', action='store_true',
                         help='record shield and hull hits locally while piloting the reserved ship')
     parser.add_argument('--company-purchases', action='store_true',
@@ -57,6 +59,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
+    if args.company_combat and not args.company_motion:
+        parser.error('--company-combat requires --company-motion')
     if args.company_fleet_orders and not args.company_purchases:
         parser.error('--company-fleet-orders requires --company-purchases')
     if args.company_sales and not (args.company_purchases and args.company_trade_view):
@@ -102,6 +106,8 @@ def main(argv=None):
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = terminal_company_ship_selector if args.company_ship_index is None else selected_index
         motion_options = {'company_motion': True} if args.company_motion else {}
+        if args.company_combat:
+            motion_options['company_combat'] = True
         if args.combat_capture:
             motion_options['combat_capture'] = True
         if args.company_purchases:
