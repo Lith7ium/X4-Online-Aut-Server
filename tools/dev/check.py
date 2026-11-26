@@ -3,7 +3,8 @@
 Any skipped test fails the run. --allow-skip TEXT (repeatable) accepts skips whose
 reason contains TEXT; CI uses it for checks that need hardware or files a hosted
 runner cannot have (X4 executables, the released lane runner). Every skip reason
-is printed either way.
+is printed either way. Supply unittest names to run selected checks on their
+native platform with the same skip policy.
 """
 import argparse
 from pathlib import Path
@@ -13,6 +14,7 @@ import unittest
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--allow-skip', action='append', default=[], metavar='TEXT')
+parser.add_argument('tests', nargs='*', metavar='TEST', help='unittest module, class or method name')
 args = parser.parse_args()
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'tools'), str(ROOT)]
@@ -23,7 +25,11 @@ except ImportError:
 print('Project:', ROOT)
 print('Version:', (ROOT/'VERSION.txt').read_text().strip())
 print('Python:', platform.python_version(), 'Platform:', platform.platform())
-suite = unittest.defaultTestLoader.discover(str(ROOT/'tests'))
+if args.tests:
+    sys.path.insert(0, str(ROOT / 'tests'))
+    suite = unittest.defaultTestLoader.loadTestsFromNames(args.tests)
+else:
+    suite = unittest.defaultTestLoader.discover(str(ROOT / 'tests'))
 result = unittest.TextTestRunner(verbosity=2).run(suite)
 refused = [(test, why) for test, why in result.skipped if not any(text in why for text in args.allow_skip)]
 for test, why in result.skipped:
