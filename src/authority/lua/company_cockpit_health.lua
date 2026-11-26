@@ -66,9 +66,14 @@ function M.new(options)
         if controlled and actor_id(candidate) and (actor == nil or actor == candidate) then return candidate end
     end
 
-    local function emit(attempt, status, health)
+    local function emit(attempt, status, health, reason)
         active = nil
-        if status == 'unknown' then fenced = true end
+        if status == 'unknown' then
+            fenced = true
+            pcall(DebugError, string.format(
+                '[X4LAN] AUTH_COMPANY_COCKPIT_HEALTH_UNCONFIRMED index=%d window=%d sequence=%.0f reason=%s',
+                options.index, attempt.window, attempt.sequence, reason))
+        end
         local receipt = {generation=attempt.generation, window=attempt.window, epoch=options.epoch,
             index=options.index, sequence=attempt.sequence, status=status}
         if health then
@@ -85,11 +90,11 @@ function M.new(options)
         end
     end
 
-    local function withdraw()
+    local function withdraw(reason)
         if not active then return end
         local attempt = active
         pcall(issue, SCREEN, 'Clear', {lease=options.lease, request=attempt.request})
-        emit(attempt, attempt.writing and 'unknown' or 'rejected')
+        emit(attempt, attempt.writing and 'unknown' or 'rejected', nil, reason or 'context_changed')
     end
 
     local function still_current(attempt, now)
@@ -182,13 +187,15 @@ function M.new(options)
                 window=attempt.window, sequence=attempt.sequence,
                 validity=math.min(MD_VALIDITY, attempt.expires_at - now),
             })
-            if not issued or result == false then withdraw() end
+            if not issued or result == false then withdraw('apply_dispatch_failed') end
         elseif status == 'applied' and attempt.writing then
             local ok, health = pcall(options.read_health, actor)
             if ok and valid_health(health, attempt) and near(health.shield, attempt.shield)
                     and near(health.hull, attempt.hull) and still_current(attempt, clock()) then
                 emit(attempt, 'confirmed', health)
-            else emit(attempt, 'unknown') end
+            else
+                emit(attempt, 'unknown', nil, 'readback_unconfirmed')
+            end
         end
     end) ~= false)
     return api
@@ -219,8 +226,11 @@ function M.motion_link(receiver)
         local received_revision = decimal(row[2])
         if not received_revision or received_revision < revision then return end
         if #row == 2 and row[1] == 'HEALTH_CLEAR' then
-            revision = received_revision
-            receiver:set_window(nil)
+            -- A snapshot from this revision may have overtaken its clear on local UDP.
+            if received_revision > revision then
+                revision = received_revision
+                receiver:set_window(nil)
+            end
             return
         end
         if (#row ~= 13 and #row ~= 14) or row[1] ~= 'HEALTH' then return end

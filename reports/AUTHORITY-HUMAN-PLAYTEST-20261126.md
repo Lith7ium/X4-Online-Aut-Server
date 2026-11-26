@@ -22,6 +22,8 @@ Of five direct Bolt Repeater contacts confirmed to the Bazzite shooter, the firs
 
 Windows recorded its initial health and local shots. Both clients use the same code to request current server health, write shield and hull in X4, and read back the result. This path does not replay the incoming projectile. Windows did not retain a confirmed cockpit readback for the incoming damage, and its launcher failed to write the final session summary at normal exit. We cannot tell whether a reduced value reached the Windows cockpit. Both pilots closed their games deliberately. Fedora saved after the last departure, and the operator verified the checkpoint marker and file hash.
 
+An offline regression also found that a delayed or duplicated local reset message could disable all subsequent cockpit health updates during a valid write. The client now ignores a reset it has already applied. A newer reset still takes effect, and X4 logs an unconfirmed write once with its reason. The Windows playtest did not retain evidence linking this ordering to the reported symptom.
+
 ## What would change the release decision
 
 A new two-person Linux/Windows internet flight needs to show both pilots following each other's turns and speed in close flight, through increasing separation and travel mode. The target speed and the positions on radar and the map need to be usable, and the Bazzite map needs to render clearly. Each pilot needs to see the other's fire and confirm the resulting shield loss in their cockpit against the server record.

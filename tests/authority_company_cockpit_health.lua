@@ -184,6 +184,7 @@ do
     f.health.hull = 3578
     -- Shield readback disagrees even though the MD result reports both setters ran.
     f:reply(1, 'applied')
+    assert(logs[#logs]:find('reason=readback_unconfirmed', 1, true))
     assert(f.receipts[1].status == 'unknown' and not f.api:apply(f:row(2)))
 end
 
@@ -192,6 +193,7 @@ do
     f.fail_command = 'Apply'
     assert(f.api:apply(f:row(1)))
     f:reply(1, 'prepared')
+    assert(logs[#logs]:find('reason=apply_dispatch_failed', 1, true))
     assert(f.receipts[1].status == 'unknown' and not f.api:apply(f:row(2)))
 end
 
@@ -202,4 +204,32 @@ do
     f.now = 101
     f:reply(1, 'prepared')
     assert(f.calls[2].command == 'Clear' and f.receipts[1].status == 'rejected')
+end
+
+-- The local bridge clears each revision before sending its first snapshot.
+-- UDP can duplicate the clear or deliver it after that snapshot.
+do
+    local f = fixture()
+    local link = module.motion_link(f.api)
+    local function begin_apply(revision, sequence)
+        link:receive({'HEALTH', tostring(revision), generation, epoch, '1074', '3',
+            tostring(sequence), '100', '100.1', '4', '2366', '3578', '3600', '6'})
+        f:reply(sequence, 'prepared')
+        assert(f.calls[#f.calls].command == 'Apply')
+    end
+    link:sample(100)
+    begin_apply(1, 1)
+    link:receive({'HEALTH_CLEAR', '1'})
+    link:receive({'HEALTH_CLEAR', '1'})
+    assert(#f.receipts == 0, 'a late clear for the current revision interrupted its health write')
+    f.health.shield, f.health.hull = 4, 3578
+    f:reply(1, 'applied')
+    assert(f.receipts[1].status == 'confirmed')
+    begin_apply(1, 2)
+    link:receive({'HEALTH_CLEAR', '2'})
+    assert(f.receipts[2].status == 'unknown', 'a newer revision must still invalidate a pending write')
+    f:reply(2, 'applied')
+    assert(#f.receipts == 2 and not f.api:set_window(generation, 4))
+    assert(logs[#logs] == '[X4LAN] AUTH_COMPANY_COCKPIT_HEALTH_UNCONFIRMED'
+        .. ' index=1074 window=3 sequence=2 reason=context_changed')
 end
