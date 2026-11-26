@@ -194,6 +194,45 @@ with the observing game's `AUTH_COMPANY_COCKPIT_READBACK` entries.
 A zero measures a stationary sample or pair. A null means the provider had
 no eligible pair of positions or no reported velocity for that measurement.
 
+### Capture native hits on the admitted ship (diagnostic)
+
+`-CombatCapture` is an opt-in, read-only diagnostic for a Company pilot. Add
+it to a Company seat command, for example:
+
+```powershell
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -FreshCompanyProfile -CompanyShipIndex 1074 -CombatCapture
+```
+
+After admission, the overlay arms the native combat observer on the offered
+registry epoch and watches only the admitted ship. It never writes hull,
+shield, damage or orders, and a refused watch never blocks the pilot. Without
+the switch the launch is unchanged.
+
+After X4 stops, the run directory holds `combat-capture-receipt.json`. The
+result line shows `combat_capture` with:
+
+- the checkpoint ID, save SHA-256, registry epoch and admitted index;
+- `receipt`, the path to the receipt file;
+- `sequences`, the native shield and hull callbacks on that ship;
+- `receipt_error` instead, if the receipt could not be written.
+
+The receipt holds no ticket, lease or key. Keep it with the run directory.
+The provider checks each sequence against its checkpoint store with
+`tools/dev/authority_combat_hit_evidence.py --piloted-ship-index`. That needs
+the pilot's `x4authority.log`, so send the log only when asked.
+
+To rebuild a receipt from a retained log, run the packaged utility. Take the
+four values from the `combat_capture` block. The utility never overwrites an
+existing receipt:
+
+```powershell
+python .\tools\dev\authority_combat_capture_receipt.py --checkpoint checkpoint-... `
+  --sha256 ... --registry-epoch ... --piloted-ship-index 1074 `
+  --log "$env:USERPROFILE\Documents\Egosoft\X4\45851\x4authority.log" --out C:\X4Test\receipt.json
+```
+
 ### Run the isolated HUD playback diagnostic
 
 Use an isolated world and matching playback-capable packages. Get both pilots

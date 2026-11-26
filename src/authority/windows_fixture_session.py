@@ -13,7 +13,7 @@ import time
 from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
-from .combat_capture import new_receipt
+from .combat_capture import collect_hits, new_receipt, write_receipt
 from .company_motion_source import validate_npc_observation, validate_playback_index
 from .company_npc_measurement import validate_measurement_trial
 from .company_ship_selection import reserve_company_ship
@@ -47,6 +47,18 @@ def _annotate(error, message):
         error.add_note(message)
     except BaseException:
         pass
+
+
+def _write_capture_receipt(workspace, receipt, log, summary):
+    """Write the opt-in combat receipt after X4 stops; a diagnostic failure is reported, never fatal."""
+    try:
+        receipt = collect_hits(receipt, log.decode('utf-8', 'replace'))
+        path = workspace.run_directory / 'combat-capture-receipt.json'
+        write_receipt(path, receipt)
+    except Exception as error:
+        summary['receipt_error'] = type(error).__name__
+        return
+    summary.update(receipt=str(path), sequences=[hit['sequence'] for hit in receipt['hits']])
 
 
 def validate_motion_request(request, participant_timeout):
@@ -385,7 +397,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if motion is not None:
                     result['motion_receipts'] = motion.confirmed_samples
                 if capture_receipt is not None:
-                    # Hits are read from this pilot's own log after X4 stops.
+                    # Hits are read from this pilot's own log after X4 stops (_write_capture_receipt).
                     result['combat_capture'] = {key: value for key, value in capture_receipt.items()
                                                 if key != 'hits'}
             except BaseException as error:
@@ -452,6 +464,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             raise RuntimeError('final fixture observations incomplete')
                         if seat_index is not None and session.company_seat_status == 'controlled':
                             result['controlled_company_ship_index'] = seat_index
+                        if capture_receipt is not None:
+                            _write_capture_receipt(workspace, capture_receipt, final_log, result['combat_capture'])
                     except BaseException:
                         cleanup_errors.append('final fixture observations unconfirmed')
                 if session is not None:

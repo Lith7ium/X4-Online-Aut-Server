@@ -80,6 +80,11 @@ COMPANY_SEAT = {
     'src/authority/lua/company_motion_source.lua', 'src/authority/lua/source_motion_sampler.lua',
     'tools/dev/authority_job_descriptor_probe.lua', 'tools/dev/authority_job_descriptor_probe.xml',
 }
+# Opt-in read-only combat capture (-CombatCapture) and its offline receipt utility.
+COMBAT_CAPTURE = {
+    'src/authority/md/combat_observer.xml', 'src/authority/lua/client_combat_capture.lua',
+    'tools/dev/authority_combat_capture_receipt.py',
+}
 
 
 def select_paths(commit):
@@ -101,7 +106,7 @@ def select_paths(commit):
             pending.append(path)
 
     for path in records:
-        if path in REQUIRED or path in COMPANY_SEAT or (
+        if path in REQUIRED or path in COMPANY_SEAT or path in COMBAT_CAPTURE or (
                 path.startswith('src/authority/') and path.endswith('.py')):
             include(path)
     if missing := REQUIRED - paths:

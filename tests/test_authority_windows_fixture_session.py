@@ -1,5 +1,6 @@
 """Lifecycle composition with test doubles; no Windows, X4 or network run."""
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -267,7 +268,32 @@ class FixtureSessionTests(unittest.TestCase):
         self.assertEqual(result['controlled_company_ship_index'], 2)
         self.assertEqual(result['combat_capture'], {
             'format': 1, 'checkpoint_id': self.offer.checkpoint_id, 'checkpoint_sha256': self.offer.sha256,
-            'registry_epoch': snapshot['epoch'], 'piloted_ship_index': 2})
+            'registry_epoch': snapshot['epoch'], 'piloted_ship_index': 2, 'receipt_error': 'AttributeError'})
+        self.assertTrue(result['owned_cleanup_confirmed'])  # a receipt failure never fails the pilot
+
+    def test_combat_capture_writes_the_receipt_from_the_final_pilot_log(self):
+        from test_authority_combat_observation import _sample_event_line
+        snapshot = self.prepare_company_seat()
+        hit = _sample_event_line(4, 'shield_damaged', 9.5, victim='0x7a1', v_code='ABC-123', v_owner='player',
+                                 v_reg=2, v_ctrl=1, v_occ=1)
+        other = _sample_event_line(5, 'hull_damaged', 9.6, v_reg=1)
+        self.final_log_extra = ''.join(f'[Scripts] 9.5 *** Context:md.X4AuthorityCombatObserver.Observe: '
+                                       f'[X4LAN] AUTH_COMBAT_OBS {payload}|{snapshot["epoch"]}\n'
+                                       for payload in (hit, other)).encode('ascii')
+        with tempfile.TemporaryDirectory() as directory:
+            self.workspace.run_directory = Path(directory)
+            with patch.object(subject, 'verify_join_snapshot', return_value=snapshot):
+                result = self.run_session(require_registry_snapshot=True, select_ship=lambda ships, pump: 2,
+                                          combat_capture=True)
+            receipt_path = Path(directory) / 'combat-capture-receipt.json'
+            self.assertEqual(result['combat_capture']['receipt'], str(receipt_path))
+            self.assertEqual(result['combat_capture']['sequences'], [4])
+            receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+        self.assertEqual((receipt['checkpoint_id'], receipt['checkpoint_sha256'], receipt['registry_epoch'],
+                          receipt['piloted_ship_index']),
+                         (self.offer.checkpoint_id, self.offer.sha256, snapshot['epoch'], 2))
+        self.assertEqual([entry['sequence'] for entry in receipt['hits']], [4])
+        self.assertTrue(result['owned_cleanup_confirmed'])
 
     def test_passenger_audit_keeps_the_reservation_without_claiming_control(self):
         snapshot = self.prepare_company_seat()

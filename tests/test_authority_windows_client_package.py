@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -122,6 +123,48 @@ with tempfile.TemporaryDirectory() as directory:
             assert 'X4LAN_MOTION_BUFFER=M' in (lab / 'ui/motion_buffer.lua').read_text()
         if playback_index is not None:
             assert 'playback_index=1317' in config
+
+    if 'combat_capture' in signature(install_fixture_overlay).parameters:
+        for capture in (False, True):
+            private = view / f'combat-{capture}'
+            (private / 'extensions').mkdir(parents=True)
+            (private / '.x4ls-view').touch()
+            assets = install_fixture_overlay(
+                private, new_test_view=True, bound_offer=MarkerBoundOffer(offer, 'e' * 32),
+                profile_id=45850, save_path=r'C:\private\45850\save', participant_port=20123,
+                participant_lease='f' * 32, windows_dll=dll, dll_sha256=hashlib.sha256(dll.read_bytes()).hexdigest(),
+                registry_status=ready, registry_nonce='3' * 32, registry_snapshot=snapshot,
+                seat_index=1318, combat_capture=capture,
+            )
+            for name in ('md/combat_observer.xml', 'ui/client_combat_capture.lua'):
+                assert (name in assets) == capture
+            config = (private / 'extensions/x4_lan_lab/ui/config.lua').read_text()
+            assert ('authority_combat_capture={epoch=' in config) == capture
+"""
+
+# The launcher's -Python receives a .cmd that runs this probe instead of a session.
+LAUNCHER_PROBE = r"""
+import importlib.util
+import json
+import sys
+
+from pathlib import Path
+
+client_path, argv = sys.argv[1], sys.argv[2:]
+sys.path[:0] = [str(Path(client_path).parent), str(Path(client_path).parents[2] / 'src')]
+import authority.windows_fixture_session as session
+import authority.windows_fixture_workspace as workspace
+spec = importlib.util.spec_from_file_location('packaged_client', client_path)
+client = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(client)
+calls = []
+session.run_fixture_session = lambda **options: calls.append(options) or {}
+workspace.WindowsFixtureWorkspace = lambda *args, **options: object()
+client.read_connection_settings = lambda path: {}
+client.run(client.parser().parse_args(argv))
+options = calls[0]
+print(json.dumps({'flag': '--combat-capture' in argv, 'combat_capture': options.get('combat_capture'),
+                  'registry': options['require_registry_snapshot']}))
 """
 
 
@@ -183,6 +226,62 @@ class WindowsClientPackageTest(unittest.TestCase):
                         self.assertIn('--fresh-company-profile', result.stdout)
             subprocess.run([sys.executable, '-c', OVERLAY_SMOKE], cwd=extracted, env=environment,
                            check=True, timeout=10)
+            self.assertTrue(package.COMBAT_CAPTURE <= names)
+            # A recorded pilot log produces a receipt with the packaged read-only utility.
+            receipt = root / 'combat-capture-receipt.json'
+            result = subprocess.run(
+                [sys.executable, str(extracted / 'tools/dev/authority_combat_capture_receipt.py'),
+                 '--checkpoint', 'checkpoint-' + 'c' * 32, '--sha256', 'd' * 64,
+                 '--registry-epoch', '5e2b7c1d9a4f4e0b8c6d2a1f3e5b7d90', '--piloted-ship-index', '1074',
+                 '--log', str(ROOT / 'tests/fixtures/windows-combat-capture-pilot.log'), '--out', str(receipt)],
+                cwd=extracted, env=environment, capture_output=True, text=True, check=True, timeout=10)
+            self.assertEqual(json.loads(result.stdout)['sequences'], [2, 4, 5])
+            stored = json.loads(receipt.read_text(encoding='utf-8'))
+            self.assertEqual((stored['piloted_ship_index'], [hit['sequence'] for hit in stored['hits']]),
+                             (1074, [2, 4, 5]))
+
+    @unittest.skipUnless(os.name == 'nt' and shutil.which('powershell'), 'Windows PowerShell launcher')
+    def test_extracted_launcher_passes_combat_capture_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_path = root / 'client.zip'
+            package.build('HEAD', archive_path)
+            with ZipFile(archive_path) as archive:
+                archive.extractall(root)
+            extracted = root / package.PREFIX
+            game, connection, dll = root / 'game', root / 'connection.json', root / 'inert.dll'
+            game.mkdir()
+            connection.write_text('{}')
+            dll.write_bytes(b'MZ synthetic test data')
+            probe = root / 'probe.py'
+            probe.write_text(LAUNCHER_PROBE)
+            stub = root / 'python-probe.cmd'
+            stub.write_text(f'@"{sys.executable}" "{probe}" %*\r\n')
+            environment = dict(os.environ, PYTHONNOUSERSITE='1')
+            environment.pop('PYTHONPATH', None)
+
+            def launch(*options):
+                return subprocess.run(
+                    ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                     str(extracted / 'tools/run_authority_windows_client.ps1'), '-Python', str(stub),
+                     # Explicit WorkRoot: on Windows PowerShell 5.1 the default Parent lacks PSIsContainer.
+                     '-Game', str(game), '-WorkRoot', str(root), '-ConnectionFile', str(connection),
+                     '-NetworkDll', str(dll),
+                     '-NetworkDllSha256', hashlib.sha256(dll.read_bytes()).hexdigest(), *options],
+                    cwd=extracted, env=environment, capture_output=True, text=True, timeout=60)
+
+            seat = ('-FreshCompanyProfile', '-CompanyShipIndex', '1074')
+            default = launch(*seat)
+            self.assertEqual(default.returncode, 0, default.stderr)
+            self.assertEqual(json.loads(default.stdout.strip().splitlines()[-1]),
+                             {'flag': False, 'combat_capture': None, 'registry': True})
+            capture = launch(*seat, '-CombatCapture')
+            self.assertEqual(capture.returncode, 0, capture.stderr)
+            self.assertEqual(json.loads(capture.stdout.strip().splitlines()[-1]),
+                             {'flag': True, 'combat_capture': True, 'registry': True})
+            refused = launch('-CombatCapture')
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('CombatCapture requires a Company ship selection', refused.stdout + refused.stderr)
 
     def test_unverified_dll_is_rejected_before_publishing(self):
         with tempfile.TemporaryDirectory() as directory:
