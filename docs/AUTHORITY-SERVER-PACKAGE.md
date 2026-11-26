@@ -446,6 +446,17 @@ current ship admission. On the server, X4 applies accepted damage to the
 registered target in arrival order and returns its shield and hull values.
 The sender retries the same report IDs after a lost reply.
 
+For an internal provider run, `--trial-ordered-gun-hits` also enables the
+combat channel. With this option the provider can process multiple hits
+from one pilot's frame in one X4 update. Each hit has its own server order,
+target and receipt. The provider reads the final shield and hull of every
+affected ship. If X4 proves a group made zero writes, the server may check
+each hit individually. A missing or incomplete native confirmation leaves
+the potentially applied hits unresolved and stops further damage writes.
+The pilot uses the ordinary combat option. The [native server
+experiment](../reports/AUTHORITY-SHIELD-REPLAY-20261126.md) records which
+parts of this path have been exercised in X4.
+
 The first source supports X4's direct bullet-contact notification for
 the unmodified vanilla S Bolt Repeater Mk2
 (`weapon_gen_s_gatling_01_mk2_macro`). X4 throttles that notification,
