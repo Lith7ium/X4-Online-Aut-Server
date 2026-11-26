@@ -187,13 +187,15 @@ class SeatLogTests(unittest.TestCase):
                 self.assertEqual(cue.exists(), combat)
                 self.assertEqual((lab / 'md/client_combat_capture.xml').exists(), capture)
                 if combat:
-                    lease = re.search(r'\blease="([0-9a-f]{32})"', motion).group(1)
-                    self.assertIn(f"@$args.$lease == '{lease}'", cue.read_text())
+                    nonce = re.search(r'\bnonce="([0-9a-f]{32})"', motion).group(1)
+                    self.assertIn(f"@$args.$lease == '{nonce}'", cue.read_text())
                     manifest = (lab / 'ui.xml').read_text()
                     self.assertEqual(manifest.count('ui/combat_observer.lua'), 1)
                     self.assertLess(manifest.index('ui/combat_observer.lua'), manifest.index('ui/company_cockpit_health.lua'))
                     self.assertLess(manifest.index('ui/company_cockpit_health.lua'),
                                     manifest.index('ui/authority_two_x4_participant_probe.lua'))
+                participant.redact()
+                self.assertNotIn('authority_company_motion={', (lab / 'ui/config.lua').read_text())
 
     def test_playback_target_must_be_operational_and_distinct_in_verified_register(self):
         for target, bits in ((INDEX, '1' * STATUS[2]), (INDEX + 1, '1' * INDEX),

@@ -58,6 +58,33 @@ class CompanyCombatTests(unittest.TestCase):
     def receive(self, stream):
         return json.loads(stream.readline())['receipts']
 
+    def test_pending_native_health_discarded_when_the_world_pauses(self):
+        self.service.close()
+        operation = Mock()
+        operation.poll.return_value = None
+        window = 3
+        self.service = CompanyCombatService(self.grants.get, self.apply,
+                                           begin_health_read=lambda binding: operation,
+                                           health_window=lambda binding: window)
+        self.addCleanup(self.service.close)
+        connection, stream = self.open()
+        request = json.loads(self.frame(self.first, []))
+        del request['impacts']
+        request.update(kind='combat_health_read', window=window, sequence=1, after_revision=None)
+        connection.sendall(encode_frame(request))
+        self.service.poll()
+        operation.poll.assert_called_once_with()
+
+        window = None
+        operation.poll.return_value = dict(shield=10, maxshield=100, hull=20, maxhull=100)
+        self.service.poll()
+        response = json.loads(stream.readline())
+        self.assertIsNone(response['health'])
+        self.assertIsNone(response['revision'])
+        operation.cancel.assert_called_once_with()
+        operation.poll.assert_called_once_with()
+        self.assertFalse(self.calls)
+
     def test_fifo_batches_multi_reporter_health_and_retry_versions(self):
         second, second_reply = self.open()
         first, first_reply = self.open()

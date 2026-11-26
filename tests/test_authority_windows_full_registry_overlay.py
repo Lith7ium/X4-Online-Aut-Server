@@ -106,9 +106,9 @@ class FullRegistryOverlayTest(unittest.TestCase):
         config = (target / 'ui/config.lua').read_text()
         motion = config.split('authority_company_motion={', 1)[1].split('}', 1)[0]
         self.assertIn('cockpit_health=true', motion)
-        lease = re.search(r'\blease="([0-9a-f]{32})"', motion).group(1)
+        nonce = re.search(r'\bnonce="([0-9a-f]{32})"', motion).group(1)
         cue = (target / 'md/company_cockpit_health.xml').read_text()
-        self.assertIn(f"@$args.$lease == '{lease}'", cue)
+        self.assertIn(f"@$args.$lease == '{nonce}'", cue)
         self.assertIn('md/company_cockpit_health.xml', assets)
         self.assertIn('md/client_combat_capture.xml', assets)
         scripts = [entry.get('name') for entry in ElementTree.parse(target / 'ui.xml').iter('file')]

@@ -80,6 +80,7 @@ class Participant(LocalParticipantControl):
                 text, count = re.subn(
                     r',authority_company_motion=\{port=[0-9]+,lease="[0-9a-f]{32}",'
                     r'generation="[0-9a-f]{32}",nonce="[0-9a-f]{32}",index=[0-9]+'
+                    r'(?:,cockpit_health=true)?'
                     r'(?:,observed_npc_index=[0-9]+,observed_npc_code="[A-Z0-9]{3}-[A-Z0-9]{3}"'
                     r'(?:,registered_npc_hold_trial=true(?:,registered_npc_alignment_trial=true)?'
                     r'|,registered_npc_local_measurement=true)?'

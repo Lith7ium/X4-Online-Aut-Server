@@ -170,7 +170,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
     local cockpit_health
     if config.cockpit_health == true then
         local health = assert(X4LAN_COMPANY_COCKPIT_HEALTH)
-        cockpit_health = health.motion_link(health.new({enabled=true, lease=config.lease,
+        cockpit_health = health.motion_link(health.new({enabled=true, lease=config.nonce,
             epoch=pinned.epoch, index=config.index, clock=udp.monotonic, available=available,
             controlled_actor=function() return seat and seat:controlled_actor() end,
             read_health=X4LAN_COMBAT_OBSERVER.read_lua_health,

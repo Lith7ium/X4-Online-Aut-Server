@@ -62,7 +62,8 @@ class CompanyCockpitHealthBridgeTests(unittest.TestCase):
         config = source.configure(EPOCH, INDEX)
         self.assertTrue(config['cockpit_health'])
         cue = source.cockpit_health_md((ROOT / 'src/authority/md/company_cockpit_health.xml').read_bytes())
-        self.assertIn(config['lease'].encode(), cue)
+        self.assertIn(config['nonce'].encode(), cue)
+        self.assertNotIn(config['lease'].encode(), cue)
         self.assertNotIn(b'__COCKPIT_HEALTH_LEASE__', cue)
         with patch('authority.company_motion_source.CompanyCockpitHealthBridge', side_effect=self.bridge):
             bridge = source.bind_cockpit_health(dict(epoch=EPOCH, generation=GENERATION, index=INDEX))

@@ -188,7 +188,7 @@ class CompanyMotionSource:
         marker = b'__COCKPIT_HEALTH_LEASE__'
         if not self._cockpit_health_enabled or self._registry is None or data.count(marker) != 1:
             raise ValueError('unexpected cockpit health MD source or configuration')
-        return data.replace(marker, self._lease.encode('ascii'))
+        return data.replace(marker, self._nonce.encode('ascii'))
 
     def bind_cockpit_health(self, credential):
         self._owner()
