@@ -65,6 +65,10 @@ local function dist3(a, b)
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
+local function own_xyz(p)
+    return ('%.4f,%.4f,%.4f'):format(p.x, p.y, p.z)
+end
+
 local function fmt_pose(p)
     return ('x=%.4f y=%.4f z=%.4f yaw=%.4f pitch=%.4f roll=%.4f'):format(
         p.x, p.y, p.z, p.yaw, p.pitch, p.roll)
@@ -314,12 +318,12 @@ local function step_active_req()
             local tgt = GetPlayerTarget()
             local mode = state.cockpit_reader and state.cockpit_reader:mode() or 'none'
             finish_req(req.seq, 'probed', (
-                'mode=%s has_target=%s %s own_disp_m=%.4f ' ..
+                'mode=%s has_target=%s %s own_xyz=%s own_disp_m=%.4f ' ..
                 'binds=%d writes=%d readbacks=%d stale_cutoffs=%d alignments=%d ' ..
                 'gen_rejects=%d refusals_50m=%d max_err=%.5f min_elapsed=%.5f ' ..
                 'align_err=%.6f align_elapsed=%.6f'
             ):format(
-                tostring(mode), tostring(tgt ~= nil), fmt_pose(rpose), odisp,
+                tostring(mode), tostring(tgt ~= nil), fmt_pose(rpose), own_xyz(opose), odisp,
                 st.binds or 0, st.writes or 0, st.readbacks or 0, st.stale_cutoffs or 0,
                 st.alignments or 0, st.generation_rejections or 0, st.refusals_over_50m or 0,
                 state.max_readback_err,
@@ -355,11 +359,11 @@ local function step_active_req()
     local odisp = dist3(state.own_init_pose, opose)
     local st = state.playback_ctrl and state.playback_ctrl:stats() or {}
     finish_req(req.seq, 'readback', (
-        'index=%s actor_hex=%s sector_macro=%s idcode=%s %s own_disp_m=%.4f ' ..
+        'index=%s actor_hex=%s sector_macro=%s idcode=%s %s own_xyz=%s own_disp_m=%.4f ' ..
         'writes=%d readbacks=%d stale_cutoffs=%d alignments=%d gen_rejects=%d refusals_50m=%d ' ..
         'max_err=%.5f min_elapsed=%.5f'
     ):format(
-        parts[3], parts[4], parts[7], parts[8], fmt_pose(rpose), odisp,
+        parts[3], parts[4], parts[7], parts[8], fmt_pose(rpose), own_xyz(opose), odisp,
         st.writes or 0, st.readbacks or 0, st.stale_cutoffs or 0, st.alignments or 0,
         st.generation_rejections or 0, st.refusals_over_50m or 0,
         state.max_readback_err,
@@ -426,10 +430,10 @@ local function frame()
         log((
             'READY own_code=%s remote_code=%s remote_hex=%s remote_sector=%s ' ..
             'remote_x=%.4f remote_y=%.4f remote_z=%.4f ' ..
-            'map_code=%s map_hex=%s map_sector=%s'
+            'map_code=%s map_hex=%s map_sector=%s own_xyz=%s'
         ):format(
             state.own_code, state.remote_code, state.remote_hex, state.remote_sector,
-            r0.x, r0.y, r0.z, state.map_code, state.map_hex, state.map_sector))
+            r0.x, r0.y, r0.z, state.map_code, state.map_hex, state.map_sector, own_xyz(state.own_init_pose)))
         return
     end
 

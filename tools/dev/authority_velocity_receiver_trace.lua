@@ -54,6 +54,14 @@ local function xyz(p)
     return ('%.4f,%.4f,%.4f'):format(p.x, p.y, p.z)
 end
 
+-- The occupied ship's sector XYZ, so spawn drift can be told apart from playback.
+local function own_pose()
+    local own = occupied()
+    if not own or own == 0 then return 'none' end
+    local ok, pose = pcall(ffi_pose, own)
+    return ok and xyz(pose) or 'none'
+end
+
 local original_cockpit_new = cockpit_playback.new
 cockpit_playback.new = function(options)
     -- Logged once when the stream starts, before any sample, so the runner can place the trajectory.
@@ -89,11 +97,12 @@ hull_playback.new = function(options)
             local independent = actor and ffi_pose(actor)
             local sector, code = native_identity(actor)
             log(('READBACK seq=%s t=%.6f elapsed=%.6f error=%.4f ffi_vs_actual=%.4f ffi_error=%.4f ffi=%s' ..
-                ' zone=%s actor=%s sector=%s code=%s'):format(
+                ' zone=%s actor=%s sector=%s code=%s own=%s'):format(
                 tostring(ev.source_sequence), ev.local_time, ev.elapsed, ev.error,
                 independent and dist3(independent, ev.actual) or -1,
                 independent and dist3(independent, ev.target) or -1,
-                independent and xyz(independent) or 'none', tostring(zone_of(actor)), binding.actor, sector, code))
+                independent and xyz(independent) or 'none', tostring(zone_of(actor)), binding.actor, sector, code,
+                own_pose()))
         end
         return record(ev)
     end
@@ -101,11 +110,13 @@ hull_playback.new = function(options)
         local zone_target = actor and zone_of(actor, target) or -1
         local zone_before = actor and zone_of(actor) or -1
         local sector, code = native_identity(actor)
+        local own_before = own_pose()
         local ok = write(self, target, before, recheck)
         log(('WRITE ok=%s t=%.6f step=%.4f recheck=%s zone_bind=%s zone_now=%s zone_target=%s target=%s' ..
-            ' zone_before=%s actor=%s sector=%s code=%s'):format(
+            ' zone_before=%s actor=%s sector=%s code=%s own_before=%s own_after=%s'):format(
             tostring(ok), clock(), before and dist3(before, target) or -1, tostring(recheck ~= nil),
-            tostring(bind_zone), tostring(actor and zone_of(actor) or -1), tostring(zone_target), xyz(target), tostring(zone_before), binding.actor, sector, code))
+            tostring(bind_zone), tostring(actor and zone_of(actor) or -1), tostring(zone_target), xyz(target), tostring(zone_before), binding.actor, sector, code,
+            own_before, own_pose()))
         return ok
     end
     return original_hull_new(options)
