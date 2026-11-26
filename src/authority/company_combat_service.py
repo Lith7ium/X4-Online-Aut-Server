@@ -33,6 +33,7 @@ class _Peer:
     outgoing: bytes = b''
     request_pending: bool = False
     last_health_window: int | None = None
+    last_health_reply_revision: int = 0
     last_possible_damage_order: int = 0
 
 
@@ -221,17 +222,19 @@ class CompanyCombatService:
             query.operation.cancel()
         if health is not None:
             query.peer.last_health_window = query.window
+            query.peer.last_health_reply_revision = query.sampled_revision
         self._queue_reply(query.peer, 'combat_health', window=query.window, sequence=query.sequence,
                           health=health, revision=query.sampled_revision if health is not None else None)
 
     def _advance_health_read(self):
         """Read the pilot ship in X4 when its last observed damage revision is stale."""
-        # A pilot whose revision already covers the last possible hit can
-        # receive an empty reply while another pilot waits for X4.
+        # An unchanged reply requires the cockpit to confirm the revision last sent
+        # on this connection as well as any damage observed since that reply.
         for query in tuple(self._health_reads):
             peer = query.peer
+            required_revision = max(peer.last_health_reply_revision, peer.last_possible_damage_order)
             if (peer.last_health_window == query.window and query.after_revision is not None
-                    and peer.last_possible_damage_order <= query.after_revision <= self._settled_order):
+                    and required_revision <= query.after_revision <= self._settled_order):
                 self._complete_health_read(query)
         if not self._health_reads:
             return

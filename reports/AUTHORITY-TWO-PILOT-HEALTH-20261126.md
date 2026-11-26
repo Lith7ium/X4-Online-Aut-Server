@@ -41,3 +41,22 @@ The sender now monitors the same open log while waiting. A complete gun event ca
 Four simultaneous shooters exposed another delay. Each shipped client has one combat relay and the server has four. With ordinary socket closure, each local relay still waited for the old health reply. All four hits reached the synthetic adapter exactly once, 1.037–1.082 seconds after their log entries. Explicitly abandoning the disposable read on the local TCP socket let its relay finish early. In the Linux loopback comparison the four hits reached the adapter in 95–112 ms. Every shooter received a receipt and resumed health reads. This changes only the local end of an abandoned health request. The normal closing procedure for impact exchanges still preserves uncertain batches for an exact retry.
 
 The regression starts four authenticated client tunnels, holds the first health operation open and checks that a hit reaches the service before that operation expires. Each target loses exactly 26 shield, each shooter gets one receipt, and all four cockpit bridges then receive the updated health. The health adapter, gun log entries and cockpit acknowledgements in this check are synthetic. Windows execution and live X4 combat remain separate checks.
+
+## Recovering a shield update after a combat connection closes
+
+The client now requests a fresh reading after an interrupted exchange or an
+unconfirmed cockpit update. Only a matching native readback resumes requests
+for changes since the confirmed revision. A reconnected pilot can also miss
+a hit while offline. The provider now checks the revision of its last full
+reply on that connection before telling the pilot there is no update.
+
+An isolated Linux test used two admitted pilots, the regular sender and
+cockpit bridge, and pinned loopback TLS. The simulated target started with
+30 shield. One 26-point hit left 4 shield at damage revision 1. After the
+combat connection closed, the simulated shield recharged while the same
+world window stayed active. The cockpit rejected a fresh reading of 9.
+The next request obtained 12 and the cockpit confirmed it at revision 1.
+The following poll required no new health read. The adapter applied the hit
+once. Shield recharge and cockpit replies were supplied by the fixture.
+The same sequence in running Windows and Linux X4 cockpits is still open.
+[Cockpit retry test](../tests/test_authority_company_cockpit_health_bridge.py) · [Provider reconnection test](../tests/test_authority_company_combat_service.py)

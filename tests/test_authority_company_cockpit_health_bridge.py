@@ -136,3 +136,36 @@ class CompanyCockpitHealthBridgeTests(unittest.TestCase):
         bridge.on_sample(dict(sequence=2, capture_time=100))
         self.assertIsNone(bridge.take_request())
         self.assertEqual(bridge.stats()['unknown'], 1)
+
+    def test_rejected_regenerated_shield_is_read_again_until_confirmed_in_x4(self):
+        bridge = self.bridge(self.binding)
+        bridge.on_clock(3, True)
+
+        def request(sequence, expected_revision):
+            self.now = 99.0 + sequence
+            bridge.on_sample(dict(sequence=sequence, capture_time=self.now))
+            self.assertEqual(bridge.take_request(), (3, sequence, expected_revision))
+
+        def stage(sequence, shield):
+            self.assertTrue(bridge.accept_reply(3, sequence, dict(STATE, shield=shield, revision=8)))
+            bridge.deliver(lambda message: True)
+
+        def confirm(sequence, shield):
+            bridge.native_result(['HEALTH_RESULT', GENERATION, EPOCH, str(INDEX), '3', str(sequence),
+                                  'confirmed', str(shield), '2366', '3578', '3600'])
+
+        request(1, None)
+        stage(1, 74)
+        confirm(1, 74)
+        request(2, 8)
+        stage(2, 81)  # A new connection can return changed health at the same damage order.
+        bridge.native_result(['HEALTH_RESULT', GENERATION, EPOCH, str(INDEX), '3', '2', 'rejected'])
+        request(3, None)
+        self.assertFalse(bridge.accept_reply(3, 3, dict(STATE, shield=99, revision=7)))
+        request(4, None)
+        stage(4, 87)
+        confirm(4, 87)
+        request(5, 8)
+        self.assertFalse(bridge.accept_reply(3, 5, None))  # The server confirmed no new damage.
+        request(6, 8)
+        self.assertEqual(bridge.stats()['last_confirmed_readback']['cockpit']['shield'], 87)
