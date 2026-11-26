@@ -23,8 +23,8 @@ needs the operator. [04:00 development check-in](https://x4multiplayeraicoms.sla
 
 A second GPU-free X4 instance replayed one shield hit observed on the
 Linux pilot. KHI-630's shields changed from 2,366 to 2,340 at unchanged
-game time. A separate native readback and the confirmed save both showed
-2,340. The offline transfer used the original pilot offer. Live reporting
+game time. A separate native readback, the confirmed save and a cold
+X4 restart all showed 2,340. The offline transfer used the original pilot offer. Live reporting
 and the decision about which simulation settles a hit remain open.
 [Observed hit, native replay and saved shield value](AUTHORITY-SHIELD-REPLAY-20261126.md)
 

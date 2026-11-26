@@ -19,4 +19,10 @@ The normal save bridge published a confirmed marked checkpoint while paused. Ind
 | Executed private MD script | `.local/shield-playback/run-01/server/private_shield_playback.xml` | `48da94fb4abe99ed9e2cac855fb1a5330be7569f33c114c1f5e7f91b5ab5e9e1` |
 | Independent verification receipt | `.local/shield-playback/run-01/verified.json` | `8e7e7dde5c0a2b9500fb759c0ec9c08df11f1329fa0a28b381102544795e1b9c` |
 
-The replay save marker is `ab981dd0b380ee54d199152d644f0211`. This run establishes one-shot playback of an observed shield state and its persistence in the saved bytes. Live damage transport, the decision about which simulation settles a hit, and a cold native reload of the replay save remain open.
+The replay save marker is `ab981dd0b380ee54d199152d644f0211`.
+
+## Cold native readback
+
+A fresh GPU-free X4 process on `f03e7f8a` loaded the confirmed replay checkpoint through the regular recovery path. Before the first resume, it verified KHI-630 in both directions of registry entry 1074 and read its health once. The native log recorded `READ|3.511|0x40b4a|2340|2366|3600|3600`. The shield loss survived a cold restart at the original game age, with the hull still full. The provider confirmed the load marker, exited paused, and left its output checkpoint store empty. The independent verification receipt has SHA-256 `7388b48a29afae4d2c7ad90494b92d6cd08cbd762281026f50d9cf3d2835b5ca`.
+
+Live damage transport and the decision about which simulation settles a hit remain open.
