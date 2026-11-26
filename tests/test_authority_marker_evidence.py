@@ -5,8 +5,10 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from authority import marker_evidence
 from authority.checkpoints import Checkpoint
 from authority.marker_evidence import MarkerEvidenceError, verify_saved_marker
 
@@ -58,6 +60,36 @@ class MarkerEvidenceTests(unittest.TestCase):
         for xml in cases:
             with self.subTest(xml=xml), self.assertRaises(MarkerEvidenceError):
                 self.check(xml)
+
+    def test_streams_opaque_unsorted_ids_in_either_order(self):
+        strings = (
+            '<refs type="string"><ref id="90" string="unrelated"/><ref id="42" string="wrong"/>'
+            '<ref id="90" string="duplicate unrelated"/><ref id="00042" string="' + MARKER + '"/></refs>'
+        )
+        cue = CUE.replace('value="42"', 'value="00042"')
+        refs_last = (
+            '<savegame><md><script name="X4AuthorityCheckpointMarker">' + cue + '</script></md>'
+            '<script>' + strings + '</script></savegame>'
+        )
+        for xml in (document(strings, cue), refs_last):
+            with self.subTest(xml=xml), patch.object(marker_evidence, '_parse', wraps=marker_evidence._parse) as parse:
+                self.assertTrue(self.check(xml))
+                self.assertEqual(parse.call_count, 1)
+
+    def test_reference_cap_switches_to_the_same_exact_lookup(self):
+        extra = '<ref id="91"/><ref id="17"/><ref id="17"/><ref id="' + '1' * 33 + '"/>'
+        for cap, duplicate, status, passes in ((3, False, True, 1), (2, False, True, 2),
+                                                (3, True, False, 1), (2, True, False, 2)):
+            strings = STRING_GROUP.replace('</refs>', extra + ('<ref id="42"/>' if duplicate else '') + '</refs>')
+            with (self.subTest(cap=cap, duplicate=duplicate),
+                  patch.object(marker_evidence, '_MAX_REFERENCE_IDS', cap),
+                  patch.object(marker_evidence, '_parse', wraps=marker_evidence._parse) as parse):
+                if status:
+                    self.assertTrue(self.check(document(strings)))
+                else:
+                    with self.assertRaisesRegex(MarkerEvidenceError, 'mismatched marker string'):
+                        self.check(document(strings))
+                self.assertEqual(parse.call_count, passes)
 
     def test_hash_and_malformed_xml_are_rejected(self):
         with self.assertRaises(MarkerEvidenceError):
