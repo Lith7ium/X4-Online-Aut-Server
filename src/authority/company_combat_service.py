@@ -216,7 +216,7 @@ class CompanyCombatService:
                 and self._admitted(query.peer) and self._health_window(query.peer.binding) == query.window)
 
     def _complete_health_read(self, query, health=None):
-        self._health_reads.popleft()
+        self._health_reads.remove(query)
         if query.operation is not None:
             query.operation.cancel()
         if health is not None:
@@ -226,14 +226,17 @@ class CompanyCombatService:
 
     def _advance_health_read(self):
         """Read the pilot ship in X4 when its last observed damage revision is stale."""
+        # A pilot whose revision already covers the last possible hit can
+        # receive an empty reply while another pilot waits for X4.
+        for query in tuple(self._health_reads):
+            peer = query.peer
+            if (peer.last_health_window == query.window and query.after_revision is not None
+                    and peer.last_possible_damage_order <= query.after_revision <= self._settled_order):
+                self._complete_health_read(query)
         if not self._health_reads:
             return
         query = self._health_reads[0]
         peer = query.peer
-        if (peer.last_health_window == query.window and query.after_revision is not None
-                and peer.last_possible_damage_order <= query.after_revision <= self._settled_order):
-            self._complete_health_read(query)
-            return
         if self.native_pending and query.operation is not None:
             # A pending damage write takes priority over a disposable snapshot.
             self._complete_health_read(query)
