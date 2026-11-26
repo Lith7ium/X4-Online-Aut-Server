@@ -396,6 +396,30 @@ class CompanyCombatTests(unittest.TestCase):
         group.assert_called_once()
         self.assertEqual(single.call_count, 3)
 
+    def test_health_read_during_serial_fallback_only_advertises_settled_hits(self):
+        group = Mock(side_effect=CombatImpactRejected('preflight refused'))
+        before = dict(shield=30, maxshield=2366, hull=3600, maxhull=3600)
+        after = dict(before, shield=4)
+        reads = Mock(side_effect=(Mock(poll=Mock(return_value=before)), Mock(poll=Mock(return_value=after))))
+        self.grouped_service(self.apply, group, begin_health_read=reads, health_window=lambda _: 3)
+        attacker, _ = self.open()
+        victim = self.grant(1074)
+        peer, reply = self.open()
+        attacker.sendall(self.frame(self.first, [hit(1, 943), hit(2)]))
+        peer.sendall(self.health_request(victim, 3, 1))
+        self.service.poll()
+        baseline = json.loads(reply.readline())
+        self.assertEqual((baseline['revision'], baseline['health']), (0, before))
+        self.service.poll()
+        self.service.poll()
+        query = json.loads(self.health_request(victim, 3, 2))
+        query['after_revision'] = baseline['revision']
+        peer.sendall(encode_frame(query))
+        self.service.poll()
+        fresh = json.loads(reply.readline())
+        self.assertEqual((fresh['revision'], fresh['health']), (2, after))
+        self.assertEqual(reads.call_count, 2)
+
     def test_group_settles_after_revocation_and_preserves_other_pilot_order(self):
         delivered = Mock(poll=Mock(return_value=None))
         group = Mock(return_value=delivered)

@@ -131,6 +131,7 @@ class CompanyCombatService:
         self._history = {}
         self._batches = deque()
         self._order = 0
+        self._settled_order = 0
         self._poisoned = False
         self._pending_impacts = None
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -230,7 +231,7 @@ class CompanyCombatService:
         query = self._health_reads[0]
         peer = query.peer
         if (peer.last_health_window == query.window and query.after_revision is not None
-                and peer.last_possible_damage_order <= query.after_revision <= self._order):
+                and peer.last_possible_damage_order <= query.after_revision <= self._settled_order):
             self._complete_health_read(query)
             return
         if self.native_pending and query.operation is not None:
@@ -245,7 +246,7 @@ class CompanyCombatService:
                     return
                 if query.operation is None:
                     query.operation = self._begin_health_read(peer.binding)
-                    query.sampled_revision = self._order
+                    query.sampled_revision = self._settled_order
                 result = query.operation.poll()
                 if result is None:
                     return
@@ -286,6 +287,13 @@ class CompanyCombatService:
             if peer.binding is not None and peer.binding[1:] == target:
                 peer.last_possible_damage_order = receipt['order']
 
+    def _finish_impacts(self, batch, receipts):
+        # A native preflight refusal can leave higher orders reserved for the
+        # serial path. Health reads must only advertise work already settled.
+        self._settled_order = receipts[-1]['order']
+        batch.receipts.extend(receipts)
+        self._pending_impacts = None
+
     def _advance_impacts(self, pending):
         batch, receipts = pending.batch, pending.receipts
         binding = batch.peer.binding
@@ -324,8 +332,7 @@ class CompanyCombatService:
                 return
         except BaseException as exc:
             self._poisoned = True
-            self._pending_impacts = None
-            batch.receipts.extend(receipts)
+            self._finish_impacts(batch, receipts)
             for receipt in receipts:
                 # A native prefix may have changed the target. Only a fresh
                 # stock read can tell its pilot what health to display.
@@ -339,8 +346,7 @@ class CompanyCombatService:
             for receipt, health in zip(receipts, values, strict=True):
                 receipt.update(status='confirmed', shield=health[0], hull=health[1])
                 self._invalidate_older_health(binding, receipt)
-        batch.receipts.extend(receipts)
-        self._pending_impacts = None
+        self._finish_impacts(batch, receipts)
 
     def _dispatch_remaining(self, batch, history):
         if batch.single_fallback:
@@ -353,7 +359,7 @@ class CompanyCombatService:
         if self._poisoned or self._apply_impact is None:
             for receipt in receipts:
                 receipt['status'] = 'rejected'
-            batch.receipts.extend(receipts)
+            self._finish_impacts(batch, receipts)
         else:
             self._advance_impacts(_PendingImpacts(batch, receipts))
 
