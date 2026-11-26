@@ -143,7 +143,7 @@ class CompanyCockpitHealthBridge:
             revision, values = ready
             fields = '|'.join(format(value, '.17g') for value in (deadline, *values))
             body = (f'HEALTH|{self._revision}|{self.generation}|{self.epoch}|{self.index}|'
-                    f'{window}|{sequence}|{sample}|{fields}')
+                    f'{window}|{sequence}|{sample}|{fields}|{revision}')
             # Keep the send one-shot. A fresh read is needed after a lost native receipt.
             self._ready, self._sent = None, (window, sequence, revision, values)
         if send(body):

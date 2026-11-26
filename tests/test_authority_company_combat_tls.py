@@ -348,7 +348,7 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result['failure'])
             self.assertEqual(result['observed'], 0)
             read.assert_called_once_with(binding)
-            self.assertTrue(sent[-1].endswith('|4|2366|3600|3600'))
+            self.assertTrue(sent[-1].endswith('|4|2366|3600|3600|0'))
 
     async def test_four_pending_health_links_yield_to_ring_hits_at_shipped_limits(self):
         self.combat.close()
@@ -419,7 +419,7 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
                         for frame in frames:
                             if frame.startswith('HEALTH|'):
                                 fields = frame.split('|')
-                                bridge.native_result(['HEALTH_RESULT', *fields[2:7], 'confirmed', *fields[9:]])
+                                bridge.native_result(['HEALTH_RESULT', *fields[2:7], 'confirmed', *fields[9:13]])
                     if (all(sender._counts['confirmed'] == 1 for sender in senders.values())
                             and all(bridge.stats().get('last_confirmed_readback', {}).get('server', {})
                                     .get('shield') == 2340 for bridge in bridges.values())):
