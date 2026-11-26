@@ -241,3 +241,45 @@ At `56a00bcc`, two automated X4 cockpits on Bazzite joined a GPU-free Fedora lap
 HVC-420 fired for 0.25 game seconds at its local copy of KHI-630 from a verified 849.875 m. The shooter recorded twelve identified stock S Bolt Repeater Mk2 projectiles and completion of the fire command. During the following 90 real seconds the shooter's observer recorded zero shield callbacks on KHI-630 and zero outgoing direct hit reports. The passive target cockpit recorded its full-health baseline. Fedora's adapter recorded six health reads and zero damage dispatches. This run completed the two-cockpit admission and firing checks. A hit travelling from one native cockpit through Fedora to the other cockpit remains open.
 
 Both clients exited normally. After last departure Fedora paused and saved `checkpoint-f725898d3caf484aac94e03d70670c9d`, SHA-256 `41b632b4f67174fa7317f411f9c2afe33f0fc0104eee76658c486848963d2a2f`. The original save was preserved. The private run is `.local/company-duel-native/native-03/`. The native shooter log SHA-256 is `5ff67c9445b34cf3cf298c7cab58f44253804a528612b6214216009d9207ada9`. The target log SHA-256 is `c5e898380cf50f175cb24d248534090e041da7f52b5ef1bd33bbe2eceb55f437`.
+
+## Three ordered stock impacts in one provider update
+
+At `56a00bcc`, two scripted protocol pilots on Bazzite held ordinary
+Company reservations on the native Fedora X4 9.00 provider over pinned TLS.
+A private fixture set the NPC freighter's shield to 30 and submitted a
+fixed impact order to one Mission Director cue. Stock
+`apply_attackstrength` ran once per row. The cue checked that the game age
+before and after each call matched its entry age, reported as 8.01344 s.
+
+| Order | Source | Target | Shield / hull before | Shield / hull after |
+| --- | --- | --- | --- | --- |
+| 1 | HVC-420 | MFQ-419, NPC | 30 / 6,400 | 4 / 6,400 |
+| 2 | HVC-420 | KHI-630, reserved | 2,366 / 3,600 | 2,340 / 3,600 |
+| 3 | KHI-630 | MFQ-419, NPC | 4 / 6,400 | 0 / 6,378 |
+
+The fixture first resent the exact ordered payload under the same ID.
+It then resent that ID with the first two impacts swapped. X4 reported
+`DUPLICATE` and `CONFLICT` on later updates. The stock damage call count
+remained three. Independent Lua reads confirmed both targets at game age
+9.92108 s. The UI log recorded monotonic dispatch-to-response intervals
+of 0.988 s for the original request, 1.000 s for the duplicate, and
+0.908 s for the conflict.
+
+The regular last departure saved
+`checkpoint-36c32bf5ac6a4f82826722f925c4f4e3` with SHA-256
+`0d571dacfc285b13a7677676568a909598ad705c29918bd034ec0a9ca4489eb5`.
+Independent save inspection found 0 shield and 6,378 hull on MFQ-419,
+and 2,340 shield and 3,600 hull on KHI-630. The source save was preserved.
+The provider exited normally with the world paused after two admissions
+and 33 accepted motion samples. Both hosts were clear of game processes
+and engine locks after cleanup.
+
+The fixture exercised ordered writes in one native provider update
+during real protocol admissions. Player-fired volleys, the product combat
+batch path and end-to-end cockpit updates remain unverified by this run.
+The first attempt ended before admission after X4 required explicit zeroes
+for the unused stock damage channels. The corrected attempt ran in a fresh
+disposable profile. The private evidence is under
+`.local/ordered-gun-trial/ordered-native-02/fedora-evidence/`. The filtered
+native witness SHA-256 is
+`4edc269622e4dafc20907220671a5a0b30c942c03c0e596167fee164af48876c`.
