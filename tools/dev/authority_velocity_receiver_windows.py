@@ -14,6 +14,7 @@ or refusal, every write and readback succeeds, and the occupied ship does not mo
 """
 import argparse
 import ctypes
+import csv
 import itertools
 import json
 import math
@@ -38,8 +39,17 @@ READBACK_TOLERANCE = 5.0
 
 
 def load_trajectory(path):
-    data = json.loads(Path(path).read_text(encoding='utf-8'))
-    rows = data['samples'] if isinstance(data, dict) else data
+    path = Path(path)
+    if path.suffix.lower() == '.tsv':
+        with path.open(encoding='ascii', newline='') as stream:
+            rows = [dict(sequence=row['sequence'], source_time=row['relative_game_s'],
+                         capture_time=row['relative_capture_s'],
+                         real_velocity={axis: row[f'v{axis}_m_s'] for axis in 'xyz'},
+                         **{axis: row[f'd{axis}_m'] for axis in 'xyz'})
+                    for row in csv.DictReader(stream, delimiter='\t')]
+    else:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        rows = data['samples'] if isinstance(data, dict) else data
     samples = []
     for row in rows:
         velocity = row.get('real_velocity')
@@ -125,6 +135,28 @@ def parse_trace(payload):
     return kind, cockpit.parse_kv(rest)
 
 
+def confirmed_zone_crossings(traces):
+    crossings = []
+    previous_write = None
+    for kind, fields in traces:
+        if kind == 'BIND':
+            previous_write = None
+        elif kind == 'WRITE':
+            previous_write = fields if fields.get('ok') == 'true' else None
+        elif kind == 'READBACK' and previous_write is not None:
+            write, previous_write = previous_write, None
+            before, destination = write.get('zone_before'), write.get('zone_target')
+            if (before and destination and before != destination and int(before) > 0 and int(destination) > 0
+                    and fields.get('zone') == destination
+                    and all(write.get(key) and write[key] != '-' and fields.get(key) == write[key]
+                            for key in ('actor', 'sector', 'code'))
+                    and float(fields['elapsed']) > 0 and 0 <= float(fields['ffi_error']) <= 3):
+                crossings.append(dict(actor=write['actor'], sector=write['sector'], code=write['code'],
+                                      before=before, after=destination, sequence=int(fields['seq']),
+                                      requested_xyz=write['target'], actual_xyz=fields['ffi']))
+    return crossings
+
+
 def evaluate(events, final, sent, bind_sample=0):
     """bind_sample > 0 allows that many earlier samples to be refused before the initial bind."""
     first_bind = next((i for i, e in enumerate(events) if e.startswith('TRACE BIND ')), len(events))
@@ -146,6 +178,7 @@ def evaluate(events, final, sent, bind_sample=0):
     sequences = sorted({int(f['seq']) for f in observations if f['seq'].isdigit()})
     report = {
         'binds': len(binds), 'bind': binds[0] if binds else None,
+        'confirmed_zone_crossings': confirmed_zone_crossings(traces),
         'observations': len(observations), 'writes': len(writes),
         'writes_refused': sum(f['ok'] != 'true' for f in writes),
         'readbacks': len(readbacks), 'samples_sent': len(sent),
@@ -180,6 +213,8 @@ def compose(view, args, recv_cfg, network_dll):
     (ext_dir / 'native' / 'x4lan_net_64.dll').write_bytes(network_dll)
     with (ext_dir / 'ui' / 'config.lua').open('a', encoding='ascii') as handle:
         handle.write('X4NEON_COMPANY_COCKPIT.velocity_trace = true\n')
+        if getattr(args, 'trial_first_contact', False):
+            handle.write('X4NEON_COMPANY_COCKPIT.trial_first_contact = true\n')
     shutil.copyfile(ROOT / TRACE_LUA, ext_dir / 'ui' / 'velocity_trace.lua')
     ui = (ext_dir / 'ui.xml').read_text(encoding='utf-8')
     ui = ui.replace('  </environment>', '    <file name="ui/velocity_trace.lua" />\n  </environment>', 1)
@@ -196,7 +231,8 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
     log_path = profile_dir / LOGFILE
     if log_path.exists():
         log_path.unlink()
-    recv_source = CompanyMotionSource(playback_index=2, cockpit_radar_playback=True)
+    recv_source = CompanyMotionSource(playback_index=None if args.trial_first_contact else 2,
+                                      cockpit_radar_playback=True, cockpit_max_pilots=1)
     recv_cfg = recv_source.configure(cockpit.EPOCH, 1, operational_bits='111')
     service = CompanyMotionService()
     client_recv = client_remote = process = job_handle = bridge = None
@@ -219,9 +255,11 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
         grant_b = service.admit(2, 'b1' * 16, 2, sector, cockpit.SESSION, cockpit.EPOCH)
         service.set_running(True)
         observer = recv_source.observe(validator)
+        route = (dict(cockpit_playback_limit=1, on_pilot_roster=observer.set_pilot_roster)
+                 if args.trial_first_contact else dict(trial_index=2))
         client_recv = CompanyMotionClient(
             service.port, grant_a, recv_source, validator, on_snapshot=observer.snapshot, on_end=observer.end,
-            on_transport_lost=observer.transport_lost, on_view_reset=observer.reset_world, trial_index=2)
+            on_transport_lost=observer.transport_lost, on_view_reset=observer.reset_world, **route)
         observer.bind_views(client_recv.set_views)
         pilot = cockpit._QueuedPilotSource(cockpit.EPOCH, 2, '1' * 32)
         client_remote = CompanyMotionClient(service.port, grant_b, pilot, lambda _: True)
@@ -259,6 +297,12 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
         assert unlocked.get('has_target') == 'false', unlocked
         pump_until(viewing, 'radar_view')
 
+        if args.trial_first_contact:
+            def pilot_has_radar():
+                current = bridge.request('probe_pilot', pump=pump)
+                return current['active'] == 'true' and float(current['range']) > 0
+            pump_until(pilot_has_radar, 'admitted pilot on local radar')
+
         rows = schedule(placed, cockpit.EPOCH, pilot.local_generation, sector)
         sent = []
         begin = time.perf_counter()
@@ -283,6 +327,19 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
         done = bridge.request('done', pump=pump)
         assert done.get('status') == 'done', done
         report = evaluate(list(bridge.events), final, sent, args.bind_sample)
+        if args.trial_first_contact:
+            contacts = [parsed[1] for event in bridge.events
+                        if (parsed := parse_trace(event)) and parsed[0] == 'FIRST_CONTACT']
+            report['first_contacts'] = contacts
+            reached_last = any(parsed[0] == 'READBACK' and int(parsed[1]['seq']) == sent[-1]['sequence']
+                               for event in bridge.events if (parsed := parse_trace(event)))
+            report['rendered_final_sequence'] = reached_last
+            report['accepted'] = bool(report['accepted'] and len(contacts) == 1 and reached_last
+                                      and contacts[0]['code'] == ready['remote_code']
+                                      and contacts[0]['actor'] == ready['remote_hex']
+                                      and int(contacts[0]['seq']) == sent[1]['sequence']
+                                      and float(contacts[0]['elapsed']) > 0
+                                      and max(float(contacts[0][key]) for key in ('error', 'ffi_error')) <= 3)
         report.update({
             'evidence_source': args.evidence,
             'placement': placement, 'probe_state': state,
@@ -318,7 +375,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--out', required=True)
-    parser.add_argument('--trajectory', help='private JSON samples; omit only with --synthetic')
+    parser.add_argument('--trajectory', help='recorded V3 JSON or the repository gate-flight TSV')
     parser.add_argument('--synthetic', action='store_true', help='harness shake-out with a generated path')
     parser.add_argument('--network-dll', required=True, help='x4lan_net_64.dll exporting monotonic()')
     parser.add_argument('--game')
@@ -327,7 +384,9 @@ def main(argv=None):
     parser.add_argument('--width', type=int, default=800)
     parser.add_argument('--height', type=int, default=600)
     parser.add_argument('--timeout', type=float, default=240.0)
-    parser.add_argument('--bind-sample', type=int, default=1,
+    parser.add_argument('--trial-first-contact', action='store_true',
+                        help='use the live pilot roster and verify one bounded alignment from sample zero')
+    parser.add_argument('--bind-sample', type=int,
                         help='sample placed on the resting hull; 0 is the velocity-less V3 baseline')
     parser.add_argument('--preflight', action='store_true', help='check inputs and placement, no launch')
     args = parser.parse_args(argv)
@@ -335,6 +394,10 @@ def main(argv=None):
     if bool(args.trajectory) == args.synthetic:
         raise SystemExit('pass exactly one of --trajectory or --synthetic')
     samples = synthetic_trajectory() if args.synthetic else load_trajectory(args.trajectory)
+    if args.bind_sample is None:
+        args.bind_sample = 0 if args.trial_first_contact else 1
+    if args.trial_first_contact and (args.bind_sample != 0 or len(samples) < 2):
+        parser.error('--trial-first-contact requires sample zero and at least two recorded positions')
     if not 0 <= args.bind_sample < len(samples):
         raise SystemExit('--bind-sample is outside the trajectory')
     args.evidence = ('synthetic_shakeout_path' if args.synthetic else

@@ -20,6 +20,17 @@ FINAL = {'refusals_50m': '0', 'own_disp_m': '0.0000'}
 
 
 class VelocityReceiverRunnerTests(unittest.TestCase):
+    def test_public_trace_and_later_zone_confirmation(self):
+        samples = runner.load_trajectory(ROOT / 'tests/fixtures/company_gate_flight.tsv')
+        self.assertEqual((len(samples), samples[0]['sequence'], samples[-1]['sequence']), (44, 143, 192))
+        identity = dict(actor='0x123', sector='456ULL', code='ABC-123')
+        write = dict(identity, ok='true', zone_before='3', zone_target='4', target='21,0,0')
+        read = dict(identity, zone='4', seq='11', elapsed='0.05', ffi_error='0.001', ffi='21.001,0,0')
+        self.assertEqual(runner.confirmed_zone_crossings([('WRITE', write), ('READBACK', read)])[0]['after'], '4')
+        for changed in (dict(zone='3'), dict(code='XYZ-987'), dict(sector='222ULL'), dict(ffi_error='4')):
+            self.assertEqual(runner.confirmed_zone_crossings([('WRITE', write), ('READBACK', dict(read, **changed))]), [])
+        self.assertEqual(runner.confirmed_zone_crossings([('WRITE', write), ('BIND', {}), ('READBACK', read)]), [])
+
     def test_trajectory_must_increase_and_accepts_list_velocity(self):
         rows = [dict(sequence=143, source_time=1.0, capture_time=2.0, x=0, y=0, z=0, real_velocity=[1, 2, 3]),
                 dict(sequence=144, source_time=1.1, capture_time=2.1, x=1, y=0, z=0, real_velocity=None)]

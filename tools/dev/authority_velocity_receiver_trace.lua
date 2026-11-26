@@ -43,6 +43,13 @@ local function zone_of(id, destination)
     return ok and zone or -1
 end
 
+local function native_identity(actor)
+    local ok, sector, code = pcall(function()
+        return tostring(C.GetContextByClass(actor, 'sector', false)), ffi.string(C.GetObjectIDCode(actor))
+    end)
+    return ok and sector or '-', ok and code or '-'
+end
+
 local function xyz(p)
     return ('%.4f,%.4f,%.4f'):format(p.x, p.y, p.z)
 end
@@ -80,20 +87,25 @@ hull_playback.new = function(options)
                 xyz(ev.actual), xyz(ev.target)))
         elseif ev.kind == 'readback' then
             local independent = actor and ffi_pose(actor)
-            log(('READBACK seq=%s t=%.6f elapsed=%.6f error=%.4f ffi_vs_actual=%.4f ffi_error=%.4f ffi=%s'):format(
+            local sector, code = native_identity(actor)
+            log(('READBACK seq=%s t=%.6f elapsed=%.6f error=%.4f ffi_vs_actual=%.4f ffi_error=%.4f ffi=%s' ..
+                ' zone=%s actor=%s sector=%s code=%s'):format(
                 tostring(ev.source_sequence), ev.local_time, ev.elapsed, ev.error,
                 independent and dist3(independent, ev.actual) or -1,
                 independent and dist3(independent, ev.target) or -1,
-                independent and xyz(independent) or 'none'))
+                independent and xyz(independent) or 'none', tostring(zone_of(actor)), binding.actor, sector, code))
         end
         return record(ev)
     end
     options.write = function(self, target, before, recheck)
         local zone_target = actor and zone_of(actor, target) or -1
+        local zone_before = actor and zone_of(actor) or -1
+        local sector, code = native_identity(actor)
         local ok = write(self, target, before, recheck)
-        log(('WRITE ok=%s t=%.6f step=%.4f recheck=%s zone_bind=%s zone_now=%s zone_target=%s target=%s'):format(
+        log(('WRITE ok=%s t=%.6f step=%.4f recheck=%s zone_bind=%s zone_now=%s zone_target=%s target=%s' ..
+            ' zone_before=%s actor=%s sector=%s code=%s'):format(
             tostring(ok), clock(), before and dist3(before, target) or -1, tostring(recheck ~= nil),
-            tostring(bind_zone), tostring(actor and zone_of(actor) or -1), tostring(zone_target), xyz(target)))
+            tostring(bind_zone), tostring(actor and zone_of(actor) or -1), tostring(zone_target), xyz(target), tostring(zone_before), binding.actor, sector, code))
         return ok
     end
     return original_hull_new(options)
