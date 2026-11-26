@@ -62,6 +62,7 @@ class CompanyCombatSender:
         self._stop = threading.Event()
         self._counts = dict(armed=False, observed=0, confirmed=0, rejected=0, unknown=0, retries=0,
                             coverage='throttled_direct_primary_gun_notifications')
+        self._last_confirmed_receipt = None
         self._failure = None
         self._thread = threading.Thread(target=self._run, name='authority-company-combat', daemon=True)
         self._thread.start()
@@ -71,7 +72,10 @@ class CompanyCombatSender:
         self._thread.join(2)
         if self._thread.is_alive():
             raise RuntimeError('company_combat_sender_cleanup_failed')
-        return dict(self._counts, failure=self._failure)
+        result = dict(self._counts, failure=self._failure)
+        if self._last_confirmed_receipt is not None:
+            result['last_confirmed_receipt'] = self._last_confirmed_receipt.copy()
+        return result
 
     def _run(self):
         try:
@@ -157,6 +161,10 @@ class CompanyCombatSender:
                 return False
             for receipt in receipts:
                 self._counts[receipt['status']] += 1
+                if receipt['status'] == 'confirmed':
+                    # The receiver reports its sampled authority order as its
+                    # health revision. Keep one validated receipt for comparison.
+                    self._last_confirmed_receipt = receipt
             self._read_requested_health()
             return True
         if not self._stop.is_set():
