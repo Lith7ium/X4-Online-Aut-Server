@@ -1,4 +1,4 @@
-"""Write the local receipt for one opt-in Windows combat capture after X4 stops.
+"""Write the local receipt for one opt-in pilot combat capture after X4 stops.
 
 Use the ``combat_capture`` block from the pilot's fixture result (checkpoint ID,
 save digest, registry epoch, admitted index) and that pilot's own log. Each
@@ -21,7 +21,7 @@ def main(argv=None):
     parser.add_argument('--sha256', required=True, help="save digest from this pilot's load offer")
     parser.add_argument('--registry-epoch', required=True)
     parser.add_argument('--piloted-ship-index', type=int, required=True)
-    parser.add_argument('--log', type=Path, required=True, help="the pilot's x4authority.log")
+    parser.add_argument('--log', type=Path, required=True, help="the pilot's X4 debug log")
     parser.add_argument('--out', type=Path, required=True, help='new receipt JSON (must not exist)')
     args = parser.parse_args(argv)
     try:

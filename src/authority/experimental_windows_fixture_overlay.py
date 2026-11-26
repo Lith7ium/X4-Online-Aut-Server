@@ -23,7 +23,7 @@ import re
 import stat
 
 from .trusted_load_messages import encode_bound_offer
-from .combat_capture import capture_config, private_capture_observer, validate_capture_lua
+from .combat_capture import capture_config, capture_files
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
@@ -314,12 +314,9 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
                                            if 'ui/' + name not in ui_files]
     if combat_capture:
         observer = _source(ROOT / 'src/authority/md/combat_observer.xml', 1024 * 1024)
-        observer = private_capture_observer(observer.decode('utf-8')).encode('utf-8')
         capture = _source(ROOT / 'src/authority/lua/client_combat_capture.lua', 1024 * 1024)
-        validate_capture_lua(capture.decode('utf-8'))
         config = config[:-2] + capture_config(full_registry, seat_index, offer.checkpoint_id, offer.sha256) + '}\n'
-        files['md/client_combat_capture.xml'] = observer
-        files['ui/client_combat_capture.lua'] = capture
+        files.update(capture_files(observer, capture))
         ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/client_combat_capture.lua')
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),

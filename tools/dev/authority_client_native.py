@@ -24,6 +24,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'src'), str(ROOT/'tools/dev')]
 from authority.company_ship_selection import reserve_company_ship
+from authority.combat_capture import capture_binding
 from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_remote_load_client import SessionFull
 from authority.experimental_client_session import client_connection
@@ -263,8 +264,10 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
         company_sales=False,
         observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
-        registered_npc_local_measurement=False):
+        registered_npc_local_measurement=False, combat_capture=False):
     player_mode = player_settings is not None
+    if type(combat_capture) is not bool or (combat_capture and not player_mode):
+        raise ValueError('combat capture requires a Company pilot')
     if type(company_motion) is not bool or (company_motion and not player_mode):
         raise ValueError('company motion requires player mode')
     if type(company_purchases) is not bool or (company_purchases and not player_mode):
@@ -437,6 +440,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     ('client_load_barrier.lua', 'x4_client_load_engine.lua', 'authority_download_load_probe.lua')]
                 if player_mode:
                     source_options = dict(software_rendered=software_vulkan_icd is not None)
+                    if combat_capture:
+                        source_options['combat_capture'] = True
                     if company_motion:
                         company_source = CompanyMotionSource(
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
@@ -520,6 +525,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                 if player_mode:
                     result['reserved_company_ship_index'] = index
                     result['company_seat_at_admission'] = seat_watch.seat_at_admission
+                    if combat_capture:
+                        result['combat_capture'] = capture_binding(
+                            bound.offer.checkpoint_id, bound.offer.sha256, seat_watch.registry_epoch, index)
                     if seat_watch.seat_status == 'controlled':
                         result['controlled_company_ship_index'] = index
                     if company_source is not None:

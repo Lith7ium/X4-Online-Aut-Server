@@ -90,6 +90,8 @@ REQUIRED = {
 }
 SUPPORT = {
     'tools/make_authority_server_package.py',
+    'tools/dev/authority_combat_capture_receipt.py',
+    'tools/dev/authority_combat_hit_evidence.py',
     'tools/dev/AUTHORITY-RECOVERED-LOOPBACK-SERVER.md',
     'tools/dev/AUTHORITY-WINDOWS-FIXTURE-CLIENT.md',
 }

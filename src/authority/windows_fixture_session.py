@@ -13,7 +13,7 @@ import time
 from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
-from .combat_capture import new_receipt
+from .combat_capture import capture_binding
 from .company_motion_source import validate_npc_observation, validate_playback_index
 from .company_npc_measurement import validate_measurement_trial
 from .company_ship_selection import reserve_company_ship
@@ -271,8 +271,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     fleet_source = CompanyFleetSource(version=owner._company_fleet_order_version)
                     source_options['company_fleet'] = fleet_source
                 if combat_capture:
-                    capture_receipt = new_receipt(bound.offer.checkpoint_id, bound.offer.sha256,
-                                                  registry_snapshot['epoch'], seat_index)
+                    capture_receipt = capture_binding(bound.offer.checkpoint_id, bound.offer.sha256,
+                                                      registry_snapshot['epoch'], seat_index)
                     source_options['combat_capture'] = True
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
@@ -386,8 +386,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     result['motion_receipts'] = motion.confirmed_samples
                 if capture_receipt is not None:
                     # Hits are read from this pilot's own log after X4 stops.
-                    result['combat_capture'] = {key: value for key, value in capture_receipt.items()
-                                                if key != 'hits'}
+                    result['combat_capture'] = capture_receipt
             except BaseException as error:
                 original = error
             finally:

@@ -81,13 +81,21 @@ class SeatLogTests(unittest.TestCase):
             with patch.object(company_seat, 'verify_join_snapshot', return_value=snapshot) as read, \
                     patch.object(company_seat.secrets, 'token_hex', return_value=NONCE):
                 paths, watch = company_seat.install(case, profile, bound, target, INDEX, keepalive,
-                                                    company_purchase=source)
+                                                    company_purchase=source, combat_capture=True)
             self.assertEqual(read.call_args.args[0].path, target)
             self.assertIs(read.call_args.kwargs['pump'], keepalive)
             lab = case / 'extensions/x4_lan_lab'
             manifest = (lab / 'ui.xml').read_text()
             self.assertLess(manifest.index('ui/client_seat.lua'), manifest.index('ui/authority_download_load_probe.lua'))
             self.assertIn(lab / 'md/client_seat.xml', paths)
+            self.assertIn(lab / 'md/client_combat_capture.xml', paths)
+            self.assertIn(lab / 'ui/client_combat_capture.lua', paths)
+            self.assertLess(manifest.index('ui/client_combat_capture.lua'),
+                            manifest.index('ui/authority_two_x4_participant_probe.lua'))
+            self.assertEqual(watch.registry_epoch, STATUS[1])
+            config = (lab / 'ui/config.lua').read_text()
+            self.assertIn(f'authority_combat_capture={{epoch="{STATUS[1]}",index={INDEX},'
+                          f'checkpoint="{OFFER.checkpoint_id}",sha256="{OFFER.sha256}"}}', config)
             self.assertIn(lab / 'ui/company_trade_capture.lua', paths)
             self.assertIn(lab / 'ui/company_purchase_source.lua', paths)
             self.assertLess(manifest.index('ui/company_purchase_source.lua'),
@@ -239,6 +247,10 @@ class PlayerClientTests(unittest.TestCase):
             self.assertEqual(options['select_ship']([], None), INDEX)
             self.assertNotIn('b' * 64, stdout.getvalue())
             self.assertNotIn('company_motion', options)
+            self.assertNotIn('combat_capture', options)
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--combat-capture']), 0)
+            self.assertIs(run.call_args.kwargs['combat_capture'], True)
             self.assertNotIn('company_purchases', options)
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-purchases']), 0)

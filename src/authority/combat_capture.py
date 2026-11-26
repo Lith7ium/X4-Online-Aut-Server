@@ -1,4 +1,4 @@
-"""Opt-in, read-only combat capture for an admitted Windows Company pilot.
+"""Opt-in, read-only combat capture for an admitted Company pilot.
 
 Diagnostic runs only. The overlay installs the native X4AuthorityCombatObserver
 and a small UI module that, after a confirmed participant resume and helm check, arms it on
@@ -70,6 +70,14 @@ def validate_capture_lua(lua_text):
     return {'read_only': True, 'controls': sorted(controls)}
 
 
+def capture_files(observer_template, client_script):
+    """Build the same passive observer and UI module for both pilot platforms."""
+    observer = private_capture_observer(observer_template.decode('utf-8'))
+    validate_capture_lua(client_script.decode('utf-8'))
+    return {'md/client_combat_capture.xml': observer.encode('utf-8'),
+            'ui/client_combat_capture.lua': client_script}
+
+
 def _validate_binding(checkpoint_id, checkpoint_sha256, epoch, index):
     if (type(checkpoint_id) is not str or not _CHECKPOINT.fullmatch(checkpoint_id)
             or type(checkpoint_sha256) is not str or not _HEX64.fullmatch(checkpoint_sha256)
@@ -88,11 +96,15 @@ def capture_config(full_registry, index, checkpoint_id, checkpoint_sha256):
             f'checkpoint={json.dumps(checkpoint_id)},sha256={json.dumps(checkpoint_sha256)}}}')
 
 
+def capture_binding(checkpoint_id, checkpoint_sha256, registry_epoch, piloted_ship_index):
+    """Identify the offered save and registered pilot seat in a session result."""
+    _validate_binding(checkpoint_id, checkpoint_sha256, registry_epoch, piloted_ship_index)
+    return {'format': FORMAT, 'checkpoint_id': checkpoint_id, 'checkpoint_sha256': checkpoint_sha256,
+            'registry_epoch': registry_epoch, 'piloted_ship_index': piloted_ship_index}
+
+
 def new_receipt(checkpoint_id, checkpoint_sha256, registry_epoch, piloted_ship_index):
-    """Start a receipt from the pilot's load offer and its admitted seat."""
-    receipt = {'format': FORMAT, 'checkpoint_id': checkpoint_id, 'checkpoint_sha256': checkpoint_sha256,
-               'registry_epoch': registry_epoch, 'piloted_ship_index': piloted_ship_index, 'hits': []}
-    return validate_receipt(receipt)
+    return dict(capture_binding(checkpoint_id, checkpoint_sha256, registry_epoch, piloted_ship_index), hits=[])
 
 
 def _ship(isship, index, code):

@@ -181,6 +181,8 @@ class AuthorityServerPackageTest(unittest.TestCase):
                 archive.extractall(root, filter='data')
             extracted = root / PACKAGE.PREFIX
             tools = extracted / 'tools/dev'
+            for diagnostic in ('authority_combat_capture_receipt.py', 'authority_combat_hit_evidence.py'):
+                self.assertTrue((tools / diagnostic).is_file(), diagnostic)
             # The extracted tools must find their imports without the checkout
             # paths used by the test suite.
             environment = dict(os.environ, PYTHONNOUSERSITE='1')
@@ -202,6 +204,8 @@ class AuthorityServerPackageTest(unittest.TestCase):
                         check=True, timeout=10,
                     )
                     self.assertIn('--company-motion', result.stdout)
+                    if role == 'client':
+                        self.assertIn('--combat-capture', result.stdout)
                     if role == 'server':
                         self.assertIn('--park-server-avatar {prepare,verify}', result.stdout)
                         self.assertIn('--persistent', result.stdout)

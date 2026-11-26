@@ -423,6 +423,29 @@ to your own world if using another test save. The ordinary map observer
 continues to cover the selected remote sector. Both the trial receiver and
 the provider must support the opt-in loss notifications.
 
+## Record hits on a Linux pilot's ship
+
+Add `--combat-capture` to the normal Linux pilot command to record shield
+and hull hits while the session is running and you control your reserved
+ship. This local diagnostic uses the regular Company seat selection.
+Its observations are available in the pilot's private run directory.
+
+After leaving X4, take the checkpoint ID, SHA-256, registry epoch and ship
+index from the launcher result's `combat_capture` object. Run the receipt
+tool against that pilot's log, substituting the four values from the result:
+
+```sh
+python3 tools/dev/authority_combat_capture_receipt.py \
+  --checkpoint "$checkpoint_id" --sha256 "$checkpoint_sha256" \
+  --registry-epoch "$registry_epoch" --piloted-ship-index "$ship_index" \
+  --log "$pilot_run/case/home/.config/EgoSoft/X4/45841/engine-output.log" \
+  --out "$pilot_run/combat-receipt.json"
+```
+
+The receipt lists native hit sequences. The host can verify a sequence
+against the offered checkpoint with `tools/dev/authority_combat_hit_evidence.py`
+and the same pilot log. Combat replication needs a separate gameplay test.
+
 ## Observe a registered NPC in an internal test
 
 Use matching provider and pilot builds of the NPC trial and an identified

@@ -5,6 +5,7 @@ import secrets
 import shutil
 
 from authority.checkpoints import Checkpoint
+from authority.combat_capture import capture_config, capture_files
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
@@ -32,7 +33,7 @@ _MD = {
 
 
 def install(case, profile, bound, target, index, pump, *, company_motion=None, company_purchase=None,
-            company_fleet=None, software_rendered=False):
+            company_fleet=None, software_rendered=False, combat_capture=False):
     """Verify the staged format-3 save and compose the gate before X4 starts."""
     offer = bound.offer
     checkpoint = Checkpoint(offer.checkpoint_id, target, offer.sha256, offer.size, bound.marker)
@@ -43,6 +44,8 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
     suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
     if company_purchase is not None:
         suffix += company_purchase_config(company_purchase, index, full)
+    if combat_capture:
+        suffix += capture_config(full, index, offer.checkpoint_id, offer.sha256)
 
     if company_fleet is not None:
         if company_purchase is None:
@@ -72,6 +75,15 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
         ui_sources = ui_sources | COMPANY_FLEET_UI
         md_sources = md_sources | COMPANY_FLEET_MD
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
+    if combat_capture:
+        scripts = capture_files((ROOT / 'src/authority/md/combat_observer.xml').read_bytes(),
+                                (ROOT / 'src/authority/lua/client_combat_capture.lua').read_bytes())
+        for relative_path, content in scripts.items():
+            destination = lab / relative_path
+            with destination.open('xb') as output:
+                output.write(content)
+            paths.append(destination)
+        modules += '    <file name="ui/client_combat_capture.lua" />\n'
     manifest.write_text(body.replace(hook, modules + hook), encoding='utf-8')
 
     for folder, sources in ((ui, ui_sources), (md, md_sources)):
@@ -96,6 +108,7 @@ class SeatWatch:
     """Validate the full ordered receipt stream from the same append-only log."""
     def __init__(self, path, bound, status, nonce, index):
         self.path = path
+        self.registry_epoch = status[1]
         self.stage = 0
         self._identity = None
         self._snapshot = b''

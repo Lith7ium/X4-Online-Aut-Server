@@ -26,6 +26,8 @@ def main(argv=None):
                         help='choose a specific free index instead of prompting')
     parser.add_argument('--company-motion', action='store_true',
                         help='opt into the server’s separate authenticated company motion channel')
+    parser.add_argument('--combat-capture', action='store_true',
+                        help='record shield and hull hits locally while piloting the reserved ship')
     parser.add_argument('--company-purchases', action='store_true',
                         help='opt in to authority-confirmed Company cockpit purchases')
     parser.add_argument('--company-fleet-orders', action='store_true',
@@ -100,6 +102,8 @@ def main(argv=None):
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = terminal_company_ship_selector if args.company_ship_index is None else selected_index
         motion_options = {'company_motion': True} if args.company_motion else {}
+        if args.combat_capture:
+            motion_options['combat_capture'] = True
         if args.company_purchases:
             motion_options['company_purchases'] = True
         if args.company_fleet_orders:
