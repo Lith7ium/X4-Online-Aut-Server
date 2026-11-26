@@ -132,6 +132,17 @@ class CombatCaptureReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'repeats'):
             collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1), repeated)
 
+    def test_streamed_capture_accepts_reordered_json_and_preserves_output_on_invalid_data(self):
+        receipt = new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1)
+        with self.log.open(encoding='utf-8') as lines:
+            captured = collect_hits(json.loads(json.dumps(receipt, sort_keys=True)), lines)
+        self.assertEqual([hit['sequence'] for hit in captured['hits']], [2, 5])
+        target = self.directory / 'capture.json'
+        captured['hits'][0]['amount'] = float('nan')
+        with self.assertRaises(ValueError):
+            write_receipt(target, captured)
+        self.assertFalse(target.exists())
+
 
 class CombatCaptureOverlayTest(unittest.TestCase):
     setUp = full_registry_overlay.FullRegistryOverlayTest.setUp

@@ -11,7 +11,10 @@ never decides damage: tools/dev/authority_combat_hit_evidence.py with
 --piloted-ship-index verifies each sequence against the provider's store.
 """
 import json
+import os
+from pathlib import Path
 import re
+import tempfile
 
 from .combat_observation import FORBIDDEN_LUA_MUTATION_CALLS, MD_EVENT_PREFIX, parse_md_event
 
@@ -22,7 +25,7 @@ CONTROLS = frozenset({'Arm', 'Watch'})
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _HEX64 = re.compile(r'[0-9a-f]{64}')
 _CHECKPOINT = re.compile(r'checkpoint-[0-9a-f]{32}')
-_FIELDS = ('format', 'checkpoint_id', 'checkpoint_sha256', 'registry_epoch', 'piloted_ship_index', 'hits')
+_FIELDS = frozenset({'format', 'checkpoint_id', 'checkpoint_sha256', 'registry_epoch', 'piloted_ship_index', 'hits'})
 
 
 def _code(lua_text):
@@ -62,10 +65,11 @@ def _ship(isship, index, code):
 
 
 def collect_hits(receipt, log_text):
-    """Record each native damage callback on the admitted ship, in log order."""
+    """Record damage callbacks from a text stream or an in-memory log, in order."""
     validate_receipt(receipt)
     hits, seen = [], set()
-    for line in log_text.splitlines():
+    lines = log_text.splitlines() if isinstance(log_text, str) else log_text
+    for line in lines:
         _, marker, payload = line.partition(MD_EVENT_PREFIX)
         event = parse_md_event(payload) if marker else None
         if event is None:
@@ -89,7 +93,8 @@ def collect_hits(receipt, log_text):
 
 
 def validate_receipt(receipt):
-    if type(receipt) is not dict or tuple(receipt) != _FIELDS or receipt['format'] != FORMAT:
+    if (type(receipt) is not dict or receipt.keys() != _FIELDS
+            or type(receipt['format']) is not int or receipt['format'] != FORMAT):
         raise ValueError('unexpected combat capture receipt')
     if (type(receipt['checkpoint_id']) is not str or not _CHECKPOINT.fullmatch(receipt['checkpoint_id'])
             or type(receipt['checkpoint_sha256']) is not str or not _HEX64.fullmatch(receipt['checkpoint_sha256'])
@@ -111,8 +116,16 @@ def verifier_arguments(receipt, store, log, sequence):
 
 
 def write_receipt(path, receipt):
-    """Create a new local receipt file; an existing receipt is never replaced."""
+    """Publish a complete receipt exactly once at the requested path."""
     validate_receipt(receipt)
-    with open(path, 'x', encoding='utf-8') as output:
-        json.dump(receipt, output, indent=2, allow_nan=False)
-        output.write('\n')
+    path = Path(path)
+    with tempfile.TemporaryDirectory(dir=path.parent) as staging:
+        candidate = Path(staging) / 'receipt.json'
+        with candidate.open('x', encoding='utf-8') as output:
+            json.dump(receipt, output, indent=2, allow_nan=False)
+            output.write('\n')
+        # Windows rename and POSIX link both fail if another writer won the race.
+        if os.name == 'nt':
+            candidate.rename(path)
+        else:
+            os.link(candidate, path)

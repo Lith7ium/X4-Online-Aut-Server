@@ -25,9 +25,9 @@ def main(argv=None):
     parser.add_argument('--out', type=Path, required=True, help='new receipt JSON (must not exist)')
     args = parser.parse_args(argv)
     try:
-        receipt = collect_hits(new_receipt(args.checkpoint, args.sha256, args.registry_epoch,
-                                           args.piloted_ship_index),
-                               args.log.read_text(encoding='utf-8', errors='replace'))
+        offer = new_receipt(args.checkpoint, args.sha256, args.registry_epoch, args.piloted_ship_index)
+        with args.log.open(encoding='utf-8', errors='replace') as lines:
+            receipt = collect_hits(offer, lines)
         write_receipt(args.out, receipt)
     except (OSError, ValueError) as error:
         parser.error(str(error))
