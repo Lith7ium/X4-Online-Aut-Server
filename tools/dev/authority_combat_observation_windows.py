@@ -63,6 +63,14 @@ AISCRIPT_FILES = [
 LIBRARY_FILES = [
     ('loadouts.xml', 'tools/dev/fixtures/vanilla-flight/libraries/loadouts.xml'),
 ]
+# The overlap scenario swaps the case driver for the two-shooter driver and adds its trace.
+OVERLAP_UI_FILES = [
+    UI_FILES[0],
+    ('authority_combat_overlap_x4.lua', 'tools/dev/authority_combat_overlap_x4.lua'),
+]
+OVERLAP_MD_FILES = MD_FILES + [
+    ('authority_combat_overlap_trace.xml', 'tools/dev/authority_combat_overlap_trace.xml'),
+]
 
 CONTENT_XML = (
     '<?xml version="1.0" encoding="utf-8"?>\n'
@@ -82,18 +90,20 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def compose_extension(extensions_dir, *, profile, gamestart, epoch):
+def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='cases'):
     # Guard read-only contract on the reusable production observer modules before launching X4.
     validate_md_read_only((ROOT / 'src/authority/md/combat_observer.xml').read_text(encoding='utf-8'))
     validate_lua_read_only((ROOT / 'src/authority/lua/combat_observer.lua').read_text(encoding='utf-8'))
+    ui_files = OVERLAP_UI_FILES if scenario == 'overlap' else UI_FILES
+    md_files = OVERLAP_MD_FILES if scenario == 'overlap' else MD_FILES
 
     target = Path(extensions_dir) / EXTENSION_ID
     target.mkdir()
     for sub in ('ui', 'md', 'aiscripts', 'libraries'):
         (target / sub).mkdir()
-    for dst_name, rel_src in MD_FILES:
+    for dst_name, rel_src in md_files:
         shutil.copyfile(ROOT / rel_src, target / 'md' / dst_name)
-    for dst_name, rel_src in UI_FILES:
+    for dst_name, rel_src in ui_files:
         shutil.copyfile(ROOT / rel_src, target / 'ui' / dst_name)
     for dst_name, rel_src in AISCRIPT_FILES:
         shutil.copyfile(ROOT / rel_src, target / 'aiscripts' / dst_name)
@@ -112,7 +122,7 @@ def compose_extension(extensions_dir, *, profile, gamestart, epoch):
     (target / 'ui' / 'config.lua').write_text(cfg_text, encoding='ascii')
     ui_entries = ''.join(
         ['    <file name="ui/config.lua" />\n']
-        + [f'    <file name="ui/{dst}" />\n' for dst, _ in UI_FILES]
+        + [f'    <file name="ui/{dst}" />\n' for dst, _ in ui_files]
     )
     ui_doc = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
@@ -252,6 +262,8 @@ def main(argv=None):
     parser.add_argument('--width', type=int, default=800)
     parser.add_argument('--height', type=int, default=600)
     parser.add_argument('--timeout', type=float, default=180.0)
+    parser.add_argument('--scenario', choices=('cases', 'overlap'), default='cases',
+                        help='cases: the six single-shooter cases; overlap: two shooters on one registered NPC')
     args = parser.parse_args(argv)
 
     if os.name != 'nt' or sys.version_info < (3, 12):
@@ -306,6 +318,7 @@ def main(argv=None):
             profile=args.profile,
             gamestart=args.gamestart,
             epoch=EPOCH,
+            scenario=args.scenario,
         )
         profile_dir = profile_mod.prepare_fresh(
             args.profile,
@@ -430,13 +443,41 @@ def main(argv=None):
     project_errors = [
         line.strip()
         for line in log_text.splitlines()
-        if any(tok in line for tok in (EXTENSION_ID, 'X4AuthorityCombatObserver', 'X4AuthorityCombatProbe', 'combat_observer', 'x4neon.combat.shoot_at'))
+        if any(tok in line for tok in (EXTENSION_ID, 'X4AuthorityCombatObserver', 'X4AuthorityCombatProbe', 'X4AuthorityCombatOverlapTrace', 'combat_observer', 'x4neon.combat.shoot_at'))
         and ('[=ERROR=]' in line or 'Error in MD cue' in line or 'Error in AI script' in line or 'Error while executing' in line)
         and 'Could not find signature file' not in line
     ]
 
     weapon_profiles = [line for line in driver_lines if line.startswith('WEAPON_PROFILE ')]
     fallbacks = [line for line in driver_lines if line.startswith('FALLBACK ')]
+
+    if args.scenario == 'overlap':
+        from authority_combat_overlap_analysis import OVERLAP_PHASES, accepted as overlap_ok, analyse
+        by_phase = summarize_by_phase(events, readbacks, phase_victims={p: 'npc_target' for p in OVERLAP_PHASES})
+        overlap = analyse(log_text, events)
+        accepted = (
+            outcome == 'done' and protected_unchanged and view_removed and not still_running
+            and not error_lines and overlap_ok(overlap)
+        )
+        result = {
+            'scenario': 'overlap', 'outcome': outcome, 'accepted': accepted,
+            'elapsed_s': round(time.monotonic() - started_at, 2),
+            'x4_exe_sha256': sha256_file(exe_path),
+            'logfile': str(copied_log) if copied_log.is_file() else None,
+            'logfile_sha256': sha256_file(copied_log) if copied_log.is_file() else None,
+            'protected_unchanged': protected_unchanged, 'view_removed': view_removed,
+            'x4_running_after': still_running,
+            'project_error_count': len(project_errors), 'project_errors': project_errors[:20],
+            'driver_errors': error_lines, 'weapon_profiles': weapon_profiles, 'fallbacks': fallbacks,
+            'driver_lines': driver_lines, 'probe_lines': probe_lines,
+            'overlap': overlap, 'phases': by_phase,
+        }
+        res_path = out_dir / 'result.json'
+        res_path.write_text(json.dumps(result, indent=2), encoding='utf-8')
+        print(json.dumps({k: result[k] for k in ('outcome', 'accepted', 'elapsed_s', 'project_error_count',
+                                                  'protected_unchanged', 'view_removed', 'x4_running_after')}
+                         | {'result_json': str(res_path)}, indent=2))
+        raise SystemExit(0 if accepted else 1)
 
     # Verify all required native combat observations succeeded.
     p1a = by_phase.get('ff_shield_only', {})

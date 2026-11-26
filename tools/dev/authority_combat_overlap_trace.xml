@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable test-only trace for the overlapping primary-gun scenario (Windows X4 9.00).
+     Reads stock events only: event_weapon_fired (weapon + fired bullet), the target's
+     event_object_shield_damaged / event_object_hull_damaged, event_object_attacked_object
+     (param3 = [attacked component, weapon]) and event_player_attacked_object. It records which
+     traced bullets no longer exist when an impact callback runs; that is an inference, not an
+     attribution the game supplies. The only world change is a distant second helper pilot that
+     drives the second shooter through the same test-only shoot_at script. -->
+<mdscript name="X4AuthorityCombatOverlapTrace" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State">
+   <actions>
+    <set_value name="State.$armed" exact="false"/>
+    <set_value name="State.$target" exact="null"/>
+    <set_value name="State.$helper2" exact="null"/>
+    <set_value name="State.$shooter_of" exact="table[]"/>
+    <set_value name="State.$live" exact="table[]"/>
+    <create_group groupname="State.$weapons"/>
+    <create_group groupname="State.$tgroup"/>
+    <create_group groupname="State.$sgroup"/>
+   </actions>
+   <cues>
+    <library name="SweepLive">
+     <actions>
+      <set_value name="$now" exact="player.age / 1s"/>
+      <set_value name="$gone" exact="0"/>
+      <set_value name="$gone_s" exact="''"/>
+      <set_value name="$keys" exact="State.$live.keys.list"/>
+      <do_all exact="$keys.count" counter="$k">
+       <set_value name="$p" exact="$keys.{$k}"/>
+       <do_if value="not @$p.exists">
+        <set_value name="$e" exact="State.$live.{$p}"/>
+        <set_value name="$gone" operation="add" exact="1"/>
+        <set_value name="$gone_s" exact="$gone_s + '%s:%s:%s;'.[$e.{1},$p,$now - $e.{3}]"/>
+        <remove_value name="State.$live.{$p}"/>
+       </do_if>
+      </do_all>
+      <set_value name="$alive" exact="State.$live.keys.count"/>
+     </actions>
+    </library>
+
+    <cue name="Arm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Arm'"/></conditions>
+     <actions>
+      <set_value name="$a" exact="event.param3"/>
+      <set_value name="$ships" exact="md.X4AuthorityCombatProbe.State.$ships"/>
+      <set_value name="State.$target" exact="@$ships.{4}"/>
+      <clear_group group="State.$weapons"/>
+      <clear_group group="State.$tgroup"/>
+      <clear_group group="State.$sgroup"/>
+      <set_value name="State.$shooter_of" exact="table[]"/>
+      <set_value name="State.$live" exact="table[]"/>
+      <set_value name="$wtotal" exact="0"/>
+      <do_all exact="2" counter="$idx">
+       <set_value name="$ship" exact="@$ships.{$idx}"/>
+       <do_if value="@$ship.isoperational">
+        <add_to_group groupname="State.$sgroup" object="$ship"/>
+        <set_value name="$wl" exact="$ship.weapons.operational.list"/>
+        <do_all exact="$wl.count" counter="$j">
+         <set_value name="State.$shooter_of.{$wl.{$j}}" exact="$idx"/>
+        </do_all>
+        <set_value name="$wtotal" operation="add" exact="$wl.count"/>
+        <do_if value="$wl.count gt 0">
+         <add_to_group groupname="State.$weapons" list="$wl"/>
+        </do_if>
+       </do_if>
+      </do_all>
+      <do_if value="@State.$target.isoperational">
+       <add_to_group groupname="State.$tgroup" object="State.$target"/>
+      </do_if>
+      <do_if value="not @State.$helper2.pilot.exists and @md.X4AuthorityCombatProbe.State.$sector.isclass.sector">
+       <create_ship name="$h2" macro="macro.ship_arg_s_scout_01_a_macro" sector="md.X4AuthorityCombatProbe.State.$sector" seed="8419">
+        <owner exact="faction.argon" overridenpc="true"/>
+        <pilot><select faction="faction.argon" tags="tag.aipilot"/></pilot>
+        <position x="35km" y="100km" z="3km"/>
+       </create_ship>
+       <do_if value="@$h2.exists">
+        <create_order object="$h2" id="'Wait'" default="true">
+         <param name="noattackresponse" value="true"/>
+        </create_order>
+        <set_value name="State.$helper2" exact="$h2"/>
+       </do_if>
+      </do_if>
+      <set_value name="State.$armed" exact="@State.$target.isoperational and $wtotal gt 0"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_CTRL action=Arm armed=%s target=%s weapons=%s helper2=%s'.[State.$armed,State.$target,$wtotal,@State.$helper2.pilot.exists]"/>
+      <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Armed|%s|%s|%s'.[@$a.$request_id,State.$armed,$wtotal,@State.$helper2.pilot.exists]"/>
+     </actions>
+    </cue>
+
+    <!-- Second shooter through its own helper pilot, so both shoot_at scripts can run at once. -->
+    <cue name="Fire2" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Fire2'"/></conditions>
+     <actions>
+      <set_value name="$a" exact="event.param3"/>
+      <set_value name="$ship" exact="@md.X4AuthorityCombatProbe.State.$ships.{2}"/>
+      <do_if value="State.$armed and @$ship.isoperational and @State.$target.isoperational and @State.$helper2.pilot.exists">
+       <stop_shooting object="$ship"/>
+       <reset_weapongroups object="$ship"/>
+       <activate_weapongroup object="$ship" weapongroup="0" primary="true"/>
+       <start_script object="State.$helper2.pilot" name="'x4neon.combat.shoot_at'">
+        <param name="ship" value="$ship"/>
+        <param name="target" value="State.$target"/>
+        <param name="duration" value="($a.$duration)s"/>
+       </start_script>
+       <debug_text text="'[X4LAN] AUTH_OVERLAP_CTRL action=Fire2 dur=%s'.[$a.$duration]"/>
+       <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Fired2'.[@$a.$request_id]"/>
+      </do_if>
+      <do_else>
+       <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Refused|fire2'.[@$a.$request_id]"/>
+      </do_else>
+     </actions>
+    </cue>
+
+    <cue name="Sweep" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Sweep'"/></conditions>
+     <actions>
+      <set_value name="$a" exact="event.param3"/>
+      <include_actions ref="SweepLive"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_SWEEP age=%s tag=%s gone=%s alive=%s ids=%s'.[$now,@$a.$tag,$gone,$alive,$gone_s]"/>
+      <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Swept|%s|%s'.[@$a.$request_id,$gone,$alive]"/>
+     </actions>
+    </cue>
+
+    <cue name="Disarm" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Disarm'"/></conditions>
+     <actions>
+      <set_value name="State.$armed" exact="false"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_CTRL action=Disarm alive=%s'.[State.$live.keys.count]"/>
+      <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Disarmed'.[@event.param3.$request_id]"/>
+     </actions>
+    </cue>
+
+    <cue name="Fired" instantiate="true" namespace="this">
+     <conditions>
+      <event_weapon_fired group="State.$weapons"/>
+      <check_value value="State.$armed"/>
+     </conditions>
+     <actions>
+      <set_value name="$w" exact="event.object"/>
+      <set_value name="$p" exact="@event.param"/>
+      <set_value name="$idx" exact="@State.$shooter_of.{$w}"/>
+      <do_if value="@$p.exists">
+       <set_value name="State.$live.{$p}" exact="[$idx, $w, player.age / 1s]"/>
+      </do_if>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_FIRE age=%s shooter=%s weapon=%s proj=%s exists=%s pmacro=%s'.[player.age / 1s,$idx,$w,$p,@$p.exists,@$p.macro.id]"/>
+     </actions>
+    </cue>
+
+    <cue name="ShieldHit" instantiate="true" namespace="this">
+     <conditions>
+      <event_object_shield_damaged group="State.$tgroup"/>
+      <check_value value="State.$armed"/>
+     </conditions>
+     <actions>
+      <set_value name="$kind" exact="'shield'"/>
+      <set_value name="$amount" exact="@event.param3"/>
+      <set_value name="$value" exact="@event.param2"/>
+      <set_value name="$comp" exact="@event.param"/>
+      <include_actions ref="SweepLive"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_IMPACT age=%s kind=%s amount=%s value=%s comp=%s gone=%s alive=%s ids=%s'.[$now,$kind,$amount,$value,$comp,$gone,$alive,$gone_s]"/>
+     </actions>
+    </cue>
+
+    <cue name="HullHit" instantiate="true" namespace="this">
+     <conditions>
+      <event_object_hull_damaged group="State.$tgroup"/>
+      <check_value value="State.$armed"/>
+     </conditions>
+     <actions>
+      <set_value name="$kind" exact="'hull'"/>
+      <set_value name="$amount" exact="@event.param3"/>
+      <set_value name="$value" exact="@event.param2"/>
+      <set_value name="$comp" exact="@event.param"/>
+      <include_actions ref="SweepLive"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_IMPACT age=%s kind=%s amount=%s value=%s comp=%s gone=%s alive=%s ids=%s'.[$now,$kind,$amount,$value,$comp,$gone,$alive,$gone_s]"/>
+     </actions>
+    </cue>
+
+    <cue name="SourceAttacked" instantiate="true" namespace="this">
+     <conditions>
+      <event_object_attacked_object group="State.$sgroup"/>
+      <check_value value="State.$armed"/>
+     </conditions>
+     <actions>
+      <set_value name="$weapon" exact="@event.param3.{2}"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_ATTACKED_OBJECT age=%s source=%s victim=%s method=%s comp=%s weapon=%s weapon_shooter=%s'.[player.age / 1s,event.object,@event.param,@event.param2,@event.param3.{1},$weapon,@State.$shooter_of.{$weapon}]"/>
+     </actions>
+    </cue>
+
+    <cue name="PlayerAttacked" instantiate="true" namespace="this">
+     <conditions>
+      <event_player_attacked_object/>
+      <check_value value="State.$armed"/>
+     </conditions>
+     <actions>
+      <set_value name="$weapon" exact="@event.param3.{2}"/>
+      <debug_text text="'[X4LAN] AUTH_OVERLAP_PLAYER_ATTACKED age=%s victim=%s method=%s comp=%s weapon=%s weapon_shooter=%s'.[player.age / 1s,@event.param,@event.param2,@event.param3.{1},$weapon,@State.$shooter_of.{$weapon}]"/>
+     </actions>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>
