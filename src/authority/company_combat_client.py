@@ -11,6 +11,7 @@ from .trusted_load_messages import validate_ship_motion_credential
 
 
 _CONNECT_TIMEOUT = 2
+_HEALTH_TIMEOUT = 2
 _CANCEL_POLL = .05
 _MAX_EXCHANGE_TIMEOUT = 600
 _CONNECTING = {getattr(errno, name) for name in (
@@ -20,6 +21,10 @@ _CONNECTING = {getattr(errno, name) for name in (
 
 class CombatExchangeCancelled(Exception):
     """The owner stopped waiting for the outstanding combat receipt."""
+
+
+class _ReceiptDeadlineExpired(TimeoutError):
+    """The local deadline elapsed, independently of any socket error."""
 
 
 class CompanyCombatClient:
@@ -45,6 +50,7 @@ class CompanyCombatClient:
         self._ticket = derive_combat_ticket(credential['ticket'])
         self._connection = None
         self._incoming = bytearray()
+        self._late_health = None
         self._pending = None
         self._pending_frame = None
 
@@ -68,7 +74,11 @@ class CompanyCombatClient:
         elif self._pending != impacts:
             raise ValueError('retry the pending Company combat batch unchanged')
         try:
-            frame = self._round_trip(self._pending_frame, deadline, cancelled)
+            if self._late_health is not None:
+                # An impact must not wait for an expired read on this stream.
+                self.close()
+            self._send_request(self._pending_frame, deadline, cancelled)
+            frame = self._read_reply(deadline, cancelled)
             receipts = decode_receipts(frame, self._binding, impacts)
             self._pending = self._pending_frame = None
             return receipts
@@ -83,14 +93,30 @@ class CompanyCombatClient:
             raise ValueError('resolve pending impacts before reading cockpit health')
         request = dict(zip(BINDING_FIELDS, self._binding), kind='combat_health_read', ticket=self._ticket,
                        window=window, sequence=sequence, after_revision=after_revision)
+        deadline = time.monotonic() + _HEALTH_TIMEOUT
         try:
-            reply = self._round_trip(encode_frame(request), time.monotonic() + 2, cancelled)
-            return decode_health_reply(reply, self._binding, window, sequence)
+            if self._late_health is not None:
+                # Validate and discard the complete old reply before sending another request.
+                stale = self._read_reply(deadline, cancelled)
+                decode_health_reply(stale, self._binding, *self._late_health)
+                self._late_health = None
+            self._send_request(encode_frame(request), deadline, cancelled)
         except BaseException:
             self.close()
             raise
 
-    def _round_trip(self, request, deadline, cancelled):
+        try:
+            reply = self._read_reply(deadline, cancelled)
+            return decode_health_reply(reply, self._binding, window, sequence)
+        except _ReceiptDeadlineExpired:
+            # Only a fully written read can safely leave a response pending.
+            self._late_health = window, sequence
+            raise
+        except BaseException:
+            self.close()
+            raise
+
+    def _send_request(self, request, deadline, cancelled):
         self._remaining(deadline, cancelled)
         if self._connection is None:
             self._connect(min(deadline, time.monotonic() + _CONNECT_TIMEOUT), cancelled)
@@ -104,6 +130,8 @@ class CompanyCombatClient:
             if not sent:
                 raise ConnectionError('Company combat stream closed while sending')
             outgoing = outgoing[sent:]
+
+    def _read_reply(self, deadline, cancelled):
         while True:
             self._wait_socket(deadline, cancelled, write=False)
             reply = read_frame(self._connection, self._incoming)
@@ -142,7 +170,7 @@ class CompanyCombatClient:
             raise CombatExchangeCancelled
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError('Company combat receipt deadline expired')
+            raise _ReceiptDeadlineExpired('Company combat receipt deadline expired')
         return remaining
 
     def close(self):
@@ -151,3 +179,4 @@ class CompanyCombatClient:
             self._connection.close()
             self._connection = None
         self._incoming.clear()
+        self._late_health = None
