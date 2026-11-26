@@ -2,6 +2,27 @@
 
 ## 26 November 2026
 
+Two admitted protocol pilots each tried to spend 106 Cr from a shared
+160 Cr balance at UPV-940. The GPU-free vanilla provider booked
+EST-929's purchase, refused BBS-493's order at the same price, and
+showed both pilots the remaining 54 Cr. The last-departure save,
+ship cargo and stock journal confirmed one debit and one transfer.
+The test ran over loopback with headless pilot endpoints.
+[Competing purchases, saved world and provider resource use](AUTHORITY-SHARED-WALLET-CONTENTION-20261126.md)
+
+Reopening the trade window while a sale is pending now waits for the
+receipt. If its unused quote expired before submission, the pilot gets
+a refusal and can reopen trade. The window disables the sell slider
+and clears the sell selection when the quote expires. Purchases remain available.
+These paths passed Linux UDP and LuaJIT widget tests.
+
+The server now uses the stock whole-credit affordability check when
+placing a purchase. In native X4, a 116 Cr wallet can cover two units
+quoted at 58.48 Cr each. A changed unit price still requires a fresh
+confirmation. The native boundary probe read the game helpers and MD
+expressions without placing an order.
+[Native cash boundary](AUTHORITY-COMPANY-STOCK-TRADE-20261124.md#native-whole-credit-affordability-boundary)
+
 A fresh GPU-free X4 process loaded the last-pilot checkpoint after the
 sector transfer. Before any pilot joined, two native readbacks placed
 BBS-493 at (30000, 100000, 55000) m in the destination sector.
@@ -47,16 +68,19 @@ with an offered checkpoint. The Internet flight awaits the operator.
 [Windows fixture results](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795647665602239) ·
 [01:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795651241349479)
 
-Matching private operator packages for `6d4062fd` are in
-`.local/flight-build-6d4062fd/`. All 176 files common to the Linux
-and Windows archives matched byte for byte. These packages include the
-retained-captain sector transfer and the trade-window corrections.
-Both extracted Linux launchers passed their help entry point.
+Matching private operator packages for `060a9da6` are in
+`.local/flight-build-060a9da6/`. All 176 files common to Linux and
+Windows matched byte for byte. Their runtime files, including the
+Windows DLL, match the reproducibly built `ba6f325a` archives.
+The guides now give the sales switches for each platform and explain
+how to check a purchase after a disconnect. Both Linux launchers and
+the Windows wrapper's Python entry point passed their help command on
+Linux at `ba6f325a`. Native Windows startup for this build awaits its operator.
 
 | Package | Bytes | SHA-256 |
 | --- | ---: | --- |
-| Linux server and pilot | 1,633,013 | `f3313234de2c4f2a4efb324f0e5fc2d242004711b6c7777d61fbe391ec37e06b` |
-| Windows pilot | 3,111,185 | `2a3f3d8531fc977c9a190b5039d9cc7e81f1c6bd68e1c804e0f41e4ceb05a6d7` |
+| Linux server and pilot | 1,633,760 | `8f6129ac68385e20ba9c594b78217e31ccd7238e8956df4e60809340e516797a` |
+| Windows pilot | 3,113,495 | `d09b6e951ff8c870cf8823ef19c62359b47792728980e2395b57fc6932e4d2a4` |
 
 ## 25 November 2026
 
