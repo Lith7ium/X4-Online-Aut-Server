@@ -24,6 +24,8 @@ DAMAGE_KINDS = ('shield_damaged', 'hull_damaged')
 OBSERVER_SCREEN = 'X4AuthorityClientCombatCapture'
 _EVENT_SOURCE = f'[{OBSERVER_SCREEN}] '
 _CAPTURE_STATUS = '[X4LAN] AUTH_COMBAT_CAPTURE '
+_WATCH_SOURCE = f'Context:md.{OBSERVER_SCREEN}.Watch<'
+_WATCH_CONTROL = '[X4LAN] AUTH_COMBAT_OBS_CTRL action=Watch '
 CONTROLS = frozenset({'Arm', 'Watch', 'Disarm'})
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _HEX64 = re.compile(r'[0-9a-f]{64}')
@@ -144,7 +146,7 @@ def captured_outgoing_contacts(receipt, log_text):
 
 def read_outgoing_capture(receipt, log_text):
     """Return the pilot's observed ship code even when no bullets hit a target."""
-    ship_codes, contacts = _captured_events(receipt, log_text, _outgoing_gun_contact)
+    ship_codes, contacts = _captured_events(receipt, log_text, _outgoing_gun_contact, require_source_watch=True)
     if len(ship_codes) != 1:
         raise ValueError('conflicting ship codes for the outgoing pilot capture')
     return ship_codes.pop(), contacts
@@ -156,15 +158,31 @@ def captured_events(receipt, log_text):
     return hits
 
 
-def _captured_events(receipt, log_text, matches_ship):
+def _watched_source_code(line, ship_index):
+    """Read the private MD Watch receipt, including X4's numeric or text booleans."""
+    prefix, watch, fields = line.partition(_WATCH_CONTROL)
+    if not watch or _WATCH_SOURCE not in prefix:
+        return None
+    values = dict(token.split('=', 1) for token in fields.split() if '=' in token)
+    if (values.get('source') in ('1', 'true') and values.get('owner') == 'player'
+            and values.get('label') == 'admitted_pilot' and values.get('reg') == str(ship_index)):
+        return values.get('code')
+    return None
+
+
+def _captured_events(receipt, log_text, matches_ship, *, require_source_watch=False):
     validate_receipt(receipt)
     hits, sequence_counts = [], {}
     start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
              f"checkpoint={receipt['checkpoint_id']} sha256={receipt['checkpoint_sha256']} code=")
     ship_code = None
+    source_watch_code = None
     observed_ship_codes = set()
     lines = log_text.splitlines() if isinstance(log_text, str) else log_text
     for line in lines:
+        if require_source_watch and _WATCH_SOURCE in line:
+            source_watch_code = _watched_source_code(line, receipt['piloted_ship_index'])
+            continue
         _, status_marker, status = line.partition(_CAPTURE_STATUS)
         if status_marker:
             if status.startswith(('capturing ', 'stopped ')):
@@ -173,7 +191,10 @@ def _captured_events(receipt, log_text, matches_ship):
                 actor = re.fullmatch(r'([A-Z0-9]{3}-[A-Z0-9]{3}) owner=player', status[len(start):].strip())
                 if actor:
                     ship_code = actor[1]
+                    if require_source_watch and source_watch_code != ship_code:
+                        raise ValueError('outgoing gun contacts were not confirmed enabled for this pilot capture')
                     observed_ship_codes.add(ship_code)
+            source_watch_code = None
             continue
         source, marker, payload = line.partition(MD_EVENT_PREFIX)
         event = parse_md_event(payload) if marker and source.endswith(_EVENT_SOURCE) else None

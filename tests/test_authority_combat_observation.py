@@ -137,7 +137,10 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
                            + MD_EVENT_PREFIX + payload + '\n')
         self.private_event_line = (f'[Scripts] 10 *** Context:md.{OBSERVER_SCREEN}.ObjectAttackedObject<inst:ab12>: '
                                    f'[{OBSERVER_SCREEN}] ' + MD_EVENT_PREFIX + payload + '\n')
-        self.capture_start = (f'[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch={EPOCH} index=1 '
+        self.capture_start = (f'[Scripts] 3.14 *** Context:md.{OBSERVER_SCREEN}.Watch<inst:e1>: '
+                              '[X4LAN] AUTH_COMBAT_OBS_CTRL action=Watch label=admitted_pilot '
+                              'ship=0x789 code=HVC-420 owner=player reg=1 target=1 source=1 weapons=0\n'
+                              f'[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch={EPOCH} index=1 '
                               f'checkpoint={self.checkpoint.checkpoint_id} sha256={self.checkpoint.sha256} '
                               'code=HVC-420 owner=player\n')
         self.ticket = (f'{"b" * 32}|1|2|1|{self.checkpoint.checkpoint_id}|'
@@ -231,14 +234,26 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         self.assertEqual(report['shooter'], {'index': 1, 'code': 'HVC-420'})
         for header, epoch, index, reason in (
             (self.capture_start.replace('HVC-420', 'XEN-123'), EPOCH, 1, 'ship code'),
-            (self.capture_start.replace('index=1', 'index=2').replace('HVC-420', 'VLY-685'),
+            (self.capture_start.replace('index=1', 'index=2').replace('reg=1', 'reg=2').replace('HVC-420', 'VLY-685'),
              EPOCH, 2, 'Company ownership'),
-            (self.capture_start.replace('index=1', 'index=4'), EPOCH, 4, 'ship code'),
+            (self.capture_start.replace('index=1', 'index=4').replace('reg=1', 'reg=4'), EPOCH, 4, 'ship code'),
             (self.capture_start.replace(EPOCH, 'e' * 32, 1), 'e' * 32, 1, 'registry epochs'),
         ):
             with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
                 self.log.write_text(header, encoding='utf-8')
                 verify_private_gun_contacts(self.log, self.checkpoint, epoch, index)
+
+    def test_old_or_foreign_capture_cannot_report_a_quiet_gun(self):
+        for header in (self.capture_start.replace('source=1', 'source=0'),
+                       self.capture_start.replace('source=1', 'source=false'),
+                       self.capture_start.replace(OBSERVER_SCREEN + '.Watch', 'X4AuthorityCombatObserver.Watch'),
+                       self.capture_start.replace('reg=1 ', 'reg=2 '),
+                       self.capture_start.split('\n', 1)[1]):
+            with self.subTest(header=header), self.assertRaisesRegex(ValueError, 'not confirmed enabled'):
+                self.log.write_text(header, encoding='utf-8')
+                verify_private_gun_contacts(self.log, self.checkpoint, EPOCH, 1)
+        self.log.write_text(self.capture_start.replace('source=1', 'source=true'), encoding='utf-8')
+        self.assertEqual(self._cli('--capture-epoch', EPOCH)['contacts'], [])
 
     def test_generic_cli_still_requires_a_sequence(self):
         self.log.write_text(self.request + self.marker + self.pause + self.event_line, encoding='utf-8')
