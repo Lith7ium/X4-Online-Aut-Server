@@ -346,6 +346,125 @@ class CompanyCombatTests(unittest.TestCase):
         self.assertEqual(self.receive(reply), receipts)
         self.assertEqual(begin.call_count, 1)
 
+    def grouped_service(self, single, group, **options):
+        self.service.close()
+        self.service = CompanyCombatService(self.grants.get, single, apply_impacts=group, **options)
+        self.addCleanup(self.service.close)
+
+    def test_native_group_reserves_order_and_skips_a_cached_prefix_on_retry(self):
+        group = Mock(side_effect=[((4, 3600), (0, 3578)), ((74, 1000), (0, 3552))])
+        self.grouped_service(self.apply, group)
+        peer, reply = self.open()
+        first = [hit(1), hit(2)]
+        peer.sendall(self.frame(self.first, first))
+        self.service.poll()
+        original = self.receive(reply)
+        self.assertEqual([(r['order'], r['shield'], r['hull']) for r in original],
+                         [(1, 4, 3600), (2, 0, 3578)])
+        mixed = [hit(2), hit(3, 943), hit(4)]
+        peer.sendall(self.frame(self.first, mixed))
+        self.service.poll()
+        received = self.receive(reply)
+        self.assertEqual(received[0], original[1])
+        self.assertEqual([r['order'] for r in received], [2, 3, 4])
+        self.assertEqual([call.args[1] for call in group.call_args_list],
+                         [((1074, 26), (1074, 26)), ((943, 26), (1074, 26))])
+        peer.sendall(self.frame(self.first, mixed))
+        self.service.poll()
+        self.assertEqual(self.receive(reply), received)
+        peer.sendall(self.frame(self.first, [hit(2, 943), hit(3, 943)]))
+        self.service.poll()
+        self.assertEqual(reply.readline(), b'')
+        self.assertEqual(group.call_count, 2)
+        self.assertEqual(self.calls, [])
+
+    def test_rejected_native_group_falls_back_to_its_reserved_orders(self):
+        group = Mock(side_effect=CombatImpactRejected('all writes refused by native preflight'))
+        single = Mock(side_effect=(CombatImpactRejected('target missing'), (4, 3600), (0, 3578)))
+        self.grouped_service(single, group)
+        first, first_reply = self.open()
+        first.sendall(self.frame(self.first, [hit(1, 943), hit(2)]))
+        self.service.poll()
+        second, second_reply = self.open()
+        second.sendall(self.frame(self.second, [hit(1)]))
+        for _ in range(3):
+            self.service.poll()
+        self.assertEqual([(r['order'], r['status']) for r in self.receive(first_reply)],
+                         [(1, 'rejected'), (2, 'confirmed')])
+        self.assertEqual(self.receive(second_reply)[0]['order'], 3)
+        self.assertFalse(self.service.poisoned)
+        group.assert_called_once()
+        self.assertEqual(single.call_count, 3)
+
+    def test_group_settles_after_revocation_and_preserves_other_pilot_order(self):
+        delivered = Mock(poll=Mock(return_value=None))
+        group = Mock(return_value=delivered)
+        self.grouped_service(self.apply, group)
+        first, first_reply = self.open()
+        first.sendall(self.frame(self.first, [hit(1), hit(2)]))
+        self.service.poll()
+        second, second_reply = self.open()
+        second.sendall(self.frame(self.second, [hit(1)]))
+        del self.grants[derive_combat_ticket(self.first['ticket'])]
+        self.service.poll()
+        self.assertEqual(self.calls, [])
+        delivered.poll.return_value = ((4, 3600), (0, 3578))
+        self.assertTrue(self.service.settle_pending())
+        for _ in range(2):
+            self.service.poll()
+        self.assertEqual(first_reply.readline(), b'')
+        self.assertEqual(self.receive(second_reply)[0]['order'], 3)
+        group.assert_called_once()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_incomplete_native_group_remains_unknown_and_refreshes_the_victim(self):
+        group_operation = Mock(poll=Mock(return_value=None))
+        group = Mock(return_value=group_operation)
+        single = Mock()
+        before = dict(shield=30, maxshield=2366, hull=3600, maxhull=3600)
+        after = dict(before, shield=4)
+        read = Mock(side_effect=(Mock(poll=Mock(return_value=before)), Mock(poll=Mock(return_value=after))))
+        self.grouped_service(single, group, begin_health_read=read, health_window=lambda _: 3)
+        victim = self.grant(1074)
+        target_peer, target_reply = self.open()
+        target_peer.sendall(self.health_request(victim, 3, 1))
+        self.service.poll()
+        initial = json.loads(target_reply.readline())
+        self.assertEqual(initial['health'], before)
+
+        peer, reply = self.open()
+        frame = self.frame(self.first, [hit(1), hit(2, 943)])
+        peer.sendall(frame)
+        self.service.poll()
+        peer.close()
+        reply.close()
+        retry, retry_reply = self.open()
+        retry.sendall(frame)
+        self.service.poll()
+        self.assertTrue(self.service.native_pending)
+        # A correct first row is not a complete receipt for the native frame.
+        group_operation.poll.return_value = ((4, 3600),)
+        with self.assertLogs('authority.company_combat_service', level='ERROR'):
+            self.service.settle_pending()
+        self.assertTrue(self.service.poisoned)
+        for _ in range(2):
+            self.service.poll()
+        receipts = self.receive(retry_reply)
+        self.assertEqual([(r['status'], r['shield'], r['hull']) for r in receipts],
+                         [('unknown', None, None), ('unknown', None, None)])
+        retry.sendall(frame)
+        self.service.poll()
+        self.assertEqual(self.receive(retry_reply), receipts)
+        single.assert_not_called()
+        group.assert_called_once()
+
+        query = json.loads(self.health_request(victim, 3, 2))
+        query['after_revision'] = initial['revision']
+        target_peer.sendall(encode_frame(query))
+        self.service.poll()
+        self.assertEqual(json.loads(target_reply.readline())['health'], after)
+        self.assertEqual(read.call_count, 2)
+
     def test_client_reconnects_only_with_an_unchanged_pending_batch(self):
         client = CompanyCombatClient(self.service.port, self.first)
         self.addCleanup(client.close)
