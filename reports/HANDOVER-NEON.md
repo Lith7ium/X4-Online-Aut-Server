@@ -67,8 +67,13 @@ integrated Linux suite found seven errors in a shared test fixture.
 After the fix, all 29 cases in the four affected modules passed.
 The last full Linux run still has 25 skips. Cobalt observed six shield
 hits on the occupied Company ship on Windows in a separate creative
-world. He is preparing the same observation for an admitted pilot
-with an offered checkpoint. The Internet flight awaits the operator.
+world. His diagnostic for an admitted pilot now captures after resume
+and helm confirmation, and binds the native event to the exact offered
+save. The integrated code passed 67 Linux fixture tests. Cobalt owns
+the PowerShell and extracted-ZIP follow-up. A native hit on an admitted
+Windows pilot and the Internet flight still await the operator.
+[Admitted-pilot capture and evidence limits](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md#windows-capture-for-a-resumed-pilot) ·
+[03:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795658448865639)
 [Windows hit observations](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md#occupied-victim-on-windows) ·
 [02:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795654839676439)
 [Strict run and coverage gaps](AUTHORITY-STRICT-CHECKS-20261125.md) ·

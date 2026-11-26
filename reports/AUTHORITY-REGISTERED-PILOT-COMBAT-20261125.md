@@ -63,6 +63,31 @@ fixture's in-memory registry. A provider offer and saved registry are
 still needed to verify an admitted Windows pilot's hit.
 [Cobalt's native result](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795651241349479)
 
+### Windows capture for a resumed pilot
+
+Cobalt contributed an opt-in Windows capture at `2bde57b9` and reported
+91 passing Windows fixture tests. The first integration installed the
+observer during the load barrier. An integration fixture reproduced the
+missing follow-up tick after the barrier closed. The integrated observer
+now receives updates from the regular participant loop once the session
+has resumed and the pilot controls the reserved ship. On loss of that
+binding it disarms its own observer. A passenger can still join while
+waiting for the helm. [03:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795658448865639)
+
+The local receipt reader streams X4's log. A capture window identifies
+the offered checkpoint ID and SHA-256, registry epoch, seat index and
+ship code. Only the private observer's damage callbacks for that
+occupied and controlled ship within the window can be listed. A later
+save can share the epoch and ship index with the first one. Supplying
+the other save's ID or digest to the reader fails. The verifier resolves
+each selected native sequence against the actual offered save.
+
+At `4e40a317`, 67 tests passed on Linux across the Windows CLI, session,
+full registry overlay, capture and combat observer. The LuaJIT cases
+exercise admission, delayed acknowledgement, pause, regained control
+and loss of the selected helm. The next native result requires a hit on
+an admitted pilot on Windows. Shared damage and a two-player fight remain open.
+
 ## Occupied target attempt on Linux
 
 One further isolated attempt at `3b5f00d4331f0aad32e4b5017fbe00e098635239`
