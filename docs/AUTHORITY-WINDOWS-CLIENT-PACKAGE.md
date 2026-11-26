@@ -206,6 +206,40 @@ with the observing game's `AUTH_COMPANY_COCKPIT_READBACK` entries.
 A zero measures a stationary sample or pair. A null means the provider had
 no eligible pair of positions or no reported velocity for that measurement.
 
+### Capture native hits on the admitted ship (diagnostic)
+
+`-CombatCapture` records hits while you control the Company ship you selected.
+In the example below, replace the work directory with an existing directory
+on your game's drive and use a ship index from your own world.
+
+```powershell
+.\tools\run_authority_windows_client.ps1 `
+  -ConnectionFile 'C:\X4Test\connection.json' `
+  -WorkRoot 'D:\SteamLibrary\steamapps\common' `
+  -FreshCompanyProfile -CompanyShipIndex 1074 -CombatCapture
+```
+
+After X4 stops, the launcher reads the verified pilot log and writes
+`combat-capture-receipt.json` in the private run directory. Its
+`combat_capture` result names the checkpoint ID, SHA-256, registry
+epoch, reserved ship index, receipt path and captured damage sequences.
+If the diagnostic fails, `receipt_error` records the error type.
+
+Keep the receipt and the original pilot log together. On the provider,
+`tools/dev/authority_combat_hit_evidence.py` checks the capture window
+and the ship identities in the offered save. Pass `--capture-epoch`
+and `--piloted-ship-index` to verify all hits in one scan.
+
+To rebuild a receipt from a retained log, run the packaged utility. Take the
+four values from the `combat_capture` block. The utility never overwrites an
+existing receipt:
+
+```powershell
+python .\tools\dev\authority_combat_capture_receipt.py --checkpoint checkpoint-... `
+  --sha256 ... --registry-epoch ... --piloted-ship-index 1074 `
+  --log "$env:USERPROFILE\Documents\Egosoft\X4\45851\x4authority.log" --out C:\X4Test\receipt.json
+```
+
 ### Run the isolated HUD playback diagnostic
 
 Use an isolated world and matching playback-capable packages. Get both pilots

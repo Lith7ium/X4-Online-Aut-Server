@@ -22,7 +22,8 @@ param(
     [switch] $TrialRegisteredNpcMeasurement,
     [switch] $CompanyCockpitPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
-    [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex
+    [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex,
+    [switch] $CombatCapture
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,6 +75,9 @@ if ($TrialRegisteredNpcMeasurement -and (-not $BaseGameOnly -or $CompanyShipInde
 $companyPilot = $ChooseCompanyShip -or $CompanyMotion -or $CompanyPurchases -or $PSBoundParameters.ContainsKey('CompanyShipIndex')
 if ($FreshCompanyProfile -and -not $companyPilot) {
     throw 'FreshCompanyProfile requires a Company ship selection or Company play option.'
+}
+if ($CombatCapture -and -not $companyPilot) {
+    throw 'CombatCapture requires a Company ship selection or Company play option.'
 }
 $playUntilExit = $companyPilot -and -not $PSBoundParameters.ContainsKey('ObserveSeconds') -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')
 if ($companyPilot -and -not $playUntilExit -and -not $PSBoundParameters.ContainsKey('ObserveSeconds')) {
@@ -179,6 +183,9 @@ if ($CompanySales) {
 }
 if ($CompanyUndockTest) {
     $clientArgs += '--company-undock-test'
+}
+if ($CombatCapture) {
+    $clientArgs += '--combat-capture'
 }
 & $Python $client @clientArgs
 exit $LASTEXITCODE

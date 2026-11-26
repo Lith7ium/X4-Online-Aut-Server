@@ -4,6 +4,7 @@ This composes the existing experimental load, participant and process owners.
 It does not prove loaded bytes, native Windows operation, gameplay or a WAN
 session. The workspace owns the profile/view/log and must keep them exclusive.
 """
+import io
 import math
 import re
 import secrets
@@ -13,7 +14,7 @@ import time
 from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
-from .combat_capture import capture_binding
+from .combat_capture import capture_binding, collect_hits, write_receipt
 from .company_motion_source import validate_npc_observation, validate_playback_index
 from .company_npc_measurement import validate_measurement_trial
 from .company_ship_selection import reserve_company_ship
@@ -47,6 +48,19 @@ def _annotate(error, message):
         error.add_note(message)
     except BaseException:
         pass
+
+
+def _write_capture_receipt(workspace, summary, final_log):
+    """Record the pilot's hits after the session verifies the final X4 log."""
+    try:
+        with io.TextIOWrapper(io.BytesIO(final_log), encoding='utf-8', errors='replace') as lines:
+            receipt = collect_hits(dict(summary, hits=[]), lines)
+        path = workspace.run_directory / 'combat-capture-receipt.json'
+        write_receipt(path, receipt)
+    except Exception as error:
+        summary['receipt_error'] = type(error).__name__
+        return
+    summary.update(receipt=str(path), sequences=[hit['sequence'] for hit in receipt['hits']])
 
 
 def validate_motion_request(request, participant_timeout):
@@ -193,7 +207,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
             company_source = company_client = purchase_source = fleet_source = None
-            motion_socket = motion = capture_receipt = None
+            motion_socket = motion = combat_binding = None
             launch_attempted = overlay_registered = False
             original = None
             cleanup_errors = []
@@ -271,8 +285,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     fleet_source = CompanyFleetSource(version=owner._company_fleet_order_version)
                     source_options['company_fleet'] = fleet_source
                 if combat_capture:
-                    capture_receipt = capture_binding(bound.offer.checkpoint_id, bound.offer.sha256,
-                                                      registry_snapshot['epoch'], seat_index)
+                    combat_binding = capture_binding(bound.offer.checkpoint_id, bound.offer.sha256,
+                                                     registry_snapshot['epoch'], seat_index)
                     source_options['combat_capture'] = True
                 hashes = install_fixture_overlay(workspace.view, new_test_view=True, bound_offer=bound,
                     save_path=str(workspace.save_dir), participant_port=controller.sock.getsockname()[1],
@@ -384,9 +398,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         result['controlled_company_ship_index'] = seat_index
                 if motion is not None:
                     result['motion_receipts'] = motion.confirmed_samples
-                if capture_receipt is not None:
-                    # Hits are read from this pilot's own log after X4 stops.
-                    result['combat_capture'] = capture_receipt
+                if combat_binding is not None:
+                    result['combat_capture'] = combat_binding
             except BaseException as error:
                 original = error
             finally:
@@ -451,6 +464,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             raise RuntimeError('final fixture observations incomplete')
                         if seat_index is not None and session.company_seat_status == 'controlled':
                             result['controlled_company_ship_index'] = seat_index
+                        if combat_binding is not None:
+                            _write_capture_receipt(workspace, combat_binding, final_log)
                     except BaseException:
                         cleanup_errors.append('final fixture observations unconfirmed')
                 if session is not None:
