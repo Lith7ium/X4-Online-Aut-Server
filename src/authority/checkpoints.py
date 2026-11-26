@@ -83,13 +83,18 @@ def _canonical(value):
 def _validate_save(path):
     """Read every compressed byte, validate gzip CRC/trailer and complete XML."""
     parser = expat.ParserCreate()
-    root = []
-    def start(name, _attrs):
-        if not root:
-            root.append(name)
+    root_name = None
+
+    def record_root(name, _attrs):
+        nonlocal root_name
+        root_name = name
+        # Expat still validates the entire document after the root is known.
+        parser.StartElementHandler = None
+
     def reject(*_args):
         raise CheckpointError('DOCTYPE and external entities are not supported')
-    parser.StartElementHandler = start
+
+    parser.StartElementHandler = record_root
     parser.StartDoctypeDeclHandler = reject
     parser.ExternalEntityRefHandler = reject
     total = 0
@@ -110,7 +115,7 @@ def _validate_save(path):
                 parser.Parse(b'', True)
     except (OSError, EOFError, expat.ExpatError, zlib.error) as exc:
         raise CheckpointError('incomplete or invalid gzip/XML save') from exc
-    if root != ['savegame']:
+    if root_name != 'savegame':
         raise CheckpointError('unexpected save XML root')
 
 
@@ -158,6 +163,7 @@ class CheckpointStore:
         if directory.is_symlink() or not directory.is_dir():
             raise CheckpointError('store must be an existing non-symlink directory')
         self.directory = directory.resolve(strict=True)
+        self._validated_publication = None
 
     def publish(self, source, *, marker=None):
         """Publish a save and optionally bind the caller's marker assertion.
@@ -199,9 +205,12 @@ class CheckpointStore:
                     raise CheckpointError('source was empty or changed during copy')
                 outgoing.flush()
                 os.fsync(outgoing.fileno())
+            source_digest = digest.hexdigest()
+            if _file_digest(target) != (source_digest, size):
+                raise CheckpointError('staged save differs from the source copy')
             _validate_save(target)
             manifest_value = {'version': 1, 'id': checkpoint_id,
-                              'sha256': digest.hexdigest(), 'size': size}
+                              'sha256': source_digest, 'size': size}
             if marker is not None:
                 manifest_value.update(version=2, marker=marker)
             metadata = _canonical(manifest_value)
@@ -212,8 +221,8 @@ class CheckpointStore:
             _sync_dir(stage)
             os.rename(stage, self.directory / checkpoint_id)
             _sync_dir(self.directory)
-            pointer = _canonical({'version': 1, 'id': checkpoint_id,
-                                  'manifest_sha256': hashlib.sha256(metadata).hexdigest()})
+            manifest_digest = hashlib.sha256(metadata).hexdigest()
+            pointer = _canonical({'version': 1, 'id': checkpoint_id, 'manifest_sha256': manifest_digest})
             fd, name = tempfile.mkstemp(prefix='.current-', dir=self.directory)
             pointer_temp = Path(name)
             with os.fdopen(fd, 'wb') as file:
@@ -223,7 +232,10 @@ class CheckpointStore:
             os.replace(pointer_temp, self.directory / 'CURRENT')
             pointer_temp = None
             _sync_dir(self.directory)
-            return Checkpoint(checkpoint_id, self.directory / checkpoint_id / 'save.xml.gz', digest.hexdigest(), size, marker)
+            checkpoint = Checkpoint(checkpoint_id, self.directory / checkpoint_id / 'save.xml.gz',
+                                    source_digest, size, marker)
+            self._validated_publication = (checkpoint, manifest_digest)
+            return checkpoint
         finally:
             if stage.exists():
                 shutil.rmtree(stage)
@@ -237,7 +249,8 @@ class CheckpointStore:
         if folder.is_symlink() or not folder.is_dir():
             raise CheckpointError('checkpoint directory missing or invalid')
         metadata = _read_regular(folder / 'manifest.json', 4096)
-        if manifest_sha256 is not None and hashlib.sha256(metadata).hexdigest() != manifest_sha256:
+        manifest_digest = hashlib.sha256(metadata).hexdigest()
+        if manifest_sha256 is not None and manifest_digest != manifest_sha256:
             raise CheckpointError('checkpoint manifest does not match CURRENT')
         value = _json(metadata)
         if not isinstance(value, dict):
@@ -256,8 +269,12 @@ class CheckpointStore:
         digest, size = _file_digest(save)
         if (digest, size) != (value['sha256'], value['size']):
             raise CheckpointError('checkpoint content does not match manifest')
-        _validate_save(save)
-        return Checkpoint(checkpoint_id, save, digest, size, value.get('marker'))
+        checkpoint = Checkpoint(checkpoint_id, save, digest, size, value.get('marker'))
+        # publish() parsed this generation in private staging. A fresh digest
+        # above establishes that each pilot is receiving the same gzip bytes.
+        if (checkpoint, manifest_digest) != self._validated_publication:
+            _validate_save(save)
+        return checkpoint
 
     def _pointed_checkpoint(self, contents):
         pointer = _json(contents)

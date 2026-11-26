@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from authority import checkpoints
 from authority.checkpoints import CheckpointError, CheckpointStore
 
 
@@ -37,6 +38,27 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(restarted.get(first.checkpoint_id), first)
         self.assertEqual(second.sha256, hashlib.sha256(self.source.read_bytes()).hexdigest())
         self.assertNotEqual(first.sha256, second.sha256)
+
+    def test_only_an_exact_publication_from_this_store_reuses_xml_validation(self):
+        self.write_save()
+        checkpoint = self.store.publish(self.source, marker='a' * 32)
+        with mock.patch.object(checkpoints, '_validate_save', wraps=checkpoints._validate_save) as validate:
+            self.store.confirm(checkpoint)
+            self.assertEqual(self.store.latest_marked_confirmed(), checkpoint)
+            validate.assert_not_called()
+
+            reopened = CheckpointStore(self.store_dir)
+            self.assertEqual(reopened.latest_confirmed(), checkpoint)
+            validate.assert_called_once_with(checkpoint.path)
+            validate.reset_mock()
+
+            # Same parsed manifest, different bytes. The publication no longer matches.
+            manifest = checkpoint.path.parent / 'manifest.json'
+            manifest.write_bytes(manifest.read_bytes() + b'\n')
+            self.assertEqual(self.store.get(checkpoint.checkpoint_id), checkpoint)
+            validate.assert_called_once_with(checkpoint.path)
+            with self.assertRaises(CheckpointError):
+                self.store.latest_marked_confirmed()
 
     def test_confirmed_pointer_survives_a_new_unconfirmed_publication(self):
         self.write_save()
