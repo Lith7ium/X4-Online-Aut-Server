@@ -181,6 +181,22 @@ Fedora paused and confirmed departure checkpoint
 `da1df283f79ec981a0e8b1e71ecf2fa9980ab8ac5eace7440e90d02f3d613776`.
 Both processes exited successfully. The original save hashes were preserved.
 
+### Windows receiver with the recorded flight
+
+Cobalt ran `f328ea20` on native Windows X4 9.00 with the same 44 input
+reports and a 40 km radar. Cobalt reports one first alignment on XPD-490
+at sequence 144. A later X4 read 12 ms after the alignment differed by
+0.000022 m. The last rendered sequence was 192. The receiver recorded
+567 writes, zero refused writes and at most 0.0005 m of readback error.
+All writes stayed in one internal zone.
+
+**The run's overall verdict was a failure.** The occupied ship was measured
+20.98 m from its initial pose, against a 0.01 m limit. It had already moved
+by stream startup. The available report does not establish when the full
+displacement occurred. The occupied ship's XYZ before and after playback
+will distinguish spawn drift from a movement during the trial. This was
+a Windows receiver playing a recorded remote pilot on loopback.
+
 ### Reproduce on a Windows receiver
 
 From this experiment branch, use a built Windows UDP module that exports
