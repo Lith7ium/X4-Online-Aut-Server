@@ -32,25 +32,22 @@ def private_display(xvfb, xauth, xdpyinfo):
         # Xvfb loads the cookie regardless of the record's display number.
         # The local-family entry for the allocated display is added below.
         authorize(xauth, authorization, hostname, ':9999', cookie)
-        ready, notify = os.pipe()
+        readiness_reader, readiness_writer = os.pipe()
         process = None
         try:
-            width, height = PROVIDER_RENDER_SIZE
-            with (Path(directory) / 'xvfb.log').open('wb') as log:
-                process = subprocess.Popen(
-                    [xvfb, '-displayfd', str(notify), '-screen', '0', f'{width}x{height}x24',
-                     '-nolisten', 'tcp', '-noreset', '-auth', str(authorization)],
-                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, pass_fds=(notify,),
-                    start_new_session=True)
-        finally:
-            os.close(notify)
-            if process is None:
-                os.close(ready)
-
-        try:
-            if not select.select([ready], [], [], 10)[0]:
+            try:
+                width, height = PROVIDER_RENDER_SIZE
+                with (Path(directory) / 'xvfb.log').open('wb') as log:
+                    process = subprocess.Popen(
+                        [xvfb, '-displayfd', str(readiness_writer), '-screen', '0', f'{width}x{height}x24',
+                         '-nolisten', 'tcp', '-noreset', '-auth', str(authorization)],
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log, pass_fds=(readiness_writer,),
+                        start_new_session=True)
+            finally:
+                os.close(readiness_writer)
+            if not select.select([readiness_reader], [], [], 10)[0]:
                 raise RuntimeError('Xvfb did not allocate a display')
-            number = os.read(ready, 16).strip()
+            number = os.read(readiness_reader, 16).strip()
             if not number.isdigit() or process.poll() is not None:
                 raise RuntimeError('Xvfb failed to initialize')
             display = ':' + number.decode('ascii')
@@ -64,14 +61,31 @@ def private_display(xvfb, xauth, xdpyinfo):
                 raise RuntimeError('Xvfb accepts connections without the private cookie')
             yield display, authorization, hostname
         finally:
-            os.close(ready)
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+            try:
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+            finally:
+                os.close(readiness_reader)
+
+
+@contextmanager
+def _display_environment(display, authorization):
+    overrides = {'DISPLAY': display, 'XAUTHORITY': str(authorization)}
+    previous = {name: os.environ.get(name) for name in overrides}
+    try:
+        os.environ.update(overrides)
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def main(argv=None):
@@ -221,13 +235,12 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, interrupt)
     try:
         with private_display(xvfb, xauth, xdpyinfo) as (display, authorization, hostname):
-            os.environ['DISPLAY'] = display
-            os.environ['XAUTHORITY'] = str(authorization)
-            return supervisor.main([
-                *server_flags, '--game', str(args.game), '--store', str(args.store),
-                '--out', str(args.out), '--display', display, '--timeout', str(args.timeout),
-                '--software-vulkan-icd', str(icd.resolve(strict=True)),
-            ], display_hostname=hostname)
+            with _display_environment(display, authorization):
+                return supervisor.main([
+                    *server_flags, '--game', str(args.game), '--store', str(args.store),
+                    '--out', str(args.out), '--display', display, '--timeout', str(args.timeout),
+                    '--software-vulkan-icd', str(icd.resolve(strict=True)),
+                ], display_hostname=hostname)
     except KeyboardInterrupt:
         return 130
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

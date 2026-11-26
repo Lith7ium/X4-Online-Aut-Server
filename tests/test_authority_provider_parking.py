@@ -1,10 +1,10 @@
 """Exercise the GPU-free provider wrapper without opening X4 or a display."""
-from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/dev'))
@@ -15,17 +15,62 @@ ARGS = ['--game', '/private/game', '--store', '/private/source/checkpoints',
 
 
 class ProviderParkingTest(unittest.TestCase):
+    def test_display_shutdown_if_log_close_fails_after_spawn(self):
+        log = Mock()
+
+        @contextmanager
+        def failing_log():
+            yield log
+            raise OSError('log close failed')
+
+        ready, notify = provider.os.pipe()
+        process = Mock()
+        process.poll.return_value = None
+        with (
+            patch.object(provider, 'authorize'),
+            patch.object(provider.os, 'pipe', return_value=(ready, notify)),
+            patch.object(Path, 'open', return_value=failing_log()),
+            patch.object(provider.subprocess, 'Popen', return_value=process),
+            patch.object(provider.select, 'select') as select,
+        ):
+            with self.assertRaisesRegex(OSError, 'log close failed'):
+                with provider.private_display('Xvfb', 'xauth', 'xdpyinfo'):
+                    self.fail('a partially initialized display was published')
+        select.assert_not_called()
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=5)
+        for descriptor in (ready, notify):
+            with self.assertRaises(OSError):
+                provider.os.fstat(descriptor)
+
+    def test_display_environment_restored_even_on_interrupt(self):
+        with patch.dict(provider.os.environ, DISPLAY=':1'):
+            provider.os.environ.pop('XAUTHORITY', None)
+            with self.assertRaises(KeyboardInterrupt):
+                with provider._display_environment(':99', Path('/private/auth')):
+                    self.assertEqual(provider.os.environ['DISPLAY'], ':99')
+                    self.assertEqual(provider.os.environ['XAUTHORITY'], '/private/auth')
+                    raise KeyboardInterrupt
+            self.assertEqual(provider.os.environ['DISPLAY'], ':1')
+            self.assertNotIn('XAUTHORITY', provider.os.environ)
+
     def test_both_modes_keep_the_existing_software_rendered_path(self):
         icd = Path(__file__).resolve()
+
+        def supervise(*_args, **_options):
+            self.assertEqual(provider.os.environ['DISPLAY'], ':99')
+            self.assertEqual(provider.os.environ['XAUTHORITY'], '/private/auth')
+            return 0
+
         for mode in ('prepare', 'verify'):
             with (
                 self.subTest(mode=mode),
                 patch.object(provider.os, 'geteuid', return_value=1000),
-                patch.dict(provider.os.environ),
+                patch.dict(provider.os.environ, DISPLAY=':1', XAUTHORITY='/initial/auth'),
                 patch.object(provider.shutil, 'which', side_effect=lambda name: '/usr/bin/' + name),
                 patch.object(provider, 'lavapipe_icd', return_value=icd),
                 patch.object(provider, 'private_display', return_value=nullcontext((':99', '/private/auth', 'x4-private-aabbccddeeff0011'))) as display,
-                patch.object(provider.supervisor, 'main', return_value=0) as run,
+                patch.object(provider.supervisor, 'main', side_effect=supervise) as run,
             ):
                 self.assertEqual(provider.main([*ARGS, '--park-server-avatar', mode]), 0)
                 display.assert_called_once_with('/usr/bin/Xvfb', '/usr/bin/xauth', '/usr/bin/xdpyinfo')
@@ -33,7 +78,8 @@ class ProviderParkingTest(unittest.TestCase):
                 self.assertEqual(flags[:3], ['--require-registry-snapshot', '--park-server-avatar', mode])
                 self.assertEqual(flags[flags.index('--display') + 1], ':99')
                 self.assertEqual(flags[flags.index('--software-vulkan-icd') + 1], str(icd))
-                self.assertEqual(provider.os.environ['XAUTHORITY'], '/private/auth')
+                self.assertEqual(provider.os.environ['DISPLAY'], ':1')
+                self.assertEqual(provider.os.environ['XAUTHORITY'], '/initial/auth')
                 self.assertEqual(run.call_args.kwargs, {'display_hostname': 'x4-private-aabbccddeeff0011'})
                 self.assertFalse(any(flag.startswith('--tls-') for flag in flags))
 

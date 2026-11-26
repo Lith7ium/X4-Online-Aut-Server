@@ -202,13 +202,13 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
             profile_ids += profile.PROFILES
         if type(profile_id) is not int or profile_id not in profile_ids:
             raise ValueError('invalid Windows fixture workspace profile')
-        motion_options = {'motion_enabled': True} if company_motion else {}
+        channel_options = {'motion_enabled': True} if company_motion else {}
         if company_combat:
-            motion_options['combat_enabled'] = True
+            channel_options['combat_enabled'] = True
         with client_connection(server_host=server_host, server_port=server_port,
                 server_fingerprint=server_fingerprint, shared_key=shared_key, file_token=file_token,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
-                keepalive_interval=keepalive_interval, **motion_options) as owner:
+                keepalive_interval=keepalive_interval, **channel_options) as owner:
             controller = process = session = None
             company_source = company_client = purchase_source = fleet_source = combat_sender = health_bridge = None
             motion_socket = motion = combat_binding = None

@@ -1,8 +1,11 @@
 """CLI/config checks only; no Windows, X4 or network connection."""
 import contextlib
+from argparse import Namespace
 import importlib.util
 import io
+from itertools import product
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +17,7 @@ SPEC = importlib.util.spec_from_file_location(
 cli = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cli)
 
+import authority_client_options as options
 from authority.company_ship_selection import CompanyShipChoiceDenied, reserve_company_ship
 
 
@@ -85,6 +89,20 @@ class FixtureCliTests(unittest.TestCase):
         with patch.object(Path, 'lstat', return_value=SimpleNamespace(
                 st_mode=stat.S_IFREG, st_size=100, st_file_attributes=0x400)):
             with self.assertRaises(ValueError):
+                cli.read_connection_settings(self.connection)
+
+    def test_connection_rejects_replacement_between_metadata_check_and_open(self):
+        replacement = self.root / 'replacement.json'
+        replacement.write_bytes(self.connection.read_bytes())
+        open_file = os.open
+
+        def open_replacement(path, flags):
+            self.assertEqual(Path(path), self.connection)
+            replacement.replace(self.connection)
+            return open_file(path, flags)
+
+        with patch.object(options.os, 'open', side_effect=open_replacement):
+            with self.assertRaisesRegex(ValueError, 'changed before opening'):
                 cli.read_connection_settings(self.connection)
 
     def test_observation_window_starts_at_first_admitted_poll(self):
@@ -244,6 +262,44 @@ class FixtureCliTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback',
                                      '--company-cockpit-playback-index', '1074'])
+
+    def test_company_feature_normalization_for_all_valid_boolean_combinations(self):
+        trade_modes = [(False, False, False, False, False)] + [
+            (True, fleet, trade, sales, undock)
+            for fleet, (trade, sales), undock in product(
+                (False, True), ((False, False), (True, False), (True, True)), (False, True))
+        ]
+        names = ('company_motion', 'company_combat', 'combat_capture',
+                 'company_purchases', 'company_fleet_orders', 'company_trade_view',
+                 'company_sales', 'company_undock_test')
+        for (motion, combat), capture, trade in product(
+                ((False, False), (True, False), (True, True)), (False, True), trade_modes):
+            switches = dict(zip(names, (motion, combat, capture, *trade), strict=True))
+            args = Namespace(**switches)
+            with self.subTest(switches=switches):
+                self.assertEqual(options.company_channel_options(args) | options.company_trade_options(args),
+                                 {name: True for name, enabled in switches.items() if enabled})
+
+    def test_company_fixture_forwards_all_enabled_features_together(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64]
+        features = ('company_motion', 'company_combat', 'combat_capture', 'company_purchases',
+                    'company_fleet_orders', 'company_trade_view', 'company_sales', 'company_undock_test',
+                    'play_until_exit')
+        flags = ['--' + name.replace('_', '-') for name in features]
+        with (patch.object(cli, 'os') as platform,
+              patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as session,
+              patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace')):
+            platform.name = 'nt'
+            cli.run(cli.parser().parse_args(base))
+            self.assertTrue(set(features).isdisjoint(session.call_args.kwargs))
+            cli.run(cli.parser().parse_args([*base, *flags, '--company-cockpit-playback-index', '1074']))
+            forwarded = session.call_args.kwargs
+            self.assertEqual({name: forwarded[name] for name in features}, dict.fromkeys(features, True))
+            self.assertIs(forwarded['cockpit_radar_playback'], True)
+            self.assertEqual(forwarded['company_hull_playback_index'], 1074)
 
     def test_fresh_company_profile_requires_explicit_seat_join_and_no_legacy_motion(self):
         base = ['--isolated-fixture-test', '--connection-file', str(self.connection),

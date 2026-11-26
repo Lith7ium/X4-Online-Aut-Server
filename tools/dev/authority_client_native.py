@@ -164,22 +164,22 @@ def observe_and_activate(owner, participant, watch, ticket, marker, guard, verif
                   admission_state='indeterminate')
     participant.loading = False  # activate may receive server participant traffic immediately.
     result['phase'] = 'claim'
-    motion_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
+    activation_options = {} if motion_consumer is None else {'apply_motion': motion_consumer}
     if company_purchase_exchange is not None:
-        motion_options['company_purchase_exchange'] = company_purchase_exchange
+        activation_options['company_purchase_exchange'] = company_purchase_exchange
     if company_fleet_exchange is not None:
-        motion_options['company_fleet_exchange'] = company_fleet_exchange
+        activation_options['company_fleet_exchange'] = company_fleet_exchange
     if company_sale_exchange is not None:
-        motion_options['company_sale_exchange'] = company_sale_exchange
+        activation_options['company_sale_exchange'] = company_sale_exchange
     if company_trade_view_exchange is not None:
-        motion_options['company_trade_view_exchange'] = company_trade_view_exchange
+        activation_options['company_trade_view_exchange'] = company_trade_view_exchange
     if company_undock_exchange is not None:
-        motion_options['company_undock_exchange'] = company_undock_exchange
+        activation_options['company_undock_exchange'] = company_undock_exchange
     if company_purchase_statement is not None:
-        motion_options.update(company_purchase_statement=company_purchase_statement,
+        activation_options.update(company_purchase_statement=company_purchase_statement,
                               company_purchase_statement_result=company_purchase_statement_result)
     command_timeout = 30 if play_until_exit else min(30, marked.remaining(participant.deadline))
-    owner.activate(attempt, participant, participant_timeout=command_timeout, **motion_options)
+    owner.activate(attempt, participant, participant_timeout=command_timeout, **activation_options)
     guard(full=True)
     if play_until_exit:
         # The load owner has handed off to per-command participant budgets.
@@ -349,11 +349,11 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
             result['phase'] = 'connect'
         else:
             download.create_owned_lock(user.pw_uid, user.pw_gid, lockbox)
-        motion_options = {'motion_enabled': True} if company_motion else {}
+        channel_options = {'motion_enabled': True} if company_motion else {}
         if company_combat:
-            motion_options['combat_enabled'] = True
+            channel_options['combat_enabled'] = True
         with client_connection(**connection_settings, deadline=join_deadline,
-                keepalive_interval=args.keepalive_interval, **motion_options) as owner:
+                keepalive_interval=args.keepalive_interval, **channel_options) as owner:
             try:
                 case_options = {'base_game_only': True} if getattr(args, 'base_game_only', False) else {}
                 case, profile, binds, lock = snapshot.prepare_case(out, game, home, **case_options)

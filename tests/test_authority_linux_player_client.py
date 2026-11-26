@@ -292,8 +292,16 @@ class PlayerClientTests(unittest.TestCase):
             self.assertEqual(options['player_settings']['server_fingerprint'], 'a' * 64)
             self.assertEqual(options['select_ship']([], None), INDEX)
             self.assertNotIn('b' * 64, stdout.getvalue())
-            self.assertNotIn('company_motion', options)
-            self.assertNotIn('combat_capture', options)
+            features = ('company_motion', 'company_combat', 'combat_capture', 'company_purchases',
+                        'company_fleet_orders', 'company_trade_view', 'company_sales', 'company_undock_test')
+            self.assertTrue(set(features).isdisjoint(options))
+            flags = ['--' + name.replace('_', '-') for name in features]
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, *flags, '--company-cockpit-playback-index', str(INDEX + 1)]), 0)
+            forwarded = run.call_args.kwargs
+            self.assertEqual({name: forwarded[name] for name in features}, dict.fromkeys(features, True))
+            self.assertIs(forwarded['cockpit_radar_playback'], True)
+            self.assertEqual(forwarded['company_hull_playback_index'], INDEX + 1)
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--combat-capture']), 0)
             self.assertIs(run.call_args.kwargs['combat_capture'], True)

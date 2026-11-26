@@ -13,9 +13,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src'))
 
 
-from authority_client_options import _read_settings, read_connection_settings, terminal_company_ship_selector
+from authority_client_options import (
+    _read_settings, company_channel_options, company_trade_options, company_view_options,
+    read_connection_settings, terminal_company_ship_selector,
+)
 from authority.experimental_remote_load_client import SessionFull
-from authority.company_npc_measurement import validate_measurement_trial
 
 
 def read_motion_request(path):
@@ -110,39 +112,16 @@ def parser():
 def run(args, *, on_stage=None):
     if not args.isolated_fixture_test or os.name != 'nt' or sys.version_info < (3, 11):
         raise ValueError('explicit isolated Windows fixture test with Python 3.11+ required')
-    fleet_orders = getattr(args, 'company_fleet_orders', False)
-    if fleet_orders and not args.company_purchases:
-        raise ValueError('--company-fleet-orders requires --company-purchases')
-    trade_view = getattr(args, 'company_trade_view', False)
-    sales = getattr(args, 'company_sales', False)
-    if sales and not (args.company_purchases and trade_view):
-        raise ValueError('--company-sales requires --company-purchases and --company-trade-view')
-    if trade_view and not args.company_purchases:
-        raise ValueError('--company-trade-view requires --company-purchases')
-    undock_test = getattr(args, 'company_undock_test', False)
-    if undock_test and not args.company_purchases:
-        raise ValueError('--company-undock-test requires --company-purchases')
+    trade_options = company_trade_options(args)
     company_pilot = (args.choose_company_ship or args.company_motion or args.company_purchases or
                      args.company_ship_index is not None)
-    combat_capture = getattr(args, 'combat_capture', False)
-    company_combat = getattr(args, 'company_combat', False)
-    if company_combat and not args.company_motion:
-        raise ValueError('--company-combat requires --company-motion')
-    if combat_capture and not company_pilot:
+    channel_options = company_channel_options(args)
+    if channel_options.get('combat_capture') and not company_pilot:
         raise ValueError('--combat-capture requires a Company seat join')
     fresh_company_profile = getattr(args, 'fresh_company_profile', False)
     if fresh_company_profile and (not company_pilot or args.motion_config is not None):
         raise ValueError('fresh Company profiles require a Company seat join without a legacy motion fixture')
-    from authority.company_motion_source import validate_npc_observation, validate_playback_index
-    cockpit_radar_playback = getattr(args, 'company_cockpit_playback', False) or args.company_cockpit_playback_index is not None
-    playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
-    observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
-                                            company_motion=args.company_motion, own_index=args.company_ship_index)
-    measurement = getattr(args, 'trial_registered_npc_measurement', False)
-    validate_measurement_trial(measurement, base_game_only=getattr(args, 'base_game_only', False),
-                               observed_npc=observed_npc, pilot_index=args.company_ship_index)
-    validate_playback_index(playback_index, company_motion=args.company_motion,
-                            own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
+    company_options = {**trade_options, **channel_options, **company_view_options(args)}
     durations = [(args.timeout, 3600), (args.keepalive_seconds, 300)]
     if not args.play_until_exit:
         durations.append((args.observe_seconds, args.timeout))
@@ -179,31 +158,8 @@ def run(args, *, on_stage=None):
     if fresh_company_profile:
         view_options['fresh_company_profile'] = True
     workspace = WindowsFixtureWorkspace(args.game, args.view_container, args.out, **view_options)
-    motion_options = {'company_motion': True} if args.company_motion else {}
-    if company_combat:
-        motion_options['company_combat'] = True
-    if args.company_purchases:
-        motion_options['company_purchases'] = True
-    if trade_view:
-        motion_options['company_trade_view'] = True
-    if sales:
-        motion_options['company_sales'] = True
-    if fleet_orders:
-        motion_options['company_fleet_orders'] = True
-    if undock_test:
-        motion_options['company_undock_test'] = True
-    if observed_npc:
-        motion_options['observed_npc'] = observed_npc
-    if measurement:
-        motion_options['registered_npc_local_measurement'] = True
-    if playback_index is not None:
-        motion_options['company_hull_playback_index'] = playback_index
-    if cockpit_radar_playback:
-        motion_options['cockpit_radar_playback'] = True
     if args.play_until_exit:
-        motion_options['play_until_exit'] = True
-    if combat_capture:
-        motion_options['combat_capture'] = True
+        company_options['play_until_exit'] = True
     return run_fixture_session(
         enabled=True, workspace=workspace, **settings,
         windows_dll=args.network_dll, dll_sha256=args.network_dll_sha256,
@@ -212,7 +168,7 @@ def run(args, *, on_stage=None):
         stop_requested=(lambda: False) if args.play_until_exit else ObservationWindow(args.observe_seconds),
         motion_request=motion_request,
         require_registry_snapshot=args.require_registry_snapshot or select_ship is not None,
-        select_ship=select_ship, on_stage=on_stage, **motion_options,
+        select_ship=select_ship, on_stage=on_stage, **company_options,
     )
 
 

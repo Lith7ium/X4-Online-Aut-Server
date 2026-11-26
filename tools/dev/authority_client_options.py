@@ -1,4 +1,5 @@
-"""Shared terminal selection and pinned TLS connection settings for authority clients."""
+"""Shared options, terminal selection and pinned TLS settings for authority clients."""
+from argparse import Namespace
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,73 @@ import stat
 import sys
 from threading import Thread
 
+from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, PILOT_INDEX, validate_measurement_trial
 from authority.company_ship_selection import CompanyShipSelector
+from authority.file_fingerprints import same_path_and_descriptor
+
+_MAX_CONNECTION_BYTES = 4096
+
+
+def company_channel_options(args: Namespace) -> dict[str, bool]:
+    if getattr(args, 'company_combat', False) and not args.company_motion:
+        raise ValueError('--company-combat requires --company-motion')
+    return {
+        name: True for name in ('company_motion', 'company_combat', 'combat_capture')
+        if getattr(args, name, False)
+    }
+
+
+def company_trade_options(args: Namespace) -> dict[str, bool]:
+    purchases = args.company_purchases
+    fleet_orders = getattr(args, 'company_fleet_orders', False)
+    trade_view = getattr(args, 'company_trade_view', False)
+    sales = getattr(args, 'company_sales', False)
+    undock_test = getattr(args, 'company_undock_test', False)
+    if fleet_orders and not purchases:
+        raise ValueError('--company-fleet-orders requires --company-purchases')
+    if sales and not (purchases and trade_view):
+        raise ValueError('--company-sales requires --company-purchases and --company-trade-view')
+    if trade_view and not purchases:
+        raise ValueError('--company-trade-view requires --company-purchases')
+    if undock_test and not purchases:
+        raise ValueError('--company-undock-test requires --company-purchases')
+    return {
+        name: True for name, enabled in (
+            ('company_purchases', purchases), ('company_fleet_orders', fleet_orders),
+            ('company_trade_view', trade_view), ('company_sales', sales),
+            ('company_undock_test', undock_test),
+        ) if enabled
+    }
+
+
+def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str, bool | int | tuple[int, str]]:
+    from authority.company_motion_source import validate_npc_observation, validate_playback_index
+
+    cockpit_index = args.company_cockpit_playback_index
+    radar_playback = getattr(args, 'company_cockpit_playback', False) or cockpit_index is not None
+    playback_index = cockpit_index if cockpit_index is not None else args.company_hull_playback_index
+    observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
+                                            company_motion=args.company_motion, own_index=args.company_ship_index)
+    measurement = getattr(args, 'trial_registered_npc_measurement', False)
+    base_game_only = getattr(args, 'base_game_only', False)
+    validate_measurement_trial(measurement, base_game_only=base_game_only,
+                               observed_npc=observed_npc, pilot_index=args.company_ship_index)
+    if hold_npc and (not base_game_only or args.company_ship_index != PILOT_INDEX
+                     or observed_npc != (NPC_INDEX, NPC_CODE)):
+        raise ValueError('NPC hold trial requires the vanilla HVC-420 pilot and observation of MFQ-419')
+    validate_playback_index(playback_index, company_motion=args.company_motion,
+                            own_index=args.company_ship_index, cockpit_radar_playback=radar_playback)
+
+    options: dict[str, bool | int | tuple[int, str]] = {}
+    if observed_npc:
+        options['observed_npc'] = observed_npc
+    if measurement:
+        options['registered_npc_local_measurement'] = True
+    if playback_index is not None:
+        options['company_hull_playback_index'] = playback_index
+    if radar_playback:
+        options['cockpit_radar_playback'] = True
+    return options
 
 
 def _unique_fields(pairs):
@@ -20,25 +87,28 @@ def _unique_fields(pairs):
     return result
 
 
-def _read_settings(path, *, require_private=False):
-    """Read one bounded private JSON file without printing its contents."""
-    path = Path(path)
-    info = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or
-            getattr(info, 'st_file_attributes', 0) & 0x400 or
-            not 0 < info.st_size <= 4096):
+def _check_connection_file(info):
+    if (not stat.S_ISREG(info.st_mode)
+            or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            or not 0 < info.st_size <= _MAX_CONNECTION_BYTES):
         raise ValueError('ordinary bounded connection file required')
-    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
-    if require_private:
-        flags |= os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    with os.fdopen(os.open(path, flags), 'rb') as stream:
-        if require_private:
-            opened = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid()
-                    or opened.st_mode & 0o077 or not os.path.samestat(info, opened)):
-                raise ValueError('owner-only connection file required')
-        data = stream.read(4097)
-    if len(data) > 4096:
+
+
+def _read_settings(path, *, require_private=False):
+    """Read one bounded JSON file without printing its contents."""
+    path = Path(path)
+    named = path.lstat()
+    _check_connection_file(named)
+    extra_flags = getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    with open(path, 'rb', opener=lambda name, flags: os.open(name, flags | extra_flags)) as stream:
+        opened = os.fstat(stream.fileno())
+        _check_connection_file(opened)
+        if not same_path_and_descriptor(named, opened):
+            raise ValueError('connection file changed before opening')
+        if require_private and (opened.st_uid != os.geteuid() or opened.st_mode & 0o077):
+            raise ValueError('owner-only connection file required')
+        data = stream.read(_MAX_CONNECTION_BYTES + 1)
+    if len(data) > _MAX_CONNECTION_BYTES:
         raise ValueError('connection file too large')
     return json.loads(data, object_pairs_hook=_unique_fields)
 

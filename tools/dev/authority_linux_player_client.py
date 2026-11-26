@@ -6,10 +6,11 @@ from pathlib import Path
 import sys
 
 import authority_client_native as native
-from authority.company_npc_measurement import validate_measurement_trial
-from authority.company_motion_source import validate_npc_observation, validate_playback_index
 from authority.experimental_remote_load_client import SessionFull
-from authority_client_options import read_connection_settings, terminal_company_ship_selector
+from authority_client_options import (
+    company_channel_options, company_trade_options, company_view_options,
+    read_connection_settings, terminal_company_ship_selector,
+)
 
 
 def main(argv=None):
@@ -59,31 +60,13 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float,
                         help='optional total run budget in seconds, including join and play (maximum 3600)')
     args = parser.parse_args(argv)
-    if args.company_combat and not args.company_motion:
-        parser.error('--company-combat requires --company-motion')
-    if args.company_fleet_orders and not args.company_purchases:
-        parser.error('--company-fleet-orders requires --company-purchases')
-    if args.company_sales and not (args.company_purchases and args.company_trade_view):
-        parser.error('--company-sales requires --company-purchases and --company-trade-view')
-    if args.company_trade_view and not args.company_purchases:
-        parser.error('--company-trade-view requires --company-purchases')
-    if args.company_undock_test and not args.company_purchases:
-        parser.error('--company-undock-test requires --company-purchases')
-    if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
-        parser.error('--company-ship-index must be between 1 and 200000')
-    cockpit_radar_playback = args.company_cockpit_playback or args.company_cockpit_playback_index is not None
-    playback_index = args.company_cockpit_playback_index if args.company_cockpit_playback_index is not None else args.company_hull_playback_index
+    hold_npc = args.trial_registered_npc_hold or args.trial_registered_npc_align
     try:
-        observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
-                                                company_motion=args.company_motion, own_index=args.company_ship_index)
-        hold_npc = args.trial_registered_npc_hold or args.trial_registered_npc_align
-        validate_measurement_trial(args.trial_registered_npc_measurement, base_game_only=args.base_game_only,
-                                   observed_npc=observed_npc, pilot_index=args.company_ship_index)
-        if hold_npc and (not args.base_game_only or args.company_ship_index != 1073
-                                                or observed_npc != (943, 'MFQ-419')):
-            raise ValueError('NPC hold trial requires the vanilla HVC-420 pilot and observation of MFQ-419')
-        validate_playback_index(playback_index, company_motion=args.company_motion,
-                                own_index=args.company_ship_index, cockpit_radar_playback=cockpit_radar_playback)
+        channel_options = company_channel_options(args)
+        trade_options = company_trade_options(args)
+        if args.company_ship_index is not None and not 1 <= args.company_ship_index <= 200000:
+            raise ValueError('--company-ship-index must be between 1 and 200000')
+        company_options = {**channel_options, **trade_options, **company_view_options(args, hold_npc=hold_npc)}
     except ValueError as error:
         parser.error(str(error))
     if not args.display:
@@ -105,35 +88,12 @@ def main(argv=None):
     try:
         settings = read_connection_settings(args.connection_file, require_private=True)
         selector = terminal_company_ship_selector if args.company_ship_index is None else selected_index
-        motion_options = {'company_motion': True} if args.company_motion else {}
-        if args.company_combat:
-            motion_options['company_combat'] = True
-        if args.combat_capture:
-            motion_options['combat_capture'] = True
-        if args.company_purchases:
-            motion_options['company_purchases'] = True
-        if args.company_fleet_orders:
-            motion_options['company_fleet_orders'] = True
-        if args.company_trade_view:
-            motion_options['company_trade_view'] = True
-        if args.company_sales:
-            motion_options['company_sales'] = True
-        if args.company_undock_test:
-            motion_options['company_undock_test'] = True
-        if observed_npc:
-            motion_options['observed_npc'] = observed_npc
-        if args.trial_registered_npc_measurement:
-            motion_options['registered_npc_local_measurement'] = True
         if hold_npc:
-            motion_options['registered_npc_hold_trial'] = True
+            company_options['registered_npc_hold_trial'] = True
         if args.trial_registered_npc_align:
-            motion_options['registered_npc_alignment_trial'] = True
-        if playback_index is not None:
-            motion_options['company_hull_playback_index'] = playback_index
-        if cockpit_radar_playback:
-            motion_options['cockpit_radar_playback'] = True
+            company_options['registered_npc_alignment_trial'] = True
         result = native.run(args, player_settings=settings, select_ship=selector, on_admitted=joined,
-                            **motion_options)
+                            **company_options)
     except (OSError, ValueError, RuntimeError, RecursionError, KeyboardInterrupt) as error:
         known = {'explicit_unprivileged_linux_opt_in_required', 'native_main_thread_required',
                  'pinned_game_or_namespace_unavailable', 'local_x11_display_required',
