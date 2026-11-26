@@ -130,8 +130,9 @@ and the native adapter with simulated X4 calls. It covers successful
 continuation, a simultaneous zone change by the observer, lost visibility,
 roster removal, incorrect XYZ or zone, and rejection of a first-write
 crossing, an unknown zone and a zone from another sector. The Windows
-baseline above predates this change. A native crossing with the updated
-receiver and a two-pilot live crossing are separate tests.
+baseline above predates this change. The [later Windows synthetic run](#windows-receiver-crossing-an-internal-zone-on-a-synthetic-route)
+exercised the updated receiver in native X4. Two independently flown
+cockpits have yet to exercise this crossing.
 
 ## First contact with a fast pilot
 
@@ -190,12 +191,36 @@ at sequence 144. A later X4 read 12 ms after the alignment differed by
 567 writes, zero refused writes and at most 0.0005 m of readback error.
 All writes stayed in one internal zone.
 
-**The run's overall verdict was a failure.** The occupied ship was measured
-20.98 m from its initial pose, against a 0.01 m limit. It had already moved
-by stream startup. The available report does not establish when the full
-displacement occurred. The occupied ship's XYZ before and after playback
-will distinguish spawn drift from a movement during the trial. This was
-a Windows receiver playing a recorded remote pilot on loopback.
+**The recorded-flight run failed its overall check.** The occupied ship was
+20.9799 m from its unlogged READY position, against a 0.01 m limit. Cobalt
+recovered the stream-start XYZ of (-11.750, -0.050, -49.410) m from the raw
+trace. The older logs contain no final XYZ for the occupied ship. The
+20.9799 m displacement was the same in the post-stream probe and final
+readback, so the logs cannot establish when the full displacement occurred.
+This run replayed the recorded remote pilot over loopback.
+
+### Windows receiver crossing an internal zone on a synthetic route
+
+Cobalt reports a separate successful native Windows X4 9.00 run on
+`1e6802c5` with `--trial-first-contact --synthetic --flip 1,1,-1`.
+The own ship's XYZ was (0, 0, 0) m at READY, stream start, the first and
+last writes and the final readback. The reported spawn, playback and
+post-playback displacements were each 0.0000 m.
+
+The receiver confirmed first contact at sequence 144 on XDE-842, actor
+`0x177049`, zone `713624`. An independent native read 0.010 s later
+showed 0.000020 m of position error. At sequence 148 it requested a write to
+zone `2647` in sector `2645`, at (757.1167, 0.0000, 811.0773) m.
+The same actor read back in zone `2647` after 0.011 s at
+(757.1172, 0.0000, 811.0771) m, about 0.00054 m from the request based
+on the printed coordinates.
+
+The run recorded one crossing, 44 writes in the original zone and 501 in the
+destination zone, with zero refusals and a maximum readback error of
+0.0022 m. Playback reached sequence 192. The largest step was 33.2 m.
+The synthetic trajectory drove the native receiver over loopback. This
+result and the earlier recorded-flight failure describe separate runs.
+[Cobalt's report](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795702005880359)
 
 ### Reproduce on a Windows receiver
 

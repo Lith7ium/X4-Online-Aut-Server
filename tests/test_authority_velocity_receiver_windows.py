@@ -1,4 +1,5 @@
 """Offline checks for the native Windows velocity receiver runner and its trace hook."""
+from argparse import ArgumentTypeError
 from contextlib import redirect_stdout
 from io import StringIO
 import json
@@ -186,6 +187,17 @@ class VelocityReceiverRunnerTests(unittest.TestCase):
         self.assertEqual((boundary['actor'], boundary['later_actual_xyz']), ('0x20', '21,0,0'))
         self.assertEqual(report['confirmed_zone_crossings'][0]['after'], '8')
         self.assertIsNone(report['first_fault'])
+        traces = [runner.parse_trace(event) for event in events]
+        for interruption in [('WRITE', traces[2][1]), ('BIND', traces[1][1]),
+                             ('READBACK', dict(traces[-1][1], actor='0x21'))]:
+            mismatched = traces[:-1] + [interruption, traces[-1]]
+            self.assertIsNone(runner.zone_boundary(mismatched)['later_actual_zone'])
+
+    def test_flip_requires_three_signed_unit_axes(self):
+        self.assertEqual(runner.parse_flip('1,1,-1'), (1, 1, -1))
+        for invalid in ('1,1', '1,1,-1,1', '0,1,1', 'a,1,1'):
+            with self.assertRaises(ArgumentTypeError):
+                runner.parse_flip(invalid)
 
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')

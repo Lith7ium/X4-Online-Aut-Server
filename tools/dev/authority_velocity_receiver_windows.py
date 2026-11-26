@@ -216,16 +216,26 @@ def own_track(events, writes, ready_own=None, final_own=None):
 
 
 def zone_boundary(traces):
-    """First write requesting a zone other than the hull's current one, with the next native readback."""
+    """Report the first requested crossing and its next correlated native read."""
     for index, (kind, fields) in enumerate(traces):
-        if kind == 'WRITE' and fields.get('zone_target') not in (None, fields.get('zone_before')):
-            after = next((f for k, f in traces[index + 1:] if k == 'READBACK'), None) or {}
-            return {'actor': fields.get('actor'), 'code': fields.get('code'), 'sector': fields.get('sector'),
-                    'write_ok': fields['ok'], 't': float(fields['t']), 'zone_before': fields.get('zone_before'),
-                    'requested_zone': fields['zone_target'], 'requested_xyz': fields['target'],
-                    'own_before': fields.get('own_before'), 'later_seq': after.get('seq'),
-                    'later_elapsed': after.get('elapsed'), 'later_actual_zone': after.get('zone'),
-                    'later_actual_xyz': after.get('ffi')}
+        if kind != 'WRITE' or fields.get('zone_target') in (None, '-1', '0', fields.get('zone_before')):
+            continue
+        after = {}
+        if fields['ok'] == 'true':
+            for next_kind, read in traces[index + 1:]:
+                if next_kind in ('BIND', 'WRITE'):
+                    break
+                if next_kind == 'READBACK':
+                    if all(fields.get(key) and fields[key] != '-' and read.get(key) == fields[key]
+                           for key in ('actor', 'sector', 'code')):
+                        after = read
+                    break
+        return {'actor': fields.get('actor'), 'code': fields.get('code'), 'sector': fields.get('sector'),
+                'write_ok': fields['ok'], 't': float(fields['t']), 'zone_before': fields.get('zone_before'),
+                'requested_zone': fields['zone_target'], 'requested_xyz': fields['target'],
+                'own_before': fields.get('own_before'), 'later_seq': after.get('seq'),
+                'later_elapsed': after.get('elapsed'), 'later_actual_zone': after.get('zone'),
+                'later_actual_xyz': after.get('ffi'), 'later_ffi_error_m': after.get('ffi_error')}
     return None
 
 
@@ -447,6 +457,13 @@ def run_trial(view, profile_dir, out, args, samples, network_dll):
             shutil.copyfile(log_path, out / LOGFILE)
 
 
+def parse_flip(text):
+    pieces = text.split(',')
+    if len(pieces) != 3 or any(piece not in ('1', '-1') for piece in pieces):
+        raise argparse.ArgumentTypeError('expected three comma-separated values, each 1 or -1')
+    return tuple(map(int, pieces))
+
+
 def main(argv=None):
     from lockstep.launcher import game as game_mod, profile as profile_mod, steam
 
@@ -463,7 +480,7 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=240.0)
     parser.add_argument('--trial-first-contact', action='store_true',
                         help='use the live pilot roster and verify one bounded alignment from sample zero')
-    parser.add_argument('--flip', type=lambda text: tuple(int(v) for v in text.split(',')),
+    parser.add_argument('--flip', type=parse_flip,
                         help='fixed per-axis mirror, e.g. 1,1,-1, to repeat an earlier path')
     parser.add_argument('--bind-sample', type=int,
                         help='sample placed on the resting hull; 0 is the velocity-less V3 baseline')
