@@ -30,6 +30,22 @@ class VanillaPairTest(unittest.TestCase):
             self.assertIn('station="ZZZ-999"', config)
             self.assertNotIn('create_ship', (lab/'md'/pair.INSPECT).read_text())
 
+    def test_boarding_seed_requires_a_distinct_attested_transport_before_census(self):
+        fighters = pair.TAG + f'{self.nonce}|PAIR|AAA-111|BBB-222|ZZZ-999|dock_room\n'.encode()
+        transport = pair.BOARDING_TAG + f'{self.nonce}|CCC-333|{pair.SECTOR}|8\n'.encode()
+
+        def receipts(extra, enabled=True):
+            return pair.genesis_receipts(None, self.nonce, lambda *_: fighters + extra, boarding_transport=enabled)
+
+        self.assertEqual(receipts(transport)['vanilla_boarding_transport'],
+                         dict(code='CCC-333', sector_macro=pair.SECTOR, marines=8))
+        for invalid in (b'', transport * 2, transport.replace(b'CCC-333', b'AAA-111'),
+                        transport.replace(b'|8\n', b'|7\n'), transport.replace(self.nonce.encode(), b'stale')):
+            with self.subTest(receipt=invalid), self.assertRaises(ValueError):
+                receipts(invalid)
+        with self.assertRaises(ValueError):
+            receipts(transport, enabled=False)
+
     def test_four_fighter_receipt_requires_group_and_exact_distinct_codes(self):
         codes = ['AAA-111', 'BBB-222', 'CCC-333', 'DDD-444']
 

@@ -1,4 +1,5 @@
-"""Place base-game fighters, discover a parking station and verify their cold identities."""
+"""Prepare and verify Company ships for disposable base-game flight tests."""
+import io
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
@@ -13,6 +14,7 @@ INSPECT = 'authority_vanilla_pair_inspect.xml'
 SECTOR = 'cluster_06_sector002_macro'
 UI = ('authority_registry_resolve_string.lua', 'authority_company_shuttle_pair.lua')
 TAG = b'[X4LAN] AUTH_VANILLA_PAIR '
+BOARDING_TAG = b'[X4LAN] AUTH_VANILLA_BOARDING '
 
 
 def _receipt_kind(fighter_count):
@@ -32,15 +34,37 @@ def _checked(pair):
     return pair
 
 
-def verify_genesis_log(log, nonce, read_evidence, *, fighter_count=2):
+def genesis_receipts(log, nonce, read_evidence, *, fighter_count=2, boarding_transport=False):
     kind = _receipt_kind(fighter_count)
-    rows = [line.split(TAG, 1)[1].strip() for line in read_evidence(log, 64 << 20).splitlines() if TAG in line]
+    if type(boarding_transport) is not bool:
+        raise ValueError('boarding transport selection must be boolean')
+    rows, transports = [], []
+    for line in io.BytesIO(read_evidence(log, 64 << 20)):
+        if TAG in line:
+            rows.append(line.split(TAG, 1)[1].strip())
+        if BOARDING_TAG in line:
+            transports.append(line.split(BOARDING_TAG, 1)[1].strip().decode('ascii').split('|'))
     if len(rows) != 1:
         raise ValueError(f'expected a single native fighter receipt, got {len(rows)}')
     fields = rows[0].decode('ascii').split('|')
     if len(fields) != fighter_count + 4 or fields[:2] != [nonce, kind]:
         raise ValueError(f'native fighter inspection failed: {rows[0][:192]!r}')
-    return _checked(dict(codes=fields[2:-2], station=fields[-2], room=fields[-1], sector=SECTOR))
+    fighters = _checked(dict(codes=fields[2:-2], station=fields[-2], room=fields[-1], sector=SECTOR))
+    receipts = {'vanilla_pair' if fighter_count == 2 else 'vanilla_flight_group': fighters}
+    if len(transports) != int(boarding_transport):
+        raise ValueError('unexpected number of native boarding transport receipts')
+    if boarding_transport:
+        transport = transports[0]
+        if (len(transport) != 4 or transport[0] != nonce or not CODE.fullmatch(transport[1])
+                or transport[1] in fighters['codes'] or transport[2:] != [SECTOR, '8']):
+            raise ValueError('boarding transport identity, sector or marine count differs')
+        receipts['vanilla_boarding_transport'] = {'code': transport[1], 'sector_macro': SECTOR, 'marines': 8}
+    return receipts
+
+
+def verify_genesis_log(log, nonce, read_evidence, *, fighter_count=2):
+    key = 'vanilla_pair' if fighter_count == 2 else 'vanilla_flight_group'
+    return genesis_receipts(log, nonce, read_evidence, fighter_count=fighter_count)[key]
 
 
 def verify_saved(checkpoint, pair):
@@ -51,7 +75,7 @@ def verify_saved(checkpoint, pair):
     return result
 
 
-def _install(case, nonce, mode, pair=None, ships=None, *, fighter_count=2):
+def _install(case, nonce, mode, pair=None, ships=None, *, fighter_count=2, boarding_transport=False):
     if re.fullmatch('[0-9a-f]{32}', nonce) is None:
         raise ValueError('invalid vanilla fixture nonce')
     lab = Path(case)/'extensions/x4_lan_lab'
@@ -68,6 +92,8 @@ def _install(case, nonce, mode, pair=None, ships=None, *, fighter_count=2):
         files[lab/'md'/CREATE] = DEV/CREATE
         files[lab/'libraries/loadouts.xml'] = LOADOUT
         config['indices'] = list(range(1, fighter_count + 1))
+        if boarding_transport:
+            config['boarding_transport'] = True
     else:
         pair = _checked(pair)
         if ([s['code'] for s in ships] != pair['codes'] or any(type(s['index']) is not int or s['index'] < 1 for s in ships)
@@ -100,9 +126,9 @@ def _install(case, nonce, mode, pair=None, ships=None, *, fighter_count=2):
     return [*files,wrapper,manifest]
 
 
-def install_genesis(case, profile, nonce, *, fighter_count=2):
+def install_genesis(case, profile, nonce, *, fighter_count=2, boarding_transport=False):
     _receipt_kind(fighter_count)
-    return _install(case, nonce, 'prepare', fighter_count=fighter_count)
+    return _install(case, nonce, 'prepare', fighter_count=fighter_count, boarding_transport=boarding_transport)
 
 
 def install_cold(case, profile, nonce, pair, ships):

@@ -41,7 +41,8 @@ def verify_base_save(checkpoint):
         raise ValueError('expected a fresh base-game Creative universe without DLC')
 
 
-def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce, *, fighter_count=2):
+def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce, *, fighter_count=2,
+            boarding_transport=False):
     import authority_vanilla_pair as pair
     world_bridge.install_probe(case, port, lease, epoch, marker_required=True)
     lab = case / 'extensions/x4_lan_lab'
@@ -75,12 +76,13 @@ def install(case, profile, port, lease, epoch, nonce, enrollment, pair_nonce, *,
                                + ' if not bridge then\n')
     # The status/enrollment overlay guards both startup and the save marker.
     probe.write_text(text, 'ascii')
-    pair.install_genesis(case, profile, pair_nonce, fighter_count=fighter_count)
+    pair.install_genesis(case, profile, pair_nonce, fighter_count=fighter_count, boarding_transport=boarding_transport)
     registry.install(case, nonce, ('uninitialized',), enroll=enrollment)
     return [path for path in lab.rglob('*') if path.is_file()] + [profile/'config.xml', profile/'content.xml']
 
 
-def run(game, out, display, auth, timeout, seed, *, fighter_count=2, software_rendered=True, display_hostname=None):
+def run(game, out, display, auth, timeout, seed, *, fighter_count=2, boarding_transport=False,
+        software_rendered=True, display_hostname=None):
     import authority_vanilla_pair as pair
     game = game.resolve(strict=True)
     out = snapshot.output_path(out)
@@ -105,7 +107,7 @@ def run(game, out, display, auth, timeout, seed, *, fighter_count=2, software_re
             sock.bind(('127.0.0.1', 0))
             sock.settimeout(.5)
             files = install(case, profile, sock.getsockname()[1], lease, epoch, nonce, enrollment, pair_nonce,
-                            fighter_count=fighter_count)
+                            fighter_count=fighter_count, boarding_transport=boarding_transport)
             expected = {path: live.sha(path) for path in files}
             (out/'checkpoints').mkdir(mode=0o700)
             store = CheckpointStore(out/'checkpoints')
@@ -150,9 +152,9 @@ def run(game, out, display, auth, timeout, seed, *, fighter_count=2, software_re
                         or any(live.sha(path) != digest for path, digest in expected.items())):
                     raise ValueError('genesis process or inputs changed')
             verify()
-            receipt_key = 'vanilla_pair' if fighter_count == 2 else 'vanilla_flight_group'
-            result[receipt_key] = pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence,
-                                                         fighter_count=fighter_count)
+            receipts = pair.genesis_receipts(log, pair_nonce, supervisor.read_evidence,
+                                             fighter_count=fighter_count, boarding_transport=boarding_transport)
+            result.update(receipts)
             registry.matches_log(log, nonce, 'startup', ('uninitialized',))
             count = registry.enrollment_receipt(log, enrollment['nonce'], enrollment['epoch'], enrollment['limit'])
             adapter = LocalControlBridge(enabled=True, sock=sock, peer=peer, lease=lease, world_epoch=epoch,
@@ -178,10 +180,10 @@ def run(game, out, display, auth, timeout, seed, *, fighter_count=2, software_re
         try:
             if case:
                 if result['success'] and remaining == []:
-                    final_receipt = pair.verify_genesis_log(log, pair_nonce, supervisor.read_evidence,
-                                                           fighter_count=fighter_count)
-                    if final_receipt != result[receipt_key]:
-                        raise ValueError('final fighter receipts changed')
+                    final_receipts = pair.genesis_receipts(log, pair_nonce, supervisor.read_evidence,
+                                                           fighter_count=fighter_count, boarding_transport=boarding_transport)
+                    if final_receipts != receipts:
+                        raise ValueError('native ship receipts changed before cleanup')
                     if any(live.sha(path) != digest for path, digest in expected.items()):
                         raise ValueError('genesis overlay changed before cleanup')
                     pair.archive_genesis(case, out)
@@ -211,6 +213,8 @@ def main():
     parser.add_argument('--seed', type=int, default=276944566)
     parser.add_argument('--fighter-count', type=int, choices=(2, 4), default=2,
                         help='number of equipped company fighters to place in Black Hole Sun V')
+    parser.add_argument('--boarding-transport', action='store_true',
+                        help='place a captained Company transport with eight marines before registry enrollment')
     args = parser.parse_args()
     if not 1 <= args.timeout <= 86400 or not 0 <= args.seed < 2**32:
         parser.error('invalid timeout or seed')
@@ -219,11 +223,11 @@ def main():
         if not os.access(auth, os.R_OK):
             parser.error('desktop rendering requires readable Xauthority')
         result = run(args.game, args.out, display, auth, args.timeout, args.seed,
-                     fighter_count=args.fighter_count, software_rendered=False)
+                     fighter_count=args.fighter_count, boarding_transport=args.boarding_transport, software_rendered=False)
     else:
         with private_display(args.xvfb, 'xauth', 'xdpyinfo') as (display, auth, hostname):
             result = run(args.game, args.out, display, auth, args.timeout, args.seed,
-                         fighter_count=args.fighter_count, display_hostname=hostname)
+                         fighter_count=args.fighter_count, boarding_transport=args.boarding_transport, display_hostname=hostname)
     print(json.dumps(result, indent=2))
     return 0 if result['success'] else 1
 

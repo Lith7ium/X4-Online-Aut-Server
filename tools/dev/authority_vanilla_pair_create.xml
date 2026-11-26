@@ -45,8 +45,42 @@
          <append_to_list name="$ships" exact="$ship"/>
         </do_all>
         <do_if value="$ships.count == $count and $ships.{1} != $ships.{2}">
-         <teleport_player object="$station" control="false" instant="true" force="true"/>
          <set_value name="$status" exact="'CREATED'"/>
+         <do_if value="@event.param3.$boarding_transport == true">
+          <set_value name="$status" exact="'BOARDING_TRANSPORT_REFUSED'"/>
+          <set_value name="$anchor" exact="$ships.{1}"/>
+          <create_ship name="$transport" macro="macro.ship_arg_m_trans_container_01_a_macro" sector="$sector" seed="8627">
+           <owner exact="faction.player" overridenpc="true"/>
+           <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+           <pilot><select race="race.argon" tags="tag.aipilot"/></pilot>
+           <safepos object="$anchor" x="18km" y="2km" z="4km"/>
+          </create_ship>
+          <do_if value="@$transport.isoperational and $transport.isclass.ship_m
+                        and $transport.macro == macro.ship_arg_m_trans_container_01_a_macro
+                        and $transport.sector == $sector and $transport.owner == faction.player
+                        and $transport.trueowner == faction.player and @$transport.pilot.isclass.npc
+                        and $transport.pilot != player.entity and $transport.pilot.owner == faction.player
+                        and $transport.assignedaipilot == $transport.pilot">
+           <set_value name="$status" exact="'BOARDING_CREW_REFUSED'"/>
+           <do_all exact="8">
+            <create_npc_template object="$transport" macro="macro.character_argon_female_pilot_01_macro" role="entityrole.marine"/>
+           </do_all>
+           <set_value name="$marines" exact="0"/>
+           <do_for_each name="$person" in="$transport.people.list">
+            <do_if value="$transport.people.{$person}.role == entityrole.marine">
+             <set_value name="$marines" exact="1" operation="add"/>
+            </do_if>
+           </do_for_each>
+           <set_value name="$distance" exact="$transport.distanceto.{$anchor} / 1m"/>
+           <do_if value="$marines == 8 and $transport.people.count == 8 and $distance ge 12000 and $distance le 30000 and $transport.idcode">
+            <set_value name="$status" exact="'CREATED'"/>
+            <debug_text text="'[X4LAN] AUTH_VANILLA_BOARDING %s|%s|%s|%s'.[$nonce,$transport.idcode,$sector.macro.id,$marines]" chance="100"/>
+           </do_if>
+          </do_if>
+         </do_if>
+         <do_if value="$status == 'CREATED'">
+          <teleport_player object="$station" control="false" instant="true" force="true"/>
+         </do_if>
         </do_if>
        </do_if>
       </do_if>

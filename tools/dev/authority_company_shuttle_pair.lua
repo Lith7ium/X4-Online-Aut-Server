@@ -131,7 +131,10 @@ function M.new_x4(config, guard)
             local args = {nonce=config.nonce,epoch=config.epoch,index=current}
             if config.live_station then
                 args.fresh, args.station, args.room = config.mode == 'prepare', config.station, config.room
-                if action == 'Create' then args.count = #indices end
+                if action == 'Create' then
+                    args.count = #indices
+                    if config.boarding_transport == true then args.boarding_transport = true end
+                end
             end
             if AddUITriggeredEvent(screen, action, args) == false then
                 refuse('DISPATCH')

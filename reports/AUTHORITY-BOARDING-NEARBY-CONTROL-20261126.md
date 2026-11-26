@@ -159,6 +159,14 @@ demonstrates stock attachment through takeover in the isolated
 stationary control. Run-04 had no range observations, so its
 approach delay cannot be attributed to target motion from these runs.
 
+The standalone saved-registry witness returned `unattributed` for
+operation `0x434d`. It recognized the target, true-owner transition
+and delayed readback. The transport ARU-541 was enrolled at 5049 after
+the source's 5,048-entry registry had been sealed. The stock getters and
+the private fixture identified the transport and its marines at runtime.
+A boarding command attributable to an admitted pilot still needs an
+attacking ship in the offered registry.
+
 Private artifacts are in `stationary-observer/run-01/`. The engine
 log SHA-256 is
 `5612dc666cba3f3c8b19458e6b196a211682966bb424f307f9385fcba3ba0dda`.

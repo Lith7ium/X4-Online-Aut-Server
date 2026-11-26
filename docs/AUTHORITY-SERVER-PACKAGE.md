@@ -227,6 +227,19 @@ takes `-BaseGameOnly`. To generate a new four-fighter world with the development
 tool, pass `--fighter-count 4` to `tools/dev/authority_vanilla_genesis.py`.
 [Fighter equipment definition](../tools/dev/fixtures/vanilla-flight/libraries/loadouts.xml)
 
+For internal boarding tests, add `--boarding-transport` to the genesis
+command. It places a Company M transport with an NPC captain and eight
+marines near the fighters before the universe census. The genesis result
+records its code and sector under `vanilla_boarding_transport`. After
+`--bootstrap-registry-snapshot` produces a confirmed format-3 checkpoint,
+verify its saved registry entry and crew from the development checkout.
+
+```sh
+python3 tools/dev/authority_boarding_transport_evidence.py \
+  --store "$confirmed_store" --checkpoint "$checkpoint_id" --sha256 "$checkpoint_sha256" \
+  --code "$transport_code" --sector "$transport_sector"
+```
+
 ### Earlier Timelines test world
 
 This older fixture requires Timelines and uses
