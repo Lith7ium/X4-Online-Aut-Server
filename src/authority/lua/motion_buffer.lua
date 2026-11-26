@@ -18,6 +18,62 @@ local function angle(radians)
  return (radians + PI) % (2 * PI) - PI
 end
 
+-- X4's sector basis is Ry(yaw) * Rx(-pitch) * Rz(-roll).
+local function quaternion(attitude)
+ local y, p, r = attitude.yaw / 2, attitude.pitch / 2, attitude.roll / 2
+ local cy, cp, cr = math.cos(y), math.cos(p), math.cos(r)
+ local sy, sp, sr = math.sin(y), math.sin(p), math.sin(r)
+ return {-cy*sp*cr - sy*cp*sr, sy*cp*cr - cy*sp*sr,
+         sy*sp*cr - cy*cp*sr, cy*cp*cr + sy*sp*sr}
+end
+
+local function dot(a, b)
+ return a[1]*b[1] + a[2]*b[2] + a[3]*b[3] + a[4]*b[4]
+end
+
+local function euler(q)
+ local x, y, z, w = q[1], q[2], q[3], q[4]
+ local sine_pitch = math.max(-1, math.min(1, 2*(y*z - w*x)))
+ local pitch = math.asin(sine_pitch)
+ if math.abs(sine_pitch) >= 1 - 1e-12 then
+  -- At the pole only the combined heading/roll is observable.
+  return {yaw=math.atan2(2*(w*y - x*z), 1 - 2*(y*y + z*z)), pitch=pitch, roll=0}
+ end
+ return {yaw=math.atan2(2*(x*z + w*y), 1 - 2*(x*x + y*y)), pitch=pitch,
+         roll=math.atan2(-2*(x*y + w*z), 1 - 2*(x*x + z*z))}
+end
+
+local function interpolate_attitude(a, b, fraction)
+ local cosine = dot(a, b)
+ local sign = cosine < 0 and -1 or 1
+ cosine = math.min(1, math.abs(cosine))
+ local left, right = 1 - fraction, fraction
+ if cosine < .999999 then
+  local theta = math.acos(cosine)
+  local sine = math.sin(theta)
+  left, right = math.sin(left*theta) / sine, math.sin(right*theta) / sine
+ end
+ local q = {}
+ for index = 1, 4 do q[index] = left*a[index] + sign*right*b[index] end
+ local length = math.sqrt(dot(q, q))
+ for index = 1, 4 do q[index] = q[index] / length end
+ return euler(q)
+end
+
+function M.attitude_changed(a, b)
+ return math.abs(dot(quaternion(a), quaternion(b))) < math.cos(.00001 / 2)
+end
+
+function M.copy_attitude(value)
+ if type(value) ~= 'table' or getmetatable(value) ~= nil then return nil end
+ local result = {}
+ for _, axis in ipairs({'yaw', 'pitch', 'roll'}) do
+  if not finite(value[axis]) or math.abs(value[axis]) > 2 * PI then return nil end
+  result[axis] = value[axis]
+ end
+ return result
+end
+
 local function vector(values, is_rate, dimensions)
  if type(values) ~= 'table' or #values ~= dimensions then return false end
  for index = 1, dimensions do
@@ -44,7 +100,7 @@ local function timestamp(seconds)
 end
 
 local function valid_sample(sample, dimensions)
- return type(sample) == 'table' and sample.version ~= 3 and
+ return type(sample) == 'table' and sample.version ~= 3 and sample.version ~= 4 and sample.attitude == nil and
   sample.capture_time == nil and sample.real_rate == nil and
   frame(sample.frame) and type(sample.sequence) == 'number' and
   sample.sequence % 1 == 0 and sample.sequence >= 1 and sample.sequence <= MAX_SEQUENCE and
@@ -55,7 +111,7 @@ end
 local function valid_capture_sample(sample, dimensions)
  if type(sample) ~= 'table' or getmetatable(sample) ~= nil or dimensions ~= 3 then return false end
  local allowed = {version=true, frame=true, sequence=true, source_time=true,
-  capture_time=true, pose=true, real_rate=true}
+  capture_time=true, pose=true, real_rate=true, attitude=true}
  for key in pairs(sample) do
   if not allowed[key] then return false end
  end
@@ -65,7 +121,9 @@ local function valid_capture_sample(sample, dimensions)
    if math.abs(sample.real_rate[index]) > 5000 then return false end
   end
  end
- return sample.version == 3 and frame(sample.frame) and type(sample.sequence) == 'number' and
+ local valid_version = (sample.version == 3 and sample.attitude == nil)
+  or (sample.version == 4 and M.copy_attitude(sample.attitude) ~= nil)
+ return valid_version and frame(sample.frame) and type(sample.sequence) == 'number' and
   sample.sequence % 1 == 0 and sample.sequence >= 1 and sample.sequence <= MAX_SEQUENCE and
   timestamp(sample.source_time) and timestamp(sample.capture_time) and
   vector(sample.pose, false, dimensions)
@@ -118,7 +176,7 @@ function M.new(options)
   cfg.teleport_distance <= 50000000 and cfg.clock_leak <= 1 and cfg.slew <= 1, 'motion option out of bounds')
 
  local samples, offset, last_arrival, last_sequence, last_sample_time = {}, nil, nil, 0, nil
- local last_source_game = nil
+ local last_source_game, version
  local lag, lag_at, last_render = nil, nil, nil
  local track = {}
 
@@ -132,7 +190,7 @@ function M.new(options)
    valid = valid_sample(sample, dimensions) and sample.version ~= 3 and
     sample.capture_time == nil and sample.real_rate == nil
   end
-  if not valid or not timestamp(arrival) then return false, 'invalid' end
+  if not valid or (version and sample.version ~= version) or not timestamp(arrival) then return false, 'invalid' end
   local sample_time = sample[clock_basis]
   local sample_rate = sample.rate
   if capture_clock then sample_rate = sample.real_rate end
@@ -169,7 +227,10 @@ function M.new(options)
   local rate = copy(sample_rate)
   if reason ~= 'append' then rate = nil end
   samples[#samples + 1] = {frame=sample.frame, sequence=sample.sequence, time=sample_time,
-                           pose=copy(sample.pose), rate=rate}
+                           pose=copy(sample.pose), rate=rate,
+                           attitude=sample.attitude and M.copy_attitude(sample.attitude),
+                           rotation=sample.attitude and quaternion(sample.attitude)}
+  version = sample.version
   while #samples > 16 do table.remove(samples, 1) end
   last_arrival, last_sequence, last_sample_time = arrival, sample.sequence, sample_time
   last_source_game = sample.source_time
@@ -183,7 +244,8 @@ function M.new(options)
   last_render = now
   if hold_only then
    local last = samples[#samples]
-   return {frame=last.frame, source_sequence=last.sequence, pose=copy(last.pose), phase='held-clock-unverified'}
+   return {frame=last.frame, source_sequence=last.sequence, pose=copy(last.pose),
+           attitude=M.copy_attitude(last.attitude), phase='held-clock-unverified'}
   end
 
   local wanted_lag = offset + cfg.delay
@@ -207,9 +269,10 @@ function M.new(options)
   lag_at = now
   local target_time = now - lag
   local first, last = samples[1], samples[#samples]
-  local result = {frame=last.frame, source_sequence=last.sequence, pose={}, phase='held'}
+  local result = {frame=last.frame, source_sequence=last.sequence, pose={}, attitude=M.copy_attitude(last.attitude), phase='held'}
   if target_time <= first.time then
    result.pose = copy(first.pose)
+   result.attitude = M.copy_attitude(first.attitude)
    result.source_sequence = first.sequence
    return result
   end
@@ -222,6 +285,10 @@ function M.new(options)
      local delta = later.pose[dimension] - earlier.pose[dimension]
      result.pose[dimension] = dimension > 3 and angle(earlier.pose[dimension] + angle(delta) * fraction) or
       earlier.pose[dimension] + delta * fraction
+    end
+    if earlier.rotation then
+     result.attitude = fraction == 1 and M.copy_attitude(later.attitude)
+      or interpolate_attitude(earlier.rotation, later.rotation, fraction)
     end
     result.phase = 'interpolated'
     result.source_sequence = later.sequence

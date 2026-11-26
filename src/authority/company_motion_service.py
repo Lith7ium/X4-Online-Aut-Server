@@ -15,7 +15,7 @@ import time
 from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_ships import _DISPLAY_CODE
 from .company_npc_measurement import MEASUREMENT_KIND, NpcMeasurementIngress
-from .experimental_tcp_motion import check_motion_progress, motion_value
+from .experimental_tcp_motion import REAL_TIME_MOTION_VERSIONS, check_motion_progress, motion_value
 from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
 
@@ -108,7 +108,7 @@ class _Peer:
 
 @dataclass(frozen=True, slots=True)
 class AcceptedCompanyMotion:
-    """One transport-accepted V3 sample, in the server's receive clock domain."""
+    """One accepted real-time pilot sample, in the server's receive clock domain."""
 
     handle: int
     window: int
@@ -663,11 +663,11 @@ class CompanyMotionService:
     def _sample(self, peer, message):
         if set(message) != {'kind', 'window', 'sample'}:
             raise ValueError('invalid participant snapshot')
-        value = motion_value(message['sample'])
+        value = motion_value(message['sample'], allow_v4=True)
         grant = peer.grant
-        if (self._grants.get(grant.handle) is not grant or
-                (value['version'], value['index'], value['epoch'], value['generation']) !=
-                (3, grant.index, grant.epoch, grant.generation) or value['sequence'] <= grant.last_sequence):
+        if (self._grants.get(grant.handle) is not grant or value['version'] not in REAL_TIME_MOTION_VERSIONS
+                or (value['index'], value['epoch'], value['generation']) != (grant.index, grant.epoch, grant.generation)
+                or value['sequence'] <= grant.last_sequence):
             raise ValueError('snapshot does not match this ship grant')
         if grant.last_sample is None and value['real_velocity'] is not None:
             raise ValueError('initial sample must establish a new motion baseline')

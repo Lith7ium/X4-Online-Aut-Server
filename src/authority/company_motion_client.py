@@ -9,7 +9,7 @@ from .company_motion_frames import (BIND_TIMEOUT, MAX_COUNTER, encode_frame,
                                     normalize_views, read_frames, validate_pilot_roster, view_matches)
 from .company_npc_measurement import (MEASUREMENT_KIND, NPC_CODE, NPC_INDEX, PILOT_INDEX,
                                       RADAR_ENDED, REGISTRY_EPOCH, SECTOR, measurement_value, native_capture_now)
-from .experimental_tcp_motion import motion_value
+from .experimental_tcp_motion import REAL_TIME_MOTION_VERSIONS, motion_value
 from .trusted_load_messages import validate_ship_motion_credential
 
 _HEX32 = re.compile(r'[0-9a-f]{32}')
@@ -295,8 +295,9 @@ class CompanyMotionClient:
             raise ValueError('unexpected movement view')
         current_view = view_id == self._view_id
         if kind == 'motion_snapshot' and set(message) == {'kind', 'window', 'view_id', 'sample'}:
-            sample = motion_value(message['sample'])
-            if sample['version'] != 3 or sample['epoch'] != self._source.registry[0] or self._receipt is not None:
+            sample = motion_value(message['sample'], allow_v4=True)
+            if (sample['version'] not in REAL_TIME_MOTION_VERSIONS or sample['epoch'] != self._source.registry[0]
+                    or self._receipt is not None):
                 raise ValueError('invalid remote movement snapshot')
             index, sector = sample['index'], sample['sector_macro']
             if index == self._source.registry[1] or (
@@ -400,9 +401,10 @@ class CompanyMotionClient:
                 raise
             sample = self._source.poll(self._validate_peer)
             if sample is not None and self._running and old_window == self._window:
-                sample = motion_value(sample)
-                if ((sample['version'], sample['epoch'], sample['index'], sample['generation']) !=
-                        (3, *self._source.registry, self._source.local_generation)):
+                sample = motion_value(sample, allow_v4=True)
+                if (sample['version'] not in REAL_TIME_MOTION_VERSIONS or
+                        (sample['epoch'], sample['index'], sample['generation']) !=
+                        (*self._source.registry, self._source.local_generation)):
                     raise ValueError('source does not match the selected local cockpit')
                 if sample['sequence'] > self._last_sequence:
                     self._latest = dict(sample, generation=self._generation)

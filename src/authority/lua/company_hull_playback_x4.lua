@@ -81,16 +81,21 @@ function M.new(options, engine)
             return actual
         end
 
-        function session:write(target, before)
+        function session:write(target, before, attitude)
             if not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
             if dx * dx + dy * dy + dz * dz > MAX_STEP * MAX_STEP then return false end
             if not engine.same_zone(original_target, target) or not eligible() then return false end
+            if attitude ~= nil then
+                attitude = X4LAN_MOTION_BUFFER.copy_attitude(attitude)
+                if not attitude then return false end
+            end
+            local rotation = attitude or actual
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
-                yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
+                yaw = rotation.yaw, pitch = rotation.pitch, roll = rotation.roll,
             })
             if not ok or dispatched ~= true then
                 closed = true  -- The native call may have had a partial effect.

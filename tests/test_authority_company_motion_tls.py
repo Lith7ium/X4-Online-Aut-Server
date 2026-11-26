@@ -281,6 +281,89 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         self.assertEqual(stats['samples_confirmed'], 3)
         self.assertEqual(stats['last_confirmed']['sequence'], 2)
 
+    async def test_stationary_turn_reaches_the_other_pilots_lua_cockpit(self):
+        from lupa.luajit21 import LuaRuntime
+
+        def local_overlay(source, ship_index):
+            self.addCleanup(source.close)
+            settings = source.configure(REGISTRY_EPOCH, ship_index, operational_bits='11')
+            overlay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.addCleanup(overlay.close)
+            overlay.connect(('127.0.0.1', settings['port']))
+            overlay.setblocking(False)
+            prefix = f'C|{settings["lease"]}|{settings["generation"]}|'
+            return overlay, prefix
+
+        _, publisher_port = await self.link()
+        _, observer_port = await self.link()
+        publisher_source = CompanyMotionSource()
+        publisher_socket, publisher_prefix = local_overlay(publisher_source, 1)
+        publisher = CompanyMotionClient(
+            publisher_port, self.grant(1, 1, 'sector_a'), publisher_source,
+            lambda address: address == publisher_socket.getsockname(),
+        )
+        self.addCleanup(publisher.close)
+        observer_source = CompanyMotionSource(playback_index=1, cockpit_radar_playback=True)
+        observer_socket, observer_prefix = local_overlay(observer_source, 2)
+        observer = ReconnectingCompanyMotionClient.observing(
+            observer_port, self.grant(2, 2, 'sector_a'), observer_source,
+            lambda address: address == observer_socket.getsockname(),
+        )
+        self.addCleanup(observer.close)
+        self.clients = [publisher, observer]
+
+        # The Lua overlay consumes the actual observer datagram and sends its
+        # own SEEN4. Only the game objects, radar read and playback sink are simulated.
+        lua = LuaRuntime()
+        stream_file = Path(__file__).resolve().parents[1] / 'src/authority/lua/company_observer_stream.lua'
+        stream = lua.execute(stream_file.read_text(encoding='utf-8'))
+        actor, code = '0xaf', 'TST-001'
+        binding = lua.table(epoch=REGISTRY_EPOCH, sector_macro='sector_a', index=1, actor=actor, code=code)
+
+        def receive(_):
+            try:
+                return observer_socket.recv(1024).decode('ascii')
+            except BlockingIOError:
+                return None
+
+        def send(_, packet):
+            encoded = packet.encode('ascii')
+            return observer_socket.send(encoded) == len(encoded)
+
+        cockpit = lua.table(tick=lambda _: binding,
+                            matches=lambda _, *identity: identity == (REGISTRY_EPOCH, 'sector_a', 1, actor, code))
+        played = []
+        playback = lua.table(view=lambda *_: None, tick=lambda *_: None,
+                             sample=lambda _, bound, serial, sample, arrival, slot: played.append(sample))
+        clock = time.perf_counter if sys.platform == 'win32' else time.monotonic
+        reader = stream.new(lua.table(cockpit=cockpit, map=lua.table(tick=lambda _: None)),
+                            REGISTRY_EPOCH, lua.table(send=send, receive=receive), observer_prefix,
+                            clock, playback)
+        reader.tick(reader, True)
+        self.service.set_running(True)
+        await self.drive(lambda: publisher._running and any(peer.views for peer in self.service._peers.values()))
+
+        # XYZ and game time stay constant. Every change here is an observed turn.
+        for sequence, angles in enumerate(((3.12, .2, -.4), (-3.12, .4, -.1)), start=1):
+            rates = '-|-|-' if sequence == 1 else '0|0|0'
+            yaw, pitch, roll = angles
+            packet = (f'SAMPLE4|{REGISTRY_EPOCH}|1|{sequence}|sector_a|8|{sequence}|10|20|30|'
+                      f'{rates}|{yaw}|{pitch}|{roll}|')
+            publisher_socket.send((publisher_prefix + packet).encode('ascii'))
+
+            def confirmed():
+                reader.tick(reader, True)
+                return observer_source.observer_stats()['samples_confirmed'] == sequence
+
+            await self.drive(confirmed)
+            self.assertEqual(len(played), sequence)
+            sample = played[-1]
+            self.assertEqual((sample.version, sample.index, sample.sequence), (4, 1, sequence))
+            self.assertEqual((sample.x, sample.y, sample.z), (10, 20, 30))
+            self.assertEqual((sample.attitude.yaw, sample.attitude.pitch, sample.attitude.roll), angles)
+        self.assertEqual((played[-1].real_velocity.x, played[-1].real_velocity.y, played[-1].real_velocity.z),
+                         (0, 0, 0))
+
     async def test_two_grantees_exchange_visible_motion_and_control_survives_pause_and_revoke(self):
         control_port, motion_a = await self.link()
         _, motion_b = await self.link()

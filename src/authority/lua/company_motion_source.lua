@@ -110,14 +110,22 @@ function M.new(options)
         if cockpit_health then cockpit_health:sample(sample.sequence) end
         local rate = sample.real_velocity
         local function number(value) return string.format('%.17g', value) end
-        options.send(table.concat({
-            'SAMPLE3', sample.epoch, tostring(sample.index),
+        local fields = {
+            sample.version == 4 and 'SAMPLE4' or 'SAMPLE3', sample.epoch, tostring(sample.index),
             string.format('%.0f', sample.sequence), sample.sector_macro,
             number(sample.source_time), number(sample.capture_time),
             number(sample.x), number(sample.y), number(sample.z),
             rate and number(rate.x) or '-', rate and number(rate.y) or '-',
-            rate and number(rate.z) or '-', '',
-        }, '|'))
+            rate and number(rate.z) or '-',
+        }
+        if sample.version == 4 then
+            local orientation = sample.orientation
+            fields[#fields + 1] = number(orientation.yaw)
+            fields[#fields + 1] = number(orientation.pitch)
+            fields[#fields + 1] = number(orientation.roll)
+        end
+        fields[#fields + 1] = ''
+        options.send(table.concat(fields, '|'))
     end
 
     function api:tick()
@@ -283,7 +291,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 enabled = true, epoch = pinned.epoch, generation = config.generation,
                 nonce = config.nonce, max_tracks = 1, scan_budget = 1,
                 interval = .10, timeout = 1, min_dt = .02, max_dt = 1,
-                real_time_motion = true, capture_clock = udp.monotonic, recover_expired_pending = true,
+                real_time_motion = true, real_time_orientation = true, capture_clock = udp.monotonic, recover_expired_pending = true,
                 allow_superhighway_gap = true, recheck_superhighway_boundary = true,
                 expected_save_path = expected, normalize_save_path = normalize,
                 guard = guard, binding_guard = function() return false end,

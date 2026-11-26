@@ -181,15 +181,15 @@ function M.new(options)
         active_generation = verified.generation
     end
 
-    local function new_controller(verified, active_session)
+    local function new_controller(verified, active_session, sample_version)
         stats.binds = stats.binds + 1
         return assert(factory.new({
-            enabled = true, own_index = own_index, binding = verified,
+            enabled = true, own_index = own_index, binding = verified, sample_version = sample_version,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
-            write = function(_, target, before)
-                local ok = active_session:write(target, before)
+            write = function(_, target, before, attitude)
+                local ok = active_session:write(target, before, attitude)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok
             end,
@@ -320,6 +320,7 @@ function M.new(options)
                 or now - arrival >= prediction_seconds then
             return false, 'expired_arrival'
         end
+        if sample.version ~= 3 and sample.version ~= 4 then return false, 'invalid_sample_version' end
         if not hex32(sample.generation) then
             stats.generation_rejections = stats.generation_rejections + 1
             return false, 'invalid_generation'
@@ -360,6 +361,7 @@ function M.new(options)
         local wkey = watermark_key(ship_index, sample.generation)
         local last = last_by_index_gen[wkey]
         if last then
+            if sample.version ~= last.version then return false, 'sample_version_changed' end
             if not (sample.sequence > last.sequence and sample.capture_time > last.capture_time
                     and sample.source_time >= last.source_time and arrival >= last.arrival) then
                 return false, 'non_monotone'
@@ -423,7 +425,7 @@ function M.new(options)
                 }
                 last_by_index_gen[wkey] = {
                     sequence = sample.sequence, capture_time = sample.capture_time,
-                    source_time = sample.source_time, arrival = arrival,
+                    source_time = sample.source_time, arrival = arrival, version = sample.version,
                 }
                 emit('reacquire_aligned', {
                     index = ship_index, dist = gap, sequence = sample.sequence,
@@ -436,11 +438,11 @@ function M.new(options)
                 accept_binding(probe_binding)
                 last_by_index_gen[wkey] = {
                     sequence = sample.sequence, capture_time = sample.capture_time,
-                    source_time = sample.source_time, arrival = arrival,
+                    source_time = sample.source_time, arrival = arrival, version = sample.version,
                 }
                 return true, 'baseline_recorded'
             end
-            local candidate = new_controller(probe_binding, temp_session)
+            local candidate = new_controller(probe_binding, temp_session, sample.version)
             local ok, reason = candidate:push(probe_binding, sample, arrival)
             if not ok then
                 candidate:stop()
@@ -468,7 +470,7 @@ function M.new(options)
         end
         last_by_index_gen[wkey] = {
             sequence = sample.sequence, capture_time = sample.capture_time,
-            source_time = sample.source_time, arrival = arrival,
+            source_time = sample.source_time, arrival = arrival, version = sample.version,
         }
         return true, 'accepted'
     end
@@ -615,7 +617,7 @@ local function make_x4_record(readers_by_slot, clock)
             track.count = track.count + 1
             local reader = readers_by_slot[slot_name]
             local mode = reader and reader.mode and reader:mode() or slot_name
-            DebugError(table.concat({
+            local fields = {
                 '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'slot=' .. slot_name,
                 'kind=' .. event.kind, 'mode=' .. tostring(mode),
                 'ship=' .. event.code, 'epoch=' .. event.epoch, 'index=' .. event.index,
@@ -625,7 +627,15 @@ local function make_x4_record(readers_by_slot, clock)
                 'capture_time=' .. decimal(event.capture_time), 'elapsed=' .. decimal(event.elapsed),
                 'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
                 'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
-            }, ' '))
+            }
+            if event.actual_attitude and event.target_attitude then
+                for _, name in ipairs({'target', 'actual'}) do
+                    local angles = event[name .. '_attitude']
+                    fields[#fields + 1] = name .. '_attitude=' ..
+                        table.concat({decimal(angles.yaw), decimal(angles.pitch), decimal(angles.roll)}, ',')
+                end
+            end
+            DebugError(table.concat(fields, ' '))
         end
         return true
     end

@@ -8,7 +8,7 @@ import time
 
 from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS as MAX_COCKPIT_PILOTS
 from .company_motion_frames import MAX_COUNTER, SECTOR
-from .experimental_tcp_motion import motion_value
+from .experimental_tcp_motion import ORIENTATION_AXES, REAL_TIME_MOTION_VERSIONS, motion_value
 
 _TOKEN = re.compile(r'[0-9a-f]{32}')
 _COUNTER = re.compile(r'[1-9][0-9]{0,15}')
@@ -22,6 +22,8 @@ COCKPIT_SLOTS = ('cockpit', 'cockpit2', 'cockpit3')
 # A full SEEN can reach 544 bytes with the lease/generation prefix,
 # cockpit2/cockpit3 slot name, a 128-byte sector macro and eight round-trippable doubles.
 MAX_OBSERVER_DATAGRAM = 576
+# SEEN4 adds three round-trippable angles.
+MAX_ORIENTED_OBSERVER_DATAGRAM = 640
 
 
 def _counter(text, limit=MAX_COUNTER):
@@ -161,7 +163,7 @@ class CompanyMotionObserver:
 
     def receive(self, fields):
         """Receive only from the source's authenticated, process-owned peer."""
-        if self._set_views is None or len(fields) not in (8, 18):
+        if self._set_views is None or len(fields) not in (8, 18, 21):
             return
         kind, slot, serial_text, epoch, *body = fields
         view = self._slots.get(slot)
@@ -171,7 +173,7 @@ class CompanyMotionObserver:
         self.expire()
         if kind == 'VIEW' and len(body) == 4:
             self._view(slot, view, serial, *body)
-        elif kind == 'SEEN' and len(body) == 14 and serial == view.serial and view.active is not None:
+        elif (kind, len(body)) in (('SEEN', 14), ('SEEN4', 17)) and serial == view.serial and view.active is not None:
             self._seen(slot, view, *body[:6], tuple(body[6:]))
 
     def _seen(self, slot, view, index_text, generation, sequence_text, sector, actor, code, values):
@@ -199,6 +201,8 @@ class CompanyMotionObserver:
                 'real_velocity': velocity, 'source_time': sample['source_time'],
                 'capture_time': sample['capture_time'],
             }
+            if sample['version'] == 4:
+                view.last_confirmed['orientation'] = sample['orientation']
             if velocity is not None and any(component != 0 for component in velocity.values()):
                 view.last_nonzero_velocity_confirmed = view.last_confirmed
             return
@@ -208,14 +212,17 @@ class CompanyMotionObserver:
         # where time.monotonic uses GetTickCount64 instead.
         received_at = time.perf_counter() if sys.platform == 'win32' else time.monotonic()
         self.expire()
-        sample = motion_value(sample)
-        if sample['version'] != 3 or sample['epoch'] != self._epoch:
+        sample = motion_value(sample, allow_v4=True)
+        if sample['version'] not in REAL_TIME_MOTION_VERSIONS or sample['epoch'] != self._epoch:
             return
         rate = sample['real_velocity']
         position = tuple(format(sample[axis], '.17g') for axis in 'xyz')
         velocity = ('-', '-', '-') if rate is None else tuple(format(rate[axis], '.17g') for axis in 'xyz')
         clocks = tuple(format(sample[key], '.17g') for key in ('source_time', 'capture_time'))
         values = (*position, *velocity, *clocks)
+        angles = ()
+        if sample['version'] == 4:
+            angles = tuple(format(sample['orientation'][axis], '.17g') for axis in ORIENTATION_AXES)
         for slot, view in self._slots.items():
             if view.active is None or (sample['sector_macro'], sample['index']) != view.active[:2]:
                 continue
@@ -228,16 +235,17 @@ class CompanyMotionObserver:
                 track = view.serial, sample['index'], sample['generation'], sample['sector_macro']
                 if self._active_tracks.get(slot) != track:
                     self._end_slot(slot)
-            message = '|'.join(map(str, (
-                'REMOTE', slot, view.serial, self._epoch, sample['index'], sample['generation'],
-                sample['sequence'], sample['sector_macro'], *values,
-            )))
+            local_clock = ()
             if track is not None:
                 # Only the opt-in local writer needs the original launcher
                 # timestamp. The remote sender clock is a separate domain.
-                message += '|' + format(received_at, '.17g')
+                local_clock = (format(received_at, '.17g'),)
+            message = '|'.join(map(str, (
+                'REMOTE4' if angles else 'REMOTE', slot, view.serial, self._epoch, sample['index'],
+                sample['generation'], sample['sequence'], sample['sector_macro'], *values, *local_clock, *angles,
+            )))
             if self._send(message):
-                view.pending.append((sample, values, time.monotonic()))
+                view.pending.append((sample, (*values, *angles), time.monotonic()))
                 if track is not None:
                     self._active_tracks[slot] = track
 

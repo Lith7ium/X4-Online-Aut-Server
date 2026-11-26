@@ -54,6 +54,9 @@ function M.new(options)
     end
     local buffer = cfg.buffer or X4LAN_MOTION_BUFFER
     local playback = cfg.playback or X4LAN_MOTION_PLAYBACK
+    local sample_version = cfg.sample_version or 3
+    assert(sample_version == 3 or sample_version == 4)
+    local follows_attitude = sample_version == 4
     assert(type(buffer) == 'table' and type(buffer.new) == 'function')
     assert(type(playback) == 'table' and type(playback.new) == 'function')
 
@@ -144,16 +147,18 @@ function M.new(options)
     end
 
     player = assert(playback.new({
-        enabled = true, buffer = checked_buffer, sample_version = 3, frame = binding.sector_macro,
+        enabled = true, buffer = checked_buffer, sample_version = sample_version, attitude_changed = follows_attitude and buffer.attitude_changed or nil, frame = binding.sector_macro,
         max_age = PREDICTION_SECONDS, max_step = MAX_STEP,
         buffer_options = {delay = .15, horizon = PREDICTION_SECONDS,
                           stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
         read = function()
-            local actual = assert(xyz(cfg.read(copy(binding)), 1e7), 'invalid native company hull read')
-            -- The shared engine accepts six axes. The company adapter only reads
-            -- and writes XYZ and is responsible for preserving native orientation.
-            actual.yaw, actual.pitch, actual.roll = 0, 0, 0
+            local observed = cfg.read(copy(binding))
+            local actual = assert(xyz(observed, 1e7), 'invalid native company hull read')
+            local attitude = follows_attitude and assert(buffer.copy_attitude(observed)) or nil
+            -- Legacy XYZ playback leaves native orientation to the adapter.
+            actual.yaw, actual.pitch, actual.roll = attitude and attitude.yaw or 0,
+                attitude and attitude.pitch or 0, attitude and attitude.roll or 0
             return actual
         end,
         write = function(target, before)
@@ -164,7 +169,8 @@ function M.new(options)
             end
             local position = assert(xyz(target, 1e7))
             write_source = rendered_source
-            return cfg.write(copy(binding), position, xyz(before, 1e7))
+            return cfg.write(copy(binding), position, xyz(before, 1e7),
+                follows_attitude and assert(buffer.copy_attitude(target)) or nil)
         end,
         record = function(event)
             local readback = event.kind == 'readback'
@@ -187,6 +193,8 @@ function M.new(options)
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,
                 actual = xyz(event.actual, 1e7), target = xyz(event.target, 1e7), phase = event.phase,
                 error = event.error, elapsed = event.elapsed,
+                actual_attitude = follows_attitude and buffer.copy_attitude(event.actual) or nil,
+                target_attitude = follows_attitude and buffer.copy_attitude(event.target) or nil,
             })
         end,
         fault = function(_, _, stage)
@@ -198,12 +206,16 @@ function M.new(options)
     function api:push(view, sample, arrival)
         if terminal then return false, terminal end
         if not same_binding(view, binding) then return stop('binding_changed', 'binding') end
-        if type(sample) ~= 'table' or getmetatable(sample) ~= nil or sample.version ~= 3
+        if type(sample) ~= 'table' or getmetatable(sample) ~= nil or sample.version ~= sample_version
                 or sample.epoch ~= binding.epoch or sample.index ~= binding.index
                 or sample.generation ~= binding.generation or sample.sector_macro ~= binding.sector_macro then
             return stop('sample_identity_changed', 'sample')
         end
         local position = xyz(sample, 1e7)
+        local attitude = follows_attitude and buffer.copy_attitude(sample.attitude) or nil
+        if (follows_attitude and not attitude) or (not follows_attitude and sample.attitude ~= nil) then
+            return stop('invalid_attitude', 'sample')
+        end
         if not position or not integer(sample.sequence, 9007199254740991)
                 or not number(sample.source_time, 0, 1e12) or not number(sample.capture_time, 0, 1e12)
                 or not number(arrival, 0, 1e12) then
@@ -222,7 +234,7 @@ function M.new(options)
             return stop('invalid_velocity', 'sample')
         end
         local ok, reason = player:push({
-            version = 3, frame = binding.sector_macro, sequence = sample.sequence, source_time = sample.source_time,
+            version = sample_version, attitude = attitude, frame = binding.sector_macro, sequence = sample.sequence, source_time = sample.source_time,
             capture_time = sample.capture_time, pose = {position.x, position.y, position.z},
             real_rate = {velocity.x, velocity.y, velocity.z},
         }, arrival)
