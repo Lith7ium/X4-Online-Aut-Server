@@ -35,3 +35,11 @@ With the pilot's normal graphics options copied into a disposable windowed profi
 ## Stationary turn on the development trial
 
 In a single native Bazzite X4 instance, the observer followed 18 synthetic version 4 samples for HVC-420, with KHI-630 occupied. X4 read back +179° yaw, then −179° across the short arc, then −160° yaw, +17° pitch and −23° roll. The largest angle error at those targets was under 0.000005°. Both ships held their XYZ positions, KHI-630 kept its original orientation, and HVC-420 held the final orientation for 5.47 seconds. The test exercised the normal cockpit playback code on a copy of a Company save. It did not exercise a Windows cockpit, an internet connection or two players supplying their own turns. A separate offline test exercised rotation during fast translation and the rejection of an unexplained lateral correction.
+
+## Continuous flight after a long receiver frame
+
+In the first isolated recovery experiment, the same radar contact could be placed once at the latest verified position when two synthetic reports left it 272.82 m behind. A later source sequence moved the ship a further 9.83 m. The 300 m ceiling belonged to that experiment. A ship travelling normally can move farther between two render frames.
+
+The optional continuous playback in `190e6ecc` advances an already identified pilot's ship using its reported velocity and elapsed real time. Fresh positions correct the trajectory. In native X4, HVC-420 remained on the observer's radar through a 411 ms gap in playback updates. Its next ordinary position update moved it **571.84 m**, and X4 independently read the position back 8.35 ms later. A new synthetic report changed the flight, after which the ship travelled another **402.88 m**. After five seconds of silence, playback stopped on the next frame at 5.005 s. A later native read found zero further displacement. The observer's own KHI-630 stayed stationary throughout.
+
+The test used one Linux observer and synthetic version 4 samples. It verifies visible-ship position reconstruction in X4. The native target-speed HUD, map icons, two-client transport and smoothness for human pilots are separate checks. [Offline regression](../tests/authority_company_cockpit_continuous_playback.lua)
