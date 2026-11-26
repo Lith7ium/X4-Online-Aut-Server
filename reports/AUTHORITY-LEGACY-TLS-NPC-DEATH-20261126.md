@@ -13,6 +13,8 @@ The final pilot departure saved the paused world normally. The marked checkpoint
 
 ## Provenance
 
+The later development checkout at `7e248d7c` read this confirmed save with its ordinary marker and join-registry validators. Across 5,048 issued indices, MFQ-419 at 943 was bound and inoperable. The operational-ship observer excluded the wreck and still resolved HVC-420 at 1073 and KHI-630 at 1074. This check used the retained save on disk. A cold native X4 load of this wreck remains open.
+
 Importing an archived pilot helper prepended its checkout paths before the provider imported the stock modules. Installed stock Lua matched `56a00bcc3a5c5c4e763cf2d7b0c071372513ce7f` byte for byte and installed MD matched after normalizing only the runtime lease fields. The wrapper intended to timestamp the stock getter did not attach to the older function signature. The test therefore establishes ordinary authenticated behavior on 56a00bcc. The corrected harness separates the archived pilot imports from the provider worker, asserts the worker module paths and requires an exact getter hook. Those changes were checked offline.
 
 | File | 56a00bcc | fa32012e and e9e1dafa |
