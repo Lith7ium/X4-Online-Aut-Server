@@ -23,11 +23,14 @@ busy provider refused the request while the cockpit still held the ship at
 its berth. The two-pilot scheduler regression checked the single departure
 and its confirmed receipt. Native two-pilot contention remains untested.
 
-Both Linux and Windows pilots can record shield and hull damage on their
-admitted ship. Capture verification now checks the original log window,
-including checkpoint ID and digest, and resolves all selected ships in one
-scan of the offered save. The private observer also records X4's separate
-projectile callback for that same helm.
+A Linux pilot joined, resumed and took the helm of HVC-420. A stock NPC
+captain on the second Company ship fired one burst. The pilot recorded 21
+shield callbacks and 21 separate projectile contacts. Shields fell from
+2,366 to 1,820 and hull stayed at 3,600. The verifier checked all hits
+against the offered checkpoint in one registry scan. The provider saved
+its original health values on last departure. Windows shares this observer.
+A Windows hit under actual admission and live damage transfer remain open.
+[Registered pilot and projectile evidence](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md#occupied-pilot-hit-through-the-regular-linux-capture) ·
 [Operator commands](../docs/AUTHORITY-SERVER-PACKAGE.md#record-hits-on-a-linux-pilots-ship)
 
 Two admitted protocol pilots each tried to spend 106 Cr from a shared
