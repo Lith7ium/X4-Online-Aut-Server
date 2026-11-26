@@ -4,9 +4,11 @@ import os
 import re
 import stat
 import threading
+import time
 
-from .company_combat_client import CompanyCombatClient
+from .company_combat_client import CombatExchangeCancelled, CompanyCombatClient
 from .company_combat_frames import MAX_BATCH, MAX_COUNTER
+from .company_limits import COMPANY_PILOT_LIMIT
 from .load_observations import MAX_LOG
 
 
@@ -20,8 +22,9 @@ _ROW = re.compile(_HEADER + re.escape(_CONTACT)
                   + rb'([0-9a-f]{32})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,5})\|([1-9][0-9]{0,15})')
 _STATUS_ROW = re.compile(_HEADER + re.escape(_STATUS) + rb'(.*)')
 _BLOCK = 16 * 1024
-_QUEUE_LIMIT = 2 * MAX_BATCH
-_TIMEOUT = 1
+# The provider serializes up to one full batch per pilot. Allow four seconds
+# per native impact even when the other pilots' batches are already queued.
+_ACK_TIMEOUT = COMPANY_PILOT_LIMIT * MAX_BATCH * 4 + 30
 _ATTEMPTS = 3
 
 
@@ -64,7 +67,7 @@ class CompanyCombatSender:
 
     def close(self):
         self._stop.set()
-        self._thread.join(_TIMEOUT + 1)
+        self._thread.join(2)
         if self._thread.is_alive():
             raise RuntimeError('company_combat_sender_cleanup_failed')
         return dict(self._counts, failure=self._failure)
@@ -119,24 +122,33 @@ class CompanyCombatSender:
                 target_index = int(target)
                 if (epoch != self._epoch or int(shooter) != self._index or not 1 <= target_index <= 200000
                         or target_index == self._index or sequence != self._counts['observed'] + 1
-                        or sequence > MAX_COUNTER or len(impacts) == _QUEUE_LIMIT):
+                        or sequence > MAX_COUNTER):
                     raise ValueError('Company gun contact does not match the active sequence')
                 self._counts['observed'] = sequence
                 impacts.append({'id': sequence, 'target_index': target_index, 'amount': 26})
-            for start in range(0, len(impacts), MAX_BATCH):
-                if not self._send(impacts[start:start + MAX_BATCH]):
-                    return
+                if len(impacts) == MAX_BATCH:
+                    if not self._send(impacts):
+                        return
+                    impacts = []
+            if impacts and not self._send(impacts):
+                return
 
     def _send(self, impacts):
+        deadline = time.monotonic() + _ACK_TIMEOUT
         for attempt in range(_ATTEMPTS):
             if self._stop.is_set():
                 return False
+            if time.monotonic() >= deadline:
+                break
+            if attempt:
+                self._counts['retries'] += 1
             try:
-                receipts = self._client.exchange(impacts, timeout=_TIMEOUT)
+                receipts = self._client.exchange(impacts, deadline=deadline, cancelled=self._stop.is_set)
+            except CombatExchangeCancelled:
+                return False
             except OSError:
-                if attempt + 1 < _ATTEMPTS:
-                    self._counts['retries'] += 1
-                    self._stop.wait(.1)
+                if attempt + 1 < _ATTEMPTS and self._stop.wait(min(.1, max(0, deadline - time.monotonic()))):
+                    return False
                 continue
             except ValueError:
                 self._failure = 'invalid_receipt'
@@ -144,5 +156,6 @@ class CompanyCombatSender:
             for receipt in receipts:
                 self._counts[receipt['status']] += 1
             return True
-        self._failure = 'transport_unavailable'
+        if not self._stop.is_set():
+            self._failure = 'receipt_timeout' if time.monotonic() >= deadline else 'transport_unavailable'
         return False

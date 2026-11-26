@@ -1,8 +1,12 @@
 """Test the dedicated cockpit combat source without launching X4."""
+from contextlib import nullcontext
+import json
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 from xml.etree import ElementTree
@@ -11,25 +15,46 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from authority.company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, CompanyCombatSender
+from authority.company_combat_frames import BINDING_FIELDS, MAX_BATCH, encode_frame
 
 
 EPOCH = 'a' * 32
 READY = f'[=ERROR=] 5.00 [X4LAN] AUTH_COMPANY_GUN_STATUS armed|{EPOCH}|1073\n'
+GRANT = {'epoch': EPOCH, 'index': 1073, 'ticket': 'b' * 64,
+         'session_epoch': 'c' * 32, 'generation': 'd' * 32}
 
 
 def contact(sequence, *, epoch=EPOCH, target=1074):
     return f'[=ERROR=] 5.01 [X4LAN] AUTH_COMPANY_GUN {epoch}|1073|{target}|{sequence}\n'
 
 
+def listening_socket():
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    sock.listen(4)
+    sock.settimeout(2)
+    return sock
+
+
+def receipt(request):
+    return encode_frame({key: request[key] for key in BINDING_FIELDS} | {
+        'kind': 'combat_receipts',
+        'receipts': [dict(impact, order=impact['id'], status='confirmed', shield=0, hull=1000)
+                     for impact in request['impacts']],
+    })
+
+
 class Client:
     def __init__(self, retry=False):
         self.retry = retry
         self.batches = []
+        self.deadlines = []
         self.received = threading.Event()
         self.closed = False
 
-    def exchange(self, impacts, *, timeout):
+    def exchange(self, impacts, *, deadline, cancelled):
         self.batches.append(impacts)
+        self.deadlines.append(deadline)
         if len(self.batches) == 1 and self.retry:
             raise TimeoutError
         self.received.set()
@@ -45,14 +70,21 @@ class CompanyCombatSourceTest(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.log = Path(temp.name) / 'engine.log'
 
-    def sender(self, text, client, *, identity=None):
+    def sender(self, text, client=None, *, identity=None, port=1234):
         self.log.write_bytes(text.encode('ascii'))
         info = self.log.lstat()
-        with patch('authority.company_combat_source.CompanyCombatClient', return_value=client):
-            sender = CompanyCombatSender(self.log, 1234, {'epoch': EPOCH, 'index': 1073}, epoch=EPOCH, index=1073,
+        context = patch('authority.company_combat_source.CompanyCombatClient', return_value=client) if client else nullcontext()
+        with context:
+            sender = CompanyCombatSender(self.log, port, GRANT, epoch=EPOCH, index=1073,
                                          log_identity=identity or (info.st_dev, info.st_ino))
         self.addCleanup(sender.close)
         return sender
+
+    def wait_for_confirmed(self, sender, count):
+        deadline = time.monotonic() + 2
+        while sender._counts['confirmed'] < count and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertEqual(sender._counts['confirmed'], count)
 
     def test_incremental_log_and_exact_retry_on_dedicated_worker(self):
         client = Client(retry=True)
@@ -64,19 +96,96 @@ class CompanyCombatSourceTest(unittest.TestCase):
         result = sender.close()
         self.assertEqual(client.batches, [[{'id': 1, 'target_index': 1074, 'amount': 26}]] * 2)
         self.assertIs(client.batches[0], client.batches[1])
+        self.assertEqual(client.deadlines[0], client.deadlines[1])
         self.assertEqual((result['observed'], result['confirmed'], result['retries'], result['failure']), (1, 1, 1, None))
         self.assertTrue(client.closed)
 
-    def test_stale_replayed_malformed_and_backlogged_rows_fail_closed(self):
+    def test_stale_replayed_and_malformed_rows_fail_closed(self):
         for log in (contact(1), READY + contact(1, epoch='b' * 32), READY + contact(1, target=1073),
-                    READY + contact(1) * 2, READY + contact(3),
-                    READY + ''.join(contact(n) for n in range(1, 66))):
+                    READY + contact(1) * 2, READY + contact(3)):
             with self.subTest(log=log[:50]):
                 client = Client()
                 sender = self.sender(log, client)
                 sender._thread.join(2)
                 self.assertEqual(sender.close()['failure'], 'source_unavailable')
                 self.assertEqual(client.batches, [])
+
+    def test_one_read_flushes_more_than_two_batches_and_preserves_partial_row(self):
+        client = Client()
+        partial = contact(70)
+        sender = self.sender(READY + ''.join(contact(n) for n in range(1, 70)) + partial[:-1], client)
+        self.wait_for_confirmed(sender, 69)
+        self.assertEqual([len(batch) for batch in client.batches], [32, 32, 5])
+        with self.log.open('ab') as stream:
+            stream.write(b'\n')
+        self.wait_for_confirmed(sender, 70)
+        self.assertEqual(sender.close()['confirmed'], 70)
+        self.assertEqual([impact['id'] for batch in client.batches for impact in batch], list(range(1, 71)))
+
+    def test_slow_fragmented_acknowledgement_keeps_the_healthy_connection(self):
+        with listening_socket() as listener:
+            count = MAX_BATCH + 1
+            sender = self.sender(READY + ''.join(contact(n) for n in range(1, count + 1)),
+                                 port=listener.getsockname()[1])
+            connection, _ = listener.accept()
+            with connection, connection.makefile('rb') as stream:
+                connection.settimeout(2)
+                first = json.loads(stream.readline())
+                self.assertEqual([item['id'] for item in first['impacts']], list(range(1, MAX_BATCH + 1)))
+                response = receipt(first)
+                mid = len(response) // 2
+                connection.sendall(response[:mid])
+                time.sleep(4.05)  # Longer than all former one-second attempts combined.
+                connection.sendall(response[mid:])
+                next_request = json.loads(stream.readline())
+                self.assertEqual([item['id'] for item in next_request['impacts']], [count])
+                connection.sendall(receipt(next_request))
+                self.wait_for_confirmed(sender, count)
+                result = sender.close()
+            self.assertEqual((result['confirmed'], result['retries'], result['failure']), (count, 0, None))
+
+    def test_disconnected_reply_retries_the_exact_request_on_a_new_socket(self):
+        with listening_socket() as listener:
+            sender = self.sender(READY + contact(1), port=listener.getsockname()[1])
+            first, _ = listener.accept()
+            with first, first.makefile('rb') as stream:
+                first.settimeout(2)
+                request = stream.readline()
+                response = receipt(json.loads(request))
+                first.sendall(response[:20])
+            second, _ = listener.accept()
+            with second, second.makefile('rb') as stream:
+                second.settimeout(2)
+                self.assertEqual(stream.readline(), request)
+                second.sendall(response)
+                self.wait_for_confirmed(sender, 1)
+                result = sender.close()
+            self.assertEqual((result['confirmed'], result['retries'], result['failure']), (1, 1, None))
+
+    def test_close_interrupts_an_outstanding_acknowledgement(self):
+        with listening_socket() as listener:
+            sender = self.sender(READY + contact(1), port=listener.getsockname()[1])
+            connection, _ = listener.accept()
+            with connection, connection.makefile('rb') as stream:
+                connection.settimeout(2)
+                self.assertEqual(json.loads(stream.readline())['impacts'][0]['id'], 1)
+                started = time.monotonic()
+                result = sender.close()
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(connection.recv(1024), b'')
+            self.assertEqual((result['confirmed'], result['retries'], result['failure']), (0, 0, None))
+
+    def test_receipt_deadline_expires_without_idle_poll_reconnect(self):
+        with listening_socket() as listener, patch('authority.company_combat_source._ACK_TIMEOUT', .25):
+            sender = self.sender(READY + contact(1), port=listener.getsockname()[1])
+            connection, _ = listener.accept()
+            with connection, connection.makefile('rb') as stream:
+                connection.settimeout(2)
+                self.assertEqual(json.loads(stream.readline())['impacts'][0]['id'], 1)
+                self.assertEqual(connection.recv(1024), b'')
+            sender._thread.join(1)
+            result = sender.close()
+            self.assertEqual((result['confirmed'], result['retries'], result['failure']), (0, 0, 'receipt_timeout'))
 
     def test_log_replacement_never_rebinds_current_admission(self):
         client = Client()
