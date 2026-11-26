@@ -66,6 +66,50 @@ with LuaJIT available on PATH. At both 20 and 30 Hz, the test uses the
 production controller and verifies a write over 50 m and the final
 sequence through next-update pose readbacks from a simulated engine.
 
+## Bazzite native playback with recorded flight data
+
+The receiver at `f3191645` ran pinned native X4 9.00 with RADV in a
+disposable Bazzite profile. The ordinary Fedora provider at `6f401cae`
+admitted KHI-630 (Company index 1074) over pinned TLS. The private
+launcher supplied HVC-420 (1073) as the only recorded source in the
+automatic cockpit roster. It delivered the 44 previously recorded V3
+samples through the normal process-owned receiver socket. The source
+coordinates were translated once to the sealed save's parked HVC
+position. Sample order, relative times, displacement and velocity were
+preserved. The receiver stayed in the same native radar binding.
+
+| Measurement | Native result |
+| --- | ---: |
+| Source samples accepted and seen in X4 | 44 / 44 |
+| Guarded stock writes / later stock XYZ readbacks | 115 / 114 |
+| Later readbacks confirming a step over 50 m | 113 |
+| Largest independently read step | 100.478 m |
+| Largest unexplained displacement | 8.364 m |
+| Largest XYZ readback error | 0.003964 m |
+| Mean interval between receiver updates | 49.932 ms |
+
+The 100.478 m step used the recorded sample 192 and a 56.301 ms render
+interval. Its unexplained displacement was 0.599 m. An independent stock
+read measured the new position 47.980 ms later with 0.003311 m of XYZ
+error. The ship moved up to 8.508 km over the run, including the final
+bounded extrapolation. The final write was still awaiting its later
+readback when the cockpit closed and is excluded from the readback
+counts. Every stock destination-zone query stayed in the same native
+zone. This run covers Bazzite receiving-cockpit playback of a recorded
+source with a real Fedora provider. A live second pilot and a native
+zone crossing require separate runs.
+
+Fedora acknowledged 50 motion samples from the receiving cockpit and
+confirmed the last-pilot departure checkpoint
+`checkpoint-7148cac1053f4a9dada3b3a544fba941`. The sealed source checksum
+remained unchanged. Both native processes exited successfully, and the
+dedicated Bazzite workload scope and both host locks cleared. The Bazzite
+scope recorded zero full memory pressure and zero OOM events.
+
+The private verification is in
+`.local/velocity-cockpit-native/native-03/verified.json` (SHA-256
+`a5078c3378645f88fefc7799fa967e61c71d7bca1d4b7a59e1e2bcfb38f00f6f`).
+
 ## Crossing an internal zone in the receiving cockpit
 
 Cobalt's Windows X4 run on `a9d1b477` followed a synthetic trajectory for
