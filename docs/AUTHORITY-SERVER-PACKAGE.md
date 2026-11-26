@@ -517,8 +517,13 @@ must support the trade-view capability. At the reserved ship's station,
 open **Trade** from the Docked menu. After loading the server's offers,
 the stock window uses the shared account and the ship's available space
 to limit the quantity. A fresh opening requests a fresh observation.
-This trial supports buying one ware per confirmation. Offers for selling
-are visible with sale submission disabled.
+Choose one ware per confirmation. To enable sales, add `--company-sales`
+to the TLS provider and to each Linux pilot using `--company-trade-view`.
+On Windows, add `-CompanySales` alongside `-CompanyPurchases -CompanyTradeView`.
+Dock at a station that buys a ware in the reserved ship's hold. Confirm
+the quantity in the stock trade window. A successful receipt shows the
+actual credit, shared balance and remaining cargo. If the sell offer
+expires, reopen Trade to fetch the current bid.
 
 Open the stock Docked menu, choose Trade, select a single ware and quantity,
 review the price, and confirm. The provider checks the reserved ship's

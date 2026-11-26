@@ -127,6 +127,14 @@ change, including a lower price. If the server refuses the booking because
 it cannot verify the berth, needs a captain, or is busy, resolve the issue
 and reopen Trade before submitting a fresh basket.
 
+Add `-CompanyTradeView` alongside `-CompanyPurchases` to see the server's
+offers, shared balance and available cargo space in the stock trade window.
+For a sale, the host also enables `--company-sales` and you add
+`-CompanySales` on Windows. Dock at a station buying a ware you carry,
+choose one ware and confirm the quantity once. Reopen Trade to refresh
+an expired sell offer. The sale and the refreshed balance have been
+observed on Linux. This Windows flow still needs an in-game test.
+
 If the game says it is awaiting reconciliation, leave the request pending.
 With the original local basket record, the same Windows account and device
 can answer fresh server checks even after reconnecting in another Company
