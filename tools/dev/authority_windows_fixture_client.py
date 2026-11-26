@@ -84,6 +84,8 @@ def parser():
                           help='follow the other pilot by HUD target or nearby cockpit radar (requires --company-motion)')
     playback.add_argument('--company-hull-playback-index', type=int,
                           help='isolated test only: follow another company ship in the same cockpit sector')
+    result.add_argument('--company-cockpit-continuous-playback', action='store_true',
+                        help='internal trial (requires --company-motion and --company-cockpit-playback)')
     result.add_argument('--company-combat', action='store_true',
                         help='report throttled stock gun contacts (requires --company-motion)')
     result.add_argument('--combat-capture', action='store_true',

@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from authority.client_seat_overlay import company_motion_md, company_motion_ui
+from authority.client_seat_overlay import company_motion_config, company_motion_md, company_motion_ui
 from authority.company_motion_frames import MAX_COUNTER
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
@@ -19,6 +19,20 @@ from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, PILOT_INDEX, 
 
 
 class CompanyMotionSourceTest(unittest.TestCase):
+    def test_continuous_playback_requires_automatic_cockpit_and_serializes_explicit_opt_in(self):
+        for options in ({}, {'cockpit_radar_playback': True, 'playback_index': 1074}):
+            with self.assertRaisesRegex(ValueError, 'requires automatic cockpit'):
+                CompanyMotionSource(cockpit_continuous_playback=True, **options)
+        for enabled in (False, True):
+            source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_continuous_playback=enabled)
+            try:
+                installed = company_motion_config(source, 1073, {
+                    'epoch': 'a' * 32, 'operational_bits': '1' * 2000,
+                })
+                self.assertEqual('cockpit_continuous_playback=true' in installed, enabled)
+            finally:
+                source.close()
+
     def test_local_npc_measurement_opt_in_requires_pinned_read_only_seat(self):
         target = (NPC_INDEX, NPC_CODE)
         operational = '1' * PILOT_INDEX

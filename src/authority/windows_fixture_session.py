@@ -128,7 +128,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         require_registry_snapshot=False, select_ship=None, company_motion=False,
                         company_hull_playback_index=None, on_stage=None, company_purchases=False, company_undock_test=False, company_trade_view=False,
                         company_sales=False,
-                        play_until_exit=False, cockpit_radar_playback=False, company_fleet_orders=False, observed_npc=None,
+                        play_until_exit=False, cockpit_radar_playback=False, cockpit_continuous_playback=False,
+                        company_fleet_orders=False, observed_npc=None,
                         registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
@@ -189,6 +190,9 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                                             cockpit_radar_playback=cockpit_radar_playback)
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
                             cockpit_radar_playback=cockpit_radar_playback)
+    if type(cockpit_continuous_playback) is not bool or (cockpit_continuous_playback and
+            (not company_motion or not cockpit_radar_playback or company_hull_playback_index is not None)):
+        raise ValueError('Company continuous playback requires automatic cockpit playback')
     validate_measurement_trial(registered_npc_local_measurement, base_game_only=getattr(workspace, 'base_game_only', False),
                                observed_npc=observed_npc)
     validate_motion_request(motion_request, participant_timeout)
@@ -274,6 +278,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                     company_source = CompanyMotionSource(playback_index=company_hull_playback_index, observed_npc=observed_npc,
                                                         registered_npc_local_measurement=registered_npc_local_measurement,
                                                         cockpit_radar_playback=cockpit_radar_playback,
+                                                        cockpit_continuous_playback=cockpit_continuous_playback,
                                                         on_stage=on_stage)
                     source_options['company_motion'] = company_source
                 if company_purchases:

@@ -66,6 +66,10 @@ def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str
     validate_playback_index(playback_index, company_motion=args.company_motion,
                             own_index=args.company_ship_index, cockpit_radar_playback=radar_playback)
 
+    continuous_playback = getattr(args, 'company_cockpit_continuous_playback', False)
+    if continuous_playback and (not radar_playback or playback_index is not None or not args.company_motion):
+        raise ValueError('--company-cockpit-continuous-playback requires --company-motion and --company-cockpit-playback')
+
     options: dict[str, bool | int | tuple[int, str]] = {}
     if observed_npc:
         options['observed_npc'] = observed_npc
@@ -75,6 +79,8 @@ def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str
         options['company_hull_playback_index'] = playback_index
     if radar_playback:
         options['cockpit_radar_playback'] = True
+    if continuous_playback:
+        options['cockpit_continuous_playback'] = True
     return options
 
 

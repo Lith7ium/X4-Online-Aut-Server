@@ -262,7 +262,8 @@ def error_code(error):
 
 def run(args, *, playback_driver=None, player_settings=None, select_ship=None, on_admitted=None,
         company_motion=False, software_vulkan_icd=None, company_hull_playback_index=None, company_purchases=False,
-        cockpit_radar_playback=False, company_undock_test=False, company_trade_view=False, company_fleet_orders=False,
+        cockpit_radar_playback=False, cockpit_continuous_playback=False, company_undock_test=False,
+        company_trade_view=False, company_fleet_orders=False,
         company_sales=False,
         observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
         registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
@@ -297,6 +298,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         raise ValueError('NPC hold trial requires the vanilla MFQ-419 observation')
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
                             cockpit_radar_playback=cockpit_radar_playback)
+    if type(cockpit_continuous_playback) is not bool or (cockpit_continuous_playback and
+            (not company_motion or not cockpit_radar_playback or company_hull_playback_index is not None)):
+        raise ValueError('Company continuous playback requires automatic cockpit playback')
     if player_mode and (not callable(select_ship) or not callable(on_admitted) or playback_driver is not None):
         raise ValueError('player seat selection and admission callback required')
     if software_vulkan_icd is not None and (
@@ -458,7 +462,9 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                     if company_motion:
                         company_source = CompanyMotionSource(
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
-                            cockpit_radar_playback=cockpit_radar_playback, registered_npc_hold_trial=registered_npc_hold_trial,
+                            cockpit_radar_playback=cockpit_radar_playback,
+                            cockpit_continuous_playback=cockpit_continuous_playback,
+                            registered_npc_hold_trial=registered_npc_hold_trial,
                             registered_npc_alignment_trial=registered_npc_alignment_trial,
                             registered_npc_local_measurement=registered_npc_local_measurement)
                         source_options['company_motion'] = company_source

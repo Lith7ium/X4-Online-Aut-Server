@@ -296,6 +296,13 @@ class PlayerClientTests(unittest.TestCase):
             features = ('company_motion', 'company_combat', 'combat_capture', 'company_purchases',
                         'company_fleet_orders', 'company_trade_view', 'company_sales', 'company_undock_test')
             self.assertTrue(set(features).isdisjoint(options))
+            self.assertNotIn('cockpit_continuous_playback', options)
+            recovery = '--company-cockpit-continuous-playback'
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', '--company-cockpit-playback', recovery]), 0)
+            self.assertIs(run.call_args.kwargs['cockpit_continuous_playback'], True)
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                cli.main([*args, '--company-motion', '--company-cockpit-playback-index', str(INDEX + 1), recovery])
             flags = ['--' + name.replace('_', '-') for name in features]
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, *flags, '--company-cockpit-playback-index', str(INDEX + 1)]), 0)
