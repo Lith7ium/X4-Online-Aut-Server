@@ -2,6 +2,9 @@
 local M = {}
 local MAX_STEP, PREDICTION_SECONDS, READBACK_TOLERANCE = 50, 5, 3
 local VELOCITY_STEP_LIMIT, VELOCITY_INTERVAL_LIMIT = 250, .100
+local INTERPOLATION_DELAY = .15
+-- Largest distance between two valid sector positions, each with axes in ±10⁷ m.
+local SECTOR_DIAGONAL = 2 * math.sqrt(3) * 1e7
 M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
 -- The shared buffer's remote-capture continuity bound is independent of
 -- the local prediction deadline and tolerates different transit delays.
@@ -85,6 +88,10 @@ function M.new(options)
     local player, terminal, refusal, last_arrival
     local rendered_source, write_source
     local velocity_steps = cfg.velocity_steps == true
+    local continuous = cfg.continuous_playback == true
+    local maximum_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP
+    if continuous then maximum_step = SECTOR_DIAGONAL end
+    local measured_pose, last_display_time, last_display_pose, last_display_rate
     local velocity, sample_count, previous_update = nil, 0, nil
     local authorize_step
     local observation, prior_update, last_real_velocity
@@ -191,6 +198,23 @@ function M.new(options)
                             math.max(math.min(start, limit), rendered.pose[axis]))
                     end
                 end
+                if continuous then
+                    -- Integrate the previous flight velocity across the actual render
+                    -- interval. Blend the residual toward the latest reconstructed
+                    -- position. The blend uses seconds, including after a long frame.
+                    local dt = last_display_time and now - last_display_time or 0
+                    local weight = 1 - math.exp(-dt / INTERPOLATION_DELAY)
+                    local output = {}
+                    for i, axis in ipairs({'x', 'y', 'z'}) do
+                        local predicted = measured_pose[axis]
+                        if last_display_pose then
+                            predicted = last_display_pose[i] + last_display_rate[i] * dt
+                        end
+                        output[i] = predicted + weight * (rendered.pose[i] - predicted)
+                    end
+                    last_display_time, last_display_pose, last_display_rate = now, output, newest.rate
+                    rendered.pose = output
+                end
                 for _, source in ipairs(lineage) do
                     if source.sequence == rendered.source_sequence then
                         rendered_source = source
@@ -204,14 +228,15 @@ function M.new(options)
     player = assert(playback.new({
         enabled = true, buffer = checked_buffer, sample_version = sample_version, frame = binding.sector_macro,
         attitude_changed = follows_attitude and buffer.attitude_changed or nil,
-        max_age = PREDICTION_SECONDS, max_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP,
-        step_guard = velocity_steps and step_guard or nil,
-        buffer_options = {delay = .15, horizon = PREDICTION_SECONDS, start_at_first_pair = cfg.start_at_first_pair,
-                          stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = MAX_STEP},
+        max_age = PREDICTION_SECONDS, max_step = maximum_step,
+        step_guard = not continuous and velocity_steps and step_guard or nil,
+        buffer_options = {delay = INTERPOLATION_DELAY, horizon = PREDICTION_SECONDS, start_at_first_pair = cfg.start_at_first_pair,
+                          stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = continuous and SECTOR_DIAGONAL or MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
         read = function()
             local observed = cfg.read(copy(binding))
             local actual = assert(xyz(observed, 1e7), 'invalid native company hull read')
+            measured_pose = actual
             local attitude = follows_attitude and assert(buffer.copy_attitude(observed)) or nil
             -- Legacy XYZ playback leaves native orientation to the adapter.
             actual.yaw, actual.pitch, actual.roll = attitude and attitude.yaw or 0,
@@ -237,8 +262,14 @@ function M.new(options)
                 return permitted
             end
             local attitude = follows_attitude and assert(buffer.copy_attitude(target)) or nil
+            local before_dispatch
+            if continuous then
+                before_dispatch = function() return expiry() == false end
+            elseif authorize then
+                before_dispatch = recheck
+            end
             local written, outside_native_limit = cfg.write(
-                copy(binding), position, xyz(before, 1e7), authorize and recheck or nil, attitude)
+                copy(binding), position, xyz(before, 1e7), before_dispatch, attitude)
             if written == false and outside_native_limit then
                 native_refusal, native_refusal_phase = xyz(outside_native_limit, 1e7), 'native_step_limit'
             end
@@ -246,14 +277,20 @@ function M.new(options)
         end,
         record = function(event)
             local readback = event.kind == 'readback'
+            local kind = event.kind
             if readback then
                 if event.elapsed <= 0 then
                     refusal = 'readback_not_later'
                     return false
                 end
                 if event.error > READBACK_TOLERANCE then
-                    refusal = 'readback_out_of_bounds'
-                    return false
+                    if not continuous then
+                        refusal = 'readback_out_of_bounds'
+                        return false
+                    end
+                    -- The same bound actor is at a different measured pose. Restart
+                    -- the blend there and do not certify the previous write.
+                    kind, last_display_pose = 'position_deviation', nil
                 end
             else
                 observation, prior_update = event, previous_update
@@ -261,7 +298,7 @@ function M.new(options)
             local source = readback and write_source or rendered_source
             assert(source and source.sequence == event.source_sequence)
             return cfg.record({
-                kind = event.kind, slot = binding.slot, serial = binding.serial, epoch = binding.epoch,
+                kind = kind, slot = binding.slot, serial = binding.serial, epoch = binding.epoch,
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,

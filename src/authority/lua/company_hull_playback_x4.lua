@@ -82,6 +82,10 @@ function M.new(options, engine)
             return eligible() and true or false
         end
 
+        function session:tracks_active_pilot()
+            return is_pilot() and self:guard()
+        end
+
         function session:read()
             local before = eligible()
             if not before then return nil end
@@ -109,14 +113,15 @@ function M.new(options, engine)
             return true
         end
 
-        function session:write(target, before, recheck, attitude)
+        function session:write(target, before, recheck, attitude, continuous)
             if pending_zone or not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
             if recheck ~= nil and type(recheck) ~= 'function' then return false end
             local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
-            if dx * dx + dy * dy + dz * dz > maximum * maximum then
+            if continuous and (not recheck or not self:tracks_active_pilot()) then return false end
+            if not continuous and dx * dx + dy * dy + dz * dz > maximum * maximum then
                 return false, recheck and actual or nil
             end
             local destination_zone = engine.destination_zone(original_target.sector, target)

@@ -224,14 +224,17 @@ function M.new(options)
 
     local function new_controller(verified, active_session, sample_version, start_at_first_pair)
         stats.binds = stats.binds + 1
+        local continuous = options.continuous_playback == true and active_session.tracks_active_pilot
+            and active_session:tracks_active_pilot()
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
+            continuous_playback = continuous,
             sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
             write = function(_, target, before, recheck, attitude)
-                local ok, outside_native_limit = active_session:write(target, before, recheck, attitude)
+                local ok, outside_native_limit = active_session:write(target, before, recheck, attitude, continuous)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok, outside_native_limit
             end,
@@ -588,6 +591,7 @@ function M.new_multi(options)
             allow_reacquire_align = options.allow_reacquire_align,
             playback = options.playback,
             trial_first_contact = options.trial_first_contact,
+            continuous_playback = options.continuous_playback,
             adapter = adapter,
             clock = options.clock,
             game = options.game,
@@ -778,6 +782,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
         slot_names = slot_names,
         own_index = config.index,
         allow_reacquire_align = true,
+        continuous_playback = config.cockpit_continuous_playback == true,
         trial_first_contact = config.trial_first_contact == true,
         adapters = adapters,
         clock = clock,

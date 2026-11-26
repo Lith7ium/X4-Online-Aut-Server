@@ -262,7 +262,8 @@ function M.new(options)
    -- Subsequent updates slew back to the ordinary interpolation delay.
    local first = samples[1]
    if #samples == 1 then
-    return {frame=first.frame, source_sequence=first.sequence, pose=copy(first.pose), phase='held'}
+    return {frame=first.frame, source_sequence=first.sequence, pose=copy(first.pose),
+            attitude=M.copy_attitude(first.attitude), phase='held'}
    end
    lag = math.max(wanted_lag, now - first.time)
   elseif not lag or not lag_at or math.abs(wanted_lag - lag) > 1 then
