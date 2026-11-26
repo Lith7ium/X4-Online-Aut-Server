@@ -44,7 +44,8 @@ class CompanyCockpitHealthBridge:
         self._clock = clock
         self._lock = threading.Lock()
         self._window = self._sample = self._pending = self._ready = self._sent = None
-        self._after_revision = self._last_dispatched = None
+        self._confirmed_revision = self._last_dispatched = None
+        self._needs_fresh_read = True
         self._last_confirmed = None
         self._revision = self._sequence = 0
         self._next_request = self._active_since = 0.0
@@ -53,7 +54,8 @@ class CompanyCockpitHealthBridge:
 
     def _invalidate(self):
         self._sample = self._pending = self._ready = self._sent = None
-        self._after_revision = None
+        self._confirmed_revision = None
+        self._needs_fresh_read = True
         self._revision += 1
         self._clear = True
         self._next_request = self._active_since = self._clock()
@@ -82,6 +84,7 @@ class CompanyCockpitHealthBridge:
             self._invalidate()
         elif self._pending is not None and now >= self._pending[2]:
             self._pending = self._ready = self._sent = None
+            self._needs_fresh_read = True
             self._counts['expired'] += 1
 
     def take_request(self):
@@ -96,17 +99,22 @@ class CompanyCockpitHealthBridge:
             self._next_request = now + _INTERVAL
             self._pending = self._window, self._sequence, now + _LIFETIME, self._sample[0]
             self._counts['requested'] += 1
-            return self._window, self._sequence, self._after_revision
+            after_revision = None if self._needs_fresh_read else self._confirmed_revision
+            return self._window, self._sequence, after_revision
 
-    def accept_reply(self, window, sequence, state):
-        """Called by the combat worker after its authenticated request returns."""
+    def accept_reply(self, window, sequence, state, *, interrupted=False):
+        """An empty server reply confirms no update. An interrupted read confirms nothing."""
         with self._lock:
             self._expire(self._clock())
             if (self._pending is None or self._pending[:2] != (window, sequence)
                     or self._ready is not None or self._sent is not None):
                 return False
-            if (state is None or not _safe_health(state)
-                    or (self._after_revision is not None and state['revision'] < self._after_revision)):
+            if interrupted or state is not None:
+                # Shields can recharge at the same damage revision. Only the
+                # controlled ship's own readback acknowledges a fresh snapshot.
+                self._needs_fresh_read = True
+            if (interrupted or state is None or not _safe_health(state)
+                    or (self._confirmed_revision is not None and state['revision'] < self._confirmed_revision)):
                 self._pending = None
                 return False
             self._ready = state['revision'], tuple(state[key] for key in _FIELDS)
@@ -169,7 +177,8 @@ class CompanyCockpitHealthBridge:
                         return
                     if not _safe_health(dict(cockpit, revision=revision)) or not _matches_readback(server, cockpit):
                         return
-                    self._after_revision = revision
+                    self._confirmed_revision = revision
+                    self._needs_fresh_read = False
                     self._last_confirmed = dict(
                         window=int(window), sequence=int(sequence), revision=revision,
                         server=server, cockpit=cockpit)

@@ -226,18 +226,16 @@ class CompanyCombatSender:
         def cancelled():
             return self._stop.is_set() or (not self._finish_next_health_read and log.has_events())
 
-        preempted = False
+        window, sequence, _ = request
         try:
             health = self._client.read_health(*request, cancelled=cancelled)
-        except CombatExchangeCancelled:
+        except (CombatExchangeCancelled, OSError, ValueError) as error:
             if self._stop.is_set():
                 return False
-            preempted = True
-            health = None
-        except (OSError, ValueError):
-            # Reads have no side effects. The game can ask again with a fresh sequence.
-            health = None
-        window, sequence, _ = request
-        self._health_bridge.accept_reply(window, sequence, health)
+            preempted = isinstance(error, CombatExchangeCancelled)
+            self._health_bridge.accept_reply(window, sequence, None, interrupted=True)
+        else:
+            preempted = False
+            self._health_bridge.accept_reply(window, sequence, health)
         self._finish_next_health_read = preempted
         return preempted

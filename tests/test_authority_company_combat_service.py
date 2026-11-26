@@ -93,6 +93,46 @@ class CompanyCombatTests(unittest.TestCase):
         self.service.poll()
         self.assertEqual(json.loads(second_reply.readline())['health'], health)
 
+    def test_reconnected_pilot_retries_health_until_confirming_the_new_revision(self):
+        self.service.close()
+        victim = self.grant(1074)
+        before = dict(shield=30, maxshield=2366, hull=3600, maxhull=3600)
+        after = dict(before, shield=4)
+        begin_read = Mock(side_effect=[Mock(poll=Mock(return_value=value))
+                                      for value in (before, after, after)])
+        self.service = CompanyCombatService(self.grants.get, self.apply, begin_health_read=begin_read,
+                                           health_window=lambda binding: 3)
+        self.addCleanup(self.service.close)
+
+        old, old_reply = self.open()
+        old.sendall(self.health_request(victim, 3, 1))
+        self.service.poll()
+        baseline = json.loads(old_reply.readline())
+        self.assertEqual((baseline['health'], baseline['revision']), (before, 0))
+        old_reply.close()
+        old.close()
+        self.service.poll()
+
+        attacker, attacker_reply = self.open()
+        attacker.sendall(self.frame(self.first, [hit(1)]))
+        self.service.poll()
+        self.service.poll()
+        self.assertEqual(self.receive(attacker_reply)[0]['order'], 1)
+
+        rejoined, reply = self.open()
+        for sequence in (2, 3):
+            # Sequence 2 reaches the pilot but never gets native cockpit confirmation.
+            rejoined.sendall(self.health_request(victim, 3, sequence, after_revision=baseline['revision']))
+            self.service.poll()
+            snapshot = json.loads(reply.readline())
+            self.assertEqual((snapshot['sequence'], snapshot['health'], snapshot['revision']),
+                             (sequence, after, 1))
+        rejoined.sendall(self.health_request(victim, 3, 4, after_revision=1))
+        self.service.poll()
+        unchanged = json.loads(reply.readline())
+        self.assertEqual((unchanged['health'], unchanged['revision']), (None, None))
+        self.assertEqual(begin_read.call_count, 3)
+
     def test_pending_native_health_discarded_when_the_world_pauses(self):
         self.service.close()
         operation = Mock()
