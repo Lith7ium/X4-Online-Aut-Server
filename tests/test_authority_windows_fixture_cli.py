@@ -285,6 +285,25 @@ class FixtureCliTests(unittest.TestCase):
         self.assertIs(session.call_args.kwargs['company_purchases'], True)
         self.assertNotIn('company_trade_view', session.call_args.kwargs)
 
+    def test_combat_capture_is_opt_in_for_an_admitted_company_seat(self):
+        base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
+                '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
+                '--out', str(self.root / 'out'), '--network-dll', str(self.root / 'net.dll'),
+                '--network-dll-sha256', 'a' * 64]
+        parse = cli.parser().parse_args
+        with (patch.object(cli, 'os') as platform,
+              patch('authority.windows_fixture_session.run_fixture_session', return_value={}) as session,
+              patch('authority.windows_fixture_workspace.WindowsFixtureWorkspace')):
+            platform.name = 'nt'
+            with self.assertRaisesRegex(ValueError, '--combat-capture requires a Company seat join'):
+                cli.run(parse([*base, '--combat-capture']))
+            session.assert_not_called()
+            cli.run(parse([*base, '--company-ship-index', '2']))
+            self.assertNotIn('combat_capture', session.call_args.kwargs)
+            cli.run(parse([*base, '--company-ship-index', '2', '--combat-capture']))
+            self.assertIs(session.call_args.kwargs['combat_capture'], True)
+            self.assertTrue(session.call_args.kwargs['require_registry_snapshot'])
+
     def test_sales_require_purchase_and_market_view_and_reach_session(self):
         base = ['--isolated-fixture-test', '--connection-file', str(self.connection),
                 '--game', str(self.root / 'game'), '--view-container', str(self.root / 'view'),
