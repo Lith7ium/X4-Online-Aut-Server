@@ -130,3 +130,34 @@ post-hit value to 4. Comparing the truncated event with the independent
 readback returned an unknown outcome. The provider stopped further writes.
 Private evidence is in
 `.local/live-shield-bridge/pinned-9188/checkout/.local/live-shield-bridge/integrated-native-03/terminal.json`.
+
+## Fractional shield and hull receipts in X4
+
+On `4e7dd6c8` the Fedora fixture loaded one GPU-free X4 with 5,048
+registered ships and held game age at 3.511 s. The private test supplied
+the two requests locally and allowed the production damage driver to run
+while paused. New receipts carry the integer and fractional parts of the
+Mission Director values together. Lua still returns its independent
+native health readback.
+
+| Input on MFQ-419 | Native shield | Native hull |
+| --- | ---: | ---: |
+| Before either hit | 29.999999701976776 | 6,400 |
+| HVC-420 hit, 26 points | 3.999999701976776 | 6,400 |
+| KHI-630 hit, 26 points | 0 | 6,377.999999701977 |
+| Old HVC-420 request repeated | 0 | 6,377.999999701977 |
+
+Three packet deliveries caused two Mission Director damage calls and two
+product receipts. The Python validator accepted both receipts. The maximum
+observed difference between the encoded MD reading and the independent
+Lua reading was 0.000000656 HP. The raw final read also matched the
+second receipt after the old request.
+
+The private supervisor exited 1 because its completion marker appeared
+twice. Both markers recorded the same counts. Independent verification
+read the untouched native log, checked every damage dispatch and receipt
+and accounted for that repeated terminal line. There was no game save
+or pilot TCP connection in this codec test. The source save remained
+intact and the server process and lock were released.
+The private raw witness is `.local/live-shield-bridge/codec-native-02/native-witness.txt`
+(SHA-256 `ee8f0a80cf5230d0ec0f5c6bd4277054cb3bc988aac75302286f06967945a13d`).

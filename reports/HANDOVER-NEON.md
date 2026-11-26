@@ -53,6 +53,13 @@ event, while the independent Lua getter retained the fractional value.
 Both occupied native client cockpits remain to be exercised.
 [Provider health readbacks and fractional event diagnosis](AUTHORITY-SHIELD-REPLAY-20261126.md#two-pilots-read-their-own-live-ship-health)
 
+The corrected receipt format passed two independently validated native
+damage reads on a paused test world, including shield overflow to hull
+and an old packet after the second hit. The private supervisor counted
+its completion marker twice and exited 1. The raw game log contained two
+damage calls and two receipts.
+[Fractional values, retry and raw witness](AUTHORITY-SHIELD-REPLAY-20261126.md#fractional-shield-and-hull-receipts-in-x4)
+
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered
 eight marines. X4 transferred ZNG-430 from Scale Plate to the player
