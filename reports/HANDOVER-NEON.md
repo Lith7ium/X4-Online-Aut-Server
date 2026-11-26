@@ -8,13 +8,14 @@ BBS-493 at (30000, 100000, 55000) m in the destination sector.
 The ship kept its registry index and its original NPC captain.
 [Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
 
-For the ordinary ZGH-239 → NEL-546 gate, the first read of the test
-ships still showed their previous positions. Within four seconds, X4
-confirmed the intended positions and ZGH-239 as the first gate. The
-marked candidate save independently matches those positions to within
-0.60 mm. It remains unconfirmed. The first cold launch stopped at
-process discovery before loading it. No pilot flew this route.
-[Gate placement and candidate save](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#bounded-placement-verification-and-candidate-save)
+HVC-420 crossed the ordinary ZGH-239 → NEL-546 jump gate under stock
+autopilot. A regular Linux cockpit and a separate GPU-free X4 provider
+ran on Bazzite. The first destination sample discarded the previous
+sector's velocity. By sample 195, velocity had resumed and the provider
+verified the transfer within 1 mm. The last-pilot save retained the
+ship in the destination sector. An earlier test observer had accepted
+only the old superhighway destination. The correction was private to
+the ordinary gate fixture. [Native gate, acknowledgements and saved world](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#verified-ordinary-gate-movement-and-departure-save)
 
 The ordinary boarding menu now has a native positive control. On a
 disposable provider the test activated the enabled Start Operation button
