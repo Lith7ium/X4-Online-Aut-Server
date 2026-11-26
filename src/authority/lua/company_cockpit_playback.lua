@@ -194,8 +194,12 @@ function M.new(options)
                 return ok
             end,
             record = function(ev)
-                if ev.kind == 'readback' then stats.readbacks = stats.readbacks + 1 end
-                return options.record(ev)
+                if options.record(ev) ~= true then return false end
+                if ev.kind == 'readback' then
+                    if active_session.confirm_motion and not active_session:confirm_motion() then return false end
+                    stats.readbacks = stats.readbacks + 1
+                end
+                return true
             end,
             fault = function(reason, uncertain, stage)
                 if reason == 'correction_out_of_bounds' then

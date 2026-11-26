@@ -1178,6 +1178,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             local list = {3, 4, 5}
             assert(multi:set_pilot_roster(list))
             list[1] = 2
+            assert(reader:is_active_pilot(3) and not reader:is_active_pilot(2))
             assert(reader:tick() == nil and issued.epoch == epoch and issued.count == 20)
             assert(issued.pilot1 == 3 and issued.pilot2 == 4 and issued.pilot3 == 5)
             local fresh = issued.request_id
@@ -1200,6 +1201,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 .. '|21,0x2a,sector_macro,ABC-401,radar;4,0x2a,sector_macro,ABC-400,radar')
             assert(reader:current().index == 4 and multi.readers.cockpit2:current() == nil)
             assert(multi:set_pilot_roster({21}))
+            assert(not reader:is_active_pilot(4) and not reader:is_active_pilot(21))
             reader:tick()
             assert(calls == 4 and issued.pilot1 == 0 and issued.pilot2 == 0 and issued.pilot3 == 0)
             received(nil, issued.request_id .. '|' .. epoch .. '|MULTI|0|-')

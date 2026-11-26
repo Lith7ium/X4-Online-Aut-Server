@@ -65,3 +65,26 @@ and XYZ offsets. From the checkout root, run
 with LuaJIT available on PATH. At both 20 and 30 Hz, the test uses the
 production controller and verifies a write over 50 m and the final
 sequence through next-update pose readbacks from a simulated engine.
+
+## Crossing an internal zone in the receiving cockpit
+
+Cobalt's Windows X4 run on `a9d1b477` followed a synthetic trajectory for
+754 m before the destination lookup returned a different zone in the same
+sector. The receiver stopped before dispatching the crossing. The result
+isolated a second cause of a stationary ship independently of render cadence.
+
+The trial allows the next ordinary movement write across that boundary after
+a verified movement readback. The observer must still identify the same
+visible ship and the server roster must still list its pilot. X4 must resolve
+the destination zone inside the original sector. On the following update the
+receiver checks the ship in that zone, compares its actual sector-space XYZ
+with the requested position (3 m tolerance), and then permits another write.
+The cockpit and observed ship may occupy different zones.
+
+The LuaJIT regression exercises the receiving controller, the roster query
+and the native adapter with simulated X4 calls. It covers successful
+continuation, a simultaneous zone change by the observer, lost visibility,
+roster removal, incorrect XYZ or zone, and rejection of a first-write
+crossing, an unknown zone and a zone from another sector. The Windows
+baseline above predates this change. A native crossing with the updated
+receiver and a two-pilot live crossing are separate tests.

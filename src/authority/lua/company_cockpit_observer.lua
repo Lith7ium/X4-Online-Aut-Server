@@ -392,6 +392,12 @@ function M.new_multi(pinned, own_index, max_pilots, engine)
             local entry = slots[slot_idx]
             return entry and entry.mode or nil
         end
+        function reader:is_active_pilot(index)
+            for _, pilot_index in ipairs(roster) do
+                if pilot_index == index then return true end
+            end
+            return false
+        end
         function reader:matches(wanted_epoch, sector, index, actor, code)
             inspect()
             local entry = slots[slot_idx]

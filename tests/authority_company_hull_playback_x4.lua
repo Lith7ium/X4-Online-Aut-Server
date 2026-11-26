@@ -2,9 +2,10 @@ local module = dofile('src/authority/lua/company_hull_playback_x4.lua')
 local epoch = ('1'):rep(32)
 local binding = {slot='cockpit', epoch=epoch, index=73, actor='0x02', sector_macro='sector_a', code='ABC-123'}
 local cockpit, target, sector, zone, cockpit_zone = 1, 2, 3, 4, 5
+local own_zone
 local owner, docked, docking, stored, pilot, assigned, ai
 local controlled, occupied, contained, cockpit_sector, target_sector, target_zone, destination_zone
-local player, paused, observed, guarded, writes, actual, requested, fault_write
+local player, paused, observed, guarded, writes, actual, requested, fault_write, active_pilot
 
 local c = {
     IsPlayerValid = function() return player end,
@@ -12,21 +13,21 @@ local c = {
     IsValidComponent = function(id) return id ~= 0 end,
     IsComponentOperational = function(id) return id == target end,
     IsComponentClass = function(id, kind)
-        return ({[1]='ship', [2]='ship', [3]='sector', [4]='zone', [5]='zone', [6]='sector'})[id] == kind
+        return ({[1]='ship', [2]='ship', [3]='sector', [4]='zone', [5]='zone', [6]='sector', [7]='zone'})[id] == kind
     end,
     GetPlayerControlledShipID = function() return controlled end,
     GetPlayerOccupiedShipID = function() return occupied end,
     GetPlayerContainerID = function() return contained end,
     GetContextByClass = function(id, kind)
         if kind == 'sector' then
-            return ({[1]=cockpit_sector, [2]=target_sector, [4]=target_sector, [5]=cockpit_sector})[id]
+            return ({[1]=cockpit_sector, [2]=target_sector, [4]=target_sector, [5]=cockpit_sector, [7]=6})[id]
         end
-        return ({[1]=cockpit_zone, [2]=target_zone})[id]
+        return ({[1]=own_zone, [2]=target_zone})[id]
     end,
     GetObjectIDCode = function() return 'ABC-123' end,
     GetObjectPositionInSector = function(id) assert(id == target); return actual end,
     GetZoneAt = function(id, offset)
-        assert(id == sector and offset[0].x == 23)
+        assert(id == sector and type(offset[0].x) == 'number')
         offset[0].x = -100 -- As a zone conversion must not change the setter's sector coordinates.
         return destination_zone
     end,
@@ -65,6 +66,9 @@ function observer:matches(seen_epoch, seen_sector, index, actor, code)
     return observed and seen_epoch == epoch and seen_sector == 'sector_a'
         and index == 73 and actor == '0x02' and code == 'ABC-123'
 end
+function observer:is_active_pilot(index)
+    return active_pilot and index == binding.index
+end
 local cfg = {enabled=true, pinned={epoch=epoch, issued_count=10082}, own_index=17, observer=observer,
              guard=function() return guarded end}
 assert(not pcall(module.new_x4, {enabled=false}))
@@ -75,6 +79,7 @@ local function reset()
     controlled, occupied, contained = cockpit, cockpit, cockpit
     cockpit_sector, target_sector, target_zone, destination_zone = sector, sector, zone, zone
     player, paused, observed, guarded, fault_write = true, false, true, true, false
+    active_pilot, own_zone = true, cockpit_zone
     writes, actual, requested = 0, {x=20, y=5, z=-7, yaw=.5, pitch=.1, roll=-.2}, nil
 end
 local destination = {x=23, y=5, z=-7, yaw=99, pitch=99, roll=99}
@@ -111,7 +116,7 @@ session:close()
 
 for _, change in ipairs({
     function() controlled = target end, function() occupied = target end, function() contained = target end,
-    function() cockpit_sector = 6 end, function() target_sector = 6 end, function() target_zone = cockpit_zone end,
+    function() own_zone = zone end, function() cockpit_sector = 6 end, function() target_sector = 6 end, function() target_zone = cockpit_zone end,
     function() owner = 'argon' end, function() docked = true end, function() docking = true end,
     function() stored = true end, function() docking = nil end, function() assigned = 'captain' end,
     function() pilot = 'captain' end, function() ai = true end, function() paused = true end,
@@ -126,7 +131,7 @@ end
 reset()
 session = assert(adapter:bind(binding))
 destination_zone = cockpit_zone
-assert(not session:write(destination, before) and writes == 0)
+assert(not session:write(destination, before) and not session:align(destination) and writes == 0)
 destination_zone = zone
 assert(not session:write({x=1e5, y=0, z=0}, before) and writes == 0)
 assert(not session:write({x=0/0, y=0, z=0}, before) and writes == 0)
@@ -148,6 +153,68 @@ local cockpit_playback = dofile(base .. 'company_cockpit_playback.lua')
 local generation = ('2'):rep(32)
 binding.slot, binding.index = 'cockpit', 73
 
+-- The engine keeps reporting the old zone until the following UI update.
+-- Feed actual V3 samples through the regular receiving controller and FFI adapter.
+local function cross_boundary(outcome)
+    reset()
+    local now, readbacks, faults = 0, 0, {}
+    local controller = cockpit_playback.new({
+        enabled=true, own_index=cfg.own_index, target_index=binding.index, adapter=adapter,
+        clock=function() return now end, game=function() return now end, paused=function() return false end,
+        record=function(event)
+            if event.kind == 'readback' then readbacks = readbacks + 1 end
+            return true
+        end,
+        fault=function(reason) faults[#faults + 1] = reason end,
+    })
+
+    local crossing_write, crossing_readback
+    for frame = 1, 16 do
+        now = frame * .05
+        if requested then
+            actual, requested = native_readback(requested), nil
+        end
+        if crossing_write and not crossing_readback then
+            if outcome ~= 'wrong_actual_zone' then target_zone = cockpit_zone end
+            if outcome == 'observer_changed_zone' then own_zone = zone end
+            if outcome == 'wrong_actual_position' then actual.x = actual.x + 10 end
+            if outcome == 'lost_radar' then observed = false end
+            if outcome == 'pilot_disconnected' then active_pilot = false end
+        end
+        local before_writes, before_readbacks = writes, readbacks
+        if readbacks >= 1 then
+            if outcome == 'foreign_sector' then destination_zone = 7
+            elseif outcome == 'unknown_zone' then destination_zone = 0
+            else destination_zone = cockpit_zone end
+            if outcome == 'unpiloted' then active_pilot = false end
+        elseif outcome == 'first_write' then
+            destination_zone = cockpit_zone
+        end
+        local sample = {
+            version=3, epoch=epoch, index=binding.index, generation=generation, sector_macro=binding.sector_macro,
+            sequence=frame, source_time=now, capture_time=now,
+            x=20 + 100 * now, y=5, z=-7, real_velocity={x=100,y=0,z=0},
+        }
+        controller:sample(binding, 1, sample, now)
+        controller:tick(now)
+        if crossing_write and readbacks > before_readbacks then crossing_readback = true end
+        if destination_zone ~= zone and writes > before_writes and not crossing_write then crossing_write = writes end
+        if #faults > 0 then break end
+    end
+    if outcome == 'success' or outcome == 'observer_changed_zone' then
+        assert(crossing_write and crossing_readback and writes > crossing_write and #faults == 0)
+    elseif outcome == 'foreign_sector' or outcome == 'unknown_zone'
+            or outcome == 'unpiloted' or outcome == 'first_write' then
+        assert(not crossing_write and #faults > 0, outcome)
+    else
+        assert(crossing_write and not crossing_readback and writes == crossing_write and #faults > 0, outcome)
+    end
+end
+for _, outcome in ipairs({'success', 'observer_changed_zone', 'first_write', 'unpiloted', 'unknown_zone', 'foreign_sector',
+        'wrong_actual_zone', 'wrong_actual_position', 'lost_radar', 'pilot_disconnected'}) do
+    cross_boundary(outcome)
+end
+
 local function flight(speed, update, test, trace)
     local now, actual, pending = 0, {x=0, y=0, z=0}, nil
     local accepted_samples, confirmed_sequence, confirmed_long_write = 0, 0, false
@@ -160,7 +227,7 @@ local function flight(speed, update, test, trace)
         read = function()
             return {x=actual.x, y=actual.y + native_offset, z=actual.z, yaw=0, pitch=0, roll=0}
         end,
-        same_zone = function() return true end,
+        destination_zone = function() return zone end,
         write = function(actor, _, pose)
             assert(actor == target and not pending)
             pending = pose
