@@ -617,3 +617,18 @@ of trade. A separate LuaJIT check executed the installed game's stock
 eight stale baskets and forwarded all eight genuine stock baskets across
 immediate and queued orders, with selling enabled and disabled. These
 two corrections still need an in-game pilot check.
+
+### Native whole-credit affordability boundary
+
+A read-only probe in an isolated vanilla Linux provider at
+`4a2fa04d35eb59b84ab0559a87056064bb3ce9f6` compared a two-unit basket
+at 58.48 Cr per unit with a 116 Cr budget. The installed stock Lua
+helpers returned 116 for `RoundTotalTradePrice(2 * 58.48)` and two for
+`GetNumAffordableTradeItems(116, 58.48)`.
+
+Mission Director calculated the raw product as 11,696 cents and
+reported false for that money value being at most 116 Cr. In the
+whole-credit comparison used by the stock trade order, division by
+`1Cr` yielded 116 for both amounts and the comparison returned true.
+These observations measure the affordability boundary. The probe
+submitted no purchase and produced no settlement or checkpoint.
