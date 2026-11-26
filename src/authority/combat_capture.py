@@ -35,6 +35,12 @@ _FIELDS = frozenset({'format', 'checkpoint_id', 'checkpoint_sha256', 'registry_e
 
 def private_capture_observer(text):
     """Give the client capture its own observer state and one sequence per log."""
+    crlf = '\r\n' in text
+    if crlf:
+        normalized = text.replace('\r\n', '\n')
+        if normalized.count('\n') != text.count('\r\n'):
+            raise ValueError('mixed line endings in the private client combat observer')
+        text = normalized
     source = 'X4AuthorityCombatObserver'
     reset = '      <set_value name="State.$seq" exact="0"/>\n'
     if f'<mdscript name="{source}"' not in text or text.count(reset) != 1:
@@ -66,7 +72,7 @@ def private_capture_observer(text):
         'State.$armed and State.$watch_player_ship and State.$targets.indexof.{@event.param} gt 0'
         ' and @player.controlled == event.param and @player.occupiedship == event.param"')
     validate_md_read_only(private)
-    return private
+    return private.replace('\n', '\r\n') if crlf else private
 
 
 def _code(lua_text):

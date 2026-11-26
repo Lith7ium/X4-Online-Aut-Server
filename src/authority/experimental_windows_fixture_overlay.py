@@ -177,6 +177,19 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
     # The offered session still assigns players to the shared player faction.
     sources.update({name: ROOT / 'src/lockstep/base' / name for name in _FACTION_ASSETS})
     files = {name: _source(path, 1024 * 1024) for name, path in sources.items()}
+    # The hook transforms expect LF internally. Keep each source's checkout style.
+    hook_sources = ('ui/authority_download_load_probe.lua', 'ui/local_udp_module.lua')
+    if motion_settings is not None:
+        hook_sources += ('ui/authority_two_x4_participant_probe.lua',)
+    crlf_sources = []
+    for name in hook_sources:
+        data = files[name]
+        if b'\r\n' in data:
+            normalized = data.replace(b'\r\n', b'\n')
+            if normalized.count(b'\n') != data.count(b'\r\n'):
+                raise ValueError(f'mixed line endings in fixture source: {name}')
+            files[name] = normalized
+            crlf_sources.append(name)
     load_probe = files['ui/authority_download_load_probe.lua']
     hook = b" elseif state=='observing' then\n"
     if load_probe.count(hook) != 1:
@@ -334,6 +347,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             files['ui/' + name] = _source(ROOT / source, 1024 * 1024)
         insertion = ui_files.index('ui/authority_two_x4_participant_probe.lua')
         ui_files[insertion:insertion] = ['ui/' + name for name in (*COMPANY_COCKPIT_HEALTH_UI, 'company_gun_source.lua')]
+    for name in crlf_sources:
+        files[name] = files[name].replace(b'\n', b'\r\n')
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

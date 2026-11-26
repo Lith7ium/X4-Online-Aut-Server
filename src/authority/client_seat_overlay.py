@@ -133,9 +133,11 @@ def company_motion_md(source):
 
 
 def export_motion_buffer(data):
-    if data.count(b'return M\n') != 1:
+    hooks = list(re.finditer(rb'return M(\r?\n)', data))
+    if len(hooks) != 1:
         raise ValueError('unexpected motion buffer module')
-    return data.replace(b'return M\n', b'X4LAN_MOTION_BUFFER=M\nreturn M\n')
+    hook = hooks[0]
+    return data[:hook.start()] + b'X4LAN_MOTION_BUFFER=M' + hook[1] + data[hook.start():]
 
 
 def company_motion_config(source, index, full_registry):

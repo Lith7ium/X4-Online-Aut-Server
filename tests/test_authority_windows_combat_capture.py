@@ -23,6 +23,7 @@ from authority.combat_capture import (
     verifier_arguments, write_receipt,
 )
 from authority.combat_observation import MD_EVENT_PREFIX, validate_md_read_only
+from authority import experimental_windows_fixture_overlay as overlay
 from authority.experimental_windows_fixture_overlay import install_fixture_overlay
 from test_authority_combat_observation import _sample_event_line
 from test_authority_registry_availability_evidence import EPOCH, RUN, build_xml
@@ -204,6 +205,49 @@ class CombatCaptureReceiptTest(unittest.TestCase):
 
 class CombatCaptureOverlayTest(unittest.TestCase):
     setUp = full_registry_overlay.FullRegistryOverlayTest.setUp
+
+    def test_capture_overlay_preserves_source_line_endings(self):
+        read_source = overlay._source
+        options = dict(self.options, profile_id=45850, save_path=r'D:\Test\45850\save',
+                       seat_index=1, combat_capture=True)
+        outputs = {}
+        for ending in (b'\n', b'\r\n'):
+            view = self.view.parent / f'capture-eol-{len(ending)}'
+            (view / 'extensions').mkdir(parents=True)
+            (view / '.x4ls-view').touch()
+
+            def source(path, maximum):
+                data = read_source(path, maximum)
+                if path.suffix in ('.lua', '.xml'):
+                    return data.replace(b'\r\n', b'\n').replace(b'\n', ending)
+                return data
+
+            with self.subTest(ending=ending), patch.object(overlay, '_source', side_effect=source):
+                manifest = install_fixture_overlay(view, **options)
+                lab = view / 'extensions/x4_lan_lab'
+                outputs[ending] = {}
+                for name in ('ui/authority_download_load_probe.lua', 'ui/local_udp_module.lua',
+                             'md/client_combat_capture.xml', 'ui/client_combat_capture.lua'):
+                    data = (lab / name).read_bytes()
+                    normalized = data.replace(b'\r\n', b'\n')
+                    self.assertEqual(data, normalized.replace(b'\n', ending), name)
+                    self.assertEqual(manifest[name], hashlib.sha256(data).hexdigest())
+                    outputs[ending][name] = normalized
+        self.assertEqual(outputs[b'\n'], outputs[b'\r\n'])
+
+    def test_load_probe_hook_rejects_duplicates_with_either_line_ending(self):
+        read_source = overlay._source
+        hook = b" elseif state=='observing' then\n"
+        for ending in (b'\n', b'\r\n'):
+            def source(path, maximum):
+                data = read_source(path, maximum)
+                if path.name == 'authority_download_load_probe.lua':
+                    return (data.replace(b'\r\n', b'\n') + hook).replace(b'\n', ending)
+                return data
+
+            with self.subTest(ending=ending), patch.object(overlay, '_source', side_effect=source):
+                with self.assertRaisesRegex(ValueError, 'unexpected load probe hook'):
+                    install_fixture_overlay(self.view, **self.options)
 
     def test_capture_is_opt_in_read_only_and_after_seat_admission(self):
         options = dict(self.options, profile_id=45850, save_path=r'D:\Test\45850\save', seat_index=1)
