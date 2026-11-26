@@ -307,6 +307,33 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(exchange.call_args.args[4], refused)
             undock.begin.assert_called_once()
 
+    def test_settled_pilot_waits_to_undock_while_another_pilot_trades(self):
+        undock = Mock()
+        undock.begin.return_value = undock.poll.return_value = None
+        world = world_fixture(self, undock=undock)
+        world.peers[1]['company_undock_version'] = 1
+        world.reservations[1].captain_seed = '7211'
+        first, second = order(1), order(2)
+        world.outcomes[1].append(first)
+        world.outcomes[2].append(second)
+        world.native.begin.side_effect = [confirmed(first), None]
+        departure = dict(request_id='b' * 32, sector=first['sector'], station_code=first['station_code'],
+                         bay_seed='507326418098681806', bay_macro='external_bay', dockarea_macro='dock_area')
+        with patch.object(control, 'poll_company_undock', side_effect=[departure, None]) as exchange:
+            for timestamp in (0, .5, 1, 1.5):
+                world.step(timestamp)
+            exchange.assert_called_once()
+            undock.begin.assert_not_called()
+            self.assertFalse(world.schedule.before_world_transition())
+            world.native.poll.return_value = dict(confirmed(second), ship_code='ABC-123')
+            world.step(2)
+            undock.begin.assert_called_once_with(
+                dict(registry_epoch='a' * 32, ship_index=7354, ship_code='WRN-302', captain_seed='7211'),
+                departure)
+            undock.poll.return_value = dict(departure, outcome='confirmed')
+            world.step(2.5)
+            self.assertEqual(exchange.call_args.args[4], dict(departure, outcome='confirmed'))
+
     def test_round_robin_serial_and_scoped_terminal_receipts(self):
         world = world_fixture(self)
         first, second = order(1), order(2)

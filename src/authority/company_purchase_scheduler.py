@@ -189,6 +189,9 @@ class CompanyPurchaseScheduler:
             if command.kind == 'fleet':
                 self._fleet.start(binding, command.request)
                 return
+            if command.kind == 'undock':
+                self._begin_undock(binding, command.request)
+                return
             request = command.request
             if command.kind == 'sale':
                 existing = self._ledger.reserve_sale(binding.ship_index, binding.ship_code, request)
@@ -287,17 +290,17 @@ class CompanyPurchaseScheduler:
                                           binding.ship_index, reply, guard=self._guard)
         except CompanyPurchasePeerLost:
             return
-        if request is None:
-            return
-        request = undock_request(request)
+        if request is not None:
+            return undock_request(request)
+
+    def _begin_undock(self, binding, request):
+        """Recheck the completed trade and current reservation at the front of the queue."""
         purchased = self._purchased_docks.get(binding)
         reason = None
         if self._undock_uncertain:
             reason = 'provider_limit'
         elif purchased != (request['sector'], request['station_code']):
             reason = 'purchase_required'
-        elif self._native_busy() or self._queue:
-            reason = 'provider_busy'
         captain = getattr(binding.reservation, 'captain_seed', None)
         if reason is None and captain is None:
             reason = 'captain_required'
@@ -385,7 +388,10 @@ class CompanyPurchaseScheduler:
             if type(version) is int and version == 1:
                 if binding in self._undock_receipts or (receipt is None and binding in self._undock_turn):
                     self._undock_turn.discard(binding)
-                    self._poll_undock(binding)
+                    request = self._poll_undock(binding)
+                    if request is not None:
+                        self._queue.append(_QueuedCommand(binding, 'undock', request))
+                        self._begin_one(bindings)
                     return
                 self._undock_turn.add(binding)
         if self._fleet is not None and receipt is None:
