@@ -37,3 +37,20 @@ this exact high-speed failure occurred in live X4.
 
 Raw replay output, the selected V3 input and the runner are in
 `.local/gate-v3-receiver-replay/`.
+
+## Velocity-based guard in a private replay
+
+A separate copy of the receiver compared the requested displacement vector
+with the previous update's known velocity multiplied by the elapsed time.
+It admitted larger steps only on an established track with two complete
+samples, an interval up to 100 ms, at most 250 m of total displacement
+and at most 50 m of unexplained displacement. All 44 source samples passed
+at 20, 30 and 60 Hz and with the inserted 55.713 ms update. The largest
+accepted step was 93.168 m at 20 Hz.
+
+Adding 120 m perpendicular to flight at 20 Hz produced a 120.004 m
+unexplained displacement and the write was refused. The first bind also
+refused a 120 m offset. After the last usable sample, the private receiver
+issued no write beyond the five-second cutoff. These cases use a simulated
+native adapter. The production guard at `f03e7f8a` still limits each step
+to 50 m.

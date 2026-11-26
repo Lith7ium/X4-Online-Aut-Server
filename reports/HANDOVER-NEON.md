@@ -2,6 +2,13 @@
 
 ## 26 November 2026
 
+A second GPU-free X4 instance replayed one shield hit observed on the
+Linux pilot. KHI-630's shields changed from 2,366 to 2,340 at unchanged
+game time. A separate native readback and the confirmed save both showed
+2,340. The offline transfer used the original pilot offer. Live reporting
+and the decision about which simulation settles a hit remain open.
+[Observed hit, native replay and saved shield value](AUTHORITY-SHIELD-REPLAY-20261126.md)
+
 On a replay of 44 recorded pilot positions and velocities from an ordinary
 gate approach, a freshly aligned receiving cockpit kept up at 60 updates/s.
 At 30 updates/s it stopped after 2.700 s on a 50.344 m step. A single
