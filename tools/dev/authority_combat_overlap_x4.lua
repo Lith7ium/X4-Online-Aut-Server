@@ -57,12 +57,17 @@ local function check_profile()
     assert(text:match('/' .. tostring(cfg.profile) .. '/save$'), 'not disposable profile ' .. tostring(cfg.profile))
 end
 
-local function check_dodge_position(ship, x)
+local function dodge_position(ship, x)
     local actor = ConvertIDTo64Bit(ship)
     assert(C.IsValidComponent(actor) and C.IsComponentOperational(actor), 'miss target is unavailable')
     local p = C.GetObjectPositionInSector(actor)
-    assert(math.abs(p.x - x) < 1 and math.abs(p.y - 100000) < 1 and math.abs(p.z) < 1,
-        'miss target position was not observed')
+    local ok = math.abs(p.x - x) < 1 and math.abs(p.y - 100000) < 1 and math.abs(p.z) < 1
+    return ok, string.format('miss target position was not observed want_x=%.1f at=(%.2f,%.2f,%.2f)', x, p.x, p.y, p.z)
+end
+
+local function check_dodge_position(ship, x)
+    local ok, msg = dodge_position(ship, x)
+    assert(ok, msg)
 end
 
 -- Target #4 sits at (-6000, 100000, 0). #1 faces it along +z; #2 faces it along +x (yaw 90),
@@ -78,8 +83,13 @@ local PHASES = {
     -- Stock shoot refuses a weapon that already had a shoot_at controller, shoot_at still hits
     -- from a 30 m lateral offset and holds fire at 120 m. So #1 fires aligned and, once the first
     -- salvo is seen, stops while #4 moves 150 m aside: the bullets in flight pass it.
-    { name = 'miss_pilot', pre = { { 1, -6000, 100000, -200, 0 } }, pilot = 'shoot_at', max = 1.0,
+    -- #4 is put back first: hull hits left in place (no restore) can move it off its spawn pose.
+    { name = 'miss_pilot', pre = { { 4, -6000, 100000, 0, 90 }, { 1, -6000, 100000, -200, 0 } }, pilot = 'shoot_at', max = 1.0,
       dodge = { 4, -5850, 100000, 0, 90 } },
+    -- Diagnostic crossfire into hull: #4 returns to its spawn pose and both shooters fire again with
+    -- the accumulated local damage left in place (never restored), until hull callbacks appear.
+    { name = 'overflow_overlap', pre = { { 4, -6000, 100000, 0, 90 }, { 1, -6000, 100000, -200, 0 } },
+      pilot = 'shoot_at', second = true, max = 3.0, hull = 12, keep_damage = true },
 }
 
 local WATCH_PLAN = {
@@ -360,7 +370,7 @@ local function tick()
     end
     if s == 'pre_settle' then
         if now() < state.settle_until then return end
-        if cfg.restore_target == true then
+        if cfg.restore_target == true and not ph.keep_damage then
             state.restore_request = trace('Restore')
             state.step = 'wait_restore'
             return
@@ -409,8 +419,14 @@ local function tick()
                 return
             end
             assert(state.dodge_reply == state.dodge_request .. '|Repositioned|4', 'miss target movement was refused')
+            -- The warp is acknowledged in the frame it is issued; the sector position follows a frame later.
+            local ok, msg = dodge_position(state.ships[4], ph.dodge[2])
+            if not ok then
+                assert(elapsed < ph.max, msg)
+                return
+            end
             state.dodge_request = nil
-            check_dodge_position(state.ships[4], ph.dodge[2])
+            log(string.format('DODGE_POSITION phase=%s elapsed=%.3f', state.phase, elapsed))
             trace('DodgeVerified')
         end
         if not state.stop_sent then
@@ -442,7 +458,7 @@ local function tick()
                 state.settle_until = now() + 1.5
                 return
             end
-            if (ph.impacts and impacts >= ph.impacts) or elapsed >= ph.max then
+            if (ph.impacts and impacts >= ph.impacts) or (ph.hull and c.hull >= ph.hull) or elapsed >= ph.max then
                 stop_phase_fire(ph)
                 state.stop_sent = true
                 state.settle_until = now() + 1.5
