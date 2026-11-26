@@ -2,6 +2,17 @@
 
 ## 26 November 2026
 
+Cobalt tested the optional `-CombatCapture` switch and receipt utility
+from an extracted ZIP on Windows 11. The launcher probe covered argument
+forwarding, and a synthetic log produced the three expected sequences.
+His recorded native creative-world log provided a separate six-hit control.
+Integration at `71febf9f` uses the admitted pilot's exact checkpoint and
+private capture window. Linux ran 40 of the 41 relevant package, session
+and capture cases successfully. The PowerShell-only case skipped on Linux.
+For PowerShell 5.1, pass an existing directory on the game drive with
+`-WorkRoot`. Cobalt is fixing the default path. The Windows flight still
+needs the operator. [04:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795662035243749)
+
 A second GPU-free X4 instance replayed one shield hit observed on the
 Linux pilot. KHI-630's shields changed from 2,366 to 2,340 at unchanged
 game time. A separate native readback and the confirmed save both showed
