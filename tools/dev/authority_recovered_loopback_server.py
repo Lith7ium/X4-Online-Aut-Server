@@ -939,7 +939,11 @@ def run(args):
     if type(company_motion) is not bool or (company_motion and (not require_company_ship or tls is None)):
         raise ValueError('company movement requires company-ship admission and the pinned TLS gateway')
     company_combat = getattr(args, 'company_combat', False)
-    if type(company_combat) is not bool or (company_combat and not company_motion):
+    ordered_gun_hits = getattr(args, 'trial_ordered_gun_hits', False)
+    if type(company_combat) is not bool or type(ordered_gun_hits) is not bool:
+        raise ValueError('invalid Company combat mode')
+    company_combat = company_combat or ordered_gun_hits
+    if company_combat and not company_motion:
         raise ValueError('Company gun combat requires authenticated Company movement admission')
     npc_args = getattr(args, 'observe_registered_npc', None)
     npc_measurement = getattr(args, 'trial_registered_npc_measurement', False)
@@ -1377,7 +1381,7 @@ def run(args):
 
             gun_damage_provider = NativeGunDamageProvider(
                 combat_grant_current, can_fire=lambda binding: motion_service.combat_helm_current(binding))
-            protected.extend(gun_damage_provider.install(case))
+            protected.extend(gun_damage_provider.install(case, ordered_hits=ordered_gun_hits))
         if npc_target is not None:
             npc_source = RegisteredNpcSource(npc_target.confirmed(saved_evidence), trial_measurement=npc_measurement)
             protected.extend(npc_source.install(case))
@@ -1643,6 +1647,7 @@ def run(args):
 
             combat_service = CompanyCombatService(
                 motion_service.current_combat_grant, gun_damage_provider.begin_impact,
+                apply_impacts=gun_damage_provider.begin_impacts if ordered_gun_hits else None,
                 begin_health_read=gun_damage_provider.begin_health_read, health_window=current_health_window)
         if npc_source is not None:
             def npc_unreserved():
@@ -2448,6 +2453,8 @@ def main(argv=None, *, display_hostname=None):
                         help='enable the separate participant-bound TLS movement channel')
     parser.add_argument('--company-combat', action='store_true',
                         help='enable dedicated TLS delivery of confirmed Company primary-gun hits')
+    parser.add_argument('--trial-ordered-gun-hits', action='store_true',
+                        help='enable Company combat and apply one pilot frame of gun hits in a single X4 update')
     parser.add_argument('--trial-registered-npc-measurement', action='store_true',
                         help='receive bounded read-only cockpit measurements for the private MFQ-419 trial')
     parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),

@@ -102,6 +102,8 @@ def main(argv=None):
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--company-combat', action='store_true',
                         help='accept confirmed primary-gun hits on a dedicated TLS channel; requires Company movement')
+    parser.add_argument('--trial-ordered-gun-hits', action='store_true',
+                        help='enable Company combat and apply one pilot frame of gun hits in a single X4 update')
     parser.add_argument('--trial-registered-npc-measurement', action='store_true',
                         help='receive bounded read-only cockpit measurements for the private MFQ-419 trial')
     parser.add_argument('--observe-registered-npc', nargs=2, metavar=('INDEX', 'SHIP_CODE'),
@@ -174,7 +176,8 @@ def main(argv=None):
         if args.verify_company_pose:
             parser.error('--verify-company-pose uses an isolated fixture with no TLS or Company hosting options')
     company_motion = args.company_motion or args.company_pose_trial
-    if args.company_combat and not company_motion:
+    company_combat = args.company_combat or args.trial_ordered_gun_hits
+    if company_combat and not company_motion:
         parser.error('--company-combat requires --company-motion or --company-ship-positions')
     require_ship = args.require_company_ship or company_motion or args.company_purchases
     if args.bootstrap_registry_snapshot:
@@ -207,8 +210,10 @@ def main(argv=None):
         server_flags.append('--require-company-ship')
     if company_motion:
         server_flags.append('--company-motion')
-    if args.company_combat:
+    if company_combat:
         server_flags.append('--company-combat')
+    if args.trial_ordered_gun_hits:
+        server_flags.append('--trial-ordered-gun-hits')
     if args.company_purchases:
         server_flags.append('--company-purchases')
     if args.company_fleet_orders:
