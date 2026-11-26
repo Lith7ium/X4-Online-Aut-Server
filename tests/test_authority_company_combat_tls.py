@@ -10,6 +10,8 @@ from unittest.mock import Mock
 from authority.company_combat_client import CompanyCombatClient
 from authority.company_combat_frames import encode_frame
 from authority.company_combat_service import CompanyCombatService, derive_combat_ticket
+from authority.company_combat_source import CompanyCombatSender
+from authority.company_cockpit_health import CompanyCockpitHealthBridge
 from authority.company_motion_service import CompanyMotionService
 from authority.experimental_tls_tunnel import create_server_context, start_client, start_server
 from test_authority_tls_tunnel_integration import TEST_CERTIFICATE, TEST_PRIVATE_KEY, listening_socket
@@ -213,6 +215,40 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
             await self.drive(asyncio.to_thread(victim.read_health, current, 8))
         self.assertEqual(reads, [1074] * 4)
         self.assertEqual(self.calls, [(1073, 1074, 26)] * 2)
+
+    async def test_idle_victim_sender_delivers_own_health_through_the_combat_stream(self):
+        self.combat.close()
+        state = dict(shield=4, maxshield=2366, hull=3600, maxhull=3600)
+        read = Mock(return_value=Mock(poll=Mock(return_value=state)))
+        self.combat = CompanyCombatService(self.motion.current_combat_grant, self.apply,
+                                           begin_health_read=read, health_window=lambda binding: 1)
+        self.addCleanup(self.combat.close)
+        await self.start(combat_enabled=True)
+        _, port = await self.link()
+        grant = self.grant(1, 1074)
+        binding = grant['generation'], grant['epoch'], grant['index']
+        bridge = CompanyCockpitHealthBridge(binding, clock=lambda: 100.0)
+        bridge.on_clock(1, True)
+        bridge.on_sample(dict(sequence=1, capture_time=100))
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / 'engine.log'
+            log.touch()
+            info = log.stat()
+            sender = CompanyCombatSender(log, port, grant, epoch=_EPOCH, index=1074,
+                                         log_identity=(info.st_dev, info.st_ino), health_bridge=bridge)
+            sent = []
+            try:
+                async with asyncio.timeout(3):
+                    while not any(frame.startswith('HEALTH|') for frame in sent):
+                        self.combat.poll()
+                        bridge.deliver(lambda frame: sent.append(frame) is None)
+                        await asyncio.sleep(.005)
+            finally:
+                result = sender.close()
+            self.assertIsNone(result['failure'])
+            self.assertEqual(result['observed'], 0)
+            read.assert_called_once_with(binding)
+            self.assertTrue(sent[-1].endswith('|4|2366|3600|3600'))
 
 
 if __name__ == '__main__':

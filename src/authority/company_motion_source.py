@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 
+from .company_cockpit_health import CompanyCockpitHealthBridge
 from .company_motion_observer import MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
 from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
                                       REGISTRY_EPOCH, measurement_value, native_capture_now as _npc_now)
@@ -123,6 +124,9 @@ class CompanyMotionSource:
         self._previous = self._returned = None
         self._peer = None
         self._observer = None
+        self._cockpit_health_enabled = False
+        self._cockpit_health = None
+        self._cockpit_health_peer = None
         self._npc_latest = self._npc_accepted = None
         self._npc_ended = False
         self._npc_seat_gap = False
@@ -173,6 +177,28 @@ class CompanyMotionSource:
         if threading.get_ident() != self._thread:
             raise RuntimeError('exclusive company motion owner thread required')
 
+    def enable_cockpit_health(self):
+        self._owner()
+        if self._registry is not None:
+            raise ValueError('cockpit health must be staged before Company motion configuration')
+        self._cockpit_health_enabled = True
+
+    def cockpit_health_md(self, data):
+        self._owner()
+        marker = b'__COCKPIT_HEALTH_LEASE__'
+        if not self._cockpit_health_enabled or self._registry is None or data.count(marker) != 1:
+            raise ValueError('unexpected cockpit health MD source or configuration')
+        return data.replace(marker, self._lease.encode('ascii'))
+
+    def bind_cockpit_health(self, credential):
+        self._owner()
+        if (not self._cockpit_health_enabled or self._registry is None or self._cockpit_health is not None
+                or type(credential) is not dict or (credential.get('epoch'), credential.get('index')) != self._registry):
+            raise ValueError('cockpit health requires the configured admitted seat')
+        self._cockpit_health = CompanyCockpitHealthBridge(
+            (credential.get('generation'), credential['epoch'], credential['index']))
+        return self._cockpit_health
+
     def configure(self, epoch, index, *, operational_bits=None):
         """Bind this source once to the installed overlay's verified selection."""
         self._owner()
@@ -201,6 +227,8 @@ class CompanyMotionSource:
         self._registry = (epoch, index)
         config = {'port': self._socket.getsockname()[1], 'lease': self._lease,
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
+        if self._cockpit_health_enabled:
+            config['cockpit_health'] = True
         if self._observed_npc:
             config['observed_npc_index'], config['observed_npc_code'] = self._observed_npc
         if self._registered_npc_hold_trial:
@@ -219,26 +247,29 @@ class CompanyMotionSource:
     def _prefix(self):
         return f'C|{self._lease}|{self._generation}|'.encode('ascii')
 
+    def _send_to_peer(self, validate_peer, message):
+        self._owner()
+        packet = self._prefix() + message.encode('ascii')
+        if self._peer is None or len(packet) > MAX_OBSERVER_DATAGRAM:
+            return False
+        try:
+            return (validate_peer(self._peer) is True
+                    and self._socket.sendto(packet, self._peer) == len(packet))
+        except Exception:
+            return False
+
     def observe(self, validate_peer):
         """Attach the optional observer to this source's authenticated X4 peer."""
         self._owner()
         if self._registry is None or self._observer is not None or not callable(validate_peer):
             raise ValueError('configured company motion source and validator required')
-
-        def send(message):
-            self._owner()
-            packet = self._prefix() + message.encode('ascii')
-            if self._peer is None or len(packet) > MAX_OBSERVER_DATAGRAM:
-                return False
-            try:
-                return (validate_peer(self._peer) is True
-                        and self._socket.sendto(packet, self._peer) == len(packet))
-            except Exception:
-                return False  # An unavailable native observer cannot stop cockpit publication.
+        if self._cockpit_health_enabled:
+            self._cockpit_health_peer = validate_peer
 
         cockpit_slots = self._cockpit_max_pilots if self._cockpit_radar_playback and self._playback_index is None else 0
         timed_index = self._observed_npc[0] if self.registered_npc_alignment_trial else self.playback_index
-        self._observer = CompanyMotionObserver(self._registry, send, trial_index=timed_index,
+        self._observer = CompanyMotionObserver(self._registry, lambda message: self._send_to_peer(validate_peer, message),
+                                               trial_index=timed_index,
                                                cockpit_playback_slots=cockpit_slots)
         return self._observer
 
@@ -341,6 +372,10 @@ class CompanyMotionSource:
                     self._report_once('first_local_motion_peer_verified')
             body = raw[len(prefix):]
             kind = body.partition(b'|')[0]
+            if self._cockpit_health is not None and kind == b'HEALTH_RESULT':
+                if len(raw) <= MAX_OBSERVER_DATAGRAM and body.isascii():
+                    self._cockpit_health.native_result(body.decode('ascii').split('|'))
+                continue
             if kind in (b'NPC_POINT', b'NPC_END'):
                 if len(raw) <= MAX_OBSERVER_DATAGRAM:
                     self._receive_npc_measurement(body)
@@ -355,6 +390,8 @@ class CompanyMotionSource:
                 continue
             fields = body.decode('ascii').split('|')
             if fields == ['GAP']:
+                if self._cockpit_health is not None:
+                    self._cockpit_health.on_gap()
                 newest = None
                 self._returned = None
                 self._npc_seat_gap = True
@@ -393,9 +430,17 @@ class CompanyMotionSource:
             if self._returned != newest['sector_macro']:
                 newest = dict(newest, real_velocity=None)
             self._returned = newest['sector_macro']
+        if self._cockpit_health is not None:
+            if newest is not None:
+                self._cockpit_health.on_sample(newest)
+            self._cockpit_health.deliver(lambda message: self._send_to_peer(validate_peer, message))
         return newest
 
     def close(self):
         self._owner()
         self._npc_latest = None
+        if self._cockpit_health is not None:
+            self._cockpit_health.close()
+            if self._cockpit_health_peer is not None:
+                self._cockpit_health.deliver(lambda message: self._send_to_peer(self._cockpit_health_peer, message))
         self._socket.close()

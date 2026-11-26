@@ -75,6 +75,8 @@ COMPANY_SEAT = {
     'src/authority/lua/company_fleet_capture.lua', 'src/authority/lua/company_fleet_source.lua',
     'src/authority/md/company_fleet_lookup.xml',
     'src/authority/lua/company_gun_source.lua', 'src/authority/md/company_gun_source.xml',
+    'src/authority/lua/combat_observer.lua', 'src/authority/lua/company_cockpit_health.lua',
+    'src/authority/md/company_cockpit_health.xml',
     'src/authority/company_command_window.py', 'src/authority/company_fleet_dispatch.py',
     'src/authority/company_fleet_orders.py', 'src/authority/company_fleet_source.py',
     'src/authority/lua/company_undock_hold.lua', 'src/authority/md/company_client_undock.xml',

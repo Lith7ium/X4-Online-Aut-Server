@@ -51,7 +51,7 @@ local function remote_sample(row, binding)
         real_velocity=velocity, source_time=tonumber(row[15]), capture_time=tonumber(row[16])}
 end
 
-function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial)
+function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial, cockpit_health)
     assert(not hold_trial or not playback_trial)
     local alignment = hold_trial and hold_trial.alignment_enabled
     local slot_names = {'cockpit'}
@@ -118,6 +118,10 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
+        end
+        if cockpit_health and (row[1] == 'HEALTH' or row[1] == 'HEALTH_CLEAR') then
+            cockpit_health:receive(row)
+            return
         end
         if row[1] == 'ROSTER' then
             observe_roster(row, packet, now)

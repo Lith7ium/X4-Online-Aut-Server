@@ -324,7 +324,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         server_resume_confirmations=0, owned_cleanup_confirmed=False, archived_identity_fixture_installed=False)
     processes, lockbox, handlers, cleanup_errors, evidence_errors = [], [], {}, [], []
     participant = watch = target = ticket = playback = seat_watch = None
-    company_source = company_client = purchase_source = fleet_source = combat_sender = None
+    company_source = company_client = purchase_source = fleet_source = combat_sender = health_bridge = None
     protected = {}
     resources_stopped = False
     cleanup_attempted = False
@@ -544,15 +544,19 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             return participant.process is not None and socket_owner(
                                 peer, company_source.socket.getsockname(), participant.process)
 
+                        credential = owner.ship_motion_credential
+                        if company_combat:
+                            health_bridge = company_source.bind_cockpit_health(credential)
+                        clock_options = {'on_clock': health_bridge.on_clock} if health_bridge is not None else {}
                         company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
-                            owner.ship_motion_credential, company_source, validate_peer)
+                            credential, company_source, validate_peer, **clock_options)
                     if company_combat:
                         from authority.company_combat_source import CompanyCombatSender
 
                         guard(full=True)
                         combat_sender = CompanyCombatSender(seat_watch.path, owner.combat_port,
                             owner.ship_motion_credential, epoch=seat_watch.registry_epoch, index=index,
-                            log_identity=seat_watch.log_identity)
+                            log_identity=seat_watch.log_identity, health_bridge=health_bridge)
                     on_admitted(index)
                     result['session_end'] = poll_player(owner, processes[0][0], guard,
                         participant.deadline, lambda: stop_requested, company_client=company_client,
@@ -592,6 +596,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                         result['company_combat'] = combat_sender.close()
                     except BaseException:
                         cleanup_errors.append('company_combat_sender_cleanup_failed')
+                if health_bridge is not None:
+                    result['company_cockpit_health'] = health_bridge.stats()
                 if company_client is not None:
                     try:
                         company_client.close()

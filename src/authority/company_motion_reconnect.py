@@ -50,10 +50,12 @@ class ReconnectingCompanyMotionClient:
     """
     def __init__(self, port, credential, source, validate_peer, *, on_snapshot=None, on_end=None,
                  on_transport_lost=None, on_world_reset=None, trial_index=None, resume_route=None,
-                 cockpit_playback_limit=None, resume_routes=None, on_pilot_roster=None):
+                 cockpit_playback_limit=None, resume_routes=None, on_pilot_roster=None, on_clock=None):
         if ((on_snapshot is not None or on_end is not None)
                 and not (callable(on_snapshot) and callable(on_end))):
             raise ValueError('an observed view needs snapshot and visibility callbacks')
+        if on_clock is not None and not callable(on_clock):
+            raise ValueError('invalid movement clock observer')
         if (trial_index is not None or resume_route is not None) and (
                 cockpit_playback_limit is not None or resume_routes is not None):
             raise ValueError('cannot combine single trial_index with multi-pilot cockpit playback')
@@ -75,6 +77,7 @@ class ReconnectingCompanyMotionClient:
         self._on_snapshot, self._on_end = on_snapshot, on_end
         self._on_transport_lost = on_transport_lost
         self._on_world_reset = on_world_reset
+        self._on_clock = on_clock
         self._trial_index = trial_index
         self._resume_route = resume_route
         self._cockpit_playback_limit = cockpit_playback_limit
@@ -133,6 +136,8 @@ class ReconnectingCompanyMotionClient:
         if self._on_world_reset is not None and self._clock is not None and clock != self._clock:
             self._notify(self._on_world_reset)
         self._clock = clock
+        if self._on_clock is not None:
+            self._notify(self._on_clock, window, running)
 
     def _fail(self, reason='motion_local_or_protocol_failure'):
         self.failure = reason
@@ -156,6 +161,11 @@ class ReconnectingCompanyMotionClient:
                 self._fail()
             finally:
                 self._merge_link_stats(self._finished_stats, client)
+        if self._on_clock is not None:
+            try:
+                self._notify(self._on_clock, None, False)
+            except ValueError:
+                self._fail()
 
     @staticmethod
     def _merge_link_stats(totals, client):
@@ -204,6 +214,8 @@ class ReconnectingCompanyMotionClient:
                             observer['resume_routes'] = routes
                 if self._npc_measurement_source is not None:
                     observer['npc_measurement_source'] = self._npc_measurement_source
+                if self._on_clock is not None:
+                    observer['on_clock'] = self._bound_clock
                 self._client = CompanyMotionClient(self._port, self._credential,
                                                    self._source, self._validate_peer, **observer)
                 # The receiver binds this trial once. A later link carries ordinary pilot motion.
@@ -226,7 +238,7 @@ class ReconnectingCompanyMotionClient:
             self._fail()
 
     @classmethod
-    def observing(cls, port, credential, source, validate_peer):
+    def observing(cls, port, credential, source, validate_peer, *, on_clock=None):
         observer = source.observe(validate_peer)
         trial = {}
         trial_index = getattr(source, 'playback_index', None)
@@ -242,7 +254,8 @@ class ReconnectingCompanyMotionClient:
             trial = dict(on_transport_lost=observer.transport_lost, on_world_reset=observer.reset_world,
                          cockpit_playback_limit=getattr(source, 'cockpit_max_pilots', MAX_COCKPIT_PLAYBACK_PILOTS),
                          resume_routes=observer.resume_routes, on_pilot_roster=observer.set_pilot_roster)
-        client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end, **trial)
+        client = cls(port, credential, source, validate_peer, on_snapshot=observer.snapshot, on_end=observer.end,
+                     on_clock=on_clock, **trial)
         observer.bind_views(client.set_views)
         return client
 

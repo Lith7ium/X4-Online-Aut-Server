@@ -45,6 +45,7 @@ function M.new(options)
     local running, active, reset, failed = false, false, false, false
     local sampler, actor, in_transit
     local observer = options.observer
+    local cockpit_health = options.cockpit_health
     local api = {}
 
     local function available()
@@ -55,6 +56,7 @@ function M.new(options)
         if not active then return end
         active, reset = false, true
         if sampler and sampler:state() == 'pending' then assert(sampler:discard_pending()) end
+        if cockpit_health then cockpit_health:gap() end
         options.send('GAP')
     end
 
@@ -65,6 +67,7 @@ function M.new(options)
             local was_in_transit = in_transit
             if not was_in_transit then
                 in_transit = true
+                if cockpit_health then cockpit_health:gap() end
                 options.send('GAP')
             end
             if options.superhighway_gap and (not was_in_transit or gap == 'superhighway_boundary_recheck') then
@@ -104,6 +107,7 @@ function M.new(options)
         local ok, sample, gap = sampler:event(row)
         if not sample_outcome(ok, gap) or not sample then return end
         in_transit = false
+        if cockpit_health then cockpit_health:sample(sample.sequence) end
         local rate = sample.real_velocity
         local function number(value) return string.format('%.17g', value) end
         options.send(table.concat({
@@ -118,6 +122,7 @@ function M.new(options)
 
     function api:tick()
         local enabled = available()
+        if cockpit_health then cockpit_health:tick() end
         observe(enabled)
         if not enabled then suspend(); return end
         if not sampler then
@@ -162,6 +167,19 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
         return actual ~= nil and actual ~= ffi.NULL and normalize(ffi.string(actual)) == expected
     end
     local prefix = 'C|' .. config.lease .. '|' .. config.generation .. '|'
+    local cockpit_health
+    if config.cockpit_health == true then
+        local health = assert(X4LAN_COMPANY_COCKPIT_HEALTH)
+        cockpit_health = health.motion_link(health.new({enabled=true, lease=config.lease,
+            epoch=pinned.epoch, index=config.index, clock=udp.monotonic, available=available,
+            controlled_actor=function() return seat and seat:controlled_actor() end,
+            read_health=X4LAN_COMBAT_OBSERVER.read_lua_health,
+            on_receipt=function(row)
+                net:send(prefix .. table.concat({'HEALTH_RESULT', row.generation, row.epoch, row.index,
+                    row.window, string.format('%.0f', row.sequence), row.status}, '|'))
+            end,
+        }))
+    end
     local function observer_fault()
         DebugError('[X4LAN] AUTH_COMPANY_OBSERVER_UNAVAILABLE')
     end
@@ -198,7 +216,8 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                     alignment = config.registered_npc_alignment_trial == true,
                 }))
             end
-            return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, nil, nil, hold_trial)
+            return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic,
+                                                    nil, nil, hold_trial, cockpit_health)
         end
         local map = X4LAN_COMPANY_OBSERVER_MAP.new_x4(pinned, config.index, available)
         local readers, trial, pilot_roster
@@ -243,11 +262,12 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
             end
         end
         return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, trial,
-                                                pilot_roster)
+                                                pilot_roster, nil, cockpit_health)
     end)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({
         observer = observer, observer_fault = observer_fault,
+        cockpit_health = cockpit_health,
         superhighway_gap = function(reason) DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP ' .. reason) end,
         pending_timeout = function() DebugError('[X4LAN] AUTH_COMPANY_MOTION_SOURCE_GAP pending_timeout') end,
         epoch = pinned.epoch, index = config.index, available = available, actor = actor,

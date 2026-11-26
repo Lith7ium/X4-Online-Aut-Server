@@ -1,6 +1,7 @@
 """Synthetic install and actual Lua-owner checks; no native X4 run."""
 import hashlib
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -95,6 +96,26 @@ class FullRegistryOverlayTest(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 install_fixture_overlay(self.view, **(options | change))
             self.assertFalse((self.view / 'extensions/x4_lan_lab').exists())
+
+    def test_combat_mounts_health_receiver_with_the_owned_motion_lease(self):
+        source = CompanyMotionSource()
+        self.addCleanup(source.close)
+        assets = install_fixture_overlay(self.view, **self.options, seat_index=1,
+                                         company_motion=source, company_combat=True, combat_capture=True)
+        target = self.view / 'extensions/x4_lan_lab'
+        config = (target / 'ui/config.lua').read_text()
+        motion = config.split('authority_company_motion={', 1)[1].split('}', 1)[0]
+        self.assertIn('cockpit_health=true', motion)
+        lease = re.search(r'\blease="([0-9a-f]{32})"', motion).group(1)
+        cue = (target / 'md/company_cockpit_health.xml').read_text()
+        self.assertIn(f"@$args.$lease == '{lease}'", cue)
+        self.assertIn('md/company_cockpit_health.xml', assets)
+        self.assertIn('md/client_combat_capture.xml', assets)
+        scripts = [entry.get('name') for entry in ElementTree.parse(target / 'ui.xml').iter('file')]
+        self.assertEqual(scripts.count('ui/combat_observer.lua'), 1)
+        self.assertLess(scripts.index('ui/combat_observer.lua'), scripts.index('ui/company_cockpit_health.lua'))
+        self.assertLess(scripts.index('ui/company_cockpit_health.lua'),
+                        scripts.index('ui/authority_two_x4_participant_probe.lua'))
 
     def test_software_overlay_selects_bounded_inspection_budget(self):
         with patch('authority.experimental_windows_fixture_overlay.extend_full_inspect',

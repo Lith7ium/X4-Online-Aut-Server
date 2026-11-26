@@ -210,7 +210,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 file_slot=file_slot, deadline=deadline, io_timeout=io_timeout,
                 keepalive_interval=keepalive_interval, **motion_options) as owner:
             controller = process = session = None
-            company_source = company_client = purchase_source = fleet_source = combat_sender = None
+            company_source = company_client = purchase_source = fleet_source = combat_sender = health_bridge = None
             motion_socket = motion = combat_binding = None
             launch_attempted = overlay_registered = False
             original = None
@@ -351,8 +351,12 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                 if company_source is not None:
                     from .company_motion_reconnect import ReconnectingCompanyMotionClient
                     validate_peer = WindowsMotionPeer(process, company_source.socket)
+                    credential = owner.ship_motion_credential
+                    if company_combat:
+                        health_bridge = company_source.bind_cockpit_health(credential)
+                    clock_options = {'on_clock': health_bridge.on_clock} if health_bridge is not None else {}
                     company_client = ReconnectingCompanyMotionClient.observing(owner.motion_port,
-                        owner.ship_motion_credential, company_source, validate_peer)
+                        credential, company_source, validate_peer, **clock_options)
                 if company_combat:
                     from .company_combat_source import CompanyCombatSender
 
@@ -360,7 +364,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         raise RuntimeError('Company combat source process unavailable')
                     combat_sender = CompanyCombatSender(workspace.log_path, owner.combat_port,
                         owner.ship_motion_credential, epoch=registry_snapshot['epoch'], index=seat_index,
-                        log_identity=workspace.log_identity)
+                        log_identity=workspace.log_identity, health_bridge=health_bridge)
                 first_traffic = {
                     'samples_acknowledged': 'first_own_sample_acknowledged',
                     'snapshots_received': 'first_remote_pose_received',
@@ -424,6 +428,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                             result['company_combat'] = combat_result
                     except BaseException:
                         cleanup_errors.append('Company combat sender cleanup failed')
+                if health_bridge is not None and result is not None:
+                    result['company_cockpit_health'] = health_bridge.stats()
                 if company_client is not None:
                     try:
                         company_client.close()

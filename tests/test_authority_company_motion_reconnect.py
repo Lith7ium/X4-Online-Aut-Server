@@ -1,7 +1,7 @@
 """No X4. Exercise finite reconnect work and fail-closed movement errors."""
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from authority import company_motion_reconnect as subject
 
@@ -61,6 +61,22 @@ class MotionReconnectTests(unittest.TestCase):
             connect.assert_not_called()
         self.assertEqual(client.failure, 'motion_local_or_protocol_failure')
         self.assertIsNone(client._credential)
+
+    def test_reports_the_confirmed_motion_window_and_invalidates_on_link_loss(self):
+        source = SimpleNamespace(poll=Mock(return_value=None), registry=('b' * 32, 7), local_generation='a' * 32)
+        on_clock = Mock()
+        client = subject.ReconnectingCompanyMotionClient(1, {'ticket': 'f' * 64}, source, Mock(), on_clock=on_clock)
+        link = Mock()
+        link.stats.return_value = dict.fromkeys(subject._COUNTERS, 0)
+        with patch.object(subject, 'CompanyMotionClient', return_value=link) as connect:
+            client.poll()
+            current = connect.call_args.kwargs['on_clock']
+            current(1, True)
+            current(2, False)
+            current(3, True)
+            link.poll.side_effect = ConnectionResetError
+            client.poll()
+        self.assertEqual(on_clock.call_args_list, [call(1, True), call(2, False), call(3, True), call(None, False)])
 
 
 if __name__ == '__main__':

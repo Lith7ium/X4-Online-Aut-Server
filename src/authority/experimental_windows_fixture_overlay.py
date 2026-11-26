@@ -27,6 +27,7 @@ from .combat_capture import capture_config, capture_files
 from .company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, company_gun_config
 from .client_registry_overlay import extend_full_inspect, extend_load_probe, validate_full_snapshot
 from .client_seat_overlay import (
+    COMPANY_COCKPIT_HEALTH_MD, COMPANY_COCKPIT_HEALTH_UI,
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
     COMPANY_MOTION_UI, company_motion_config, company_motion_md, company_motion_ui,
     company_purchase_config, company_purchase_md, company_purchase_ui, export_motion_buffer, extend_seat_gate,
@@ -273,6 +274,8 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
             for name, source in sources.items():
                 files[folder + '/' + name] = _source(ROOT / source, 1024 * 1024)
     if company_motion is not None:
+        if company_combat:
+            company_motion.enable_cockpit_health()
         config = config[:-2] + company_motion_config(company_motion, seat_index, full_registry) + '}\n'
         ui_sources = company_motion_ui(company_motion)
         if (company_motion.playback_index is not None or company_motion.cockpit_radar_playback) and motion_settings is not None:
@@ -325,7 +328,12 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         config = config[:-2] + company_gun_config(full_registry, seat_index) + '}\n'
         files['ui/company_gun_source.lua'] = _source(ROOT / COMPANY_GUN_UI, 1024 * 1024)
         files['md/company_gun_source.xml'] = _source(ROOT / COMPANY_GUN_MD, 1024 * 1024)
-        ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/company_gun_source.lua')
+        files['md/company_cockpit_health.xml'] = company_motion.cockpit_health_md(
+            _source(ROOT / COMPANY_COCKPIT_HEALTH_MD, 1024 * 1024))
+        for name, source in COMPANY_COCKPIT_HEALTH_UI.items():
+            files['ui/' + name] = _source(ROOT / source, 1024 * 1024)
+        insertion = ui_files.index('ui/authority_two_x4_participant_probe.lua')
+        ui_files[insertion:insertion] = ['ui/' + name for name in (*COMPANY_COCKPIT_HEALTH_UI, 'company_gun_source.lua')]
     files.update({'ui/config.lua': config.encode('ascii'),
                   'ui.xml': extension.ui_xml(ui_files).encode('utf-8'),
                   'content.xml': extension.CONTENT.encode('utf-8'),

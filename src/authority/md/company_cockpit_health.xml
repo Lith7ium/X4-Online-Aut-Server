@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4AuthorityCompanyCockpitHealth" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State">
+   <actions><set_value name="State.$last_request" exact="0"/></actions>
+   <cues>
+    <library name="ResolveSeat" purpose="include_actions">
+     <actions>
+      <set_value name="$ship" exact="null"/>
+      <set_value name="$matched" exact="false"/>
+      <do_if value="md.X4AuthorityShipRegistry.State.$epoch? and md.X4AuthorityShipRegistry.State.$last?
+         and md.X4AuthorityShipRegistry.State.$ships? and md.X4AuthorityShipRegistry.State.$byship?
+         and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted
+         and $proposal.$epoch == md.X4AuthorityShipRegistry.State.$epoch
+         and $proposal.$index le md.X4AuthorityShipRegistry.State.$last">
+       <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$proposal.$index}"/>
+       <set_value name="$matched" exact="@$ship.isclass.ship and $ship.isoperational
+         and $ship.owner == faction.player and $ship.trueowner == faction.player
+         and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $proposal.$index
+         and '%s'.[$ship] == $proposal.$actor and $ship == player.controlled
+         and $ship == player.occupiedship and $ship == player.container and $ship == player.ship
+         and not $ship.isinternallystored and $ship.hull gt 0
+         and $ship.maxshield == $proposal.$maxshield and $ship.maxhull == $proposal.$maxhull"/>
+      </do_if>
+     </actions>
+    </library>
+    <cue name="Command" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCompanyCockpitHealth'"/></conditions>
+     <actions>
+      <set_value name="$args" exact="event.param3"/>
+      <do_if value="typeof $args == datatype.table and @$args.$lease == '__COCKPIT_HEALTH_LEASE__'
+         and @$args.$request ge 1 and $args.$request le 2147483647 and ($args.$request)i == $args.$request">
+       <set_value name="$status" exact="''"/>
+       <do_if value="event.param2 == 'Clear' and $args.$request ge State.$last_request">
+        <set_value name="State.$last_request" exact="$args.$request"/>
+        <remove_value name="State.$proposal"/>
+       </do_if>
+       <do_elseif value="event.param2 == 'Prepare' and $args.$request gt State.$last_request">
+        <set_value name="State.$last_request" exact="$args.$request"/>
+        <remove_value name="State.$proposal"/>
+        <set_value name="$status" exact="'prepare_rejected'"/>
+        <do_if value="typeof @$args.$generation == datatype.string and typeof @$args.$epoch == datatype.string
+           and typeof @$args.$actor == datatype.string
+           and @$args.$window ge 1 and $args.$window le 2147483647 and ($args.$window)i == $args.$window
+           and @$args.$sequence ge 1 and $args.$sequence le 9007199254740991L and ($args.$sequence)L == $args.$sequence
+           and @$args.$index ge 1 and $args.$index le 200000 and ($args.$index)i == $args.$index
+           and @$args.$validity gt 0 and $args.$validity le 0.25
+           and @$args.$shield ge 0 and $args.$shield le @$args.$maxshield and $args.$maxshield le 9007199254740991L
+           and @$args.$hull gt 0 and $args.$hull le @$args.$maxhull and $args.$maxhull le 9007199254740991L">
+         <set_value name="$proposal" exact="$args"/>
+         <include_actions ref="ResolveSeat"/>
+         <do_if value="$matched">
+          <set_value name="State.$proposal" exact="$proposal"/>
+          <set_value name="State.$prepared" exact="player.age"/>
+          <set_value name="$status" exact="'prepared'"/>
+         </do_if>
+        </do_if>
+       </do_elseif>
+       <do_elseif value="event.param2 == 'Apply' and State.$proposal?
+          and $args.$request == State.$last_request and $args.$request == State.$proposal.$request
+          and @$args.$generation == State.$proposal.$generation and @$args.$window == State.$proposal.$window
+          and @$args.$sequence == State.$proposal.$sequence">
+        <set_value name="$proposal" exact="State.$proposal"/>
+        <remove_value name="State.$proposal"/>
+        <set_value name="$status" exact="'apply_rejected'"/>
+        <include_actions ref="ResolveSeat"/>
+        <do_if value="$matched and @$args.$validity gt 0 and $args.$validity le $proposal.$validity
+           and player.age ge State.$prepared and player.age lt State.$prepared + $args.$validity * 1s">
+         <do_if value="$proposal.$maxshield gt 0 and $ship.shield != $proposal.$shield">
+          <set_object_shield object="$ship" exact="100.0 * $proposal.$shield / $proposal.$maxshield"/>
+         </do_if>
+         <do_if value="$ship.hull != $proposal.$hull">
+          <set_object_hull object="$ship" exact="100.0 * $proposal.$hull / $proposal.$maxhull"/>
+         </do_if>
+         <set_value name="$status" exact="'applied'"/>
+        </do_if>
+       </do_elseif>
+       <do_if value="$status != ''">
+        <raise_lua_event name="'X4AuthorityCompanyCockpitHealth.Result'"
+                         param="'%s|%s|%s'.[$args.$lease,($args.$request)i,$status]"/>
+       </do_if>
+      </do_if>
+      <cancel_cue cue="this"/>
+     </actions>
+    </cue>
+   </cues>
+  </cue>
+ </cues>
+</mdscript>

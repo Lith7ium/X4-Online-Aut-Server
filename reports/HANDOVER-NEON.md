@@ -31,11 +31,19 @@ The dedicated combat TLS stream uses the existing public port. The
 Linux and Windows senders opt in with Company motion and combat enabled.
 They start with direct X4 notifications for an unmodified vanilla S Bolt
 Repeater Mk2. The first controlled native volley had 49 damage callbacks
-but only one direct notification. Complete burst attribution and target
-cockpit health delivery are still open. The integrated loopback test used
+but only one direct notification. Complete burst attribution and a live
+target cockpit readback are still open. The integrated loopback test used
 two real TLS clients, fresh pilot grants, a simulated damage adapter and
 a repeated report after another pilot's hit. It preserved the later damage.
 [Operator flags](../docs/AUTHORITY-SERVER-PACKAGE.md#record-hits-on-a-linux-pilots-ship)
+
+On GPU-free Fedora the first combat TLS report from an admitted protocol
+pilot changed MFQ-419 from 30 shield to 4 in the last-departure save.
+The first implementation returned an unknown outcome and suspended further
+writes. The exact retry caused no additional native damage call. The
+follow-up collects typed health, a correlated Mission Director witness and
+an independent Lua readback on the same target.
+[Native TLS hit and saved shield](AUTHORITY-SHIELD-REPLAY-20261126.md#first-combat-tls-hit-in-the-running-fedora-world)
 
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered

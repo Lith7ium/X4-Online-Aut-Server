@@ -21,6 +21,10 @@ COMPANY_FLEET_UI = {
     for name in ('company_fleet_capture', 'company_fleet_source')
 }
 COMPANY_FLEET_MD = {'company_fleet_lookup.xml': 'src/authority/md/company_fleet_lookup.xml'}
+COMPANY_COCKPIT_HEALTH_UI = {
+    f'{name}.lua': f'src/authority/lua/{name}.lua' for name in ('combat_observer', 'company_cockpit_health')
+}
+COMPANY_COCKPIT_HEALTH_MD = 'src/authority/md/company_cockpit_health.xml'
 
 
 def company_fleet_config(source, full_registry):

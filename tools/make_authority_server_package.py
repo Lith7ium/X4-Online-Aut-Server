@@ -49,6 +49,7 @@ REQUIRED = {
     'tools/dev/authority_company_gun_damage.xml',
     'tools/dev/authority_company_gun_damage.lua',
     'src/authority/lua/company_gun_source.lua', 'src/authority/md/company_gun_source.xml',
+    'src/authority/lua/company_cockpit_health.lua', 'src/authority/md/company_cockpit_health.xml',
     'src/authority/company_command_window.py',
     'src/authority/company_fleet_dispatch.py',
     'src/authority/company_fleet_orders.py',

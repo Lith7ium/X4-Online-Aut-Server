@@ -9,6 +9,7 @@ from authority.combat_capture import capture_config, capture_files
 from authority.company_combat_source import COMPANY_GUN_MD, COMPANY_GUN_UI, company_gun_config
 from authority.client_registry_overlay import extend_full_inspect, validate_full_snapshot
 from authority.client_seat_overlay import (
+    COMPANY_COCKPIT_HEALTH_MD, COMPANY_COCKPIT_HEALTH_UI,
     COMPANY_FLEET_MD, COMPANY_FLEET_UI, company_fleet_config,
     company_motion_config, company_motion_md, company_motion_ui,
     company_purchase_config, company_purchase_md, company_purchase_ui, export_motion_buffer, extend_seat_gate,
@@ -42,14 +43,16 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
     status = ('ready', saved['epoch'], saved['issued_count'], saved['mapping_sha256'])
     nonce = secrets.token_hex(16)
     full = validate_full_snapshot(saved, status, nonce, bound.marker)
+    if company_combat:
+        if company_motion is None:
+            raise ValueError('Company combat requires Company motion')
+        company_motion.enable_cockpit_health()
     suffix = '' if company_motion is None else company_motion_config(company_motion, index, full)
     if company_purchase is not None:
         suffix += company_purchase_config(company_purchase, index, full)
     if combat_capture:
         suffix += capture_config(full, index, offer.checkpoint_id, offer.sha256)
     if company_combat:
-        if company_motion is None:
-            raise ValueError('Company combat requires Company motion')
         suffix += company_gun_config(full, index)
 
     if company_fleet is not None:
@@ -80,8 +83,9 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
         ui_sources = ui_sources | COMPANY_FLEET_UI
         md_sources = md_sources | COMPANY_FLEET_MD
     if company_combat:
-        ui_sources = ui_sources | {'company_gun_source.lua': COMPANY_GUN_UI}
-        md_sources = md_sources | {'company_gun_source.xml': COMPANY_GUN_MD}
+        ui_sources = ui_sources | COMPANY_COCKPIT_HEALTH_UI | {'company_gun_source.lua': COMPANY_GUN_UI}
+        md_sources = md_sources | {'company_gun_source.xml': COMPANY_GUN_MD,
+                                   'company_cockpit_health.xml': COMPANY_COCKPIT_HEALTH_MD}
     modules = ''.join(f'    <file name="ui/{name}" />\n' for name in ui_sources)
     if combat_capture:
         scripts = capture_files((ROOT / 'src/authority/md/combat_observer.xml').read_bytes(),
@@ -99,6 +103,8 @@ def install(case, profile, bound, target, index, pump, *, company_motion=None, c
             target_file = folder / name
             if name == 'motion_buffer.lua':
                 target_file.write_bytes(export_motion_buffer((ROOT / original).read_bytes()))
+            elif name == 'company_cockpit_health.xml':
+                target_file.write_bytes(company_motion.cockpit_health_md((ROOT / original).read_bytes()))
             else:
                 shutil.copyfile(ROOT / original, target_file)
             paths.append(target_file)
