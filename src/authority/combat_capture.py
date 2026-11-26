@@ -25,6 +25,9 @@ OBSERVER_SCREEN = 'X4AuthorityClientCombatCapture'
 _EVENT_SOURCE = f'[{OBSERVER_SCREEN}] '
 _CAPTURE_STATUS = '[X4LAN] AUTH_COMBAT_CAPTURE '
 _WATCH_SOURCE = f'Context:md.{OBSERVER_SCREEN}.Watch<'
+_MD_CUE_PREFIX = rf'\[Scripts\] [^\n]+ \*\*\* Context:md\.{OBSERVER_SCREEN}\.'
+_WATCH_CUE = re.compile(_MD_CUE_PREFIX + r'Watch<[^<>]+>: ')
+_PROJECTILE_CUE = re.compile(_MD_CUE_PREFIX + rf'PlayerShipHit<[^<>]+>: \[{OBSERVER_SCREEN}\] ')
 _WATCH_CONTROL = '[X4LAN] AUTH_COMBAT_OBS_CTRL action=Watch '
 CONTROLS = frozenset({'Arm', 'Watch', 'Disarm'})
 _HEX32 = re.compile(r'[0-9a-f]{32}')
@@ -164,6 +167,89 @@ def captured_events(receipt, log_text):
     return hits
 
 
+def read_incoming_projectile_capture(receipt, log_text):
+    """Verify each victim-side capture interval in one pass over the log."""
+    validate_receipt(receipt)
+    start = _capture_start(receipt)
+    stop = f"stopped epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']}"
+    watched_target = admitted_target = active_target = None
+    previous_sequence = 0
+    contacts = []
+    lines = log_text.splitlines() if isinstance(log_text, str) else log_text
+    for line in lines:
+        if _WATCH_SOURCE in line:
+            if active_target:
+                raise ValueError('incoming projectile capture changed its admitted target watch')
+            watched_target = _watched_target(line, receipt['piloted_ship_index'])
+            continue
+        _, status_marker, status = line.partition(_CAPTURE_STATUS)
+        if status_marker:
+            if status.startswith('capturing '):
+                if active_target or not status.startswith(start):
+                    raise ValueError('incoming projectile capture is nested or differs from the admitted binding')
+                code = _capture_ship_code(status, start)
+                if not watched_target or code != watched_target[0]:
+                    raise ValueError('incoming projectile capture lacks a fresh admitted target watch')
+                if admitted_target and watched_target != admitted_target:
+                    raise ValueError('admitted target actor or code changed after combat capture resumed')
+                active_target = admitted_target = watched_target
+            elif status.startswith('stopped '):
+                if not active_target or status.strip() != stop:
+                    raise ValueError('incoming projectile capture has an unmatched or changed stop')
+                active_target = None
+            watched_target = None
+            continue
+
+        source, payload = _private_event_payload(line)
+        if payload is None:
+            continue
+        is_projectile = payload.split('|', 2)[1:2] == ['player_ship_hit']
+        if is_projectile:
+            _verify_projectile_cue(source, payload)
+        event = parse_md_event(payload)
+        if is_projectile:
+            _verify_projectile_target(event, active_target, receipt)
+        if event is not None:
+            if event.seq <= previous_sequence:
+                raise ValueError('native combat sequence is stale or repeats across captures')
+            previous_sequence = event.seq
+        if is_projectile:
+            contacts.append(event)
+    if admitted_target is None:
+        raise ValueError('no active pilot capture for the offered checkpoint and seat')
+    return contacts
+
+
+def _verify_projectile_cue(source, payload):
+    fields = payload.rstrip().split('|')
+    if (_PROJECTILE_CUE.fullmatch(source) is None or len(fields) != 40
+            or re.fullmatch(r'[1-9][0-9]{0,15}', fields[0]) is None or int(fields[0]) >= 2**53):
+        raise ValueError('incoming projectile record does not come from the expected native cue')
+
+
+def _verify_projectile_target(event, active_target, receipt):
+    if (event is None or not active_target or event.registry_epoch != receipt['registry_epoch']
+            or not re.fullmatch(r'0x[0-9a-fA-F]{1,16}', event.victim)
+            or (event.victim_code, int(event.victim, 16)) != active_target
+            or not event.victim_ctrl or not event.victim_occ or event.victim_label != 'admitted_pilot'
+            or event.victim_owner != 'player' or event.victim_reg != receipt['piloted_ship_index']):
+        raise ValueError('incoming projectile record differs from the active admitted target')
+
+
+def _watched_target(line, ship_index):
+    prefix, marker, fields = line.partition(_WATCH_CONTROL)
+    if not marker or _WATCH_CUE.fullmatch(prefix) is None:
+        return None
+    values = dict(token.split('=', 1) for token in fields.split() if '=' in token)
+    code, ship = values.get('code', ''), values.get('ship', '')
+    if (values.get('target') in ('1', 'true') and values.get('owner') == 'player'
+            and values.get('label') == 'admitted_pilot' and values.get('reg') == str(ship_index)
+            and re.fullmatch('[A-Z0-9]{3}-[A-Z0-9]{3}', code)
+            and re.fullmatch(r'0x[0-9a-fA-F]{1,16}', ship) and int(ship, 16)):
+        return code, int(ship, 16)
+    return None
+
+
 def _watched_source_code(line, ship_index):
     """Read the private MD Watch receipt, including X4's numeric or text booleans."""
     prefix, watch, fields = line.partition(_WATCH_CONTROL)
@@ -176,11 +262,25 @@ def _watched_source_code(line, ship_index):
     return None
 
 
+def _capture_start(receipt):
+    return (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
+            f"checkpoint={receipt['checkpoint_id']} sha256={receipt['checkpoint_sha256']} code=")
+
+
+def _capture_ship_code(status, start):
+    match = re.fullmatch(r'([A-Z0-9]{3}-[A-Z0-9]{3}) owner=player', status[len(start):].strip())
+    return match[1] if match else None
+
+
+def _private_event_payload(line):
+    source, marker, payload = line.partition(MD_EVENT_PREFIX)
+    return source, payload if marker and source.endswith(_EVENT_SOURCE) else None
+
+
 def _captured_events(receipt, log_text, matches_ship, *, require_source_watch=False):
     validate_receipt(receipt)
     hits, sequence_counts = [], {}
-    start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
-             f"checkpoint={receipt['checkpoint_id']} sha256={receipt['checkpoint_sha256']} code=")
+    start = _capture_start(receipt)
     ship_code = None
     source_watch_code = None
     observed_ship_codes = set()
@@ -194,16 +294,15 @@ def _captured_events(receipt, log_text, matches_ship, *, require_source_watch=Fa
             if status.startswith(('capturing ', 'stopped ')):
                 ship_code = None
             if status.startswith(start):
-                actor = re.fullmatch(r'([A-Z0-9]{3}-[A-Z0-9]{3}) owner=player', status[len(start):].strip())
-                if actor:
-                    ship_code = actor[1]
+                ship_code = _capture_ship_code(status, start)
+                if ship_code:
                     if require_source_watch and source_watch_code != ship_code:
                         raise ValueError('outgoing gun contacts were not confirmed enabled for this pilot capture')
                     observed_ship_codes.add(ship_code)
             source_watch_code = None
             continue
-        source, marker, payload = line.partition(MD_EVENT_PREFIX)
-        event = parse_md_event(payload) if marker and source.endswith(_EVENT_SOURCE) else None
+        _, payload = _private_event_payload(line)
+        event = parse_md_event(payload) if payload is not None else None
         if event is None:
             continue
         sequence_counts[event.seq] = sequence_counts.get(event.seq, 0) + 1

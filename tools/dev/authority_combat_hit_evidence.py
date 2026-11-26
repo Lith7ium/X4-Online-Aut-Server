@@ -9,7 +9,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 
 from authority.checkpoints import CheckpointStore
-from authority.combat_capture import DAMAGE_KINDS, captured_events, new_receipt, read_outgoing_capture
+from authority.combat_capture import (DAMAGE_KINDS, capture_binding, captured_events, new_receipt,
+                                      read_incoming_projectile_capture, read_outgoing_capture)
 from authority.combat_observation import MD_EVENT_PREFIX, parse_md_event
 from authority.load_observations import LOAD_TAG, MARKER_TAG, TICKET_FIELDS, validate_client_receipts
 from authority.marker_evidence import verify_saved_marker
@@ -17,6 +18,7 @@ from authority.registry_availability_evidence import verify_join_snapshot
 
 
 GUN_CONTACT_KIND = 'object_attacked_object'
+_NPC_PROJECTILE = 'bullet_xen_s_laser_01_mk1_macro'
 _HANDLE = r'0x[0-9a-fA-F]{1,16}'
 _WEAPON_PAIR = re.compile(rf'\[component\.\{{({_HANDLE})L\}},\s*component\.\{{({_HANDLE})L\}}\]')
 _GENERIC_CONTACT_SOURCE = re.compile(
@@ -55,15 +57,15 @@ def _read_event(log, sequence, kinds, description, checkpoint=None):
     return event
 
 
-def _verify_contact_load(receipts, checkpoint):
+def _verify_contact_load(receipts, checkpoint, observation='gun contact'):
     if len(receipts) != 3 or LOAD_TAG not in receipts[0] or not checkpoint.marker:
-        raise ValueError('expected one checkpoint load before the gun contact')
+        raise ValueError(f'expected one checkpoint load before the {observation}')
     fields = receipts[0].split(LOAD_TAG, 1)[1].strip().decode('ascii').split('|')
     if len(fields) != len(TICKET_FIELDS) + 1 or fields[0] != 'load_requested':
-        raise ValueError('expected a checkpoint load request before the gun contact')
+        raise ValueError(f'expected a checkpoint load request before the {observation}')
     ticket = dict(zip(TICKET_FIELDS, fields[1:]))
     if (ticket['checkpoint_id'], ticket['sha256']) != (checkpoint.checkpoint_id, checkpoint.sha256):
-        raise ValueError('gun contact log load differs from the pilot load offer')
+        raise ValueError(f'{observation} log load differs from the pilot load offer')
     validate_client_receipts(b''.join(receipts), ticket, checkpoint.marker)
 
 
@@ -224,6 +226,91 @@ def resolve_gun_contact(checkpoint, event, *, shooter_ship_index):
     return contacts[0]
 
 
+def _loaded_capture_lines(stream, checkpoint):
+    receipts = []
+    load_verified = False
+    for raw in stream:
+        if LOAD_TAG in raw or MARKER_TAG in raw:
+            if load_verified or len(receipts) >= 3:
+                raise ValueError('incoming projectile log has an ambiguous load history')
+            receipts.append(raw)
+        line = raw.decode('utf-8', errors='replace')
+        if not load_verified and '[X4LAN] AUTH_COMBAT_CAPTURE capturing ' in line:
+            _verify_contact_load(receipts, checkpoint, 'incoming projectile capture')
+            load_verified = True
+        yield line
+
+
+def _npc_projectile_components(event, pilot):
+    if (not math.isfinite(event.age) or event.age < 0 or event.seq <= 0
+            or not event.ev_att_isship or event.ev_att_ctrl or not 1 <= event.ev_att_reg <= 200000
+            or event.ev_att_reg == pilot or event.ev_att_owner != 'xenon'
+            or event.param3 != _NPC_PROJECTILE or not event.is_root or event.collided):
+        raise ValueError('expected one unambiguous registered Xenon stock laser contact')
+    values = (event.ev_att, event.victim, event.comp, event.param2)
+    if any(re.fullmatch(_HANDLE, value) is None for value in values):
+        raise ValueError('invalid native attacker, victim or projectile handle')
+    attacker, target, component, projectile = (int(value, 16) for value in values)
+    if min(attacker, target, projectile) <= 0 or target != component or len({attacker, target, projectile}) != 3:
+        raise ValueError('inconsistent native attacker, victim or projectile handles')
+    return attacker, target, projectile
+
+
+def verify_private_npc_projectiles(log, checkpoint, registry_epoch, piloted_ship_index, *, sequence=None):
+    receipt = new_receipt(checkpoint.checkpoint_id, checkpoint.sha256, registry_epoch, piloted_ship_index)
+    with log.open('rb') as stream:
+        events = read_incoming_projectile_capture(receipt, _loaded_capture_lines(stream, checkpoint))
+    verify_saved_marker(checkpoint, checkpoint.marker,
+                        script_name='X4AuthorityCheckpointMarker', cue_name='MarkerState')
+
+    observations, actors, projectiles = [], {}, set()
+    prior_sequence, prior_age = 0, 0
+    for event in events:
+        if event.ev_att_owner == 'player':
+            continue
+        attacker, target, projectile = _npc_projectile_components(event, piloted_ship_index)
+        if event.seq <= prior_sequence or event.age < prior_age or projectile in projectiles:
+            raise ValueError('ambiguous, duplicate or stale incoming projectile observation')
+        prior_sequence, prior_age = event.seq, event.age
+        index = event.ev_att_reg
+        identity = attacker, event.ev_att_code
+        if actors.setdefault(index, identity) != identity:
+            raise ValueError('native NPC identity changed in the active capture')
+        projectiles.add(projectile)
+        observations.append((event, attacker, target, projectile))
+
+    if not observations or len({identity[0] for identity in actors.values()}) != len(actors):
+        raise ValueError('no uniquely registered incoming NPC projectile contacts in the active capture')
+    wanted = {piloted_ship_index, *actors}
+    snapshot, saved_ships = _saved_ships(checkpoint, wanted)
+    if (snapshot['epoch'] != registry_epoch or any(
+            index > len(snapshot['operational_bits']) or snapshot['operational_bits'][index - 1] != '1'
+            for index in wanted)):
+        raise ValueError('incoming projectile identities differ from the offered operational registry')
+
+    contacts = []
+    for event, attacker, target, projectile in observations:
+        roles = {'attacker': (event.ev_att_reg, event.ev_att_code), 'target': (event.victim_reg, event.victim_code)}
+        identities = _verify_identities(roles, saved_ships)
+        for role, owner, actor in (('attacker', 'xenon', attacker), ('target', 'player', target)):
+            identity = identities[role]
+            if saved_ships[identity['index']]['owner'] != owner:
+                raise ValueError(f'{role} faction differs from the offered checkpoint')
+            identity.update(faction=owner, native_actor=hex(actor))
+        contacts.append({
+            'checkpoint_id': checkpoint.checkpoint_id, 'checkpoint_sha256': checkpoint.sha256,
+            'registry_epoch': registry_epoch, 'sequence': event.seq, 'event': event.kind,
+            'game_age': event.age, **identities, 'projectile': {'native_actor': hex(projectile), 'macro': event.param3},
+        })
+    if sequence is not None:
+        for contact in contacts:
+            if contact['sequence'] == sequence:
+                return contact
+        raise ValueError('no registered NPC projectile with the requested sequence')
+    binding = capture_binding(checkpoint.checkpoint_id, checkpoint.sha256, registry_epoch, piloted_ship_index)
+    return dict(binding, contacts=contacts)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--store', type=Path, required=True)
@@ -236,7 +323,13 @@ def main():
                         help='require the hit victim to be the occupied, controlled Company ship at this admitted index')
     parser.add_argument('--shooter-ship-index', type=int,
                         help='verify direct bullet contacts from the controlled Company shooter at this index')
+    parser.add_argument('--incoming-npc-projectiles', action='store_true',
+                        help='verify the measured stock Xenon Mk1 laser from registered Xenon ships hitting the occupied pilot')
     args = parser.parse_args()
+    if args.incoming_npc_projectiles and (args.capture_epoch is None or args.piloted_ship_index is None
+                                         or not 1 <= args.piloted_ship_index <= 200000
+                                         or args.shooter_ship_index is not None):
+        parser.error('--incoming-npc-projectiles requires --capture-epoch and --piloted-ship-index')
     if args.shooter_ship_index is not None and (args.shooter_ship_index <= 0 or args.piloted_ship_index is not None):
         parser.error('--shooter-ship-index requires a positive index without --piloted-ship-index')
     if args.capture_epoch is not None and args.piloted_ship_index is None and args.shooter_ship_index is None:
@@ -247,7 +340,10 @@ def main():
         checkpoint = CheckpointStore(args.store).get(args.checkpoint)
         if checkpoint.sha256 != args.sha256:
             raise ValueError('checkpoint differs from the pilot load offer')
-        if args.shooter_ship_index is not None:
+        if args.incoming_npc_projectiles:
+            report = verify_private_npc_projectiles(args.log, checkpoint, args.capture_epoch,
+                                                    args.piloted_ship_index, sequence=args.sequence)
+        elif args.shooter_ship_index is not None:
             if args.capture_epoch is None:
                 event = read_gun_contact(args.log, args.sequence, checkpoint)
                 report = resolve_gun_contact(checkpoint, event, shooter_ship_index=args.shooter_ship_index)

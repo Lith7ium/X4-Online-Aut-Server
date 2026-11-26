@@ -116,7 +116,7 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         save = Path(directory.name) / 'save.xml.gz'
         ships = ('<component class="ship_s" id="[0x101]" owner="player" code="HVC-420"/>'
                  '<component class="ship_s" id="[0x102]" owner="xenon" code="VLY-685"/>'
-                 '<component class="ship_s" id="[0x103]" owner="xenon" code="XEN-123"/>')
+                 '<component class="ship_s" id="[0x103]" owner="argon" code="XEN-123"/>')
         marker = (b'<script name="X4AuthorityCheckpointMarker"><cue name="MarkerState"><vars>'
                   b'<value name="$marker" type="string" value="11"/><value name="$loaded" type="integer"/>'
                   b'</vars></cue></script>')
@@ -150,16 +150,85 @@ class CheckpointGunContactEvidenceTests(unittest.TestCase):
         self.marker = f'AUTH_MARKER load INSPECTED {RUN}\n'
         self.pause = load_tag + 'pause_observed|' + self.ticket + '\n'
 
-    def _cli(self, *options):
+    def _cli(self, *options, outgoing=True):
         argv = [
             'authority_combat_hit_evidence.py', '--store', str(self.store.directory),
             '--checkpoint', self.checkpoint.checkpoint_id, '--sha256', self.checkpoint.sha256,
-            '--log', str(self.log), '--shooter-ship-index', '1', *options,
+            '--log', str(self.log),
         ]
+        argv.extend(('--shooter-ship-index', '1') if outgoing else ('--piloted-ship-index', '1'))
+        argv.extend(options)
         output = StringIO()
         with patch.object(sys, 'argv', argv), redirect_stdout(output):
             evidence.main()
         return json.loads(output.getvalue())
+
+    def _incoming_row(self, sequence=49, **changes):
+        fields = dict(victim='0x789', v_label='admitted_pilot', v_code='HVC-420', v_owner='player',
+                      v_reg=1, v_ctrl=1, v_occ=1, ev_att='0x456', ea_code='VLY-685',
+                      ea_owner='xenon', ea_reg=2, ea_isship=1, last_att='0x999', la_reg=999,
+                      p2='0x98a', p3='bullet_xen_s_laser_01_mk1_macro', amount=0)
+        row = _sample_event_line(sequence, 'player_ship_hit', 12.0, **(fields | changes))
+        return (f'[Scripts] 12 *** Context:md.{OBSERVER_SCREEN}.PlayerShipHit<inst:ab13>: '
+                f'[{OBSERVER_SCREEN}] {MD_EVENT_PREFIX}{row}|{EPOCH}\n')
+
+    def test_incoming_projectile_cli_checks_offered_ships_in_one_registry_pass(self):
+        self.log.write_text(self.request + self.marker + self.pause + self.capture_start
+                            + self._incoming_row() + self._incoming_row(50, p2='0x98b'))
+        with patch.object(evidence, '_saved_ships', wraps=evidence._saved_ships) as scanned:
+            report = self._cli('--incoming-npc-projectiles', '--capture-epoch', EPOCH, outgoing=False)
+        scanned.assert_called_once_with(self.checkpoint, {1, 2})
+        self.assertEqual([row['sequence'] for row in report['contacts']], [49, 50])
+        one = self._cli('--incoming-npc-projectiles', '--capture-epoch', EPOCH, '--sequence', '49', outgoing=False)
+        self.assertEqual(one['attacker'], dict(index=2, code='VLY-685', faction='xenon', native_actor='0x456'))
+        self.assertEqual(one['target'], dict(index=1, code='HVC-420', faction='player', native_actor='0x789'))
+        self.assertEqual(one['projectile'], dict(native_actor='0x98a', macro='bullet_xen_s_laser_01_mk1_macro'))
+        self.assertNotIn('amount', one)
+        self.assertNotIn('last_attacker', one)
+
+    def test_incoming_projectile_resume_rechecks_the_same_pilot_and_continuous_sequence(self):
+        load = self.request + self.marker + self.pause
+        started = self.capture_start
+        stop = f'[X4LAN] AUTH_COMBAT_CAPTURE stopped epoch={EPOCH} index=1\n'
+        first, second = self._incoming_row(), self._incoming_row(50, p2='0x98b')
+        self.log.write_text(load + started + first + stop + started + second + stop)
+        report = self._cli('--incoming-npc-projectiles', '--capture-epoch', EPOCH, outgoing=False)
+        self.assertEqual([row['sequence'] for row in report['contacts']], [49, 50])
+        for name, tail in (
+            ('nested capture', started + second),
+            ('missing fresh watch', stop + started.splitlines(keepends=True)[1] + second),
+            ('changed native actor', stop + started.replace('ship=0x789', 'ship=0x777') + second),
+            ('changed seat', stop + started.replace('index=1', 'index=2') + second),
+            ('changed stop', stop.replace('index=1', 'index=2') + started + second),
+            ('reused sequence', stop + started + self._incoming_row(49, p2='0x98b')),
+            ('stale row between captures', stop + second + started),
+            ('second load', stop + load + started + second),
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.log.write_text(load + started + first + tail)
+                evidence.verify_private_npc_projectiles(self.log, self.checkpoint, EPOCH, 1)
+
+    def test_incoming_projectile_refuses_stale_or_ambiguous_native_capture(self):
+        load = self.request + self.marker + self.pause
+        hit = self._incoming_row()
+        for name, rows in (
+            ('wrong native cue', self.capture_start + hit.replace('PlayerShipHit<', 'WeaponFired<')),
+            ('before capture', hit + self.capture_start),
+            ('duplicate sequence', self.capture_start + hit + hit),
+            ('reused projectile', self.capture_start + hit + self._incoming_row(50, p2='0x098A')),
+            ('new load', self.capture_start + self.request + hit),
+            ('stopped', self.capture_start + '[X4LAN] AUTH_COMBAT_CAPTURE stopped reason=helm_lost\n' + hit),
+            ('wrong target watch', self.capture_start.replace('target=1', 'target=0') + hit),
+            ('uncontrolled victim', self.capture_start + self._incoming_row(v_ctrl=0)),
+            ('collision', self.capture_start + self._incoming_row(collided=1)),
+            ('wrong native target actor', self.capture_start + self._incoming_row(victim='0x777')),
+            ('wrong checkpoint attacker code', self.capture_start + self._incoming_row(ea_code='XEN-123')),
+            ('wrong projectile macro', self.capture_start + self._incoming_row(p3='bullet_gen_s_gatling_01_mk2_macro')),
+            ('wrong saved faction', self.capture_start + self._incoming_row(ea_reg=3, ea_code='XEN-123')),
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.log.write_text(load + rows)
+                evidence.verify_private_npc_projectiles(self.log, self.checkpoint, EPOCH, 1)
 
     def test_direct_target_and_weapon_bind_without_last_attacker_or_damage(self):
         self.log.write_text(self.request + self.marker + self.pause + self.private_event_line + self.event_line,
