@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
 
 from authority.combat_observation import (
+    MD_EVENT_PREFIX,
     parse_log,
     parse_md_event,
     summarize_by_phase,
@@ -20,8 +21,12 @@ from authority.combat_observation import (
     validate_md_read_only,
 )
 from authority.checkpoints import Checkpoint
+from authority.combat_capture import OBSERVER_SCREEN
+from authority.load_observations import LOAD_TAG
 from test_authority_registry_availability_evidence import EPOCH, RUN, build_xml
-from tools.dev.authority_combat_hit_evidence import resolve_hit
+from tools.dev.authority_combat_hit_evidence import (
+    read_gun_contact, read_private_gun_contact, resolve_gun_contact, resolve_hit,
+)
 
 MD_PATH = ROOT / 'src' / 'authority' / 'md' / 'combat_observer.xml'
 LUA_PATH = ROOT / 'src' / 'authority' / 'lua' / 'combat_observer.lua'
@@ -96,6 +101,112 @@ class CheckpointDamageEvidenceTests(unittest.TestCase):
                              replace(event, victim_code='HVC-420'), replace(event, last_att_reg=3)):
                 with self.subTest(mismatch=mismatch), self.assertRaises(ValueError):
                     resolve_hit(checkpoint, mismatch)
+
+
+class CheckpointGunContactEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.log = Path(directory.name) / 'engine-output.log'
+        save = Path(directory.name) / 'save.xml.gz'
+        ships = ('<component class="ship_s" id="[0x101]" owner="player" code="HVC-420"/>'
+                 '<component class="ship_s" id="[0x102]" owner="xenon" code="VLY-685"/>')
+        marker = (b'<script name="X4AuthorityCheckpointMarker"><cue name="MarkerState"><vars>'
+                  b'<value name="$marker" type="string" value="11"/><value name="$loaded" type="integer"/>'
+                  b'</vars></cue></script>')
+        compressed = gzip.compress(build_xml((1, 1), definitions=ships).replace(b'</md>', marker + b'</md>'))
+        save.write_bytes(compressed)
+        self.checkpoint = Checkpoint('checkpoint-' + 'a' * 32, save, hashlib.sha256(compressed).hexdigest(),
+                                     len(compressed), RUN)
+        payload = _sample_event_line(
+            48, 'object_attacked_object', 10, victim='0x456', v_owner='xenon',
+            ev_att='0x789', ea_code='HVC-420', ea_owner='player', ea_reg=1, ea_ctrl=1, ea_isship=1,
+            last_att='0x321', la_reg=999, last_att_time=3,
+            p2='hitbybullet', p3='[component.{0x456L},component.{0x78aL}]', amount=0,
+        ) + '|' + EPOCH
+        self.event = parse_md_event(payload)
+        self.event_line = ('[Scripts] 10 *** Context:md.X4AuthorityCombatObserver.ObjectAttackedObject<inst:ab12>: '
+                           + MD_EVENT_PREFIX + payload + '\n')
+        self.private_event_line = (f'[Scripts] 10 *** Context:md.{OBSERVER_SCREEN}.ObjectAttackedObject<inst:ab12>: '
+                                   f'[{OBSERVER_SCREEN}] ' + MD_EVENT_PREFIX + payload + '\n')
+        self.capture_start = (f'[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch={EPOCH} index=1 '
+                              f'checkpoint={self.checkpoint.checkpoint_id} sha256={self.checkpoint.sha256} '
+                              'code=HVC-420 owner=player\n')
+        self.ticket = (f'{"b" * 32}|1|2|1|{self.checkpoint.checkpoint_id}|'
+                       f'{self.checkpoint.sha256}|{"c" * 32}|save_009')
+        load_tag = LOAD_TAG.decode('ascii')
+        self.request = load_tag + 'load_requested|' + self.ticket + '\n'
+        self.marker = f'AUTH_MARKER load INSPECTED {RUN}\n'
+        self.pause = load_tag + 'pause_observed|' + self.ticket + '\n'
+
+    def test_direct_target_and_weapon_bind_without_last_attacker_or_damage(self):
+        self.log.write_text(self.request + self.marker + self.pause + self.private_event_line + self.event_line,
+                            encoding='utf-8')
+        event = read_gun_contact(self.log, 48, self.checkpoint)
+        report = resolve_gun_contact(self.checkpoint, event, shooter_ship_index=1)
+        self.assertEqual(report['shooter'], {'code': 'HVC-420', 'index': 1})
+        self.assertEqual(report['target'], {'code': 'VLY-685', 'index': 2})
+        self.assertEqual(report['method'], 'hitbybullet')
+        self.assertEqual(report['damaged_component'], '0x456')
+        self.assertEqual(report['weapon'], '0x78a')
+        self.assertNotIn('last_attacker', report)
+        self.assertNotIn('amount', report)
+        self.assertEqual(report['checkpoint_sha256'], self.checkpoint.sha256)
+        self.assertEqual(report['registry_epoch'], EPOCH)
+
+    def test_rejects_unbound_stale_and_ambiguous_log_records(self):
+        for name, lines in (
+            ('event before pause', self.request + self.marker + self.event_line + self.pause),
+            ('stale offer', (self.request + self.marker + self.pause).replace(self.checkpoint.sha256, 'd' * 64)
+             + self.event_line),
+            ('stale marker', self.request + self.marker.replace(RUN, 'e' * 32) + self.pause + self.event_line),
+            ('new load underway', self.request + self.marker + self.pause + self.request + self.event_line),
+            ('ambiguous event', self.request + self.marker + self.pause + self.event_line * 2),
+            ('reused observer sequence', self.request + self.marker + self.pause + self.event_line
+             + self.event_line.replace('ObjectAttackedObject', 'WeaponFired')),
+            ('firing only', self.request + self.marker + self.pause
+             + self.event_line.replace('object_attacked_object', 'weapon_fired')),
+            ('wrong observer', self.request + self.marker + self.pause + self.private_event_line),
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.log.write_text(lines, encoding='utf-8')
+                read_gun_contact(self.log, 48, self.checkpoint)
+
+    def test_private_contact_requires_matching_active_capture_and_saved_marker(self):
+        self.log.write_text(self.capture_start + self.event_line + self.private_event_line, encoding='utf-8')
+        event = read_private_gun_contact(self.log, 48, self.checkpoint, EPOCH, 1)
+        self.assertEqual(event, self.event)
+        with self.assertRaisesRegex(ValueError, 'marker string'):
+            read_private_gun_contact(self.log, 48, replace(self.checkpoint, marker='e' * 32), EPOCH, 1)
+        for lines in (
+            self.private_event_line + self.capture_start,
+            self.capture_start + self.event_line,
+            self.capture_start + '[X4LAN] AUTH_COMBAT_CAPTURE stopped reason=helm_lost\n' + self.private_event_line,
+            self.capture_start.replace(self.checkpoint.sha256, 'd' * 64) + self.private_event_line,
+        ):
+            with self.subTest(lines=lines), self.assertRaises(ValueError):
+                self.log.write_text(lines, encoding='utf-8')
+                read_private_gun_contact(self.log, 48, self.checkpoint, EPOCH, 1)
+
+    def test_rejects_events_without_a_direct_registered_company_shooter_and_target(self):
+        for changes in (
+            {'kind': 'weapon_fired'}, {'kind': 'shield_damaged'}, {'kind': 'object_attacked'},
+            {'kind': 'player_owned_attacked_object'}, {'param2': 'hitbymissile'},
+            {'ev_att_ctrl': False}, {'ev_att_isship': False}, {'ev_att_reg': 2}, {'ev_att_owner': 'xenon'},
+            {'ev_att_code': 'VLY-685'}, {'ev_att': '0'}, {'ev_att': '0x456'}, {'victim_reg': 0}, {'victim_reg': 1},
+            {'victim_code': 'HVC-420'}, {'victim': '0x0'}, {'victim_ctrl': True},
+            {'comp': '0x455'}, {'registry_epoch': 'd' * 32},
+            {'registry_epoch': None}, {'age': float('nan')},
+            {'param3': 'null'}, {'param3': '[component.{0x456L},component.{0x0L}]'},
+            {'param3': '[component.{0x456L},component.{0x789L}]'},
+            {'param3': '[component.{0x456L},component.{0x456L}]'},
+            {'param3': '[component.{0x456L},component.{0x78aL},component.{0x78bL}]'},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                resolve_gun_contact(self.checkpoint, replace(self.event, **changes), shooter_ship_index=1)
+        npc = replace(self.event, ev_att_reg=2, ev_att_code='VLY-685', victim_reg=1, victim_code='HVC-420')
+        with self.assertRaisesRegex(ValueError, 'Company ownership'):
+            resolve_gun_contact(self.checkpoint, npc, shooter_ship_index=2)
 
 
 class CombatObservationContractTests(unittest.TestCase):

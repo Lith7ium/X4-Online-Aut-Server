@@ -97,7 +97,8 @@ end
 status(arming .. '|Armed|' .. epoch .. '|' .. epoch)
 update()
 local watch = action(2, 'Watch')
-assert(watch.registry_index == 1 and watch.as_target and watch.actor == nil)
+assert(watch.registry_index == 1 and watch.as_target and watch.as_source and watch.actor == nil)
+assert(not watch.watch_weapons, 'capturing confirmed contacts should not log every trigger pull')
 if mode == 'refusal' or mode == 'wrong-actor' then
     if mode == 'refusal' then
         status(watch.request_id .. '|WatchRefused|admitted_pilot')

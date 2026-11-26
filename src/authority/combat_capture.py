@@ -45,12 +45,17 @@ def private_capture_observer(text):
     if private.count(watch) != 1:
         raise ValueError('unexpected private combat watch gate')
     private = private.replace(watch, watch + ' and @player.controlled == $ship and @player.occupiedship == $ship')
-    for event in ('shield_damaged', 'hull_damaged'):
-        gate = f'<event_object_{event} group="State.$targets"/>\n      <check_value value="State.$armed"/>'
+    helm_events = ('shield_damaged', 'hull_damaged', 'attacked_object')
+    for event in helm_events:
+        group = 'sources' if event == 'attacked_object' else 'targets'
+        condition = f'<event_object_{event} group="State.${group}"'
+        gate = condition + '/>\n      <check_value value="State.$armed"/>'
         if private.count(gate) != 1:
-            raise ValueError('unexpected private combat damage gate')
-        private = private.replace(gate, gate.replace('State.$armed"',
-            'State.$armed and @player.controlled == event.object and @player.occupiedship == event.object"'))
+            raise ValueError(f'unexpected private combat gate for {event}')
+        if event == 'attacked_object':
+            condition += ' method="killmethod.hitbybullet"'
+        private = private.replace(gate, condition + '/>\n      <check_value value="State.$armed'
+            ' and @player.controlled == event.object and @player.occupiedship == event.object"/>')
     # X4's projectile callback is global and puts the victim in event.param.
     projectile_gate = 'State.$armed and State.$watch_player_ship"'
     if private.count(projectile_gate) != 1:
@@ -118,8 +123,30 @@ def _ship(isship, index, code):
     return {'index': index, 'code': code} if isship and index > 0 else None
 
 
+def _incoming_damage(event, ship_index, ship_code):
+    return (event.kind in DAMAGE_KINDS and event.victim_reg == ship_index
+            and event.victim_code == ship_code and event.victim_owner == 'player'
+            and event.victim_ctrl and event.victim_occ)
+
+
+def _outgoing_gun_contact(event, ship_index, ship_code):
+    return (event.kind == 'object_attacked_object' and event.param2 == 'hitbybullet'
+            and event.ev_att_reg == ship_index and event.ev_att_code == ship_code
+            and event.ev_att_owner == 'player' and event.ev_att_isship and event.ev_att_ctrl
+            and event.victim_reg > 0 and event.victim_reg != ship_index)
+
+
+def captured_outgoing_contacts(receipt, log_text):
+    """Read X4's throttled gun-contact notifications at the admitted pilot's helm."""
+    return _captured_events(receipt, log_text, _outgoing_gun_contact)
+
+
 def captured_events(receipt, log_text):
-    """Read private damage callbacks from the offered checkpoint's active helm windows."""
+    """Read private damage callbacks on the admitted pilot's ship."""
+    return _captured_events(receipt, log_text, _incoming_damage)
+
+
+def _captured_events(receipt, log_text, matches_ship):
     validate_receipt(receipt)
     hits, sequence_counts = [], {}
     start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
@@ -142,10 +169,8 @@ def captured_events(receipt, log_text):
         if event is None:
             continue
         sequence_counts[event.seq] = sequence_counts.get(event.seq, 0) + 1
-        if (not ship_code or event.kind not in DAMAGE_KINDS
-                or event.registry_epoch != receipt['registry_epoch'] or event.victim_reg != receipt['piloted_ship_index']
-                or event.victim_code != ship_code or event.victim_owner != 'player'
-                or not event.victim_ctrl or not event.victim_occ):
+        if (not ship_code or event.registry_epoch != receipt['registry_epoch']
+                or not matches_ship(event, receipt['piloted_ship_index'], ship_code)):
             continue
         hits.append(event)
     if not observed_window:

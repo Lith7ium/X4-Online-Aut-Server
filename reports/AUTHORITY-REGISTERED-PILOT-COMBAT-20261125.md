@@ -50,6 +50,25 @@ ownership, occupancy and control at the instant of the damage event.
 Replaying the archived sequence 49 with target index 1074 rejected
 KHI-630 because nobody occupied or controlled it.
 
+### Outgoing gun contact verified on 26 November
+
+The saved log also contains the firing ship's own `object_attacked_object`
+notification, sequence 48 at game age 5.09576. The verifier checked the
+checkpoint recorded in the pilot's load log, marker and registry. X4
+reported HVC-420 (1073) at the controls firing on KHI-630 (1074), with
+the target's root component and firing weapon in the same notification.
+On this process the weapon handle was `0x40b1e`. The notification arrived
+before shield subtraction. The following callback recorded 26 shield HP
+lost. The direct notification occurred once in that volley of 49 hits.
+These two events cannot account individually for hits by overlapping shooters.
+
+To inspect the archived notification, use the same store, checkpoint,
+digest and log above with `--shooter-ship-index 1073 --sequence 48`.
+The opt-in pilot capture also records outgoing bullet contacts while the
+admitted pilot occupies and controls their ship. It checks the helm in
+the native event callback. The local damage receipt keeps its existing
+incoming-only format.
+
 ### Occupied victim on Windows
 
 Cobalt reported a native Windows 11 run at `28b36a12` with X4 9.00

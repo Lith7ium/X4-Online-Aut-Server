@@ -107,7 +107,7 @@ function M.tick(seat)
     elseif state == 'armed' then
         state = 'watching'
         send('Watch', {registry_index = cfg.index, label = 'admitted_pilot',
-                        as_target = true, as_source = false, watch_weapons = false})
+                        as_target = true, as_source = true, watch_weapons = false})
     end
 end
 

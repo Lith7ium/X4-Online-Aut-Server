@@ -1,19 +1,21 @@
 # Silver's lockstep build and the authority fork
 
-Reviewed upstream main at `cea737b1` on 24 November. The latest successful
-installer workflow built `d4b964a6` and produced one 43,578,083-byte artifact.
-The latest main commit passed its Linux suite and Windows gate build. The
-GitHub releases list had no published release. The game runs below are
-Silver's recorded results; this review did not rerun his multiplayer suite.
+The 24 November review used upstream `cea737b1` and the Windows installer
+workflow for `d4b964a6`, which produced a 43,578,083-byte artifact. The combat
+review on 26 November used Silver's Windows prerelease `rk16`, published as
+`playtest-2026-11-25`. The tag and upstream main pointed to
+`61d7ed6b622381033d1a4031d5beb221bf4b17b4` at review time. The upstream
+game runs below come from Silver's reports.
 [Installer build](https://github.com/Unofficially-Online/X4-Online/actions/runs/45324840981)
-· [Main revision](https://github.com/Unofficially-Online/X4-Online/commit/cea737b1)
+· [24 November revision](https://github.com/Unofficially-Online/X4-Online/commit/cea737b1)
+· [rk16 prerelease](https://github.com/Unofficially-Online/X4-Online/releases/tag/playtest-2026-11-25)
 
 | Capability | Evidence on Silver's branch | Use on the authority fork |
 | --- | --- | --- |
 | Windows onboarding | Two physical Windows PCs at one site used the CI MSI, the game's Multiplayer menu and a join code. They loaded together and stayed in sync past tick 2,154 over a VPS relay. | Reuse Steam discovery and the user-facing flow. Keep our pinned, direct Linux-host connection. [Product run](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/NETPLAY.md#L647-L689) |
 | Mid-session join | A second X4 instance on one Windows laptop joined at tick 3,324. The 188 MB join package compressed to 27 MB. The host paused for about two minutes. One controller drift is fixed; another is open. | Publish a verified temporary save into the final slot. Our host can pause during joins, and its checkpoint remains the source of truth. [Drop-in](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/NETPLAY.md#L691-L703) · [Controller findings](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/reports/LOCKSTEP-FAST-JOIN-20261123.txt) |
 | Trade and fleet orders | Both test pilots bought and sold 20 food rations through stock menus. Holds and account agreed for 8,174 ticks. A separate test issued remote fleet trades over 9,287 ticks. The orders tests checked actual ship behaviour after Move, Follow, Protect, Attack and Dock. | Use stock menu callbacks and physical end-state checks. Submit each accepted financial or fleet command once to the authoritative X4 world. [Playtest results](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1462-L1508) · [Scenario code](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/tools/dev/action_tests.py#L304-L431) |
-| Combat and boarding | A wing destroyed a Xenon ship. Marines claimed an ownerless scout. Hostile boarding remains listed among the unrun actions. In a separate Windows/Linux battle, the world census agreed through tick 1,500 and differed on eight objects at tick 2,400. | Reuse target, shield, hull, crew and ownership observations. Two-human PvP and actual hostile boarding still need independent authority-server tests. [Combat and claim](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1495-L1536) · [Remaining actions](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1778-L1785) · [Mixed-platform run](https://github.com/Unofficially-Online/X4-Online/commit/2af3958c) |
+| Boarding | A wing destroyed a Xenon ship, and marines claimed an ownerless scout. Hostile boarding was listed among the unrun actions. | Reuse crew and ownership observations. Hostile boarding between participants needs its own test. [Combat and claim](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1495-L1536) · [Remaining actions](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1778-L1785) |
 
 The sector and movement work offers a targeted test for our next handover.
 Silver exercised players separating into different physics scenes and
@@ -26,6 +28,59 @@ on a shared simulation tick. Adopting those records would require a separate
 architecture decision.
 [Sector observations](https://github.com/Unofficially-Online/X4-Online/blob/cea737b1/docs/PLAYTEST.md#L1115-L1139)
 · [Join fix](https://github.com/Unofficially-Online/X4-Online/commit/cea737b1)
+
+## Combat review and authority decision, 26 November 2026
+
+- **Fire and aim in `rk16`.** Each client replays the slot's trigger on the
+  ship's active primary group through X4's native weapons. Target selection
+  replays a portable object reference. Manual aim carries a point in the
+  ship's frame and aim flags. Secondary fire uses the slot's soft target and
+  the stock `shoot_at` controller. These are reference points for observing
+  the native shot and matching it to a ship on the authority fork.
+  [Fire](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_pilot_fire.h#L319-L374)
+  · [Target](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_ui_replay.h#L767-L790)
+  · [Aim](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_pilot_aim.h#L20-L50)
+- **Hit authority in `rk16`.** Hits on NPC ships stay native on each peer.
+  For a keyed single-hit projectile against a player-slot ship, `rk16`
+  defaults to the victim's claim. Every peer validates the claim against
+  its copy of the projectile and target and applies the accepted outcome
+  through X4's `OnHit`. Beams, piercing bullets and shots without portable
+  shooter identities stay on their native paths. The relay exchanges input
+  records and compares state digests. This claim path relies on peers
+  simulating the same projectile identities, world and ticks.
+  [Defaults](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/tools/dev/native_gate_defaults.lua#L213-L221)
+  · [Hit handling](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_hit_native.h#L24-L56)
+  · [Validation](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_hit_claims.h#L268-L290)
+  · [Relay](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/tools/dev/native_gate_relay.py#L334-L390)
+- **Scope of upstream tests.** An earlier scripted PvP fixture recorded 70
+  applied hits across 6,300 ticks, with six deaths and five respawns. Its
+  ships had no missile launchers. In the `rk16` two-instance test on one PC,
+  player 2's turrets hit in enemy, fighter and defend modes. In “attack my
+  current target,” they acquired the intended target but logged no hit.
+  [PvP fixture](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/reports/LOCKSTEP-CENSUS-20261028.txt#L1348-L1358)
+  · [Turret results](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/docs/PLAYTEST.md#L1523-L1586)
+- **Close-range regression.** Silver records an earlier player firing at a
+  Terran corvette. A position predicted ahead of the visible projectile
+  missed the hull on all 50 native hits. For our fork, include a point-blank
+  burst alongside a deliberate miss and keep X4's observed hit as the input.
+  [Upstream diagnosis](https://github.com/Unofficially-Online/X4-Online/blob/61d7ed6b622381033d1a4031d5beb221bf4b17b4/src/native/engine/lockstep_hit_native.h#L30-L44)
+
+The authority fork will take the hit confirmation for a player-fired shot from
+the shooter's X4 instance, in both PvE and PvP. For an NPC-fired shot, the
+simulation currently assigned to that NPC confirms the hit. The central world
+authority verifies the reporting simulation's current assignment and the
+registered attacker and victim, then applies each accepted impact at most once
+and publishes the resulting state. Retries of the same impact must resolve to
+the original result. A recipient's local hit observation can support diagnosis.
+The impact identity must survive retransmission and use the shared registry
+and a shot or impact identifier in place of process-local X4 handles.
+
+The fork has measured native damage and projectile attribution in an admitted
+Linux cockpit. A separate paused provider applied one recorded shield value and
+verified it again after a cold load. Live impact submission, duplicate handling,
+and matching health in the provider and both human cockpits remain to be tested.
+[Native combat capture](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md#occupied-pilot-hit-through-the-regular-linux-capture)
+· [Shield replay](AUTHORITY-SHIELD-REPLAY-20261126.md)
 
 ## Changes tested on the authority fork
 

@@ -234,8 +234,14 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                 self.assertIn('<mdscript name="X4AuthorityClientCombatCapture"', observer)
                 self.assertNotIn('X4AuthorityCombatObserver', observer)
                 self.assertEqual(observer.count('<set_value name="State.$seq" exact="0"/>'), 1)
-                self.assertEqual(observer.count('@player.controlled == event.object'), 2)
-                contact = ElementTree.fromstring(observer).find(".//cue[@name='PlayerShipHit']/conditions/check_value")
+                tree = ElementTree.fromstring(observer)
+                for name in ('ShieldDamaged', 'HullDamaged', 'ObjectAttackedObject'):
+                    gate = tree.find(f".//cue[@name='{name}']/conditions/check_value")
+                    self.assertEqual(gate.get('value'), 'State.$armed and @player.controlled == event.object'
+                                     ' and @player.occupiedship == event.object')
+                contact_event = tree.find(".//cue[@name='ObjectAttackedObject']/conditions/event_object_attacked_object")
+                self.assertEqual(contact_event.attrib, {'group': 'State.$sources', 'method': 'killmethod.hitbybullet'})
+                contact = tree.find(".//cue[@name='PlayerShipHit']/conditions/check_value")
                 self.assertEqual(contact.get('value'), 'State.$armed and State.$watch_player_ship'
                                  ' and State.$targets.indexof.{@event.param} gt 0'
                                  ' and @player.controlled == event.param and @player.occupiedship == event.param')

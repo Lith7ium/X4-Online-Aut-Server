@@ -2,6 +2,15 @@
 
 ## 26 November 2026
 
+PvE and PvP with primary guns have priority for the weekend. Lith7ium will
+request packages when needed. Boarding work resumes next week. For player
+shots, the firing pilot's X4 confirms the hit, including hits against another
+pilot. For NPC shots, the simulation assigned to the firing NPC reports the
+result. The server books each impact once and distributes the resulting
+shield and hull values. The cross-platform human combat test is outstanding.
+[Silver rk16 comparison and fork decision](AUTHORITY-SILVER-REUSE-20261124.md) ·
+[08:00 development assignments](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795676466189069)
+
 A stock boarding operation on the GPU-free server reached takeover.
 Two pods closed at about 75 m per game second, attached, and delivered
 eight marines. X4 transferred ZNG-430 from Scale Plate to the player
@@ -17,15 +26,17 @@ His recorded native creative-world log provided a separate six-hit control.
 Integration at `71febf9f` uses the admitted pilot's exact checkpoint and
 private capture window. Linux ran 40 of the 41 relevant package, session
 and capture cases successfully. The PowerShell-only case skipped on Linux.
-For PowerShell 5.1, pass an existing directory on the game drive with
-`-WorkRoot`. Cobalt is fixing the default path. The Windows flight still
+At `2128381c` the fork includes Cobalt's PowerShell 5.1 default work
+directory fix. On Windows he verified the documented command, an explicit
+directory on the game drive and refusal of a missing directory using the
+extracted launcher. The Windows flight still
 needs the operator. [04:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795662035243749)
 
 A second GPU-free X4 instance replayed one shield hit observed on the
 Linux pilot. KHI-630's shields changed from 2,366 to 2,340 at unchanged
 game time. A separate native readback, the confirmed save and a cold
-X4 restart all showed 2,340. The offline transfer used the original pilot offer. Live reporting
-and the decision about which simulation settles a hit remain open.
+X4 restart all showed 2,340. The offline transfer used the original pilot
+offer. Live reporting through the multiplayer connection remains open.
 [Observed hit, native replay and saved shield value](AUTHORITY-SHIELD-REPLAY-20261126.md)
 
 On a replay of 44 recorded pilot positions and velocities from an ordinary
@@ -663,8 +674,8 @@ It has not been deployed to Fedora. The client wire format is unchanged.
   selectable, the target capturable and all eight marines assignable.
   Persisting the new index and starting an operation are still open.
   [Boarding baseline and native probe](AUTHORITY-BOARDING-BASELINE-20261125.md)
-  Before implementing damage replication, ask Lith7ium which simulation
-  should settle a hit when two pilots are involved. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
+  Follow the 26 November shooter-side decision above when working on damage
+  replication. [Native combat observations](AUTHORITY-COMBAT-OBSERVATION-WINDOWS-20261125.md)
 - **Quartz** (currently unavailable) traced the stock map's “Fly and Wait” command to an NPC-captained
   Company ship. Astra exercised the stock handler on Linux. X4 accepted a single
   order and the ship came to rest 2.23 km from the exact requested position.
