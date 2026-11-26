@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 import warnings
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
@@ -75,6 +75,33 @@ class WindowsX4ProcessTests(unittest.TestCase):
         self.assertEqual(self.job.calls[-2:], [('stop', 2), ('close',)])
         with self.assertRaises(ValueError):
             owner.stop()
+
+    def test_exit_code_reads_the_retained_process_handle_after_exit(self):
+        for code in (0, 0xC0000005):
+            with self.subTest(code=code):
+                def read_exit_code(process, result):
+                    self.assertEqual(process, 33)
+                    result._obj.value = code
+                    return True
+
+                native = NATIVE_JOB.__new__(NATIVE_JOB)
+                native.info = subject._ProcessInfo()
+                native.info.hProcess = 33
+                native.start = Mock(return_value=123)
+                native.wait = Mock(return_value=258)
+                native.get_exit_code = Mock(side_effect=read_exit_code)
+
+                with patch.object(subject, '_Win32Job', return_value=native):
+                    owner = subject.WindowsX4Process(enabled=True)
+                    owner.start(self.view, profile_id=45841, guard=lambda: True)
+
+                self.assertIsNone(owner.exit_code())
+                native.wait.assert_called_with(33, 0)
+                native.get_exit_code.assert_not_called()
+
+                native.wait.return_value = 0
+                self.assertFalse(owner.is_running())
+                self.assertEqual(owner.exit_code(), code)
 
     def test_owns_running_pid_requires_the_same_live_owned_process(self):
         owner = subject.WindowsX4Process(enabled=True)
