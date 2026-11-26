@@ -220,3 +220,39 @@ interval. Both errors use the same pairs. The receipt also scores the input
 with the position-only baseline the client sends on admission and records
 the first capture interval and displacement separately. These measurements
 use no receiving cockpit readbacks.
+
+## Native velocity and stopping after five seconds
+
+A single native Linux X4 loaded a copied Company save, seated the observer in
+KHI-630 and found HVC-420 on its 40 km radar. The fixture supplied the other
+pilot's lateral motion at 100 m/s in one aligned zone. The ordinary Company
+client does not enable these diagnostic velocity writes.
+
+| Movement and stop procedure | Observed result |
+| --- | --- |
+| Set native velocity, then release it after five seconds without input | X4 reported 100 m/s during flight and 0 m/s after release. Across the release the position jumped backwards 492.561 m in 48.6 ms. The later stationary read alone had incorrectly made the first verifier pass. A second check of the same log rejected the discontinuity. |
+| Keep the visible pose and native velocity together, record the reached position at cutoff, set velocity to zero, then release it on a later update | The last source report was 5.014662 real seconds before cutoff. X4 returned the same position just before and after zeroing and after release. A further read 0.651 s later agreed within 0.00035 m. KHI-630 remained stationary. |
+
+The combined run issued 126 bounded position writes, 103 during source
+silence. The largest correction from the already moving ship was 0.00175 m.
+The final position write requested the current measured position and moved
+the ship 0 m. All later observations were reads. Of the 126 immediate
+next-render reads, the largest distance from the last write was 0.835 m.
+Independent native reads about 56 ms apart recorded up to 5.773 m of
+physical travel. A 50 ms read on a ship moving at 100 m/s must account
+for about 5 m of expected travel before evaluating a 3 m correction
+tolerance. Integrating that rule into an admitted cockpit is separate work.
+
+The published probe differs from the successful native run in one log
+label. The original also printed a pre-operation position under the name of
+a dispatched velocity on zero and release. The audit used the independent
+native speed and position fields. The source save hash was preserved and
+X4 exited. The complete engine log SHA-256 was
+`9b19aa97bb97756b670709e41d7371086262cfe0b92dd3520a753039a66667e7`.
+
+The standalone Lua regression checks the order of the cutoff, zero,
+release and readback operations:
+
+```sh
+luajit tests/check_authority_company_native_velocity.lua tools/dev/authority_company_native_velocity.lua
+```
