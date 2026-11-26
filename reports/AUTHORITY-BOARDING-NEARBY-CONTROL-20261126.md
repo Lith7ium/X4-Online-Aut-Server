@@ -54,3 +54,31 @@ The provider opened no client endpoint and wrote no checkpoint. The
 original and cloned source remained unchanged and owned processes were
 reaped. The private `nearby-observer/run-02/` engine log SHA-256 is
 `c81ceb599a64a916269c7e86a4d0eb5692d591fe7eb55f6c5f33a9713975f554`.
+
+## Run-03 stopped before the deferred disarm readback
+
+The same confirmed source and provider revision passed the narrower
+primary-weapon precondition. The new scout spawned 2,999.5 m from ZNG-430
+and 18,468 m from ARU-541. The fixture matched two distinct weapons on
+that scout and dispatched their removal once. The readiness cue
+evaluated in the same game frame at 569.015 s, before the one-game-second
+disarm readback. It treated pending setup as a refusal. Both target
+primary handles matched, its shields were at 100%, and the two boarding
+ships were still at `incluster` without physics readiness. The trace
+does not establish deferred disarm, helm entry, high-attention play,
+a stock operation, or pod behaviour.
+
+The private cue now waits for the delayed equipment readback to resolve
+before evaluating helm readiness. A refused disarm can terminate
+immediately. Successful zero-weapon readback dispatches the one helm
+transfer and starts a 12-game-second readiness window with 250 ms
+checks. The terminal check still requires the exact occupied helm and
+both actual actors to be visible and physics-ready. The offline ordering
+check used the 569.015 s run-03 trace and synthetic delayed success,
+disarm refusal, and deadline cases. No further native run tested this
+correction.
+
+No checkpoint or client endpoint was created. The source and copy were
+unchanged, and all owned processes exited. The private
+`nearby-observer/run-03/` engine log SHA-256 is
+`09156a1596b063663f29b00853cc7ac673f42e5ec9c9cdcc6dfc1127d57ee25e`.
