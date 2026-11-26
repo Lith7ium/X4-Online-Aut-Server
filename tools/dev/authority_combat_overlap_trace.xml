@@ -4,13 +4,14 @@
      event_object_shield_damaged / event_object_hull_damaged, event_object_attacked_object
      (param3 = [attacked component, weapon]) and event_player_attacked_object. It records which
      traced bullets no longer exist when an impact callback runs; that is an inference, not an
-     attribution the game supplies. The only world change is a distant second helper pilot that
-     drives the second shooter through the same test-only shoot_at script. -->
+     attribution the game supplies. A distant helper drives the second shooter through the same
+     test-only shoot_at script. The optional Restore command resets only registered fixture #4. -->
 <mdscript name="X4AuthorityCombatOverlapTrace" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
  <cues>
   <cue name="State">
    <actions>
     <set_value name="State.$armed" exact="false"/>
+    <set_value name="State.$restore" exact="false"/>
     <set_value name="State.$target" exact="null"/>
     <set_value name="State.$helper2" exact="null"/>
     <set_value name="State.$shooter_of" exact="table[]"/>
@@ -43,6 +44,8 @@
      <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Arm'"/></conditions>
      <actions>
       <set_value name="$a" exact="event.param3"/>
+      <set_value name="State.$restore" exact="@$a.$restore == true"/>
+      <set_value name="State.$epoch" exact="@$a.$epoch"/>
       <set_value name="$ships" exact="md.X4AuthorityCombatProbe.State.$ships"/>
       <set_value name="State.$target" exact="@$ships.{4}"/>
       <clear_group group="State.$weapons"/>
@@ -107,6 +110,32 @@
       </do_if>
       <do_else>
        <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Refused|fire2'.[@$a.$request_id]"/>
+      </do_else>
+     </actions>
+    </cue>
+
+    <!-- Opt-in: put #4 back to full shield and hull so every phase starts from the same state. -->
+    <cue name="Restore" instantiate="true" namespace="this">
+     <conditions><event_ui_triggered screen="'X4AuthorityCombatOverlapTrace'" control="'Restore'"/></conditions>
+     <actions>
+      <set_value name="$a" exact="event.param3"/>
+      <include_actions ref="SweepLive"/>
+      <do_if value="State.$armed and State.$restore and $alive == 0 and @State.$target.isoperational
+                    and State.$target.owner == faction.xenon
+                    and @md.X4AuthorityShipRegistry.State.$faulted == false
+                    and @md.X4AuthorityShipRegistry.State.$epoch == State.$epoch
+                    and @md.X4AuthorityShipRegistry.State.$ships.{4} == State.$target
+                    and @md.X4AuthorityShipRegistry.State.$byship.{State.$target} == 4">
+       <set_object_shield object="State.$target" exact="100"/>
+       <set_object_hull object="State.$target" exact="100"/>
+       <debug_text text="'[X4LAN] AUTH_OVERLAP_CTRL action=Restore shield=%s/%s hull=%s/%s'.[State.$target.shield,State.$target.maxshield,State.$target.hull,State.$target.maxhull]"/>
+       <do_if value="State.$target.shield == State.$target.maxshield and State.$target.hull == State.$target.maxhull">
+        <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Restored'.[@$a.$request_id]"/>
+       </do_if>
+       <do_else><raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Refused|restore_readback'.[@$a.$request_id]"/></do_else>
+      </do_if>
+      <do_else>
+       <raise_lua_event name="'X4AuthorityCombatOverlapTrace.Status'" param="'%s|Refused|restore'.[@$a.$request_id]"/>
       </do_else>
      </actions>
     </cue>

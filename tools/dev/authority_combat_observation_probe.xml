@@ -30,10 +30,15 @@
          <position x="0m" y="100km" z="0m"/>
          <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
         </create_ship>
-        <!-- Ship #2: Unoccupied registered Company Pulsar Vanguard (same-Company FF target, 200 m ahead broadside). -->
+        <!-- Ship #2: Unoccupied registered Company Pulsar Vanguard (same-Company FF target, 200 m ahead broadside).
+             The overlap scenario may name another test loadout for it to give the second shooter a different gun. -->
+        <set_value name="$p2_loadout" exact="$pulsar_loadout"/>
+        <do_if value="@$r.$second_loadout == 'x4lan_overlap_second'">
+         <get_loadout loadout="$r.$second_loadout" macro="macro.ship_arg_s_fighter_03_a_macro" result="$p2_loadout"/>
+        </do_if>
         <create_ship name="$p2" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$sec" seed="8402">
          <owner exact="faction.player" overridenpc="true"/>
-         <loadout loadout="$pulsar_loadout"/>
+         <loadout loadout="$p2_loadout"/>
          <position x="0m" y="100km" z="200m"/>
          <rotation yaw="90deg" pitch="0deg" roll="0deg"/>
         </create_ship>

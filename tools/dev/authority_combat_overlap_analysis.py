@@ -13,6 +13,7 @@ import re
 PHASE_PREFIX = '[X4LAN] AUTH_COMBAT_PHASE '
 TRACE_PREFIX = '[X4LAN] AUTH_OVERLAP_'
 PROBE_SETUP = '[X4LAN] AUTH_COMBAT_PROBE setup_ok '
+WEAPON_PROFILE = '[X4LAN] AUTH_COMBAT_DRIVER WEAPON_PROFILE '
 FIELD = re.compile(r'(\w+)=(\S*)')
 ACTOR = re.compile(r'(0x[0-9a-f]+)\(([A-Z0-9]{3}-[A-Z0-9]{3})(?:,w=\d+)?\)')
 WEAPON_PAIR = re.compile(r'\[component\.\{(0x[0-9a-f]+)L\},\s*component\.\{(0x[0-9a-f]+)L\}\]')
@@ -319,6 +320,156 @@ def analyse(text, events, *, epoch=None):
     actors = fixture_actors(text)
     return {phase: analyse_phase(bucket, [e for e in events if e.phase == phase], actors, epoch)
             for phase, bucket in trace.items() if phase in OVERLAP_PHASES}
+
+
+def _root_damage(events, actors, epoch):
+    return [e for e in events if e.kind in ('shield_damaged', 'hull_damaged')
+            and _target_event(e, actors, epoch) and e.comp == e.victim and e.amount > 0
+            and math.isfinite(e.amount) and math.isfinite(e.age) and e.age >= 0
+            and math.isfinite(e.shield) and e.shield >= 0 and math.isfinite(e.hull) and e.hull >= 0]
+
+
+def _damage_controls(text, events, trace, overlap, actors, epoch):
+    profiles = [_fields(line.split(WEAPON_PROFILE, 1)[1]) for line in text.splitlines() if WEAPON_PROFILE in line]
+    baselines = {}
+    for shooter, phases in (('1', ('control_pilot',)), ('2', ('control_second_yawfix', 'control_second'))):
+        matches = [row for row in profiles if row.get('label') == SHOOTER_LABELS[shooter]]
+        if len(matches) != 1:
+            continue
+        profile = matches[0]
+        amount, bullet = _number(profile.get('hs_shot')), profile.get('bullet')
+        if (profile.get('ok') != 'true' or profile.get('modified') != 'false' or profile.get('mixed') != 'false'
+                or profile.get('root_hullshield_only') != 'true'
+                or profile.get('weapons') != '6' or not re.fullmatch(r'bullet_[a-z0-9_]+_macro', bullet or '')
+                or amount is None or amount <= 0):
+            continue
+        for phase in phases:
+            outcome = overlap.get(phase, {})
+            if (not outcome.get('observer_damage_matches_trace') or outcome.get('observer_other_victim_damage')
+                    or set(outcome.get('shots_by_shooter', {})) != {shooter}
+                    or outcome.get('direct_hit_shooters') != [shooter]):
+                continue
+            if {row.get('pmacro') for row in trace[phase]['fires']} != {bullet}:
+                continue
+            damage = _root_damage(events.get(phase, ()), actors, epoch)
+            if len(damage) != outcome['observer_damage_callbacks']:
+                continue
+            amounts = Counter(e.amount for e in damage if e.kind == 'shield_damaged' and e.shield > 0)
+            if set(amounts) == {amount}:
+                baselines[shooter] = {'amount': amount, 'bullet': bullet, 'phase': phase,
+                                      'calibration_callbacks': amounts[amount]}
+                break
+    return baselines
+
+
+def _preceding_notices(events, actors, epoch):
+    notices = {}
+    previous, shooter = None, None
+    for event in events:
+        if previous is None or event.age != previous.age or event.seq != previous.seq + 1:
+            shooter = None
+        if event.kind == 'object_attacked' and _target_event(event, actors, epoch):
+            source = str(event.ev_att_reg)
+            shooter = source if (source in SHOOTER_LABELS and event.param2 in BULLET_METHODS
+                                 and actors.get(source) == (event.ev_att, event.ev_att_code)
+                                 and event.ev_att_label == SHOOTER_LABELS[source]
+                                 and event.ev_att_owner == 'player' and event.ev_att_isship
+                                 and event.ev_att_ctrl == (source == '1')) else None
+        notices[event.seq] = shooter
+        previous = event
+    return notices
+
+
+def _frame_damage_rows(frame, values):
+    hulls = [row for row in frame if row.kind == 'hull_damaged']
+    options = {row.seq: [(h, values[row.amount + h.amount]) for h in hulls
+                         if h.seq > row.seq and row.amount + h.amount in values]
+               for row in frame if row.kind == 'shield_damaged' and row.shield == 0}
+    hull_candidates = Counter(h.seq for pairs in options.values() for h, _ in pairs)
+    used = set()
+    for row in frame:
+        if row.seq in used:
+            continue
+        shooter, kind, pair = None, 'unresolved', None
+        if row.kind == 'shield_damaged':
+            candidates = options.get(row.seq, [])
+            if len(candidates) == 1:
+                hull, source = candidates[0]
+                if (hull.seq == row.seq + 1 and hull_candidates[hull.seq] == 1
+                        and hull.amount not in values and hull.hull > 0 and hull.shield == 0):
+                    shooter, kind, pair = source, 'overflow', hull
+                    used.add(hull.seq)
+            if candidates and pair is None:
+                kind = 'ambiguous_overflow'
+            elif not candidates and row.hull > 0 and row.amount in values:
+                shooter, kind = values[row.amount], 'shield' if row.shield > 0 else 'shield_depletion'
+        elif hull_candidates[row.seq]:
+            kind = 'ambiguous_overflow'
+        elif row.hull > 0 and row.shield == 0 and row.amount in values:
+            shooter, kind = values[row.amount], 'hull'
+        yield row, shooter, kind, pair
+
+
+def _attribute_damage(events, damage, values, actors, epoch):
+    notices = _preceding_notices(events, actors, epoch)
+    frames, rows = {}, []
+    mixed = alternations = 0
+    for event in damage:
+        frames.setdefault(event.age, []).append(event)
+    labels = {label: source for source, label in SHOOTER_LABELS.items()}
+    for frame in frames.values():
+        sources = []
+        for event, source, kind, pair in _frame_damage_rows(frame, values):
+            sources.append(source)
+            rows.append({
+                'age': event.age, 'sequence': event.seq, 'amount': event.amount, 'kind': kind,
+                'source_by_amount': source, 'overflow_hull_sequence': None if pair is None else pair.seq,
+                'overflow_hull_amount': None if pair is None else pair.amount,
+                'lastattacker': labels.get(event.last_att_label), 'preceding_same_age_notification': notices[event.seq],
+            })
+        mixed += {'1', '2'} <= set(sources)
+        alternations += any(a is not None and b is not None and a == c and a != b
+                            for a, b, c in zip(sources, sources[1:], sources[2:]))
+    assigned = [row for row in rows if row['source_by_amount'] is not None]
+    compared = [row for row in assigned if row['preceding_same_age_notification'] is not None]
+    last = [row for row in assigned if row['lastattacker'] is not None]
+    return {'callbacks': len(damage), 'assigned_hits': len(assigned),
+            'unassigned_callbacks': len(damage) - len(assigned) - sum(row['kind'] == 'overflow' for row in assigned),
+            'assigned_by_source': _count(row['source_by_amount'] for row in assigned),
+            'lastattacker_compared': len(last),
+            'lastattacker_agrees': sum(row['lastattacker'] == row['source_by_amount'] for row in last),
+            'preceding_same_age_notification_compared': len(compared),
+            'preceding_same_age_notification_agrees': sum(row['preceding_same_age_notification'] == row['source_by_amount']
+                                                           for row in compared),
+            'mixed_game_ages': mixed, 'alternating_game_ages': alternations, 'rows': rows}
+
+
+def analyse_damage(text, events, overlap, *, epoch):
+    """Compare calibrated fixture damage amounts alongside direct-witness acceptance."""
+    actors, trace = fixture_actors(text), parse_trace(text)
+    by_phase = {phase: [e for e in events if e.phase == phase] for phase in overlap}
+    baselines = _damage_controls(text, by_phase, trace, overlap, actors, epoch)
+    amounts = {item['amount']: source for source, item in baselines.items()}
+    if len(amounts) != 2 or len({item['bullet'] for item in baselines.values()}) != 2:
+        return baselines, {}
+    result = {}
+    for phase, outcome in overlap.items():
+        if phase == 'miss_pilot' or not outcome['observer_damage_matches_trace'] or outcome['observer_other_victim_damage']:
+            continue
+        fires = trace[phase]['fires']
+        if any(row.get('shooter') not in baselines or
+               row.get('pmacro') != baselines[row['shooter']]['bullet'] for row in fires):
+            continue
+        phase_events = by_phase[phase]
+        damage = _root_damage(phase_events, actors, epoch)
+        if (len(damage) != outcome['observer_damage_callbacks']
+                or any(a.seq >= b.seq or a.age > b.age for a, b in zip(phase_events, phase_events[1:]))):
+            continue
+        attribution = _attribute_damage(phase_events, damage, amounts, actors, epoch)
+        if all(count <= outcome['shots_by_shooter'].get(source, 0)
+               for source, count in attribution['assigned_by_source'].items()):
+            result[phase] = attribution
+    return baselines, result
 
 
 def accepted(by_phase):

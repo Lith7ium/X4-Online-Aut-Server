@@ -68,12 +68,13 @@ end
 -- Target #4 sits at (-6000, 100000, 0). #1 faces it along +z; #2 faces it along +x (yaw 90),
 -- and the driver retries #2 at yaw -90 if its bullets miss in the control phase. Both fire from
 -- 200 m, so equal flight times put both shooters' salvos into the same frames.
-local SECOND_POS = { -6200, 100000, 0 }
+local SECOND_POS = { -6000 - (cfg.second_range or 200), 100000, 0 }
+local mixed = cfg.second_loadout ~= nil
 local PHASES = {
     { name = 'control_pilot', pre = { { 1, -6000, 100000, -200, 0 }, { 2, SECOND_POS[1], SECOND_POS[2], SECOND_POS[3], 90 } },
-      pilot = 'shoot_at', max = 1.2, impacts = 10 },
-    { name = 'control_second', second = true, max = 1.2, impacts = 10, aim_check = true },
-    { name = 'overlap', pilot = 'shoot_at', second = true, max = 1.5, impacts = 30 },
+      pilot = 'shoot_at', max = 1.2, impacts = mixed and 8 or 10 },
+    { name = 'control_second', second = true, max = 1.2, impacts = mixed and 8 or 10, aim_check = true },
+    { name = 'overlap', pilot = 'shoot_at', second = true, max = 1.5, impacts = mixed and 34 or 30 },
     -- Stock shoot refuses a weapon that already had a shoot_at controller, shoot_at still hits
     -- from a 30 m lateral offset and holds fire at 120 m. So #1 fires aligned and, once the first
     -- salvo is seen, stops while #4 moves 150 m aside: the bullets in flight pass it.
@@ -151,6 +152,7 @@ local function trace(control, args)
     args = args or {}
     args.request_id = next_req()
     AddUITriggeredEvent('X4AuthorityCombatOverlapTrace', control, args)
+    return args.request_id
 end
 
 local function observer_ctrl(control, args)
@@ -167,9 +169,17 @@ local function log_weapon_profile(label, actor_str)
         return
     end
     local w1 = prof.weapons[1] or {}
-    log(string.format('WEAPON_PROFILE label=%s ok=true slots=%d weapons=%d uniform=%s mixed=%s modified=%s bullet=%s hs_shot=%s speed=%s',
+    local root_only = #prof.weapons == 6 and w1.bullet_macro ~= nil and (w1.hullshielddpshot or 0) > 0
+    for _, gun in ipairs(prof.weapons) do
+        if gun.isbeamweapon or #gun.other_channels ~= 0 or gun.bullet_macro ~= w1.bullet_macro
+                or gun.hullshielddpshot ~= w1.hullshielddpshot then
+            root_only = false
+        end
+    end
+    log(string.format('WEAPON_PROFILE label=%s ok=true slots=%d weapons=%d uniform=%s mixed=%s modified=%s bullet=%s hs_shot=%s speed=%s root_hullshield_only=%s',
         label, prof.slot_count or 0, prof.weapon_count or 0, tostring(prof.uniform_macro), tostring(prof.mixed),
-        tostring(prof.any_modified), tostring(w1.bullet_macro), tostring(w1.hullshielddpshot), tostring(w1.bulletspeed)))
+        tostring(prof.any_modified), tostring(w1.bullet_macro), tostring(w1.hullshielddpshot), tostring(w1.bulletspeed),
+        tostring(root_only)))
 end
 
 -- Each shoot_at script ends shortly after its phase, so the next phase starts a fresh script.
@@ -236,7 +246,7 @@ local function tick()
     if s == 'wait_registry' then
         if not state.reg_reply then return end
         log('REGISTRY ' .. state.reg_reply)
-        probe('Setup', { epoch = cfg.epoch })
+        probe('Setup', { epoch = cfg.epoch, second_loadout = cfg.second_loadout })
         state.step = 'wait_setup'
         return
     end
@@ -279,7 +289,7 @@ local function tick()
         state.watch_idx = state.watch_idx + 1
         local w = WATCH_PLAN[state.watch_idx]
         if not w then
-            trace('Arm')
+            trace('Arm', { restore = cfg.restore_target == true, epoch = cfg.epoch })
             state.step = 'wait_trace_arm'
             return
         end
@@ -350,6 +360,20 @@ local function tick()
     end
     if s == 'pre_settle' then
         if now() < state.settle_until then return end
+        if cfg.restore_target == true then
+            state.restore_request = trace('Restore')
+            state.step = 'wait_restore'
+            return
+        end
+        begin_marker(state.marker_name or ph.name)
+        state.step = 'wait_marker'
+        return
+    end
+    if s == 'wait_restore' then
+        if not state.trace_reply then return end
+        local reply = split(state.trace_reply, '|')
+        assert(tonumber(reply[1]) == state.restore_request and reply[2] == 'Restored',
+            'fresh fixture target health was not confirmed')
         begin_marker(state.marker_name or ph.name)
         state.step = 'wait_marker'
         return

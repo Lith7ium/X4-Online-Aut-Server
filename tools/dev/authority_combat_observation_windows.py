@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -90,7 +91,38 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='cases'):
+SECOND_LOADOUT_ID = 'x4lan_overlap_second'
+SECOND_WEAPON_PATTERN = re.compile(r'weapon_gen_s_[a-z0-9]+_0[1-9]_mk[1-9]_macro')
+
+
+def _validate_overlap_options(scenario, second_weapon, second_range, restore_target):
+    if (second_weapon is not None or second_range is not None or restore_target) and scenario != 'overlap':
+        raise ValueError('--second-weapon, --second-range and --restore-target require --scenario overlap')
+    if second_weapon is not None and (type(second_weapon) is not str or not SECOND_WEAPON_PATTERN.fullmatch(second_weapon)):
+        raise ValueError('--second-weapon requires a stock S weapon macro')
+    if second_range is not None and (type(second_range) is not int or not 100 <= second_range <= 1500):
+        raise ValueError('--second-range must be 100–1500 m')
+
+
+def with_second_loadout(loadouts_text, weapon_macro):
+    """Add a private test loadout with the alternate gun in the six primary slots."""
+    if not SECOND_WEAPON_PATTERN.fullmatch(weapon_macro) or f'id="{SECOND_LOADOUT_ID}"' in loadouts_text:
+        raise ValueError('invalid overlap alternate loadout')
+    origin = 'id="x4lan_company_pulsar"'
+    if loadouts_text.count('<loadout ' + origin) != 1:
+        raise ValueError('expected one original Company Pulsar loadout')
+    start = loadouts_text.index('<loadout ' + origin)
+    end = loadouts_text.index('</loadout>', start) + len('</loadout>')
+    block = loadouts_text[start:end].replace(origin, f'id="{SECOND_LOADOUT_ID}"', 1)
+    stock = '<weapon macro="weapon_gen_s_gatling_01_mk2_macro"'
+    if block.count('<weapon ') != 6 or block.count(stock) != 6:
+        raise ValueError('expected six stock primary slots in the original loadout')
+    return loadouts_text[:end] + '\n' + block.replace(stock, f'<weapon macro="{weapon_macro}"') + loadouts_text[end:]
+
+
+def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='cases',
+                      second_weapon=None, second_range=None, restore_target=False):
+    _validate_overlap_options(scenario, second_weapon, second_range, restore_target)
     # Guard read-only contract on the reusable production observer modules before launching X4.
     validate_md_read_only((ROOT / 'src/authority/md/combat_observer.xml').read_text(encoding='utf-8'))
     validate_lua_read_only((ROOT / 'src/authority/lua/combat_observer.lua').read_text(encoding='utf-8'))
@@ -109,6 +141,9 @@ def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='ca
         shutil.copyfile(ROOT / rel_src, target / 'aiscripts' / dst_name)
     for dst_name, rel_src in LIBRARY_FILES:
         shutil.copyfile(ROOT / rel_src, target / 'libraries' / dst_name)
+    if second_weapon is not None:
+        path = target / 'libraries' / 'loadouts.xml'
+        path.write_text(with_second_loadout(path.read_text(encoding='utf-8'), second_weapon), encoding='utf-8')
 
     cfg_text = (
         'X4NEON_COMBAT_OBS = {\n'
@@ -117,7 +152,10 @@ def compose_extension(extensions_dir, *, profile, gamestart, epoch, scenario='ca
         f'  profile = "{int(profile)}",\n'
         f'  gamestart = "{gamestart}",\n'
         f'  epoch = "{epoch}",\n'
-        '}\n'
+        + (f'  second_loadout = "{SECOND_LOADOUT_ID}",\n' if second_weapon is not None else '')
+        + (f'  second_range = {second_range},\n' if second_range is not None else '')
+        + ('  restore_target = true,\n' if restore_target else '')
+        + '}\n'
     )
     (target / 'ui' / 'config.lua').write_text(cfg_text, encoding='ascii')
     ui_entries = ''.join(
@@ -264,7 +302,15 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=180.0)
     parser.add_argument('--scenario', choices=('cases', 'overlap'), default='cases',
                         help='cases: the six single-shooter cases; overlap: two shooters on one registered NPC')
+    parser.add_argument('--second-weapon', help='overlap only: alternate stock S gun macro')
+    parser.add_argument('--second-range', type=int, help='overlap only: second shooter range in metres (default 200)')
+    parser.add_argument('--restore-target', action='store_true',
+                        help='overlap only: restore the fixture NPC health before each phase')
     args = parser.parse_args(argv)
+    try:
+        _validate_overlap_options(args.scenario, args.second_weapon, args.second_range, args.restore_target)
+    except ValueError as error:
+        parser.error(str(error))
 
     if os.name != 'nt' or sys.version_info < (3, 12):
         raise SystemExit('Python 3.12+ required on Windows for safe x4ls view/profile teardown')
@@ -319,6 +365,9 @@ def main(argv=None):
             gamestart=args.gamestart,
             epoch=EPOCH,
             scenario=args.scenario,
+            second_weapon=args.second_weapon,
+            second_range=args.second_range,
+            restore_target=args.restore_target,
         )
         profile_dir = profile_mod.prepare_fresh(
             args.profile,
@@ -452,9 +501,10 @@ def main(argv=None):
     fallbacks = [line for line in driver_lines if line.startswith('FALLBACK ')]
 
     if args.scenario == 'overlap':
-        from authority_combat_overlap_analysis import OVERLAP_PHASES, accepted as overlap_ok, analyse
+        from authority_combat_overlap_analysis import OVERLAP_PHASES, accepted as overlap_ok, analyse, analyse_damage
         by_phase = summarize_by_phase(events, readbacks, phase_victims={p: 'npc_target' for p in OVERLAP_PHASES})
         overlap = analyse(log_text, events, epoch=EPOCH)
+        damage_baselines, damage_attribution = analyse_damage(log_text, events, overlap, epoch=EPOCH)
         driver_errors = [line.split('[X4LAN] AUTH_COMBAT_DRIVER ', 1)[1].strip()
                          for line in log_text.splitlines() if '[X4LAN] AUTH_COMBAT_DRIVER ERROR ' in line]
         outside_phase_damage = [event.seq for event in events if event.phase not in overlap
@@ -466,6 +516,9 @@ def main(argv=None):
         )
         result = {
             'scenario': 'overlap', 'outcome': outcome, 'accepted': accepted,
+            'second_weapon': args.second_weapon, 'second_range': args.second_range,
+            'restore_target': args.restore_target, 'damage_baselines': damage_baselines,
+            'damage_attribution': damage_attribution,
             'elapsed_s': round(time.monotonic() - started_at, 2),
             'x4_exe_sha256': sha256_file(exe_path),
             'logfile': str(copied_log) if copied_log.is_file() else None,

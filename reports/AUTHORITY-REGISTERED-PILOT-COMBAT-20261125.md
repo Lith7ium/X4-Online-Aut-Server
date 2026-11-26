@@ -62,6 +62,15 @@ before shield subtraction. The following callback recorded 26 shield HP
 lost. The direct notification occurred once in that volley of 49 hits.
 These two events cannot account individually for hits by overlapping shooters.
 
+All 49 shield callbacks on KHI-630 reduced its shield by exactly 26 points,
+from 2,366 to 1,092. The hull stayed at 3,600. Each callback identified
+HVC-420 as the last attacker, but the last-attack time stayed at 5.09576
+through the final callback at 5.74137. The 49 impacts span 27 distinct
+game times, with up to four at the same time. Six guns produced 66 firing
+notifications. Neither a timestamp nor a firing notification identifies
+one projectile across this burst. The direct contact and the first shield
+debit describe the same hit and must only be counted once.
+
 To inspect the archived notification, use the same store, checkpoint,
 digest and log above with `--shooter-ship-index 1073 --sequence 48`.
 The opt-in pilot capture also records outgoing bullet contacts while the
