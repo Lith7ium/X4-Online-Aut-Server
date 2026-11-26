@@ -317,7 +317,7 @@ def install_fixture_overlay(view, *, new_test_view, bound_offer, save_path,
         observer = private_capture_observer(observer.decode('utf-8')).encode('utf-8')
         capture = _source(ROOT / 'src/authority/lua/client_combat_capture.lua', 1024 * 1024)
         validate_capture_lua(capture.decode('utf-8'))
-        config = config[:-2] + capture_config(full_registry, seat_index) + '}\n'
+        config = config[:-2] + capture_config(full_registry, seat_index, offer.checkpoint_id, offer.sha256) + '}\n'
         files['md/client_combat_capture.xml'] = observer
         files['ui/client_combat_capture.lua'] = capture
         ui_files.insert(ui_files.index('ui/authority_two_x4_participant_probe.lua'), 'ui/client_combat_capture.lua')

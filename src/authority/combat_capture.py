@@ -22,6 +22,8 @@ from .combat_observation import (FORBIDDEN_LUA_MUTATION_CALLS, MD_EVENT_PREFIX, 
 FORMAT = 1
 DAMAGE_KINDS = ('shield_damaged', 'hull_damaged')
 OBSERVER_SCREEN = 'X4AuthorityClientCombatCapture'
+_EVENT_SOURCE = f'[{OBSERVER_SCREEN}] '
+_CAPTURE_STATUS = '[X4LAN] AUTH_COMBAT_CAPTURE '
 CONTROLS = frozenset({'Arm', 'Watch', 'Disarm'})
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _HEX64 = re.compile(r'[0-9a-f]{64}')
@@ -36,6 +38,9 @@ def private_capture_observer(text):
     if f'<mdscript name="{source}"' not in text or text.count(reset) != 1:
         raise ValueError('unexpected source for the private client combat observer')
     private = text.replace(source, OBSERVER_SCREEN).replace(reset, '')
+    if private.count(MD_EVENT_PREFIX) != 1:
+        raise ValueError('unexpected number of native combat event emitters')
+    private = private.replace(MD_EVENT_PREFIX, _EVENT_SOURCE + MD_EVENT_PREFIX)
     watch = 'State.$armed and @$ship.exists and $ship.isclass.ship'
     if private.count(watch) != 1:
         raise ValueError('unexpected private combat watch gate')
@@ -65,14 +70,22 @@ def validate_capture_lua(lua_text):
     return {'read_only': True, 'controls': sorted(controls)}
 
 
-def capture_config(full_registry, index):
-    """Lua config fragment for the admitted seat on the offered registry."""
+def _validate_binding(checkpoint_id, checkpoint_sha256, epoch, index):
+    if (type(checkpoint_id) is not str or not _CHECKPOINT.fullmatch(checkpoint_id)
+            or type(checkpoint_sha256) is not str or not _HEX64.fullmatch(checkpoint_sha256)
+            or type(epoch) is not str or not _HEX32.fullmatch(epoch)
+            or type(index) is not int or index < 1):
+        raise ValueError('invalid checkpoint, registry epoch or pilot seat in combat capture')
+
+
+def capture_config(full_registry, index, checkpoint_id, checkpoint_sha256):
+    """Bind the observer to the exact offered save and requested Company seat."""
     epoch = full_registry['epoch']
-    if (type(epoch) is not str or not _HEX32.fullmatch(epoch) or type(index) is not int
-            or not 1 <= index <= full_registry['issued_count']
-            or full_registry['operational_bits'][index - 1] != '1'):
+    _validate_binding(checkpoint_id, checkpoint_sha256, epoch, index)
+    if index > full_registry['issued_count'] or full_registry['operational_bits'][index - 1] != '1':
         raise ValueError('combat capture needs an operational admitted index on the offered registry')
-    return f',authority_combat_capture={{epoch={json.dumps(epoch)},index={index}}}'
+    return (f',authority_combat_capture={{epoch={json.dumps(epoch)},index={index},'
+            f'checkpoint={json.dumps(checkpoint_id)},sha256={json.dumps(checkpoint_sha256)}}}')
 
 
 def new_receipt(checkpoint_id, checkpoint_sha256, registry_epoch, piloted_ship_index):
@@ -89,19 +102,31 @@ def _ship(isship, index, code):
 def collect_hits(receipt, log_text):
     """Record damage callbacks from a text stream or an in-memory log, in order."""
     validate_receipt(receipt)
-    hits, seen = [], set()
+    hits, sequence_counts = [], {}
+    start = (f"capturing epoch={receipt['registry_epoch']} index={receipt['piloted_ship_index']} "
+             f"checkpoint={receipt['checkpoint_id']} sha256={receipt['checkpoint_sha256']} code=")
+    ship_code = None
+    observed_window = False
     lines = log_text.splitlines() if isinstance(log_text, str) else log_text
     for line in lines:
-        _, marker, payload = line.partition(MD_EVENT_PREFIX)
+        _, status_marker, status = line.partition(_CAPTURE_STATUS)
+        if status_marker:
+            if status.startswith(('capturing ', 'stopped ')):
+                ship_code = None
+            if status.startswith(start):
+                actor = re.fullmatch(r'([A-Z0-9]{3}-[A-Z0-9]{3}) owner=player', status[len(start):].strip())
+                if actor:
+                    ship_code, observed_window = actor[1], True
+            continue
+        source, marker, payload = line.partition(MD_EVENT_PREFIX)
         event = parse_md_event(payload) if marker else None
         if event is None:
             continue
-        if event.seq in seen:
-            # The verifier reads each sequence from this same log and needs it to be unique.
-            raise ValueError('native combat sequence repeats in one capture log')
-        seen.add(event.seq)
-        if (event.kind not in DAMAGE_KINDS or event.registry_epoch != receipt['registry_epoch']
-                or event.victim_reg != receipt['piloted_ship_index']):
+        sequence_counts[event.seq] = sequence_counts.get(event.seq, 0) + 1
+        if (not ship_code or not source.endswith(_EVENT_SOURCE) or event.kind not in DAMAGE_KINDS
+                or event.registry_epoch != receipt['registry_epoch'] or event.victim_reg != receipt['piloted_ship_index']
+                or event.victim_code != ship_code or event.victim_owner != 'player'
+                or not event.victim_ctrl or not event.victim_occ):
             continue
         hits.append({
             'sequence': event.seq, 'event': event.kind, 'victim_code': event.victim_code,
@@ -111,6 +136,11 @@ def collect_hits(receipt, log_text):
             'last_attacker': _ship(event.last_att_isship, event.last_att_reg, event.last_att_code),
             'amount': event.amount, 'shield_after': event.shield, 'hull_after': event.hull,
         })
+    if not observed_window:
+        raise ValueError('no active pilot capture for the offered checkpoint and seat')
+    if any(sequence_counts[hit['sequence']] != 1 for hit in hits):
+        # The independent verifier retrieves each selected event by sequence from the same file.
+        raise ValueError('native combat sequence repeats in one capture log')
     return dict(receipt, hits=hits)
 
 
@@ -118,12 +148,10 @@ def validate_receipt(receipt):
     if (type(receipt) is not dict or receipt.keys() != _FIELDS
             or type(receipt['format']) is not int or receipt['format'] != FORMAT):
         raise ValueError('unexpected combat capture receipt')
-    if (type(receipt['checkpoint_id']) is not str or not _CHECKPOINT.fullmatch(receipt['checkpoint_id'])
-            or type(receipt['checkpoint_sha256']) is not str or not _HEX64.fullmatch(receipt['checkpoint_sha256'])
-            or type(receipt['registry_epoch']) is not str or not _HEX32.fullmatch(receipt['registry_epoch'])
-            or type(receipt['piloted_ship_index']) is not int or receipt['piloted_ship_index'] < 1
-            or type(receipt['hits']) is not list):
-        raise ValueError('invalid combat capture receipt')
+    _validate_binding(receipt['checkpoint_id'], receipt['checkpoint_sha256'],
+                      receipt['registry_epoch'], receipt['piloted_ship_index'])
+    if type(receipt['hits']) is not list:
+        raise ValueError('invalid combat hit list')
     return receipt
 
 

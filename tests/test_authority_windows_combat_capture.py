@@ -41,13 +41,18 @@ PILOT = dict(victim='0x7a1', v_label='admitted_pilot', v_code='HVC-420', v_owner
 
 
 def _log_line(payload, epoch=EPOCH):
-    return ('[Scripts] 812.40 *** Context:md.X4AuthorityCombatObserver.Observe<inst:1>: '
+    return ('[Scripts] 812.40 *** Context:md.X4AuthorityClientCombatCapture.Observe<inst:1>: '
+            + '[X4AuthorityClientCombatCapture] '
             + MD_EVENT_PREFIX + payload + ('|' + epoch if epoch else ''))
 
 
-def _pilot_log():
+def _pilot_log(digest):
+    marker = (f'[X4LAN] AUTH_COMBAT_CAPTURE capturing epoch={EPOCH} index=1 checkpoint={CHECKPOINT_ID} '
+              f'sha256={digest} code=HVC-420 owner=player')
     return '\n'.join((
         '[General] 800.00 unrelated line',
+        _log_line(_sample_event_line(11, 'shield_damaged', 8.0, **PILOT)),
+        marker,
         _log_line(_sample_event_line(1, 'attacked', 9.0, **PILOT)),
         _log_line(_sample_event_line(2, 'shield_damaged', 9.5, **PILOT, amount=52.0, shield=4748.0)),
         # Another ship's hit and a hit on another epoch are not this pilot's capture.
@@ -55,6 +60,10 @@ def _pilot_log():
                                      v_owner='xenon', v_reg=2)),
         _log_line(_sample_event_line(4, 'hull_damaged', 9.7, **PILOT), epoch='9' * 32),
         _log_line(_sample_event_line(5, 'hull_damaged', 9.8, **PILOT, amount=12.5, shield=0.0, hull=2087.5)),
+        _log_line(_sample_event_line(12, 'hull_damaged', 9.81, **PILOT)).replace(
+            '[X4AuthorityClientCombatCapture] ', ''),
+        f'[X4LAN] AUTH_COMBAT_CAPTURE stopped epoch={EPOCH} index=1',
+        _log_line(_sample_event_line(13, 'hull_damaged', 9.9, **PILOT)),
     )) + '\n'
 
 
@@ -69,7 +78,7 @@ class CombatCaptureReceiptTest(unittest.TestCase):
         self.sha256 = hashlib.sha256(compressed).hexdigest()
         self.checkpoint = Checkpoint(CHECKPOINT_ID, save, self.sha256, len(compressed), RUN)
         self.log = self.directory / 'x4authority.log'
-        self.log.write_text(_pilot_log(), encoding='utf-8')
+        self.log.write_text(_pilot_log(self.sha256), encoding='utf-8')
 
     def verify(self, arguments):
         store = Mock()
@@ -131,9 +140,12 @@ class CombatCaptureReceiptTest(unittest.TestCase):
                        (CHECKPOINT_ID, self.sha256, EPOCH, True)):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 new_receipt(*values)
-        repeated = _pilot_log() + _log_line(_sample_event_line(2, 'hull_damaged', 9.9, **PILOT)) + '\n'
+        repeated = _pilot_log(self.sha256) + _log_line(_sample_event_line(2, 'hull_damaged', 9.9, **PILOT)) + '\n'
         with self.assertRaisesRegex(ValueError, 'repeats'):
             collect_hits(new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1), repeated)
+        for checkpoint, digest in ((CHECKPOINT_ID, '1' * 64), ('checkpoint-' + 'f' * 32, self.sha256)):
+            with self.subTest(checkpoint=checkpoint, digest=digest), self.assertRaisesRegex(ValueError, 'no active'):
+                collect_hits(new_receipt(checkpoint, digest, EPOCH, 1), _pilot_log(self.sha256))
 
     def test_streamed_capture_accepts_reordered_json_and_preserves_output_on_invalid_data(self):
         receipt = new_receipt(CHECKPOINT_ID, self.sha256, EPOCH, 1)
@@ -169,7 +181,8 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                     self.assertNotIn('X4LAN_COMBAT_CAPTURE', probe)
                     continue
                 self.assertLessEqual(added, set(manifest))
-                self.assertIn(',authority_combat_capture={epoch="' + '1' * 32 + '",index=1}}', config)
+                offer = options['bound_offer'].offer
+                self.assertIn(capture_config(self.snapshot, 1, offer.checkpoint_id, offer.sha256), config)
                 self.assertLess(scripts.index('ui/client_combat_capture.lua'),
                                 scripts.index('ui/authority_two_x4_participant_probe.lua'))
                 self.assertNotIn('X4LAN_COMBAT_CAPTURE', probe)
@@ -190,10 +203,12 @@ class CombatCaptureOverlayTest(unittest.TestCase):
                 "  assert(full_registry_inspect:guard(),'full registry guard lost before admission')\n")
         registry = {'epoch': EPOCH, 'issued_count': 2, 'operational_bits': '10'}
         self.assertNotIn('X4LAN_COMBAT_CAPTURE', extend_seat_gate(text, 1, registry))
-        self.assertEqual(capture_config(registry, 1), f',authority_combat_capture={{epoch="{EPOCH}",index=1}}')
+        digest = 'a' * 64
+        self.assertEqual(capture_config(registry, 1, CHECKPOINT_ID, digest),
+                         f',authority_combat_capture={{epoch="{EPOCH}",index=1,checkpoint="{CHECKPOINT_ID}",sha256="{digest}"}}')
         for index in (0, 2, 3, True):
             with self.subTest(index=index), self.assertRaises(ValueError):
-                capture_config(registry, index)
+                capture_config(registry, index, CHECKPOINT_ID, digest)
         validate_md_read_only(OBSERVER_MD.read_text(encoding='utf-8'))
         source = CAPTURE_LUA.read_text(encoding='utf-8')
         self.assertEqual(validate_capture_lua(source)['controls'], ['Arm', 'Disarm', 'Watch'])
