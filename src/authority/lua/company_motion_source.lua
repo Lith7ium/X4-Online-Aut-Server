@@ -233,6 +233,7 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
             if max_pilots > 1 or config.playback_index == nil then
                 local multi = assert(X4LAN_COMPANY_COCKPIT_OBSERVER).new_multi_x4(pinned, config.index, available, {
                     max_pilots = max_pilots,
+                    read_radar_range = config.trial_first_contact == true,
                     clock = udp.monotonic,
                 })
                 if config.playback_index == nil then pilot_roster = multi end
