@@ -195,6 +195,20 @@ class MixedWeaponTest(unittest.TestCase):
                                                   for row in rows))
         self.assertGreaterEqual(buckets['disagree'], 1)
 
+    def test_one_direct_source_and_no_registered_last_attacker_is_unassigned(self):
+        text, events = fixture()
+        events = [row for row in events if not (row.phase == 'overlap' and row.ev_att_reg == 1
+                                                and 'attacked' in row.kind)]
+        for row in events:
+            if row.phase == 'overlap' and row.kind in ('shield_damaged', 'hull_damaged'):
+                row.last_att_reg = 0
+        overlap = A.analyse(text, events, epoch=EPOCH)['overlap']
+        self.assertEqual(len(overlap['callback_detail']), 2)
+        self.assertTrue(all(row['direct_sources'] == ['2'] and row['lastattacker'] is None
+                            for row in overlap['callback_detail']))
+        self.assertEqual(overlap['direct_source_vs_lastattacker'], {
+            'agree': 0, 'disagree': 0, 'unassigned': 2, 'direct_names_both': 0, 'no_direct_source': 0})
+
     def test_mixed_damage_is_independent_of_lastattacker_and_cannot_replace_direct_witness(self):
         text, events = fixture(mixed=True)
         overlap = A.analyse(text, events, epoch=EPOCH)

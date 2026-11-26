@@ -392,6 +392,8 @@ def analyse_phase(bucket, events, actors, epoch):
             'agree': sum(row['direct_sources'] == [row['lastattacker']] for row in callback_detail),
             'disagree': sum(len(row['direct_sources']) == 1 and row['lastattacker'] is not None
                             and row['direct_sources'] != [row['lastattacker']] for row in callback_detail),
+            'unassigned': sum(len(row['direct_sources']) == 1 and row['lastattacker'] is None
+                              for row in callback_detail),
             'direct_names_both': sum(row['direct_sources'] == ['1', '2'] for row in callback_detail),
             'no_direct_source': sum(not row['direct_sources'] for row in callback_detail)},
     }
