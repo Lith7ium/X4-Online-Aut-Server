@@ -9,9 +9,11 @@ The ship kept its registry index and its original NPC captain.
 [Cold restart and retained captain](AUTHORITY-CAPTAINED-COMPANY-FLIGHT-20261125.md#read-only-cold-restore-of-the-bbs-493-departure-save)
 
 The separate ordinary jump-gate fixture stopped during staging between
-ZGH-239 and NEL-546. The provider loaded the source and inspected all
-5,048 registry entries. The staging cue returned no route receipt.
-No starting checkpoint was published and no pilot flew this route.
+ZGH-239 and NEL-546. After the MD event correction, the provider loaded
+all 5,048 registry entries and ran both staging and readback at the same
+paused game time. Readback refused the route. It did not report which
+distance, sector, discovery or path predicate failed. No starting
+checkpoint was published and no pilot flew this route.
 [Ordinary gate staging](AUTHORITY-SUPERHIGHWAY-TRANSIT-20261125.md#ordinary-jump-gate-staging-attempt)
 
 The ordinary boarding menu now has a native positive control. On a
@@ -26,13 +28,16 @@ to infiltration, then X4 reported failure. Scale Plate retained the ship.
 Pod attachment and the cause of failure are unknown. This trial started
 on the provider. [Boarding timeline](AUTHORITY-BOARDING-BASELINE-20261125.md#native-follow-up-at-the-highest-stock-thresholds)
 
-Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. The
+Cobalt's Windows 11 rerun passed 37 of 39 cases, with two skips. His
+separate Windows run at `f0605562` passed all 15 NPC observation,
+trade capture and purchase-source fixtures with zero skips. The
 integrated Linux suite found seven errors in a shared test fixture.
 After the fix, all 29 cases in the four affected modules passed.
-The last full Linux run still has 25 skips. Cobalt owns the native
-Windows trade and NPC fixture checks and the operator's Internet flight.
+The last full Linux run still has 25 skips. Cobalt owns the operator's
+Internet flight and the Windows occupied-ship hit observation.
 [Strict run and coverage gaps](AUTHORITY-STRICT-CHECKS-20261125.md) ·
-[00:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795647665602239)
+[Windows fixture results](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795647665602239) ·
+[01:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795651241349479)
 
 Matching private operator packages for `6d4062fd` are in
 `.local/flight-build-6d4062fd/`. All 176 files common to the Linux
