@@ -23,17 +23,21 @@ _SNAPSHOT = _COMMON | {'sector_macro', 'source_time', 'x', 'y', 'z', 'velocity'}
 _SNAPSHOT_V2 = _SNAPSHOT | {'orientation', 'angular_rate'}
 _SNAPSHOT_V3 = _COMMON | {'sector_macro', 'source_time', 'capture_time',
                           'x', 'y', 'z', 'real_velocity'}
+_SNAPSHOT_V4 = _SNAPSHOT_V3 | {'orientation'}
+_SNAPSHOTS = {1: _SNAPSHOT, 2: _SNAPSHOT_V2, 3: _SNAPSHOT_V3, 4: _SNAPSHOT_V4}
+ORIENTATION_AXES = ('yaw', 'pitch', 'roll')
+REAL_TIME_MOTION_VERSIONS = (3, 4)
 
 
-def motion_value(value, *, despawn=False):
+def motion_value(value, *, despawn=False, allow_v4=False):
     """Validate exact portable fields and return a detached copy."""
-    if type(despawn) is not bool or type(value) is not dict:
+    if type(despawn) is not bool or type(allow_v4) is not bool or type(value) is not dict:
         raise ValueError('invalid motion fields')
     version = value.get('version')
-    if type(version) is not int or version not in (1, 2, 3) or (despawn and version != 1):
+    if (type(version) is not int or version not in _SNAPSHOTS
+            or (version == 4 and not allow_v4) or (despawn and version != 1)):
         raise ValueError('invalid motion version')
-    snapshots = {1: _SNAPSHOT, 2: _SNAPSHOT_V2, 3: _SNAPSHOT_V3}
-    expected = _COMMON if despawn else snapshots[version]
+    expected = _COMMON if despawn else _SNAPSHOTS[version]
     if set(value) != expected:
         raise ValueError('invalid motion fields')
     if any(type(value[k]) is not str or not _TOKEN.fullmatch(value[k]) for k in ('epoch', 'generation')):
@@ -49,23 +53,27 @@ def motion_value(value, *, despawn=False):
             raise ValueError('invalid motion frame')
         if not number(value['source_time'], 0, 1e12) or any(not number(value[k], -1e7, 1e7) for k in ('x','y','z')):
             raise ValueError('invalid motion sample')
-        if version == 3 and not number(value['capture_time'], 0, 1e12):
+        real_time = version in REAL_TIME_MOTION_VERSIONS
+        if real_time and not number(value['capture_time'], 0, 1e12):
             raise ValueError('invalid motion capture time')
-        vel = value['real_velocity'] if version == 3 else value['velocity']
+        vel = value['real_velocity'] if real_time else value['velocity']
         if vel is not None and (type(vel) is not dict or set(vel)!={'x','y','z'} or
                 any(not number(vel[k], -5000, 5000) for k in ('x','y','z'))):
             raise ValueError('invalid motion rate')
-        if version == 2:
+        if version in (2, 4):
             orientation = value['orientation']
-            angular_rate = value['angular_rate']
-            axes = ('yaw', 'pitch', 'roll')
-            if (type(orientation) is not dict or set(orientation) != set(axes) or
-                    any(not number(orientation[k], -2 * math.pi, 2 * math.pi) for k in axes)):
+            if (type(orientation) is not dict or set(orientation) != set(ORIENTATION_AXES) or
+                    any(not number(orientation[axis], -2 * math.pi, 2 * math.pi)
+                        for axis in ORIENTATION_AXES)):
                 raise ValueError('invalid motion orientation')
+        if version == 2:
+            angular_rate = value['angular_rate']
             if (vel is None) != (angular_rate is None):
                 raise ValueError('incomplete motion rate')
-            if angular_rate is not None and (type(angular_rate) is not dict or set(angular_rate) != set(axes) or
-                    any(not number(angular_rate[k], -2 * math.pi, 2 * math.pi) for k in axes)):
+            if angular_rate is not None and (type(angular_rate) is not dict or
+                    set(angular_rate) != set(ORIENTATION_AXES) or
+                    any(not number(angular_rate[axis], -2 * math.pi, 2 * math.pi)
+                        for axis in ORIENTATION_AXES)):
                 raise ValueError('invalid angular rate')
     return copy.deepcopy(value)
 
@@ -81,7 +89,7 @@ def check_motion_progress(value, previous):
     if value['version'] != previous['version']:
         raise ValueError('motion snapshot version changed within lifetime')
     previous_time = previous['source_time']
-    if value['version'] == 3:
+    if value['version'] in REAL_TIME_MOTION_VERSIONS:
         if value['source_time'] < previous_time:
             raise ValueError('source game time regressed')
         if value['capture_time'] <= previous['capture_time']:

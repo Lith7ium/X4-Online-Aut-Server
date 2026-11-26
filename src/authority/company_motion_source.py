@@ -7,13 +7,15 @@ import threading
 import time
 
 from .company_cockpit_health import CompanyCockpitHealthBridge
-from .company_motion_observer import MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM, CompanyMotionObserver
+from .company_motion_observer import (MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM,
+                                      MAX_ORIENTED_OBSERVER_DATAGRAM, CompanyMotionObserver)
 from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
                                       REGISTRY_EPOCH, measurement_value, native_capture_now as _npc_now)
-from .experimental_tcp_motion import check_motion_progress, motion_value
+from .experimental_tcp_motion import ORIENTATION_AXES, check_motion_progress, motion_value
 
 
 _MAX_SAMPLER_DATAGRAM = 512
+_MAX_ORIENTED_SAMPLER_DATAGRAM = 576
 _MAX_NPC_AGE = 1.0
 _NATIVE_NUMBER = re.compile(r'-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
 
@@ -250,7 +252,8 @@ class CompanyMotionSource:
     def _send_to_peer(self, validate_peer, message):
         self._owner()
         packet = self._prefix() + message.encode('ascii')
-        if self._peer is None or len(packet) > MAX_OBSERVER_DATAGRAM:
+        limit = MAX_ORIENTED_OBSERVER_DATAGRAM if message.startswith('REMOTE4|') else MAX_OBSERVER_DATAGRAM
+        if self._peer is None or len(packet) > limit:
             return False
         try:
             return (validate_peer(self._peer) is True
@@ -336,15 +339,15 @@ class CompanyMotionSource:
         return sample
 
     def poll(self, validate_peer):
-        """Return one latest new V3 sample, or None. validate_peer takes (IPv4, port)."""
+        """Return the latest new real-time sample, or None. validate_peer takes (IPv4, port)."""
         self._owner()
         if self._registry is None or not callable(validate_peer):
             raise ValueError('configured company motion source and validator required')
         newest = None
         checked_peer = None
         prefix = self._prefix()
-        packet_limit = (MAX_OBSERVER_DATAGRAM if self._observer is not None or self._registered_npc_local_measurement
-                        else _MAX_SAMPLER_DATAGRAM)
+        packet_limit = (MAX_ORIENTED_OBSERVER_DATAGRAM if self._observer is not None
+                        else _MAX_ORIENTED_SAMPLER_DATAGRAM)
         if self._observer is not None:
             self._observer.expire()
         drain_limit = 64 if self._cockpit_max_pilots > 1 else 32
@@ -380,8 +383,9 @@ class CompanyMotionSource:
                 if len(raw) <= MAX_OBSERVER_DATAGRAM:
                     self._receive_npc_measurement(body)
                 continue
-            if self._observer is not None and kind not in (b'GAP', b'SAMPLE3'):
-                if len(raw) <= MAX_OBSERVER_DATAGRAM and (body.startswith(b'VIEW|') or body.startswith(b'SEEN|')):
+            if self._observer is not None and kind not in (b'GAP', b'SAMPLE3', b'SAMPLE4'):
+                limit = MAX_ORIENTED_OBSERVER_DATAGRAM if kind == b'SEEN4' else MAX_OBSERVER_DATAGRAM
+                if len(raw) <= limit and kind in (b'VIEW', b'SEEN', b'SEEN4'):
                     try:
                         fields = body.decode('ascii').split('|')
                     except UnicodeDecodeError:
@@ -398,20 +402,28 @@ class CompanyMotionSource:
                 if self._npc_latest is not RADAR_ENDED:
                     self._npc_latest = None
                 continue
-            if len(raw) > _MAX_SAMPLER_DATAGRAM or len(fields) != 14 or fields[0] != 'SAMPLE3':
+            oriented = kind == b'SAMPLE4'
+            limit = _MAX_ORIENTED_SAMPLER_DATAGRAM if oriented else _MAX_SAMPLER_DATAGRAM
+            if kind not in (b'SAMPLE3', b'SAMPLE4') or len(raw) > limit or len(fields) != (17 if oriented else 14):
                 raise ValueError('invalid local company motion packet')
-            _, epoch, index, sequence, sector, source_time, capture_time, x, y, z, vx, vy, vz, end = fields
-            if (end != '' or not re.fullmatch(r'[1-9][0-9]{0,15}', sequence)
+            _, epoch, index, sequence, sector, source_time, capture_time, x, y, z, vx, vy, vz = fields[:13]
+            if (fields[-1] != '' or not re.fullmatch(r'[1-9][0-9]{0,15}', sequence)
                     or not re.fullmatch(r'[1-9][0-9]{0,5}', index)
                     or (epoch, int(index)) != self._registry):
                 raise ValueError('foreign local company motion sample')
             rate = None if (vx, vy, vz) == ('-', '-', '-') else dict(zip('xyz', map(float, (vx, vy, vz))))
-            sample = motion_value({
-                'version': 3, 'epoch': epoch, 'generation': self._generation,
+            sample = {
+                'version': 4 if oriented else 3, 'epoch': epoch, 'generation': self._generation,
                 'index': int(index), 'sequence': int(sequence), 'sector_macro': sector,
                 'source_time': float(source_time), 'capture_time': float(capture_time),
                 'x': float(x), 'y': float(y), 'z': float(z), 'real_velocity': rate,
-            })
+            }
+            if oriented:
+                angles = fields[13:16]
+                if any(not _NATIVE_NUMBER.fullmatch(angle) for angle in angles):
+                    raise ValueError('invalid local company motion orientation')
+                sample['orientation'] = dict(zip(ORIENTATION_AXES, map(float, angles)))
+            sample = motion_value(sample, allow_v4=True)
             if self._previous is not None:
                 if sample['sequence'] <= self._previous['sequence']:
                     continue

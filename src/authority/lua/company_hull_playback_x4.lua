@@ -109,7 +109,7 @@ function M.new(options, engine)
             return true
         end
 
-        function session:write(target, before, recheck)
+        function session:write(target, before, recheck, attitude)
             if pending_zone or not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
@@ -125,10 +125,15 @@ function M.new(options, engine)
             -- The native read can differ from the playback observation. Check the
             -- actual displacement and prediction deadline again before dispatch.
             if recheck and recheck(actual) ~= true then return false end
+            local rotation = actual
+            if attitude ~= nil then
+                rotation = X4LAN_MOTION_BUFFER.copy_attitude(attitude)
+                if not rotation then return false end
+            end
             if crossing then pending_zone = destination_zone end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
                 x = target.x, y = target.y, z = target.z,
-                yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
+                yaw = rotation.yaw, pitch = rotation.pitch, roll = rotation.roll,
             })
             if not ok or dispatched ~= true then
                 closed = true  -- The native call may have had a partial effect.

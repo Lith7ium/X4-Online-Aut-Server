@@ -398,3 +398,133 @@ do
  end
 end
 print('company hull playback checks passed')
+
+-- REMOTE4 follows measured sector attitude through the ordinary cockpit
+-- stream, controller and bound native adapter using a deterministic engine.
+do
+    local dir = 'src/authority/lua/'
+    X4LAN_MOTION_BUFFER = dofile(dir .. 'motion_buffer.lua')
+    X4LAN_MOTION_PLAYBACK = dofile(dir .. 'motion_playback.lua')
+    X4LAN_COMPANY_HULL_PLAYBACK = dofile(dir .. 'company_hull_playback.lua')
+    local adapter_module = dofile(dir .. 'company_hull_playback_x4.lua')
+    local cockpit_module = dofile(dir .. 'company_cockpit_playback.lua')
+    local stream_module = dofile(dir .. 'company_observer_stream.lua')
+    local epoch, generation = ('a'):rep(32), ('b'):rep(32)
+    local now, queue, sent, writes, readings = 10, {}, {}, {}, {}
+    local actual = {x=50, y=0, z=0, yaw=0, pitch=0, roll=0}
+    local observed = {epoch=epoch, index=2, actor='0x22', sector_macro='sector', code='NPC-123'}
+    local reader = {
+        close=function() end,
+        tick=function() return observed end,
+        matches=function(_, e, sector, index, actor, code)
+            return e == epoch and sector == 'sector' and index == 2 and actor == '0x22' and code == 'NPC-123'
+        end,
+    }
+    local adapter = adapter_module.new({
+        enabled=true, pinned={epoch=epoch, issued_count=2}, own_index=1, observer=reader,
+        guard=function() return true end,
+    }, {
+        cockpit=function() return {actor=1, sector=4, zone=5} end,
+        target=function(actor)
+            assert(actor == '0x22')
+            return {actor=2, sector=4, zone=5, sector_macro='sector', code='NPC-123'}
+        end,
+        read=function(actor) assert(actor == 2); return actual end,
+        destination_zone=function(sector) assert(sector == 4); return 5 end,
+        write=function(actor, sector, pose)
+            assert(actor == 2 and sector == 4 and pose.x == 50 and pose.y == 0 and pose.z == 0)
+            actual = pose
+            writes[#writes + 1] = pose
+            return true
+        end,
+    })
+    local cockpit = cockpit_module.new({
+        enabled=true, own_index=1, adapter=adapter,
+        clock=function() return now end, game=function() return now end,
+        paused=function() return false end,
+        fault=function(r) error(r) end,
+        record=function(row) readings[#readings + 1] = row; return true end,
+    })
+    local stream = stream_module.new({cockpit=reader, map=reader}, epoch, {
+        receive=function() return table.remove(queue, 1) end,
+        send=function(_, packet) sent[#sent + 1] = packet; return true end,
+    }, 'related|', function() return now end, cockpit)
+
+    local function packet(kind, slot, sequence, speed, capture, angles, timed)
+        local fields = {'related', kind, slot, '1', epoch, '2', generation, tostring(sequence),
+                        'sector', '50', '0', '0', speed, speed, speed, tostring(capture), tostring(capture)}
+        if timed then fields[#fields + 1] = tostring(now) end
+        for _, value in ipairs(angles or {}) do fields[#fields + 1] = tostring(value) end
+        queue[#queue + 1] = table.concat(fields, '|')
+    end
+    packet('REMOTE4', 'cockpit', 1, '-', 10, {0, .3, -.4}, true)
+    stream:tick(true)
+    assert(#writes == 0 and sent[#sent]:match('related|SEEN4|cockpit|.*|0|0%.3|%-0%.4$'))
+    now = 10.2
+    packet('REMOTE4', 'cockpit', 2, '0', 10.2, {math.rad(170), 0, 0}, true)
+    stream:tick(true)
+    assert(#writes == 1 and math.abs(actual.yaw - math.rad(170)) < 1e-12)
+    now = 10.4
+    packet('REMOTE4', 'cockpit', 3, '0', 10.4, {math.rad(-170), 0, 0}, true)
+    stream:tick(true)
+    assert(#writes == 2 and math.deg(actual.yaw) > 170 and math.deg(actual.yaw) < 180)
+    assert(readings[#readings - 1].actual_attitude and readings[#readings - 1].target_attitude)
+    now = 10.45
+    stream:tick(true)
+    assert(math.abs(math.abs(actual.yaw) - math.pi) < 1e-12)
+    now = 10.6
+    stream:tick(true)
+    assert(math.abs(actual.yaw - math.rad(-170)) < 1e-12)
+    local held_count = #writes
+    now = 11
+    packet('REMOTE4', 'map', 4, '0', 11, {0, 0, 0}, false)
+    packet('REMOTE4', 'cockpit', 4, '0', 11, {'nan', 0, 0}, true)
+    stream:tick(true)
+    assert(#writes == held_count)
+    assert(sent[#sent]:match('related|SEEN4|map|.*|0|0|0$'))
+    now = 15.4
+    stream:tick(true)
+    assert(cockpit:stats().stale_cutoffs == 1 and #writes == held_count)
+    now = 16
+    packet('REMOTE', 'cockpit', 4, '0', 16, nil, true)
+    stream:tick(true)
+    assert(#writes == held_count, 'same lifetime must not switch to a different pose contract')
+    stream:close()
+end
+
+do
+    local buffer = dofile('src/authority/lua/motion_buffer.lua')
+    -- Independently compute the validated X4 sector basis columns from an
+    -- Euler sample and measure relative rotation from the basis dot products.
+    local function basis(a)
+        local cy, cp, cr = math.cos(a.yaw), math.cos(a.pitch), math.cos(a.roll)
+        local sy, sp, sr = math.sin(a.yaw), math.sin(a.pitch), math.sin(a.roll)
+        return {cr*cy+sr*sp*sy, -sr*cp, -cr*sy+sr*sp*cy,
+                sr*cy-cr*sp*sy, cr*cp, -sr*sy-cr*sp*cy, cp*sy, sp, cp*cy}
+    end
+    local function separation(a, b)
+        local A, B, trace = basis(a), basis(b), 0
+        for axis = 1, 9 do trace = trace + A[axis]*B[axis] end
+        return math.acos(math.max(-1, math.min(1, (trace - 1) / 2)))
+    end
+    local function mid(a, b)
+        local track = buffer.new({clock_basis='capture_time', dimensions=3, delay=.25})
+        for i, value in ipairs({a, b}) do
+            assert(track:push({version=4, frame='sector', sequence=i, source_time=i,
+                               capture_time=i/2, pose={0,0,0}, attitude=value}, i/2))
+        end
+        return assert(track:render(1)).attitude
+    end
+    local a = {yaw=.37, pitch=.8, roll=-.53}
+    local b = {yaw=-1.24, pitch=.18, roll=.9}
+    local between = mid(a, b)
+    assert(math.abs(separation(a, between) - separation(a, b)/2) < 1e-12)
+    assert(math.abs(separation(b, between) - separation(a, b)/2) < 1e-12)
+    for _, pole in ipairs({-1, 1}) do
+        local pitched = {yaw=.6, pitch=pole*math.pi/2, roll=.4}
+        local equivalent = {yaw=.6 - pole*.4, pitch=pitched.pitch, roll=0}
+        local vertical = mid(pitched, equivalent)
+        assert(separation(pitched, vertical) < 1e-6)
+        assert(not buffer.attitude_changed(pitched, equivalent))
+    end
+end

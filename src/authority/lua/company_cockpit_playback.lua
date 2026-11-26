@@ -17,7 +17,7 @@ end
 
 local function watermark(sample, arrival)
     return {sequence = sample.sequence, capture_time = sample.capture_time, source_time = sample.source_time,
-            arrival = arrival}
+            arrival = arrival, version = sample.version}
 end
 
 local function alignment(sample, written_at, first_contact)
@@ -222,16 +222,16 @@ function M.new(options)
         active_generation = verified.generation
     end
 
-    local function new_controller(verified, active_session, start_at_first_pair)
+    local function new_controller(verified, active_session, sample_version, start_at_first_pair)
         stats.binds = stats.binds + 1
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
-            start_at_first_pair = start_at_first_pair,
+            sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
-            write = function(_, target, before, recheck)
-                local ok = active_session:write(target, before, recheck)
+            write = function(_, target, before, recheck, attitude)
+                local ok = active_session:write(target, before, recheck, attitude)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok
             end,
@@ -253,7 +253,7 @@ function M.new(options)
     end
 
     local function start_first_contact(verified, native_session, previous, sample, arrival)
-        local candidate = new_controller(verified, native_session, true)
+        local candidate = new_controller(verified, native_session, sample.version, true)
         local ok, reason = candidate:push(verified, sample, arrival)
         if not ok then
             candidate:stop()
@@ -402,6 +402,7 @@ function M.new(options)
                 or now - arrival >= prediction_seconds then
             return false, 'expired_arrival'
         end
+        if sample.version ~= 3 and sample.version ~= 4 then return false, 'invalid_sample_version' end
         if not hex32(sample.generation) then
             stats.generation_rejections = stats.generation_rejections + 1
             return false, 'invalid_generation'
@@ -443,6 +444,7 @@ function M.new(options)
         local wkey = watermark_key(ship_index, sample.generation)
         local last = last_by_index_gen[wkey]
         if last then
+            if sample.version ~= last.version then return false, 'sample_version_changed' end
             if not (sample.sequence > last.sequence and sample.capture_time > last.capture_time
                     and sample.source_time >= last.source_time and arrival >= last.arrival) then
                 return false, 'non_monotone'
@@ -517,7 +519,7 @@ function M.new(options)
                 -- A fresh velocity-less baseline can identify the first contact.
                 -- It cannot grant the normal post-loss reacquisition permission.
                 if options.trial_first_contact == true and not align_allowed and not active_index then
-                    if (not last or previous) and sample.version == 3
+                    if (not last or previous)
                             and sample.epoch == observed.epoch and sample.index == ship_index
                             and sample.sector_macro == observed.sector_macro and temp_session.first_contact_in_range
                             and temp_session:first_contact_in_range(actual, sample) then
@@ -532,7 +534,7 @@ function M.new(options)
                 last_by_index_gen[wkey] = watermark(sample, arrival)
                 return true, 'baseline_recorded'
             end
-            local candidate = new_controller(probe_binding, temp_session)
+            local candidate = new_controller(probe_binding, temp_session, sample.version)
             local ok, reason = candidate:push(probe_binding, sample, arrival)
             if not ok then
                 candidate:stop()
@@ -704,7 +706,7 @@ local function make_x4_record(readers_by_slot, clock)
             track.count = track.count + 1
             local reader = readers_by_slot[slot_name]
             local mode = reader and reader.mode and reader:mode() or slot_name
-            DebugError(table.concat({
+            local fields = {
                 '[X4LAN] AUTH_COMPANY_COCKPIT_READBACK', 'slot=' .. slot_name,
                 'kind=' .. event.kind, 'mode=' .. tostring(mode),
                 'ship=' .. event.code, 'epoch=' .. event.epoch, 'index=' .. event.index,
@@ -714,7 +716,15 @@ local function make_x4_record(readers_by_slot, clock)
                 'capture_time=' .. decimal(event.capture_time), 'elapsed=' .. decimal(event.elapsed),
                 'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
                 'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
-            }, ' '))
+            }
+            if event.actual_attitude and event.target_attitude then
+                for _, name in ipairs({'target', 'actual'}) do
+                    local angles = event[name .. '_attitude']
+                    fields[#fields + 1] = name .. '_attitude=' ..
+                        table.concat({decimal(angles.yaw), decimal(angles.pitch), decimal(angles.roll)}, ',')
+                end
+            end
+            DebugError(table.concat(fields, ' '))
         end
         return true
     end

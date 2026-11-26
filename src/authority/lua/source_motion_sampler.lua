@@ -29,6 +29,8 @@ function M.new(o)
  assert(finite(c.min_dt) and finite(c.max_dt) and c.min_dt>0 and c.min_dt<=c.max_dt and c.max_dt<=60)
  assert(c.include_orientation==nil or type(c.include_orientation)=='boolean')
  assert(c.real_time_motion==nil or type(c.real_time_motion)=='boolean')
+ assert(c.real_time_orientation==nil or type(c.real_time_orientation)=='boolean')
+ assert(not c.real_time_orientation or (c.real_time_motion and not c.include_orientation))
  assert(c.allow_superhighway_gap==nil or type(c.allow_superhighway_gap)=='boolean')
  assert(c.recheck_superhighway_boundary==nil or (type(c.recheck_superhighway_boundary)=='boolean'
   and (not c.recheck_superhighway_boundary or c.allow_superhighway_gap)))
@@ -210,7 +212,7 @@ function M.new(o)
     capture_before_pose=sample.capture_before_pose,capture_after_pose=sample.capture_after_pose,
     sector_macro=sample.sector_macro,local_sector_key=sample.local_sector_key,
     game_after_pose=sample.game_after_pose,x=sample.x,y=sample.y,z=sample.z}
-   if c.include_orientation then
+   if c.include_orientation or c.real_time_orientation then
     sampled.orientation={}
     for _,axis in ipairs({'yaw','pitch','roll'}) do
      assert(finite(sample[axis]) and math.abs(sample[axis])<=2*math.pi)
@@ -273,7 +275,8 @@ function M.new(o)
    local v={version=c.include_orientation and 2 or 1,epoch=c.epoch,generation=c.generation,index=e.row.index,sequence=e.sequence+1,
     sector_macro=sample.sector_macro,source_time=t,x=sample.x,y=sample.y,z=sample.z,velocity=velocity}
    if c.real_time_motion then
-    v.version=3
+    v.version=c.real_time_orientation and 4 or 3
+    if c.real_time_orientation then v.orientation=sample.orientation end
     v.velocity=nil
     v.capture_time=capture_time
     v.real_velocity=velocity
@@ -384,7 +387,7 @@ function M.new_x4(c)
  opts.reader_factory=function(row,actor,request)
   return new_descriptor({enabled=true,epoch=c.epoch,request_id=request,timeout=c.timeout,
    row=row,actor=actor,expected_save_path=c.expected_save_path,normalize_save_path=c.normalize_save_path,
-   guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation,
+   guard=c.guard,include_local_sector=true,include_orientation=c.include_orientation or c.real_time_orientation,
    include_capture_time=c.real_time_motion,capture_clock=c.capture_clock,
    allow_superhighway_gap=c.allow_superhighway_gap,recheck_superhighway_boundary=c.recheck_superhighway_boundary,
    saved_baseline=row.classification=='saved_baseline' and c.saved_baseline_limit or nil})

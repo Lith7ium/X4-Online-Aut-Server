@@ -130,6 +130,7 @@ source.new = function(options) native_options = options; return {} end
 source.new_x4({port = 1, lease = 'test', generation = generation, nonce = nonce, index = index},
               '/private/save', {epoch = epoch, issued_count = index}, {open = function() return {} end})
 local config = native_options.make_sampler(actor, function() return true end)
+assert(config.real_time_motion and config.real_time_orientation and not config.include_orientation)
 assert(config.diagnostics and config.recover_expired_pending and config.allow_superhighway_gap
     and config.recheck_superhighway_boundary)
 native_options.superhighway_gap('superhighway_boundary_recheck')
@@ -180,7 +181,7 @@ assert(not native_options.available())
 
 -- Exercise the real correlated descriptor, sampler, and Company owner.
 local descriptor = dofile('tools/dev/authority_job_descriptor_probe.lua')
-local function transit_case(response, allow_gap, return_to_origin)
+local function transit_case(response, allow_gap, return_to_origin, oriented)
     local now, current_actor, x = 1, actor, 10
     local issued, sent, failed = {}, {}, {}
     local client = make_source({
@@ -193,7 +194,7 @@ local function transit_case(response, allow_gap, return_to_origin)
                 enabled = true, epoch = epoch, generation = generation, nonce = nonce,
                 max_tracks = 1, scan_budget = 1, interval = .10, timeout = 1,
                 min_dt = .02, max_dt = 1, real_time_motion = true,
-                allow_superhighway_gap = allow_gap,
+                allow_superhighway_gap = allow_gap, real_time_orientation = oriented,
                 clock = function() return now end, guard = guard, actor_key = tostring,
                 binding_guard = function() return false end, saved_baseline_limit = index,
                 saved_baseline_guard = function(row, value)
@@ -204,7 +205,7 @@ local function transit_case(response, allow_gap, return_to_origin)
                         enabled = true, epoch = epoch, request_id = rid, timeout = 1,
                         row = row, actor = value, saved_baseline = index,
                         allow_superhighway_gap = allow_gap, guard = guard,
-                        include_local_sector = true, include_capture_time = true,
+                        include_local_sector = true, include_capture_time = true, include_orientation = oriented,
                         capture_clock = function() return now end,
                         clock = function() return now end, game_time = function() return now end,
                         actor_key = tostring, hex_key = function(hex) return tostring(tonumber(hex)) end,
@@ -216,7 +217,8 @@ local function transit_case(response, allow_gap, return_to_origin)
                         snapshot = function(_, sector)
                             return {sector_local = tostring(tonumber(sector)), x = x, y = 0, z = 0,
                                 game_before = now, game_after = now,
-                                capture_before = now, capture_after = now}
+                                capture_before = now, capture_after = now,
+                                yaw = now == 1 and 0 or 3, pitch = -.25, roll = .5}
                         end,
                     })
                 end,
@@ -237,7 +239,11 @@ local function transit_case(response, allow_gap, return_to_origin)
     reply(1, old)
     x = 12
     reply(1.2, old)
-    assert(sent[2]:match('|2|sector_a.*|10%.?[%d]*|0|0|$'))
+    local format = oriented and 'SAMPLE4' or 'SAMPLE3'
+    local angles = oriented and '3|%-0%.25|0%.5|' or ''
+    assert(sent[1] == format .. '|' .. epoch .. '|1961|1|sector_a|1|1|10|0|0|-|-|-|'
+        .. (oriented and '0|-0.25|0.5|' or ''))
+    assert(sent[2]:match('^' .. format .. '|.*|2|sector_a.*|10%.?[%d]*|0|0|' .. angles .. '$'))
     if response then
         now = 1.4
         client:tick()
@@ -269,14 +275,15 @@ local function transit_case(response, allow_gap, return_to_origin)
     assert(#sent == 3 and #issued == 5)
     x = 700
     reply(1.8, new)
-    assert(#failed == 0 and sent[4]:match('|3|' .. result_sector .. '.*|%-|%-|%-|$'))
+    assert(#failed == 0 and sent[4]:match('|3|' .. result_sector .. '.*|%-|%-|%-|' .. angles .. '$'))
     x = 702
     reply(2, new)
-    assert(sent[5]:match('|4|' .. result_sector .. '.*|10%.?[%d]*|0|0|$'))
+    assert(sent[5]:match('|4|' .. result_sector .. '.*|10%.?[%d]*|0|0|' .. angles .. '$'))
 end
 
 transit_case(nil, true)
 transit_case(nil, true, true)
+transit_case(nil, true, false, true)
 for _, response in ipairs({'unavailable', 'transit|0x2cd', 'transit|0x2cc|junk',
                             'transit0x2cc', 'binding', 'epoch', 'index'}) do
     transit_case(response, true)

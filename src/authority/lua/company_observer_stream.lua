@@ -41,12 +41,12 @@ local function valid_sample(row)
     return true
 end
 
-local function remote_sample(row, binding)
+local function remote_sample(row, binding, attitude)
     local velocity
     if row[12] ~= '-' then
         velocity = {x=tonumber(row[12]), y=tonumber(row[13]), z=tonumber(row[14])}
     end
-    return {version=3, epoch=binding.epoch, index=binding.index, sector_macro=binding.sector_macro,
+    return {version=attitude and 4 or 3, attitude=attitude, epoch=binding.epoch, index=binding.index, sector_macro=binding.sector_macro,
         generation=row[6], sequence=tonumber(row[7]), x=tonumber(row[9]), y=tonumber(row[10]), z=tonumber(row[11]),
         real_velocity=velocity, source_time=tonumber(row[15]), capture_time=tonumber(row[16])}
 end
@@ -114,7 +114,8 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
     end
 
     local function observe(packet, now)
-        if #packet > 576 or packet:sub(1, #prefix) ~= prefix then return end
+        if #packet > 640 or packet:sub(1, #prefix) ~= prefix
+                or (#packet > 576 and packet:sub(#prefix + 1, #prefix + 8) ~= 'REMOTE4|') then return end
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
@@ -138,14 +139,25 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             end
             return
         end
+        local version4 = row[1] == 'REMOTE4'
+        if not version4 and row[1] ~= 'REMOTE' then return end
+        local angle_fields = version4 and 3 or 0
         local received_at
-        if #row == 17 and timed_trial then
+        if #row == 17 + angle_fields and timed_trial then
             -- Both clocks here belong to the receiving machine. Field 16 is
             -- the original capture clock on the remote pilot's machine.
             received_at = coordinate(row[17], 1e12)
             if not received_at or received_at < 0 or received_at > clock() then return end
-        elseif #row ~= 16 then return end
-        if row[1] ~= 'REMOTE' then return end
+        elseif #row ~= 16 + angle_fields then return end
+        local attitude
+        if version4 then
+            local first = received_at and 18 or 17
+            local yaw = coordinate(row[first], 2 * math.pi)
+            local pitch = coordinate(row[first + 1], 2 * math.pi)
+            local roll = coordinate(row[first + 2], 2 * math.pi)
+            if not (yaw and pitch and roll) then return end
+            attitude = {yaw = yaw, pitch = pitch, roll = roll}
+        end
         local slot = slots[row[2]]
         local binding = slot and slot.binding
         if not binding or counter(row[3]) ~= slot.serial or row[4] ~= epoch
@@ -153,14 +165,17 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
                 or not valid_sample(row) then return end
         if not slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then return end
         -- Echo only after reading the live local hull again. Source rates may be absent.
-        local receipt = {'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
+        local receipt = {version4 and 'SEEN4' or 'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
                          binding.actor, binding.code, unpack(row, 9, 16)}
+        if attitude then
+            for index = #row - 2, #row do receipt[#receipt + 1] = row[index] end
+        end
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
-        if hold_trial and confirmed == true and row[2] == 'cockpit' then
+        if hold_trial and confirmed == true and row[2] == 'cockpit' and not version4 then
             hold_trial:sample(binding, slot.serial, remote_sample(row, binding), received_at)
         end
-        if playback_trial and received_at and confirmed == true then
-            playback_trial:sample(binding, slot.serial, remote_sample(row, binding), received_at, row[2])
+        if playback_trial and playback_slots[row[2]] and received_at and confirmed == true then
+            playback_trial:sample(binding, slot.serial, remote_sample(row, binding, attitude), received_at, row[2])
         end
     end
 

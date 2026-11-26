@@ -35,8 +35,11 @@ function M.new(options)
  assert(step_guard == nil or type(step_guard) == 'function')
  local sample_version = configuration.sample_version
  if sample_version == nil then sample_version = 1 end
- assert(sample_version == 1 or sample_version == 3, 'invalid playback sample version')
- local clock_basis = sample_version == 3 and 'capture_time' or 'source_time'
+ assert(sample_version == 1 or sample_version == 3 or sample_version == 4, 'invalid playback sample version')
+ local capture_clock = sample_version ~= 1
+ local follows_attitude = sample_version == 4
+ assert(not follows_attitude or type(configuration.attitude_changed) == 'function')
+ local clock_basis = capture_clock and 'capture_time' or 'source_time'
  local buffer_options = {}
  for key, value in pairs(configuration.buffer_options or {}) do buffer_options[key] = value end
  assert(buffer_options.dimensions == nil or buffer_options.dimensions == 3)
@@ -125,11 +128,11 @@ function M.new(options)
    check()
    stage = 'sample'
    assert(type(snapshot) == 'table' and snapshot.frame == configuration.frame)
-   if sample_version == 3 then
-    assert(snapshot.version == 3 and finite(snapshot.capture_time) and
+   if capture_clock then
+    assert(snapshot.version == sample_version and finite(snapshot.capture_time) and
      snapshot.capture_time >= 0 and (not last_capture or snapshot.capture_time > last_capture))
    else
-    assert(snapshot.version ~= 3 and snapshot.capture_time == nil and snapshot.real_rate == nil)
+    assert(snapshot.version ~= 3 and snapshot.version ~= 4 and snapshot.capture_time == nil and snapshot.real_rate == nil)
    end
    stage = 'arrival'
    assert(finite(arrival) and arrival >= 0 and arrival <= now and
@@ -137,7 +140,7 @@ function M.new(options)
    stage = 'sequence'
    assert(type(snapshot.sequence) == 'number' and snapshot.sequence % 1 == 0 and
     snapshot.sequence > last_sequence and finite(snapshot.source_time) and
-    (not last_source or (sample_version == 3 and snapshot.source_time >= last_source) or
+    (not last_source or (capture_clock and snapshot.source_time >= last_source) or
      snapshot.source_time > last_source))
    -- Do not infer age from the remote clock's unrelated absolute origin.
    if now-arrival >= configuration.max_age or (invalidated_at and arrival <= invalidated_at) then
@@ -147,7 +150,7 @@ function M.new(options)
    assert(buffer:push(snapshot, arrival) == true)
    check()
    last_sequence, last_source, last_arrival = snapshot.sequence, snapshot.source_time, arrival
-   if sample_version == 3 then last_capture = snapshot.capture_time end
+   if capture_clock then last_capture = snapshot.capture_time end
    fresh_arrival = arrival
    state = 'active'
    accepted = true
@@ -202,6 +205,10 @@ function M.new(options)
    assert(rendered.frame == configuration.frame and #rendered.pose == 3)
    local target = {x=rendered.pose[1], y=rendered.pose[2], z=rendered.pose[3],
     yaw=actual.yaw, pitch=actual.pitch, roll=actual.roll}
+   if follows_attitude then
+    target.yaw, target.pitch, target.roll =
+     rendered.attitude.yaw, rendered.attitude.pitch, rendered.attitude.roll
+   end
    target = copy_pose(target)
    record({kind='observation', actual=copy_pose(actual), target=copy_pose(target),
     source_sequence=rendered.source_sequence, latest_source_time=last_source,
@@ -211,7 +218,7 @@ function M.new(options)
    local step = distance(actual, target)
    assert(finite(step) and step <= configuration.max_step
     and (not step_guard or step_guard(actual, target, now, rendered.phase) == true), 'correction too large')
-   if step == 0 then return end
+   if step == 0 and (not follows_attitude or not configuration.attitude_changed(actual, target)) then return end
    check()
    if clock()-fresh_arrival >= configuration.max_age then invalidate(clock(), 'stale'); return end
    uncertain = true -- An exception can follow a partial native effect.
