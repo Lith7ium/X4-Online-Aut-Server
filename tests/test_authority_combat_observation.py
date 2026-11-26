@@ -75,6 +75,23 @@ class CheckpointDamageEvidenceTests(unittest.TestCase):
             self.assertEqual(report['victim'], {'code': 'VLY-685', 'index': 2})
             self.assertEqual(report['last_attacker'], {'code': 'HVC-420', 'index': 1})
             self.assertIsNone(report['event_attacker'])
+            self.assertFalse(report['victim_occupied_by_player'])
+            self.assertFalse(report['victim_controlled_by_player'])
+            piloted_hit = replace(event, victim_reg=1, victim_code='HVC-420', victim_owner='player',
+                                  victim_occ=True, victim_ctrl=True)
+            pilot_report = resolve_hit(checkpoint, piloted_hit, piloted_ship_index=1)
+            self.assertTrue(pilot_report['victim_occupied_by_player'])
+            self.assertTrue(pilot_report['victim_controlled_by_player'])
+            for observed, admitted_index, expected_error in (
+                (piloted_hit, 2, 'admitted pilot ship'),
+                (replace(piloted_hit, victim_ctrl=False), 1, 'occupied and controlled'),
+                (replace(piloted_hit, victim_occ=False), 1, 'occupied and controlled'),
+                (replace(piloted_hit, victim_owner='xenon'), 1, 'Company ownership'),
+                (replace(piloted_hit, victim_reg=2, victim_code='VLY-685'), 2, 'Company ownership'),
+            ):
+                with self.subTest(expected_error=expected_error, observed=observed):
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        resolve_hit(checkpoint, observed, piloted_ship_index=admitted_index)
             for mismatch in (replace(event, registry_epoch=None), replace(event, registry_epoch='other'),
                              replace(event, victim_code='HVC-420'), replace(event, last_att_reg=3)):
                 with self.subTest(mismatch=mismatch), self.assertRaises(ValueError):

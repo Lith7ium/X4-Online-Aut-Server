@@ -43,6 +43,13 @@ python3 tools/dev/authority_combat_hit_evidence.py \
   --log "$run/cockpit-1073/client/case/home/.config/EgoSoft/X4/45841/engine-output.log" --sequence 49
 ```
 
+For a trial that requires the pilot to be hit, pass `--piloted-ship-index`
+with the registry index from that pilot's admission. The verifier checks
+the victim's code and Company ownership in the offered save, and the live
+ownership, occupancy and control at the instant of the damage event.
+Replaying the archived sequence 49 with target index 1074 rejected
+KHI-630 because nobody occupied or controlled it.
+
 ## Occupied target attempt on Linux
 
 One further isolated attempt at `3b5f00d4331f0aad32e4b5017fbe00e098635239`
