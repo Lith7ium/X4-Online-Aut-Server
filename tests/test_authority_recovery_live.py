@@ -80,12 +80,12 @@ class RecoveryLiveTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'log replaced'): watch.poll()
 
     def test_cleanup_keeps_lock_when_owned_process_stop_is_unconfirmed(self):
-        for mode in ('not_started','stopped','survives','raises','invalid','unknown_identity','interrupted_spawn','spawn_raises'):
+        for mode in ('not_started','stopped','survives','raises','invalid','unknown_identity','interrupted_spawn','spawn_raises','observation_timeout'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
                 root=Path(d);game=root/'game';(game/'extensions').mkdir(parents=True);(game/'X4').touch()
                 auth=root/'auth';auth.touch();out=root/'output';profile=root/'profile';(profile/'save').mkdir(parents=True)
                 source=root/'source';source.write_bytes(b'saved bytes');lock=root/'lock'
-                checkpoint=SimpleNamespace(marker='a'*32,sha256='expected')
+                checkpoint=SimpleNamespace(checkpoint_id='checkpoint-'+'b'*32,marker='a'*32,sha256='expected')
                 args=SimpleNamespace(out=out,store=root/'store',game=game,display=':0',timeout=5,seed=1)
                 user=SimpleNamespace(pw_dir=str(root),pw_uid=1000,pw_gid=1000,pw_name='tester')
                 proc=Mock(pid=123);proc.poll.return_value=None
@@ -124,17 +124,29 @@ class RecoveryLiveTests(unittest.TestCase):
                     def spawn(*_args,**_kwargs):
                         if mode=='spawn_raises': raise OSError('launch outcome unknown')
                         if mode=='interrupted_spawn': installed_handlers[recovery.signal.SIGTERM](recovery.signal.SIGTERM,None)
+                        if mode=='observation_timeout':
+                            (profile/'engine-output.log').write_text(
+                                '[X4LAN] AUTH_RECOVERY REQUEST\n'
+                                f'[X4LAN] AUTH_MARKER load INSPECTED {checkpoint.marker}\n'
+                                '[X4LAN] AUTH_RECOVERY PAUSED\n')
                         return proc
                     popen=replace(recovery.subprocess,'Popen',Mock(side_effect=spawn))
                     replace(recovery.live,'start_ticks',Mock(side_effect=RuntimeError('no identity')) if mode=='unknown_identity' else lambda _:7)
                     replace(recovery.live,'record_owned_game',Mock(return_value={'leader':123}))
                     replace(recovery.live,'stop_owned_game_descendants',Mock(return_value={'refused':[]}))
                     replace(recovery.live,'wait_owned_groups',Mock(return_value={123:[99]}))
-                    replace(recovery.prior,'game_identity',Mock(side_effect=RuntimeError('end observation')))
+                    if mode=='observation_timeout':
+                        def observe(*, guard, **_):
+                            guard()
+                            raise TimeoutError('optional observation timed out')
+                        replace(recovery.prior,'game_identity',lambda *_:(123,7))
+                        replace(recovery,'observation_callback',observe)
+                    else:
+                        replace(recovery.prior,'game_identity',Mock(side_effect=RuntimeError('end observation')))
                     stop=replace(recovery.snapshot,'stop_owned',Mock(side_effect=RuntimeError('uncertain')) if mode=='raises' else Mock(return_value=[99] if mode=='survives' else (None if mode=='invalid' else [])))
                     result=recovery.run(args)
                 self.assertFalse(result['success'])
-                if mode in ('not_started','stopped','interrupted_spawn'):
+                if mode in ('not_started','stopped','interrupted_spawn','observation_timeout'):
                     release_mock.assert_called_once();self.assertFalse(lock.exists())
                     self.assertEqual(result['owned_processes_remaining'],[])
                 else:
@@ -147,6 +159,16 @@ class RecoveryLiveTests(unittest.TestCase):
                 if mode=='interrupted_spawn':
                     self.assertEqual(result['error'],'signal '+str(recovery.signal.SIGTERM))
                     stop.assert_called_once_with(proc,7)
+                if mode=='observation_timeout':
+                    self.assertEqual(result['error'],'optional observation timed out')
+                    self.assertEqual(result['checkpoint_id'],checkpoint.checkpoint_id)
+                    self.assertEqual(result['sha256'],checkpoint.sha256)
+                    for key in ('load_requested','marker_after_game_loaded','pause_observed'):
+                        self.assertIs(result[key],True)
+                    for key in ('exact_loaded_file_proven','zero_advance_proven','admitted'):
+                        self.assertIs(result[key],False)
+                    self.assertNotIn('experiment',result)
+                    self.assertEqual(json.loads((out/'result.json').read_text()),result)
 
     def test_stopped_leader_reuses_authenticated_descendant_cleanup(self):
         process = Mock(pid=123)

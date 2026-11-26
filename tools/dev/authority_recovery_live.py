@@ -236,6 +236,9 @@ def run(args):
                 if watch.stage and seen_game is None: raise RuntimeError('receipt without owned X4 process')
                 if caught_up and watch.stage==3:
                     if live.sha(target)!=checkpoint.sha256: raise ValueError('staged checkpoint changed')
+                    result.update(checkpoint_id=checkpoint.checkpoint_id,sha256=checkpoint.sha256,
+                                  load_requested=True,marker_after_game_loaded=True,pause_observed=True,
+                                  exact_loaded_file_proven=False,zero_advance_proven=False,admitted=False)
                     if observation_callback is not None:
                         if not callable(observation_callback): raise ValueError('invalid observation hook')
                         def guard():
@@ -251,9 +254,7 @@ def run(args):
                         guard()
                         if type(experiment) is not dict: raise ValueError('invalid observation result')
                         result['experiment']=experiment
-                    result.update(success=True,checkpoint_id=checkpoint.checkpoint_id,sha256=checkpoint.sha256,
-                                  load_requested=True,marker_after_game_loaded=True,pause_observed=True,
-                                  exact_loaded_file_proven=False,zero_advance_proven=False,admitted=False)
+                    result['success']=True
                     break
                 time.sleep(.1)
     except (Exception,KeyboardInterrupt) as error: result['error']=str(error)

@@ -37,8 +37,30 @@ the SHA-256 above. Its saved X4 marker and registry independently identified
 the Company ship KHI-630 at index 1074 with 2,340 root shield. The ship had
 no serialized root hull damage.
 
-The client stopped after staging the slot. This check covers the bytes a
-returning pilot receives. Loading that slot into a new X4 process and
-reading the ship in the cockpit remain separate checks. The first fixture
+The client stopped after staging the slot. The first fixture
 allowed only one relay for both control and the file transfer and timed out.
 The successful run used the regular Company connection limits.
+
+## Cold-loading the downloaded slot in X4
+
+A new Linux X4 9.00 process on Bazzite loaded a private, read-only copy of
+the downloaded slot using software Vulkan and the base-game profile. X4
+reported the saved marker after loading and paused. A read-only probe
+checked the forward and reverse registry entries for index 1074 and
+identified the operational player-owned ship KHI-630. At paused game
+time 27.45333 s, X4 reported **2,340 / 2,366 shield and 3,600 / 3,600 hull**.
+The original keyboard hit, Fedora's confirmed save and the returning
+pilot's downloaded world therefore agree on the 26 missing shield points.
+
+The first observer timed out after three seconds. Its closed engine log
+contained the correct marker, pause and native health reading. After the
+observer adopted the recovery supervisor's deadline, a second isolated load
+confirmed the same reading while X4 was running and completed normally.
+Both supervisors reported zero remaining owned processes. The successful
+engine log has SHA-256 `1141863b8cc47e202fce64e7971ad33dfc6e7953f6833114016e388bfb07b8ef`;
+the supervisor result has SHA-256
+`62dfe04e9850e31681dce9316f3f0da58740919e4e0b9c983c5c697ff2097ed8`.
+
+This load ended while paused, before multiplayer admission, with no pilot
+at KHI's controls. Live reciprocal cockpit damage over the Internet
+remains an acceptance test.
