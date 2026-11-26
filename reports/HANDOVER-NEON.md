@@ -34,8 +34,12 @@ separate Windows run at `f0605562` passed all 15 NPC observation,
 trade capture and purchase-source fixtures with zero skips. The
 integrated Linux suite found seven errors in a shared test fixture.
 After the fix, all 29 cases in the four affected modules passed.
-The last full Linux run still has 25 skips. Cobalt owns the operator's
-Internet flight and the Windows occupied-ship hit observation.
+The last full Linux run still has 25 skips. Cobalt observed six shield
+hits on the occupied Company ship on Windows in a separate creative
+world. He is preparing the same observation for an admitted pilot
+with an offered checkpoint. The Internet flight awaits the operator.
+[Windows hit observations](AUTHORITY-REGISTERED-PILOT-COMBAT-20261125.md#occupied-victim-on-windows) ·
+[02:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795654839676439)
 [Strict run and coverage gaps](AUTHORITY-STRICT-CHECKS-20261125.md) ·
 [Windows fixture results](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795647665602239) ·
 [01:00 development check-in](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795651241349479)

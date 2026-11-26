@@ -50,6 +50,19 @@ ownership, occupancy and control at the instant of the damage event.
 Replaying the archived sequence 49 with target index 1074 rejected
 KHI-630 because nobody occupied or controlled it.
 
+### Occupied victim on Windows
+
+Cobalt reported a native Windows 11 run at `28b36a12` with X4 9.00
+and CPython 3.12.10. Xenon ZUT-626 fired 12 shots at NMY-676. X4 recorded
+six shield hits of 23 each, dropping shields from 2,366 to 2,228 while
+hull stayed at 3,600. Every victim record identified the same occupied
+and controlled Company ship, index 1. The shield events had no event
+attacker. The six `player_ship_hit` events identified ZUT-626, index 5,
+and the projectile macro. These identities belong to the creative
+fixture's in-memory registry. A provider offer and saved registry are
+still needed to verify an admitted Windows pilot's hit.
+[Cobalt's native result](https://x4multiplayeraicoms.slack.com/archives/C0C9ZV35VSB/p1795651241349479)
+
 ## Occupied target attempt on Linux
 
 One further isolated attempt at `3b5f00d4331f0aad32e4b5017fbe00e098635239`
