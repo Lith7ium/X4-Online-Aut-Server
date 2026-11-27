@@ -194,6 +194,7 @@ local marker_module = dofile('src/authority/lua/company_map_marker.lua')
 local menu = {name='MapMenu', shown=true, holomap=9, frames={}}
 local camera = {x=0,y=0,z=0,yaw=0,pitch=-1.55,roll=0,distance=20000}
 local viewport = {x=0,y=0,width=100,height=100}
+local toolbar
 local viewed_sector, map_pointer, other_layer = 'sector_b', true, false
 local capacity, register = true, true
 local attempts = 0
@@ -226,7 +227,7 @@ local marker = marker_module.new({
     view=function(binding, y)
         if map_pointer and viewed_sector == binding.sector_macro then
             return {sector=viewed_sector, height=y, menu=menu, holomap=9, camera=camera, viewport=viewport,
-                ui_scale=1, fixed_top_down=true}
+                ui_scale=1, fixed_top_down=true, toolbar=toolbar}
         end
     end,
     calibrate=function(view)
@@ -454,3 +455,144 @@ map_packet('map', 2, 1, {generation=new_generation})
 owner:tick(true)
 assert(#sent == 4 and sent[4]:match('SEEN|map|2|'))
 owner:close()
+
+
+-- An occupied toolbar hides only the overlay and does not change projection
+-- or consume the remote sample. Exact rectangle edges can touch.
+viewport.width, viewed_sector, map_pointer = 100, 'sector_b', true
+other_layer, capacity, register = false, true, true
+toolbar = {x=48, y=30, width=15, height=25}
+local prepared, prior_draws = calibrations, #draws
+clock = 30
+marker:sample(10, {generation=generation, sequence=1, x=40, y=2000, z=40}, clock)
+marker:tick({sector_macro='sector_b'}, 10, clock)
+assert(not menu.frames[3] and #draws == prior_draws and calibrations == prepared + 1)
+toolbar.x = 49
+marker:tick({sector_macro='sector_b'}, 10, clock+.1)
+assert(menu.frames[3] and #draws == prior_draws + 1 and calibrations == prepared + 1)
+assert(draws[#draws].x == 31 and draws[#draws].y == 31)
+toolbar.x = 48
+marker:tick({sector_macro='sector_b'}, 10, clock+.2)
+assert(not menu.frames[3] and #draws == prior_draws + 1 and calibrations == prepared + 1)
+toolbar.y = 50
+marker:tick({sector_macro='sector_b'}, 10, clock+.3)
+assert(menu.frames[3] and #draws == prior_draws + 2 and calibrations == prepared + 1)
+marker:close()
+
+-- Run the native view adapter with the stock table geometry entry points.
+-- The toolbar includes the label row and uses the frame's real offset.
+local create_marker = marker_module.new
+local ffi = package.loaded.ffi
+local scale, percentage = 1, false
+local mouse_x, mouse_y = .1, .1
+local stock = {
+    name='MapMenu', shown=true, picking=true, map=70, holomap=71, topLevel=72,
+    frameData={[6]={x=11,y=17}}, topLevelHeight=74, frames={},
+}
+Helper = {borderSize=4}
+Menus = {stock}
+X4LAN_RESOLVE_STRING = {parse_hex=function() return 91 end}
+local stock_camera = {x=0,y=0,z=0,yaw=0,pitch=-math.pi/2,roll=0}
+package.loaded.ffi = {
+    typeof=function() return true end,
+    cdef=function() end,
+    new=function(name) return name == 'UIPosRot[1]' and {[0]={}} or {} end,
+    C={
+        GetMapState=function(_, state) state[0] = {offset=stock_camera, cameradistance=2500} end,
+        GetMapPositionOnEcliptic2=function(_, point, _, _, offset)
+            point[0].x = 11 + (1 + mouse_x) * 500 * scale
+            point[0].y = offset.y or 0
+            point[0].z = 17 + (1 - mouse_y) * 350 * scale
+            return 81
+        end,
+        SetMapRelativeMousePosition=function(_, _, x, y) mouse_x, mouse_y = x, y end,
+        GetContextByClass=function() return 81 end,
+        IsComponentClass=function() return true end,
+        GetUIScale=function() return scale end,
+    },
+}
+function IsValidWidgetElement(id) return id == stock.topLevel or id == stock.frames[3] end
+function GetRenderTargetMousePosition() return mouse_x, mouse_y end
+function GetSize() return 1000*scale, 700*scale end
+function GetOffset(id)
+    if id == stock.topLevel then return 315*scale, 20*scale end
+    return 0, 0
+end
+function GetTableColumnWidths(id)
+    assert(id == stock.topLevel)
+    return 40*scale, 50*scale, 40*scale
+end
+function IsTableColumnWidthPercentage(id)
+    assert(id == stock.topLevel)
+    return percentage
+end
+marker_module.new = function(options) return options end
+local native_view = marker_module.new_x4().view
+local function check_stock_layout()
+    local view = assert(native_view({actor='0x5b'}, 2000))
+    assert(view.viewport.x == 11 and view.viewport.y == 17)
+    assert(view.viewport.width == 1000*scale and view.viewport.height == 700*scale)
+    assert(view.toolbar.x == 11+315*scale and view.toolbar.y == 17+20*scale)
+    assert(view.toolbar.width == 138*scale and view.toolbar.height == 54*scale)
+end
+check_stock_layout()
+scale = 1.5
+Helper.borderSize, stock.topLevelHeight = 4*scale, 74*scale
+check_stock_layout()
+percentage = true
+assert(native_view({actor='0x5b'}, 2000).toolbar == nil)
+marker_module.new = create_marker
+
+-- The native adapter and real marker keep moving and returning SEEN when
+-- the toolbar has no usable rectangle. A measured overlap still hides it.
+scale, Helper.borderSize, stock.topLevelHeight = 1, 4, 74
+local registered = {}
+Helper.createFrameHandle = function(actual, properties)
+    assert(actual == stock and properties.layer == 3)
+    local id = 500 + #registered
+    return {id=id, display=function()
+        registered[#registered+1] = properties
+        stock.frames[3] = id
+    end}
+end
+Helper.clearFrame = function(actual, layer)
+    assert(actual == stock and layer == 3)
+    stock.frames[3] = nil
+end
+clock, incoming, sent = 31, {}, {}
+owner = stream.new({cockpit=cockpit, map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, marker_module.new_x4(), true)
+owner:tick(true)
+local function native_sample(sequence, x)
+    clock = clock + .125
+    local previous = #sent
+    map_packet('map', 1, sequence, {x=x})
+    owner:tick(true)
+    for i = previous + 1, #sent do
+        if sent[i]:match('SEEN|map|1|') and sent[i]:match('|' .. sequence .. '|sector_b|') then return end
+    end
+    error('expected map receipt for sample ' .. sequence)
+end
+native_sample(1, 350)
+assert(#registered == 1 and registered[1].x == 341)
+stock.topLevel = nil
+native_sample(2, 405)
+assert(#registered == 2 and registered[2].x == 396)
+
+stock.topLevel, percentage = 72, false
+local column_widths = GetTableColumnWidths
+GetTableColumnWidths = nil
+native_sample(3, 420)
+assert(#registered == 3 and registered[3].x == 411)
+GetTableColumnWidths = function() error('toolbar invalidated while reading column widths') end
+native_sample(4, 400)
+assert(#registered == 4 and registered[4].x == 391)
+
+GetTableColumnWidths = column_widths
+native_sample(5, 350)
+assert(#registered == 4 and not stock.frames[3])
+native_sample(6, 510)
+assert(#registered == 5 and registered[5].x == 501 and stock.frames[3])
+owner:close()
+assert(not stock.frames[3])
+package.loaded.ffi = ffi

@@ -152,6 +152,9 @@ local function renderer(options, calibration)
             or y + marker_size > viewport.y + viewport.height then
             return hide()
         end
+        local toolbar = view.toolbar
+        if toolbar and x < toolbar.x + toolbar.width and x + marker_size > toolbar.x
+            and y < toolbar.y + toolbar.height and y + marker_size > toolbar.y then return hide() end
         if previous_x ~= nil and not owns_layer() then return hide() end
         if x == previous_x and y == previous_y then return true end
         if previous_x == nil and (registration_failed
@@ -290,6 +293,29 @@ function M.new_x4()
         return count < 5
     end
 
+    local function toolbar_rectangle(menu, base)
+        local widget = menu.topLevel
+        if not widget or not IsValidWidgetElement(widget)
+            or type(IsTableColumnWidthPercentage) ~= 'function' or type(GetTableColumnWidths) ~= 'function'
+            or IsTableColumnWidthPercentage(widget) then return end
+        local x, y = GetOffset(widget)
+        local columns = { GetTableColumnWidths(widget) }
+        if #columns == 0 or not finite(x) or not finite(y) or not finite(menu.topLevelHeight)
+            or not finite(helper.borderSize) or helper.borderSize < 0 then return end
+
+        -- The stock MapMenu helper includes the label row in topLevelHeight,
+        -- measured from the frame origin. Native columns omit their borders.
+        local height = menu.topLevelHeight - y
+        local width = (#columns - 1) * helper.borderSize
+        for _, column in ipairs(columns) do
+            if not finite(column) or column < 0 then return end
+            width = width + column
+        end
+        if width > 0 and height > 0 then
+            return {x=x + base.x, y=y + base.y, width=width, height=height}
+        end
+    end
+
     local function view_at(sector, height)
         if helper.minimizedMenu then return end -- Helper.display would otherwise dismiss it.
         local active
@@ -308,12 +334,16 @@ function M.new_x4()
         local x, y = GetOffset(active.map)
         C.GetMapState(active.holomap, camera)
         local state, base = camera[0], active.frameData[6]
+        -- Toolbar geometry is optional. A stock layout can replace the
+        -- widget or make its bounds unavailable while the map stays valid.
+        local toolbar_read, toolbar = pcall(toolbar_rectangle, active, base)
         local pos = state.offset
         return {
             menu=active, holomap=active.holomap, sector=sector, height=height,
             fixed_top_down=math.abs(pos.pitch + math.pi / 2) <= .05 and math.abs(pos.roll) <= .05,
             ui_scale=C.GetUIScale(false), mouse_x=mx, mouse_y=my,
             viewport={x=x + base.x, y=y + base.y, width=width, height=height_px},
+            toolbar=toolbar_read and toolbar or nil,
             camera={x=pos.x, y=pos.y, z=pos.z, yaw=pos.yaw, pitch=pos.pitch, roll=pos.roll,
                 distance=state.cameradistance},
         }
