@@ -374,6 +374,28 @@ desired `config.xml` using `--graphics-config PATH` on Linux or
 `-GraphicsConfig PATH` in PowerShell. A new pilot profile with no saved
 preferences uses X4's display defaults.
 
+### Continuous cockpit playback on the development branch
+
+For an internal flight with matching builds, add `--company-cockpit-continuous-playback`
+to the Linux client command above or `-CompanyCockpitContinuousPlayback` to the
+PowerShell command. Both require the ordinary motion and automatic cockpit playback
+options. Each pilot who wants to observe the other this way enables it locally.
+
+Once the cockpit has identified a visible teammate, it uses fresh positions to
+correct the displayed flight path. Between reports it advances the ship using
+the last measured velocity in metres per real second. A ship moving at 1,500 m/s
+can legitimately advance 600 m in a 0.4 s frame gap. The earlier 300 m recovery
+experiment applied to a one-time realignment. A tracked ship in continuous mode
+can cover that 600 m in one update. If samples fall silent, prediction ends five
+real seconds after receipt of the last complete sample. Losing sight of the ship
+or receiving a withdrawal of the pilot's authority ends the corresponding writes
+as soon as the cockpit processes that change.
+
+Version 4 also carries orientation. The observer interpolates between measured
+attitudes and holds the last one during silence. This trial updates the ship's
+pose in X4. In a two-pilot Linux travel run, stock target range and bearing
+changed while the stock target-speed display stayed at zero. [Flight and braking measurements](../reports/AUTHORITY-HUMAN-PLAYTEST-20261126.md#travel-drive-and-braking-with-two-v4-clients)
+
 The Linux launcher allows up to an hour to connect and join. Once admitted,
 close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
 add `--timeout SECONDS` (up to 3600), which covers both joining and playing.
