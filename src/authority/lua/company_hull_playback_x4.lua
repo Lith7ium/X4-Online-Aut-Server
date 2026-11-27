@@ -26,6 +26,14 @@ local function same_ship_and_sector(current, original)
     return current and current.actor == original.actor and current.sector == original.sector
 end
 
+local function default_zone_text(zone)
+    if type(zone) == 'string' and zone ~= '' then return zone end
+    if type(zone) == 'number' and finite(zone) and zone >= 0 and zone % 1 == 0 then
+        return ('0x%x'):format(zone)
+    end
+    return nil
+end
+
 function M.new(options, engine)
     assert(type(options) == 'table' and options.enabled == true, 'explicit hull playback opt-in required')
     local pinned, own_index, observer = options.pinned, options.own_index, options.observer
@@ -34,14 +42,42 @@ function M.new(options, engine)
     assert(type(observer) == 'table' and type(observer.matches) == 'function'
         and type(options.guard) == 'function', 'verified local cockpit observer and guard required')
     local epoch, count = pinned.epoch, pinned.issued_count
+    local velocity = options.velocity
+    local zone_text = type(engine.zone_text) == 'function' and engine.zone_text or default_zone_text
+    local claims = options.exclusive_claims
+    local enforce_claims = velocity ~= nil or type(claims) == 'table'
+    if enforce_claims then
+        if type(claims) ~= 'table' then
+            claims = {by_actor = {}, by_slot = {}}
+        else
+            claims.by_actor = claims.by_actor or {}
+            claims.by_slot = claims.by_slot or {}
+        end
+    end
     local adapter = {}
+
+    function adapter:tick()
+        if velocity and velocity.tick then
+            return velocity:tick()
+        end
+        return true
+    end
+
+    function adapter:cleanup_uncertain()
+        if velocity and velocity.cleanup_uncertain then
+            return velocity:cleanup_uncertain()
+        end
+        return false, nil
+    end
 
     function adapter:bind(binding)
         if type(binding) ~= 'table' or not COCKPIT_SLOTS[binding.slot] or binding.epoch ~= epoch
                 or not index_in(binding.index, count) or binding.index == own_index
                 or type(binding.actor) ~= 'string' or type(binding.sector_macro) ~= 'string'
                 or type(binding.code) ~= 'string' then return nil end
-        local index, actor_text, frame, code = binding.index, binding.actor, binding.sector_macro, binding.code
+        if velocity and velocity.cleanup_uncertain and velocity:cleanup_uncertain() then return nil end
+        local index, actor_text, frame, code, slot = binding.index, binding.actor, binding.sector_macro, binding.code, binding.slot
+        if enforce_claims and (claims.by_actor[actor_text] ~= nil or claims.by_slot[slot] ~= nil) then return nil end
 
         local function inspect()
             if options.guard() ~= true or not observer:matches(epoch, frame, index, actor_text, code) then return end
@@ -56,24 +92,54 @@ function M.new(options, engine)
 
         local ok, original_cockpit, original_target = pcall(inspect)
         if not ok or not original_cockpit then return nil end
+        local claim = enforce_claims and {slot = slot, actor = actor_text, index = index, generation = binding.generation} or nil
+        if enforce_claims then
+            claims.by_actor[actor_text] = claim
+            claims.by_slot[slot] = claim
+        end
         local closed, has_verified_motion = false, false
+        local confirmed_cockpit_zone = original_cockpit.zone
         local confirmed_zone, pending_zone = original_target.zone, nil
+        local session_cleanup_uncertain, session_cleanup_reason = false, nil
         local session = {}
+
+        local function release_claim()
+            if not enforce_claims then return end
+            if claims.by_actor[actor_text] == claim then claims.by_actor[actor_text] = nil end
+            if claims.by_slot[slot] == claim then claims.by_slot[slot] = nil end
+        end
 
         local function is_pilot()
             return observer.is_active_pilot and observer:is_active_pilot(index) == true
         end
 
+        local function owns_exclusive_binding()
+            if not enforce_claims then return true end
+            return claims.by_actor[actor_text] == claim and claims.by_slot[slot] == claim
+        end
+
+        local function mark_closed()
+            closed = true
+            if not velocity then release_claim() end
+        end
+
         local function eligible()
             if closed then return false end
+            if not owns_exclusive_binding() then
+                mark_closed()
+                return false
+            end
             local checked, cockpit, target = pcall(inspect)
             if not checked or not same_ship_and_sector(cockpit, original_cockpit)
                     or not same_ship_and_sector(target, original_target)
                     or (cockpit.zone ~= original_cockpit.zone and not (has_verified_motion and is_pilot()))
                     or (target.zone ~= confirmed_zone and target.zone ~= pending_zone)
                     or (pending_zone and not is_pilot()) then
-                closed = true
+                mark_closed()
                 return false
+            end
+            if has_verified_motion and is_pilot() then
+                confirmed_cockpit_zone = cockpit.zone
             end
             return target
         end
@@ -95,7 +161,7 @@ function M.new(options, engine)
             -- The setter can return while the ship is still in its original zone.
             -- A later position is evidence only when read from the expected zone.
             if pending_zone and (before.zone ~= pending_zone or after.zone ~= pending_zone) then
-                closed = true
+                mark_closed()
                 return nil
             end
             return actual
@@ -113,10 +179,92 @@ function M.new(options, engine)
             return true
         end
 
-        function session:write(target, before, recheck, attitude, continuous)
+        -- Verify original local cockpit, target, code, zone, and exclusive observer/slot binding
+        -- before any native SetObjectSectorPos anchor write (including during stop after view loss).
+        local function anchor_live_pose()
+            if options.guard() ~= true then return false, 'anchor_guard_failed' end
+            if not owns_exclusive_binding() then return false, 'anchor_exclusive_binding_lost' end
+            if not observer:matches(epoch, frame, index, actor_text, code) then
+                return false, 'anchor_observer_mismatch'
+            end
+            local ok_c, c = pcall(engine.cockpit)
+            local ok_t, t = pcall(engine.target, actor_text)
+            if not (ok_c and c and ok_t and t) then
+                return false, 'anchor_cockpit_or_target_unavailable'
+            end
+            if not same_ship_and_sector(c, original_cockpit) then
+                return false, 'anchor_cockpit_changed'
+            end
+            if c.zone ~= original_cockpit.zone and c.zone ~= confirmed_cockpit_zone
+                    and not (has_verified_motion and is_pilot()) then
+                return false, 'anchor_cockpit_zone_changed'
+            end
+            if not same_ship_and_sector(t, original_target) or t.actor == c.actor or t.sector ~= c.sector then
+                return false, 'anchor_target_changed'
+            end
+            if t.sector_macro ~= frame or t.code ~= code then
+                return false, 'anchor_target_identity_changed'
+            end
+            if (t.zone ~= confirmed_zone and t.zone ~= pending_zone) or (pending_zone and not is_pilot()) then
+                return false, 'anchor_target_zone_changed'
+            end
+            local target_zone_text = zone_text(t.zone)
+            if not target_zone_text then
+                return false, 'anchor_zone_unresolvable'
+            end
+            local ok_r, live = pcall(engine.read, original_target.actor)
+            if not (ok_r and position(live) and finite(live.yaw) and finite(live.pitch) and finite(live.roll)) then
+                return false, 'anchor_read_failed'
+            end
+            local ok_z, dest_zone = pcall(engine.destination_zone, original_target.sector, live)
+            if not ok_z or dest_zone ~= t.zone then
+                return false, 'anchor_destination_zone_mismatch'
+            end
+            if options.guard() ~= true or not owns_exclusive_binding()
+                    or not observer:matches(epoch, frame, index, actor_text, code) then
+                return false, 'anchor_binding_lost_before_write'
+            end
+            local ok_w, dispatched = pcall(engine.write, original_target.actor, original_target.sector, live)
+            if not ok_w or dispatched ~= true then
+                return false, 'anchor_write_failed'
+            end
+            return {
+                x = live.x, y = live.y, z = live.z,
+                yaw = live.yaw, pitch = live.pitch, roll = live.roll,
+                zone = target_zone_text, actor = actor_text, sector_macro = frame,
+            }
+        end
+
+        function session:acknowledged_velocity()
+            if not velocity or closed then return nil end
+            if velocity.tick then pcall(velocity.tick, velocity) end
+            if velocity.cleanup_uncertain and velocity:cleanup_uncertain() then return nil end
+            if not self:guard() then return nil end
+            local expected_zone = zone_text(pending_zone or confirmed_zone)
+            if not expected_zone then return nil end
+            return velocity:acknowledged_velocity(binding, expected_zone)
+        end
+
+        function session:cleanup_uncertain()
+            if velocity and velocity.cleanup_uncertain then
+                local v_unc, v_reason = velocity:cleanup_uncertain()
+                if v_unc then
+                    session_cleanup_uncertain = true
+                    session_cleanup_reason = session_cleanup_reason or v_reason
+                end
+            end
+            return session_cleanup_uncertain, session_cleanup_reason
+        end
+
+        function session:write(target, before, recheck, attitude, continuous, linear_velocity)
             -- An older crossing can remain unresolved after a position deviation.
             -- Refusing a new setter cannot certify that crossing.
             if pending_zone then return false end
+            if velocity and velocity.tick then pcall(velocity.tick, velocity) end
+            if velocity and velocity.cleanup_uncertain and velocity:cleanup_uncertain() then
+                closed = true
+                return false
+            end
             if not position(target) or not position(before) then return false, nil, 'not_dispatched' end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false, nil, 'not_dispatched' end
@@ -146,10 +294,47 @@ function M.new(options, engine)
                 yaw = rotation.yaw, pitch = rotation.pitch, roll = rotation.roll,
             })
             if not ok or dispatched ~= true then
-                closed = true  -- The native call may have had a partial effect.
+                mark_closed()  -- The native call may have had a partial effect.
                 return false
             end
-            return self:guard()
+            if not self:guard() then
+                if velocity then
+                    local ok_s, stopped, s_reason = pcall(velocity.stop, velocity, anchor_live_pose, 'post_write_guard')
+                    if not ok_s or stopped ~= true then
+                        session_cleanup_uncertain = true
+                        session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'post_write_stop_failed')
+                    end
+                end
+                return false
+            end
+            if velocity and linear_velocity then
+                local expected_zone = zone_text(crossing and destination_zone or confirmed_zone)
+                if not expected_zone then
+                    local ok_s, stopped, s_reason = pcall(velocity.stop, velocity, anchor_live_pose, 'zone_unresolvable')
+                    if not ok_s or stopped ~= true then
+                        session_cleanup_uncertain = true
+                        session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'zone_stop_failed')
+                        closed = true
+                        return false
+                    end
+                    return true
+                end
+                local vok, applied, vel_reason = pcall(
+                    velocity.apply, velocity, binding, linear_velocity, anchor_live_pose, expected_zone)
+                if not vok or applied ~= true then
+                    if not (velocity.cleanup_uncertain and velocity:cleanup_uncertain()) then
+                        pcall(velocity.stop, velocity, anchor_live_pose, 'apply_failed')
+                    end
+                    if velocity.cleanup_uncertain and velocity:cleanup_uncertain() then
+                        local _, v_reason = velocity:cleanup_uncertain()
+                        session_cleanup_uncertain = true
+                        session_cleanup_reason = session_cleanup_reason or v_reason or (type(vel_reason) == 'string' and vel_reason)
+                    end
+                    closed = true
+                    return false
+                end
+            end
+            return true
         end
 
         function session:first_contact_in_range(actual, target)
@@ -174,14 +359,23 @@ function M.new(options, engine)
                 yaw = actual.yaw, pitch = actual.pitch, roll = actual.roll,
             })
             if not ok or dispatched ~= true or not self:guard() then
-                closed = true
+                mark_closed()
                 return false, 'unconfirmed'
             end
             return true
         end
 
         function session:close()
+            if velocity then
+                local ok_s, stopped, s_reason = pcall(velocity.stop, velocity, anchor_live_pose, 'session_close')
+                if not ok_s or stopped ~= true then
+                    session_cleanup_uncertain = true
+                    session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'stop_failed')
+                end
+            end
+            release_claim()
             closed = true
+            return not session_cleanup_uncertain, session_cleanup_reason
         end
         return session
     end
@@ -257,9 +451,45 @@ function M.new_x4(options)
                 sector_macro = GetComponentData(sector_ref, 'macro')}
     end
 
+    local HEX_DIGITS = '0123456789abcdef'
+    local function u64_decimal_to_hex(dec)
+        if type(dec) ~= 'string' or not dec:match('^[0-9]+$') then return nil end
+        local digits = {}
+        for i = 1, #dec do digits[i] = dec:byte(i) - 48 end
+        local out = {}
+        while #digits > 0 do
+            local rem, next_digits = 0, {}
+            for i = 1, #digits do
+                local cur = rem * 10 + digits[i]
+                local q = math.floor(cur / 16)
+                rem = cur - q * 16
+                if #next_digits > 0 or q > 0 then next_digits[#next_digits + 1] = q end
+            end
+            out[#out + 1] = HEX_DIGITS:sub(rem + 1, rem + 1)
+            digits = next_digits
+        end
+        if #out == 0 then return nil end
+        local rev = {}
+        for i = #out, 1, -1 do rev[#rev + 1] = out[i] end
+        return '0x' .. table.concat(rev)
+    end
+
+    local function zone_text(id)
+        if type(id) == 'string' and id ~= '' then return id end
+        if id == nil or id == 0 then return nil end
+        local u = resolve.actor_u64(id)
+        if not u or u == 0 then return nil end
+        if type(u) == 'number' then
+            if finite(u) and u >= 0 and u % 1 == 0 then return ('0x%x'):format(u) end
+            return nil
+        end
+        return u64_decimal_to_hex((tostring(u):gsub('ULL$', '')))
+    end
+
     return M.new(options, {
         cockpit = cockpit,
         target = target,
+        zone_text = zone_text,
         read = function(actor)
             local value = read(actor)
             return {x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z),

@@ -68,6 +68,8 @@ function M.new(options)
     local pending_align, first_contact
     local last_tick_now = nil
     local closed = false
+    local velocity_cleanup_uncertain = false
+    local velocity_uncertain_reason = nil
 
     local stats = {
         slot = slot_name,
@@ -113,13 +115,61 @@ function M.new(options)
         return options.paused and options.paused() ~= false
     end
 
+    local function record_velocity_uncertainty(reason, stage)
+        if velocity_cleanup_uncertain then return true end
+        velocity_cleanup_uncertain = true
+        velocity_uncertain_reason = reason or 'velocity_cleanup_uncertain'
+        closed = true
+        local idx = binding and binding.index or active_index
+        emit('closed_uncertain', {
+            index = idx, reason = 'velocity_cleanup_uncertain', detail = velocity_uncertain_reason,
+        })
+        if options.fault then
+            options.fault('velocity_cleanup_uncertain', true, stage or 'velocity_cleanup')
+        end
+        return true
+    end
+
+    local function poll_velocity_uncertainty(stage)
+        if options.adapter and options.adapter.tick then
+            pcall(options.adapter.tick, options.adapter)
+        end
+        local unc, reason = false, nil
+        if session and session.cleanup_uncertain then
+            local ok_u, u, r = pcall(session.cleanup_uncertain, session)
+            if ok_u and u then unc, reason = true, r end
+        end
+        if not unc and options.adapter and options.adapter.cleanup_uncertain then
+            local ok_u, u, r = pcall(options.adapter.cleanup_uncertain, options.adapter)
+            if ok_u and u then unc, reason = true, r end
+        end
+        if unc then
+            if controller then controller:stop(); controller = nil end
+            if session then session:close(); session = nil end
+            pending_align, first_contact = nil, nil
+            return record_velocity_uncertainty(reason, stage)
+        end
+        return velocity_cleanup_uncertain
+    end
+
     local function stop_track()
         if pending_align and pending_align.first_contact then
             -- Its native setter may have succeeded; a second alignment is unsafe.
             closed = true
         end
         if controller then controller:stop(); controller = nil end
-        if session then session:close(); session = nil end
+        if session then
+            local closed_clean, close_reason = session:close()
+            local s_unc, s_reason = false, nil
+            if session.cleanup_uncertain then
+                local ok_u, u, r = pcall(session.cleanup_uncertain, session)
+                if ok_u and u then s_unc, s_reason = true, r end
+            end
+            session = nil
+            if closed_clean == false or s_unc then
+                record_velocity_uncertainty(s_reason or close_reason or 'velocity_stop_unproved', 'velocity_stop')
+            end
+        end
         pending_align, first_contact = nil, nil
     end
 
@@ -200,9 +250,12 @@ function M.new(options)
         stop_track()
         if uncertain then
             closed = true
-            emit('closed_uncertain', {index = idx, reason = reason})
+            if not velocity_cleanup_uncertain then
+                emit('closed_uncertain', {index = idx, reason = reason})
+            end
             return
         end
+        if closed then return end
         if reason == 'stale' or reason == 'arrival_gap' then
             stats.stale_cutoffs = stats.stale_cutoffs + 1
             if idx then reacquire_by_index[idx] = true end
@@ -229,12 +282,17 @@ function M.new(options)
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
             continuous_playback = continuous,
+            native_velocity = options.native_velocity == true,
+            acknowledged_velocity = options.native_velocity == true and function()
+                return active_session.acknowledged_velocity and active_session:acknowledged_velocity() or nil
+            end or nil,
             sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
-            write = function(_, target, before, recheck, attitude)
-                local ok, outside_native_limit, dispatch = active_session:write(target, before, recheck, attitude, continuous)
+            write = function(_, target, before, recheck, attitude, linear_velocity)
+                local ok, outside_native_limit, dispatch = active_session:write(
+                    target, before, recheck, attitude, continuous, linear_velocity)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok, outside_native_limit, dispatch
             end,
@@ -298,6 +356,8 @@ function M.new(options)
         for k, v in pairs(stats) do out[k] = v end
         out.active = controller ~= nil
         out.closed = closed
+        out.velocity_cleanup_uncertain = velocity_cleanup_uncertain
+        out.velocity_uncertain_reason = velocity_uncertain_reason
         out.active_index = active_index
         out.active_generation = active_generation
         out.reacquire_align_allowed = active_index ~= nil and (reacquire_by_index[active_index] == true) or false
@@ -305,7 +365,7 @@ function M.new(options)
     end
 
     function ctrl:view(observed, serial)
-        if closed then return end
+        if poll_velocity_uncertainty('velocity_view') or closed then return end
         if first_contact and (first_contact.serial ~= serial or not same_hull(observed, first_contact)) then
             first_contact = nil
         end
@@ -315,7 +375,7 @@ function M.new(options)
             if controller or pending_align then
                 stop_track()
             end
-            if observed == nil or not same_hull(observed, binding) then
+            if not closed and (observed == nil or not same_hull(observed, binding)) then
                 stats.withdrawals = stats.withdrawals + 1
                 reacquire_by_index[prev_index] = true
                 if active_index == prev_index then
@@ -329,7 +389,7 @@ function M.new(options)
     end
 
     function ctrl:end_track(observed, serial, generation)
-        if closed or not observed then return end
+        if poll_velocity_uncertainty('velocity_end_track') or closed or not observed then return end
         if target_index ~= nil and observed.index ~= target_index then return end
         mark_revoked(observed.index, generation)
         if first_contact and first_contact.index == observed.index and first_contact.generation == generation then
@@ -343,8 +403,10 @@ function M.new(options)
                 active_generation = nil
             end
             binding = nil
-            reacquire_by_index[observed.index] = true
-            emit('generation_revoked', {index = observed.index, generation = generation})
+            if not closed then
+                reacquire_by_index[observed.index] = true
+                emit('generation_revoked', {index = observed.index, generation = generation})
+            end
         end
     end
 
@@ -364,14 +426,16 @@ function M.new(options)
     end
 
     function ctrl:tick(update_started_at)
-        if closed then return end
+        if poll_velocity_uncertainty('velocity_tick') or closed then return end
         if paused() then
             first_contact = nil
             if controller or pending_align then
                 local idx = binding and binding.index or active_index
                 stop_track()
-                if idx then reacquire_by_index[idx] = true end
-                emit('paused_stop', {index = idx})
+                if not closed then
+                    if idx then reacquire_by_index[idx] = true end
+                    emit('paused_stop', {index = idx})
+                end
             end
             return
         end
@@ -392,6 +456,7 @@ function M.new(options)
     end
 
     function ctrl:sample(observed, serial, sample, arrival)
+        if poll_velocity_uncertainty('velocity_sample') then return false, 'velocity_cleanup_uncertain' end
         if closed or not observed or observed.index == own_index then return false, 'ineligible' end
         if target_index ~= nil and observed.index ~= target_index then return false, 'other_target' end
         if paused() then
@@ -592,6 +657,7 @@ function M.new_multi(options)
             playback = options.playback,
             trial_first_contact = options.trial_first_contact,
             continuous_playback = options.continuous_playback,
+            native_velocity = options.native_velocity == true,
             adapter = adapter,
             clock = options.clock,
             game = options.game,
@@ -730,6 +796,10 @@ local function make_x4_record(readers_by_slot, clock)
                 fields[#fields + 1] = 'input_age_at_write_s=' .. decimal(event.input_age)
                 fields[#fields + 1] = 'input_velocity_mps=' .. coordinates(event.input_velocity)
             end
+            if event.applied_velocity then
+                fields[#fields + 1] = 'native_velocity_mps=' .. coordinates(event.applied_velocity)
+                if event.raw_error then fields[#fields + 1] = 'raw_error=' .. decimal(event.raw_error) end
+            end
             if event.actual_attitude and event.target_attitude then
                 for _, name in ipairs({'target', 'actual'}) do
                     local angles = event[name .. '_attitude']
@@ -746,8 +816,13 @@ end
 function M.new_x4(config, pinned, cockpit_reader, guard, clock)
     local ffi = require('ffi')
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local native_velocity = config.cockpit_native_velocity == true
+    local velocity = native_velocity and assert(X4LAN_COMPANY_COCKPIT_VELOCITY).new_x4({
+        enabled = true, slot = 'cockpit', pinned = pinned, own_index = config.index, clock = clock,
+    }) or nil
     local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
+        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader,
+        guard = guard, velocity = velocity,
     })
     return M.new({
         enabled = true,
@@ -755,6 +830,7 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
         own_index = config.index,
         target_index = config.playback_index,
         allow_reacquire_align = true,
+        native_velocity = native_velocity,
         trial_first_contact = config.trial_first_contact == true,
         adapter = adapter,
         clock = clock,
@@ -773,13 +849,19 @@ end
 function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
     local ffi = require('ffi')
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local native_velocity = config.cockpit_native_velocity == true
     local slot_names, adapters = {}, {}
+    local exclusive_claims = {by_actor = {}, by_slot = {}}
     for _, name in ipairs(COCKPIT_SLOTS) do
         local reader = cockpit_readers[name]
         if reader ~= nil then
             slot_names[#slot_names + 1] = name
+            local velocity = native_velocity and assert(X4LAN_COMPANY_COCKPIT_VELOCITY).new_x4({
+                enabled = true, slot = name, pinned = pinned, own_index = config.index, clock = clock,
+            }) or nil
             adapters[name] = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-                enabled = true, pinned = pinned, own_index = config.index, observer = reader, guard = guard,
+                enabled = true, pinned = pinned, own_index = config.index, observer = reader,
+                guard = guard, velocity = velocity, exclusive_claims = exclusive_claims,
             })
         end
     end
@@ -789,6 +871,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
         own_index = config.index,
         allow_reacquire_align = true,
         continuous_playback = config.cockpit_continuous_playback == true,
+        native_velocity = native_velocity,
         trial_first_contact = config.trial_first_contact == true,
         adapters = adapters,
         clock = clock,
