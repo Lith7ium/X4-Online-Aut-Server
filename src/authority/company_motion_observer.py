@@ -24,6 +24,10 @@ COCKPIT_SLOTS = ('cockpit', 'cockpit2', 'cockpit3')
 MAX_OBSERVER_DATAGRAM = 576
 # SEEN4 adds three round-trippable angles.
 MAX_ORIENTED_OBSERVER_DATAGRAM = 640
+ROSTER_SAMPLE_SUFFIX = '|@roster|'
+# A revision has at most 16 digits and each of three indices uses up to 7
+# bytes including the separator. The native UDP module allows 768 bytes.
+MAX_ROSTER_SUFFIX_BYTES = len(ROSTER_SAMPLE_SUFFIX) + 16 + MAX_COCKPIT_PILOTS * 7
 
 
 def _counter(text, limit=MAX_COUNTER):
@@ -61,7 +65,8 @@ class _View:
 class CompanyMotionObserver:
     """Keep one observed hull per native slot (up to 3 cockpit slots plus independent map) and a bounded receipt history."""
 
-    def __init__(self, registry, send, *, trial_index=None, cockpit_playback_slots=0, private_map_marker=False):
+    def __init__(self, registry, send, *, trial_index=None, cockpit_playback_slots=0, private_map_marker=False,
+                 roster_with_samples=False):
         self._epoch, self._own_index = registry
         if trial_index is not None and (type(trial_index) is not int or not 1 <= trial_index <= 200000
                                         or trial_index == self._own_index):
@@ -71,6 +76,7 @@ class CompanyMotionObserver:
         if trial_index is not None and cockpit_playback_slots > 1:
             raise ValueError('cannot combine single trial_index with multi-pilot cockpit slots')
         self._private_map_marker = private_map_marker
+        self._roster_with_samples = roster_with_samples
         self._trial_index = trial_index
         self._cockpit_playback_slots = frozenset(COCKPIT_SLOTS[:cockpit_playback_slots])
         slot_names = (*COCKPIT_SLOTS[:cockpit_playback_slots], 'map') if cockpit_playback_slots > 1 else _SLOTS
@@ -246,6 +252,9 @@ class CompanyMotionObserver:
                 'REMOTE4' if angles else 'REMOTE', slot, view.serial, self._epoch, sample['index'],
                 sample['generation'], sample['sequence'], sample['sector_macro'], *values, *local_clock, *angles,
             )))
+            if (self._roster_with_samples and slot in self._cockpit_playback_slots
+                    and sample['index'] in self._pilot_roster):
+                message += ROSTER_SAMPLE_SUFFIX + '|'.join(map(str, (self._roster_revision, *self._pilot_roster)))
             if self._send(message):
                 view.pending.append((sample, (*values, *angles), time.monotonic()))
                 if track is not None:

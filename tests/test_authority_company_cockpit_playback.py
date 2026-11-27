@@ -152,6 +152,41 @@ class CompanyCockpitOptInConfigTests(unittest.TestCase):
 
 @unittest.skipIf(luajit21 is None, 'lupa.luajit21 required')
 class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
+    def test_atomic_roster_sample_freshness_identity_and_expiry(self):
+        lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+        lua.globals()['_ROOT'] = str(ROOT)
+        fixture = lua.execute((ROOT / 'tests/authority_company_cockpit_transport.lua').read_text())
+        epoch, generation = 'a' * 32, 'b' * 32
+
+        def deliver(at, received_at, *, suffix='1|2', serial=1, sequence=1):
+            fixture.ingest(f'REMOTE|cockpit|{serial}|{epoch}|2|{generation}|{sequence}|sector_a|'
+                           f'0|0|0|-|-|-|5|5|{received_at}|@roster|{suffix}')
+            fixture.step(at)
+
+        for received_at, suffix, serial in ((11, '1|2', 1), (7, '1|2', 1), (9, '1|2', 2),
+                                            (9, '1|2|2', 1), (9, '1|3', 1), (9, '1|2|', 1)):
+            deliver(10, received_at, suffix=suffix, serial=serial)
+            self.assertFalse(fixture.rostered())
+
+        deliver(10, 8.5)
+        self.assertTrue(fixture.rostered())
+        deliver(11.4, 11.3, sequence=2)
+        self.assertTrue(fixture.rostered())
+        deliver(11.6, 11.55, sequence=3)
+        self.assertFalse(fixture.rostered())  # The original received_at + 3 remains authoritative.
+
+        fixture.ingest(f'ROSTER|{epoch}|1|2')
+        fixture.step(11.7)
+        self.assertTrue(fixture.rostered())  # A standalone heartbeat can restore this revision.
+        fixture.ingest(f'ROSTER|{epoch}|2')
+        fixture.step(11.8)
+        deliver(11.9, 11.85, sequence=4)
+        self.assertFalse(fixture.rostered())  # An older bundle cannot override a withdrawal.
+        deliver(12, 11.95, suffix='2|2', sequence=5)
+        self.assertFalse(fixture.rostered())  # Equal revision must be identical.
+        deliver(12.1, 12, suffix='3|2', sequence=6)
+        self.assertTrue(fixture.rostered())
+
     def test_only_accepted_playback_authorizes_alignment_after_end(self):
         lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
         lua.globals()._ROOT = str(ROOT).replace('\\', '/')
@@ -1422,6 +1457,106 @@ class CompanyCockpitLoopbackServiceTests(unittest.TestCase):
         finally:
             service.close()
 
+
+    @unittest.skipIf(luajit21 is None, 'Lupa LuaJIT 2.1 binding required')
+    def test_atomic_cockpit_roster_survives_startup_delivery_order(self):
+        from collections import deque
+        from contextlib import ExitStack, closing
+        import socket
+        from types import SimpleNamespace
+        from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
+
+        epoch, session, sector = 'a' * 32, 'b' * 32, 'sector_a'
+        script = (ROOT / 'tests/authority_company_cockpit_transport.lua').read_text()
+        for late_peer in (False, True):
+            with self.subTest(late_peer=late_peer), ExitStack() as stack:
+                service = stack.enter_context(closing(CompanyMotionService()))
+                source = stack.enter_context(closing(CompanyMotionSource(
+                    cockpit_radar_playback=True, cockpit_continuous_playback=True)))
+                config = source.configure(epoch, 1, operational_bits='11')
+                grant = service.admit(1, '1' * 32, 1, sector, session, epoch)
+                publisher_grant = service.admit(2, '2' * 32, 2, sector, session, epoch)
+                peer = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                peer.bind(('127.0.0.1', 0))
+                peer.setblocking(False)
+                peer_address = peer.getsockname()
+                source_address = ('127.0.0.1', config['port'])
+                prefix = f"C|{config['lease']}|{config['generation']}|"
+                sink = stack.enter_context(closing(ReconnectingCompanyMotionClient.observing(
+                    service.port, grant, source, lambda address: address == peer_address)))
+                queue = deque()
+                publisher_source = SimpleNamespace(registry=(epoch, 2), local_generation='c' * 32,
+                    poll=lambda _: queue.popleft() if queue else None)
+                publisher = stack.enter_context(closing(CompanyMotionClient(
+                    service.port, publisher_grant, publisher_source, lambda _: True)))
+                service.set_running(True)
+                lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+                lua.globals()['_ROOT'] = str(ROOT)
+                fixture = lua.execute(script)
+                received = []
+                discarded_initial = False
+
+                def pump_until(ready, *, publish=True):
+                    nonlocal discarded_initial
+                    deadline = time.monotonic() + 4
+                    while not ready():
+                        self.assertLess(time.monotonic(), deadline)
+                        service.poll()
+                        sink.poll()
+                        if publish:
+                            publisher.poll()
+                        while True:
+                            try:
+                                packet, sender = peer.recvfrom(768)
+                            except BlockingIOError:
+                                break
+                            self.assertEqual(sender, source_address)
+                            body = packet.decode('ascii').removeprefix(prefix)
+                            if not late_peer and not discarded_initial and body.startswith('ROSTER|'):
+                                discarded_initial = True
+                                continue
+                            received.append(body)
+                        time.sleep(.005)
+
+                view = f'{prefix}VIEW|cockpit|1|{epoch}|{sector}|2|0x200|TGT-002'
+                if not late_peer:
+                    peer.sendto(view.encode('ascii'), source_address)
+                pump_until(lambda: source._observer._pilot_roster == (2,) and publisher._running)
+                if late_peer:
+                    self.assertIsNone(source._peer)
+                    peer.sendto(view.encode('ascii'), source_address)
+                pump_until(lambda: sink._client._sent_view == {sector: frozenset({2})})
+                for sequence in (1, 2):
+                    now = time.monotonic()
+                    queue.append({'version': 4, 'epoch': epoch, 'generation': 'c' * 32, 'index': 2,
+                                  'sequence': sequence, 'sector_macro': sector, 'source_time': now,
+                                  'capture_time': now, 'x': float(sequence), 'y': 0.0, 'z': 0.0,
+                                  'real_velocity': {'x': 10.0, 'y': 0.0, 'z': 0.0},
+                                  'orientation': {'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0}})
+                    pump_until(lambda: any(body.startswith('REMOTE4|') and body.split('|')[6] == str(sequence)
+                                           for body in received))
+                    time.sleep(.02)
+                snapshots = [body for body in received if body.startswith('REMOTE4|')]
+                self.assertEqual(discarded_initial, not late_peer)
+                self.assertTrue(all(body.endswith('|@roster|1|2') for body in snapshots))
+                for body in snapshots:
+                    fixture.ingest(body)
+                arrival = float(snapshots[-1].split('|')[16])
+                fixture.step(arrival + .15)
+                fixture.step(arrival + .25)
+                self.assertTrue(fixture.rostered())
+                before = fixture.writes()
+                self.assertGreater(before, 0)
+
+                received.clear()
+                service.transport_lost(2)
+                pump_until(lambda: f'ROSTER|{epoch}|2' in received, publish=False)
+                for body in received:
+                    fixture.ingest(body)
+                fixture.ingest(snapshots[-1])
+                fixture.step(arrival + .35)
+                self.assertFalse(fixture.rostered())
+                self.assertEqual(fixture.writes(), before)
 
     @unittest.skipIf(luajit21 is None, 'Lupa LuaJIT 2.1 binding required')
     def test_transport_withdrawal_roster_and_real_lua_setter_boundary(self):

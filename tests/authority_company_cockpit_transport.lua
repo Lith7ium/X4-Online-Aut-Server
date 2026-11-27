@@ -43,6 +43,7 @@ local receiver = stream.new({cockpit=reader, map={tick=function() end,close=func
         set_pilot_roster=function(_, indices) rostered=indices[1]==2; return true end,
     })
 return {
+    rostered=function() return rostered end,
     ingest=function(packet) packets[#packets+1] = prefix..packet end,
     step=function(at) now=at; receiver:tick(true) end,
     writes=function() return writes end,

@@ -9,7 +9,8 @@ import time
 from .company_cockpit_health import CompanyCockpitHealthBridge
 from .company_motion_frames import MAX_SAMPLE_AGE
 from .company_motion_observer import (MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM,
-                                      MAX_ORIENTED_OBSERVER_DATAGRAM, CompanyMotionObserver)
+                                      MAX_ORIENTED_OBSERVER_DATAGRAM, MAX_ROSTER_SUFFIX_BYTES,
+                                      ROSTER_SAMPLE_SUFFIX, CompanyMotionObserver)
 from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
                                       REGISTRY_EPOCH, measurement_value, native_capture_now)
 from .experimental_tcp_motion import ORIENTATION_AXES, check_motion_progress, motion_value
@@ -276,7 +277,10 @@ class CompanyMotionSource:
         self._owner()
         packet = self._prefix() + message.encode('ascii')
         limit = MAX_ORIENTED_OBSERVER_DATAGRAM if message.startswith('REMOTE4|') else MAX_OBSERVER_DATAGRAM
-        if self._peer is None or len(packet) > limit:
+        base, marker, roster = packet.partition(ROSTER_SAMPLE_SUFFIX.encode('ascii'))
+        if (self._peer is None or len(base) > limit or (marker and (
+                not message.startswith(('REMOTE|', 'REMOTE4|'))
+                or len(marker) + len(roster) > MAX_ROSTER_SUFFIX_BYTES))):
             return False
         try:
             return (validate_peer(self._peer) is True
@@ -297,7 +301,8 @@ class CompanyMotionSource:
         self._observer = CompanyMotionObserver(self._registry, lambda message: self._send_to_peer(validate_peer, message),
                                                trial_index=timed_index,
                                                cockpit_playback_slots=cockpit_slots,
-                                               private_map_marker=self._private_map_marker)
+                                               private_map_marker=self._private_map_marker,
+                                               roster_with_samples=self._cockpit_continuous_playback)
         return self._observer
 
     def observer_stats(self):

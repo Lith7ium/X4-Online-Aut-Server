@@ -6,6 +6,9 @@ local ROSTER_TTL = 3
 local MAX_PILOT_INDEX = 200000
 local MAX_PILOTS = 3
 local MAX_COUNTER = 9007199254740991
+local MAX_LEGACY_PACKET, MAX_ORIENTED_PACKET = 576, 640
+local ROSTER_SAMPLE_SUFFIX = '|@roster|'
+local MAX_ROSTER_SUFFIX_BYTES = #ROSTER_SAMPLE_SUFFIX + 16 + MAX_PILOTS * 7
 
 local function same_binding(left, right)
     if left == nil or right == nil then return left == right end
@@ -132,15 +135,18 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         end
     end
 
-    local function observe_roster(row, packet, now)
+    local function observe_roster(row, packet, now, sample_received_at)
         if not pilot_roster or #row < 3 or #row > 3 + MAX_PILOTS or row[2] ~= epoch then return end
         local revision = counter(row[3])
         if not revision or revision < roster_revision then return end
+        local deadline = (sample_received_at or now) + ROSTER_TTL
+        if deadline <= now then return end
         if revision == roster_revision then
             if packet ~= roster_packet then return end
+            if sample_received_at then return roster_deadline ~= nil and roster_deadline > now end
             if roster_deadline then
                 roster_deadline = now + ROSTER_TTL
-                return
+                return true
             end
         end
         local indices, previous = {}, 0
@@ -150,16 +156,27 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             indices[#indices + 1], previous = index, index
         end
         if pilot_roster:set_pilot_roster(indices) ~= true then return end
-        roster_revision, roster_packet, roster_deadline = revision, packet, now + ROSTER_TTL
+        roster_revision, roster_packet, roster_deadline = revision, packet, deadline
+        return true
     end
 
     local function observe(packet, now)
-        if #packet > 640 or packet:sub(1, #prefix) ~= prefix
-                or (#packet > 576 and packet:sub(#prefix + 1, #prefix + 8) ~= 'REMOTE4|') then return end
+        if #packet > MAX_ORIENTED_PACKET + MAX_ROSTER_SUFFIX_BYTES
+                or packet:sub(1, #prefix) ~= prefix then return end
+        local marker = packet:find(ROSTER_SAMPLE_SUFFIX, #prefix + 1, true)
+        local bundled
+        if marker then
+            if not pilot_roster or #packet - marker + 1 > MAX_ROSTER_SUFFIX_BYTES then return end
+            bundled = packet:sub(marker + #ROSTER_SAMPLE_SUFFIX)
+            packet = packet:sub(1, marker - 1)
+        end
+        if #packet > MAX_ORIENTED_PACKET
+                or (#packet > MAX_LEGACY_PACKET and packet:sub(#prefix + 1, #prefix + 8) ~= 'REMOTE4|') then return end
         local row = {}
         for field in (packet:sub(#prefix + 1) .. '|'):gmatch('([^|]*)|') do
             row[#row + 1] = field
         end
+        if bundled and row[1] ~= 'REMOTE' and row[1] ~= 'REMOTE4' then return end
         if cockpit_health and (row[1] == 'HEALTH' or row[1] == 'HEALTH_CLEAR') then
             cockpit_health:receive(row)
             return
@@ -208,6 +225,19 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
                 or counter(row[5]) ~= binding.index or row[8] ~= binding.sector_macro
                 or not valid_sample(row) then return end
         if not slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then return end
+        if bundled then
+            if not playback_slots[row[2]] or not playback_trial or not received_at then return end
+            local roster, includes_target = {'ROSTER', epoch}, false
+            for field in (bundled .. '|'):gmatch('([^|]*)|') do
+                if #roster >= 3 + MAX_PILOTS then return end
+                if #roster >= 3 and field == row[5] then includes_target = true end
+                roster[#roster + 1] = field
+            end
+            -- A snapshot may seed membership, but only a standalone heartbeat
+            -- may renew the same revision or restore it after expiry.
+            if not includes_target or not observe_roster(roster,
+                    prefix .. table.concat(roster, '|'), clock(), received_at) then return end
+        end
         if timed_map and received_at and not slot.map_generation then
             for _, ended in ipairs(slot.map_early_ends or {}) do
                 if row[6] == ended then
