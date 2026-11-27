@@ -109,6 +109,21 @@ class OverlapFrameTest(unittest.TestCase):
         self.assertEqual(result['frame_classes'], {'unresolved_stop_sweep_same_frame': 1, 'unresolved_last_frame': 1})
         self.assertEqual(result['bullets_gone_without_impact_frame'], 2)
 
+    def test_extra_hit_like_removal_and_late_despawn_never_count_as_a_contact(self):
+        # Offline ambiguity control. The trace sees only the target's callbacks. A bullet that ends
+        # on another object with a hit-like flight makes the count differ. A despawn outside the
+        # flight window is never assigned to a frame.
+        text = '\n'.join([
+            f'{P}COMBAT_PHASE phase=control_pilot age=0.5',
+            fire(0.6, 1, '0xc'), fire(1.0, 1, '0xa'), fire(1.0, 1, '0xb'),
+            impact(1.1, 'shield', 26, 100),
+            impact(1.2, 'shield', 26, 74, '1:0xa:0.1;1:0xb:0.1;'),
+            sweep(2.2, 'control_pilot_stop', '1:0xc:1.6;'),
+        ])
+        result = A.analyse(text, [])['control_pilot']
+        self.assertEqual([f['class'] for f in result['frame_detail']], ['one_shooter_count_differs', 'no_bullet_seen_gone'])
+        self.assertEqual(result['bullets_gone_without_impact_frame'], 1)
+
     def test_a_miss_is_bullets_fired_without_any_impact(self):
         text = '\n'.join([
             f'{P}COMBAT_PHASE phase=miss_pilot age=1',
