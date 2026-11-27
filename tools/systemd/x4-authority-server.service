@@ -1,0 +1,28 @@
+# systemd user unit for a dedicated X4 authority world (opt-in keep-running mode).
+# Install as the unprivileged game user; see docs/AUTHORITY-SERVER-PACKAGE.md.
+# Edit WorkingDirectory and ExecStart if the package is not in ~/x4-authority-test-server.
+[Unit]
+Description=X4 authority dedicated world
+Wants=network-online.target
+After=network-online.target
+# Stop retrying after five failed starts within an hour; inspect the newest run first.
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/x4-authority-test-server
+EnvironmentFile=%h/.config/x4-authority/server.env
+ExecStart=/usr/bin/python3 %h/x4-authority-test-server/tools/dev/authority_dedicated_server.py --game ${X4_GAME} --initial-store ${X4_INITIAL_STORE} --runs ${X4_RUNS} $X4_LAUNCHER_OPTIONS
+Restart=on-failure
+RestartSec=60
+# Only the supervisor gets SIGTERM. It saves and pauses the world, then stops X4 itself.
+# The default control-group mode would signal X4 and the display at the same time.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=600
+SuccessExitStatus=130
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -131,6 +131,50 @@ The following are unmeasured:
 - the length of each checkpoint pause;
 - NPC and economy progress while no pilot is present.
 
+### Run the world as a service
+
+This setup has offline tests only. It has not run under systemd or in X4.
+`tools/dev/authority_dedicated_server.py` starts the provider with
+`--persistent --keep-world-running` and a fresh run directory under `--runs`.
+It uses the `checkpoints` of the newest run whose `result.json` reports a clean,
+paused stop with a final checkpoint. Without such a run it uses
+`--initial-store`. A crashed run is skipped, so a restart after a crash
+continues from the previous clean stop. Each choice is recorded in
+`<run>.launch.json` beside the run, including the runs that were skipped.
+Before starting, the launcher waits up to `--steam-wait-seconds` (default 600)
+for this user's Steam client. Add `--dry-run` to print the choice and the
+command without starting anything.
+
+Install the user unit as the unprivileged game user:
+
+```sh
+mkdir -p ~/.config/systemd/user ~/.config/x4-authority
+install -m 600 tools/systemd/x4-authority-server.env.example ~/.config/x4-authority/server.env
+editor ~/.config/x4-authority/server.env
+cp tools/systemd/x4-authority-server.service ~/.config/systemd/user/
+python3 tools/dev/authority_dedicated_server.py --game "$X4_GAME"   --initial-store "$X4_INITIAL_STORE" --runs "$X4_RUNS" --dry-run
+systemctl --user daemon-reload
+systemctl --user enable --now x4-authority-server
+sudo loginctl enable-linger "$USER"   # start at boot without a login
+```
+
+The unit expects the package in `~/x4-authority-test-server`; edit
+`WorkingDirectory` and `ExecStart` otherwise. Its settings:
+- `KillMode=mixed` sends SIGTERM only to the supervisor, which saves and pauses
+  the world and then stops X4. The default mode would signal X4 and the display
+  at the same moment.
+- `TimeoutStopSec=600` allows time for that save.
+- `Restart=on-failure` retries after 60 seconds.
+- After five failed starts within an hour the unit stops retrying. Read the
+  newest run's `result.json` and `launch.json` before running
+  `systemctl --user reset-failed x4-authority-server`.
+
+Three requirements are still open:
+- The supervisor still requires an authenticated native Steam client under the
+  same account. This package does not start Steam at boot.
+- Every restart creates a new run directory, and nothing removes old ones.
+- Checkpoints from a crashed run are not yet a restart source.
+
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
 and records the Vulkan probe in `.local/provider-run-01/software-vulkan.log`.
