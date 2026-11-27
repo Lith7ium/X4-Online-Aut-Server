@@ -316,6 +316,48 @@ class CompanyCombatTLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reads, [1074] * 4)
         self.assertEqual(self.calls, [(1073, 1074, 26)] * 2)
 
+    async def test_connected_cockpit_refreshes_native_damage_without_a_player_hit(self):
+        self.combat.close()
+        native_health = dict(shield=100, maxshield=2366, hull=3600, maxhull=3600)
+        read = Mock(side_effect=lambda binding: Mock(poll=lambda: native_health.copy()))
+        self.combat = CompanyCombatService(self.motion.current_combat_grant, self.apply,
+                                           begin_health_read=read, health_window=lambda binding: 1)
+        self.addCleanup(self.combat.close)
+        await self.start(combat_enabled=True)
+        _, port = await self.link()
+        grant = self.grant(1, 1074)
+        client = CompanyCombatClient(port, grant)
+        self.addCleanup(client.close)
+        now = 100.0
+        binding = grant['generation'], grant['epoch'], grant['index']
+        bridge = CompanyCockpitHealthBridge(binding, clock=lambda: now)
+        bridge.on_clock(1, True)
+
+        for sequence in range(1, 12):
+            now = 99.0 + sequence
+            if sequence == 2:
+                native_health['shield'] = 74  # Damage in server X4 alone.
+            if sequence == 7:
+                native_health['shield'] = 88  # Native regeneration, still revision zero.
+            bridge.on_sample(dict(sequence=sequence, capture_time=now))
+            request = bridge.take_request()
+            reply = await self.drive(asyncio.to_thread(client.read_health, *request))
+            if sequence not in (1, 6, 11):
+                self.assertIsNone(reply)
+                bridge.accept_reply(1, sequence, reply)
+                continue
+            self.assertEqual(reply, dict(native_health, revision=0))
+            self.assertTrue(bridge.accept_reply(1, sequence, reply))
+            frames = []
+            bridge.deliver(lambda frame: frames.append(frame) is None)
+            fields = frames[-1].split('|')
+            self.assertEqual(fields[0], 'HEALTH')
+            bridge.native_result(['HEALTH_RESULT', *fields[2:7], 'confirmed', *fields[9:13]])
+            confirmed = bridge.stats()['last_confirmed_readback']
+            self.assertEqual((confirmed['sequence'], confirmed['cockpit']), (sequence, native_health))
+        self.assertEqual(read.call_count, 3)
+        self.assertEqual(self.calls, [])
+
     async def test_idle_victim_sender_delivers_own_health_through_the_combat_stream(self):
         self.combat.close()
         state = dict(shield=4, maxshield=2366, hull=3600, maxhull=3600)

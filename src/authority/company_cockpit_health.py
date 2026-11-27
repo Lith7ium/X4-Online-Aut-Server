@@ -12,6 +12,7 @@ _TOKEN = re.compile(r'[0-9a-f]{32}')
 _LIFETIME = 2.0
 _SAMPLE_AGE = 1.0
 _INTERVAL = 1.0
+_NATIVE_REFRESH_INTERVAL = 5.0
 _MAX_WINDOW = 2**31 - 1
 
 
@@ -49,6 +50,7 @@ class CompanyCockpitHealthBridge:
         self._last_confirmed = None
         self._revision = self._sequence = 0
         self._next_request = self._active_since = 0.0
+        self._next_native_refresh = 0.0
         self._clear = self._closed = False
         self._counts = dict(requested=0, delivered=0, confirmed=0, rejected=0, unknown=0, expired=0)
 
@@ -99,7 +101,12 @@ class CompanyCockpitHealthBridge:
             self._next_request = now + _INTERVAL
             self._pending = self._window, self._sequence, now + _LIFETIME, self._sample[0]
             self._counts['requested'] += 1
-            after_revision = None if self._needs_fresh_read else self._confirmed_revision
+            after_revision = self._confirmed_revision
+            # Native NPC fire and shield recharge can change health without a
+            # multiplayer damage order. Reuse the existing unconditional read.
+            if self._needs_fresh_read or now >= self._next_native_refresh:
+                after_revision = None
+                self._next_native_refresh = now + _NATIVE_REFRESH_INTERVAL
             return self._window, self._sequence, after_revision
 
     def accept_reply(self, window, sequence, state, *, interrupted=False):
@@ -179,6 +186,7 @@ class CompanyCockpitHealthBridge:
                         return
                     self._confirmed_revision = revision
                     self._needs_fresh_read = False
+                    self._next_native_refresh = self._clock() + _NATIVE_REFRESH_INTERVAL
                     self._last_confirmed = dict(
                         window=int(window), sequence=int(sequence), revision=revision,
                         server=server, cockpit=cockpit)

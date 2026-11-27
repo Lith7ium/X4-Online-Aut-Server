@@ -26,9 +26,13 @@ An offline regression also found that a delayed or duplicated local reset messag
 
 A later loopback test used one native Linux shooter and a separate native provider on the archived Bolt experiment at `1c1505b2`. Holding Space for 0.369 s produced 36 stock projectiles. Seven hits reduced the local target's shield from 2,366 to 2,184. The shooter received one confirmed 26-point hit over the combat channel. The provider applied it once and its next confirmed save contained 2,340 shield points. The other six local hits did not reach the provider. The private test supervisor stopped during a process ownership check. The recording does not establish why the additional-hit observer did not finish. The target was an empty Company ship. [Earlier two-cockpit test](AUTHORITY-TWO-COCKPIT-COMBAT-20261126.md)
 
+In a second isolated run on that archived revision, the shooter recorded nine local shield hits of 26 points each against the same unoccupied ship. The provider confirmed one hit and saved 2,340 shield and 3,600 hull. The shooter's X4 process exited abnormally before reporting completion of the additional-hit observation. The cause is undetermined, and the remaining eight hits have no server receipts.
+
 ### A live player ship hits an ordinary NPC
 
 On a copied world, a Linux pilot fired a stock Bolt Repeater Mk2 burst at Antigone freighter MFQ-419, staged about 850 m ahead. The NPC kept its captain. X4 recorded 36 projectiles and 17 shield hits on the pilot's instance. The regular authenticated combat channel forwarded one hit. A separate server X4 process read the freighter's shields at 5,750 before the attack and 5,724 afterward, with hull at 6,400. The confirmed departure save retained 5,724 shield points. The stock DockAt order resumed after the test. This run used two processes on one Linux host. The remaining 16 local hits and return fire from the NPC are still open.
+
+The cockpit used to skip native health reads indefinitely while its last multiplayer damage order was current. NPC fire on the server and natural shield regeneration can both change health at the same order. The trial client now requests a full read after five seconds without a confirmed cockpit snapshot. The ordinary damage-order check still runs between full reads. An idle pilot on a real TLS connection received shield values of 100, 74 and 88 from a simulated provider at damage order zero. The test performed three backend reads across eleven requests with no damage transactions. Native NPC return fire reaching a running cockpit remains to be demonstrated.
 
 ## What would change the release decision
 
