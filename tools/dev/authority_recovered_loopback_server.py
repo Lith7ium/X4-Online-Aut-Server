@@ -1650,7 +1650,8 @@ def run(args):
             combat_service = CompanyCombatService(
                 motion_service.current_combat_grant, gun_damage_provider.begin_impact,
                 apply_impacts=gun_damage_provider.begin_impacts if ordered_gun_hits else None,
-                begin_health_read=gun_damage_provider.begin_health_read, health_window=current_health_window)
+                begin_health_read=gun_damage_provider.begin_health_read, health_window=current_health_window,
+                max_health_reads=gun_damage_provider.max_health_reads)
         if npc_source is not None:
             def npc_unreserved():
                 reservations = session.running_ship_reservations()

@@ -56,19 +56,21 @@ class _HealthRead:
     binding: tuple
     deadline: float
     response_prefix: bytes
+    slot: int
+    receipt: bytes | None = None
     health: dict | None = None
     error: ValueError | None = None
 
     def poll(self):
-        if self.health is None and self.error is None:
+        if self.provider._health_reads.get(self.slot) is self:
             self.provider._poll_health(self)
         if self.error is not None:
             raise self.error
         return None if self.health is None else dict(self.health)
 
     def cancel(self):
-        if self.provider._health_active is self:
-            self.provider._finish_health(error=ValueError('native health read cancelled'))
+        if self.provider._health_reads.get(self.slot) is self:
+            self.provider._fail_health_read(self, 'native health read cancelled')
 
 
 def _bounded_index(value):
@@ -175,7 +177,7 @@ class _GroupReceipt:
 
 
 class NativeGunDamageProvider:
-    """Run one authorized native operation at a time without retrying stock writes.
+    """Serialize stock writes and allow up to four independent read-only health observations.
 
     The combat service owns confirmation identity, ordering and deduplication.
     is_current checks the assignment and can_fire adds input freshness before
@@ -184,6 +186,8 @@ class NativeGunDamageProvider:
     pumps the returned operation without blocking TLS or motion. Damage takes
     precedence over cancellable, read-only health observations.
     """
+
+    max_health_reads = 4
 
     def __init__(self, is_current, *, can_fire=None, world_current=None, timeout=4, clock=time.monotonic):
         if (not callable(is_current) or type(timeout) not in (int, float)
@@ -204,7 +208,8 @@ class NativeGunDamageProvider:
             raise
         self._lease = secrets.token_hex(16)
         self._serial = self._health_serial = 0
-        self._peer = self._process = self._guard = self._staged_md = self._active = self._health_active = None
+        self._peer = self._process = self._guard = self._staged_md = self._active = None
+        self._health_reads = {}
         self._fenced = False
         self._ordered_hits = False
 
@@ -291,8 +296,7 @@ class NativeGunDamageProvider:
 
     def close(self):
         self._socket.close()
-        if self._health_active is not None:
-            self._finish_health(error=ValueError('native health adapter closed during read'))
+        self._cancel_health_reads('native health adapter closed during read')
         if self._active is not None:
             self._finish(error=NativeGunDamageUncertain('native damage adapter closed during impact'))
 
@@ -359,8 +363,7 @@ class NativeGunDamageProvider:
         if (self._is_current(binding) is not True
                 or (self._can_fire is not None and self._can_fire(binding) is not True)):
             raise CombatImpactRejected('native impact requires a current firing assignment')
-        if self._health_active is not None:
-            self._finish_health(error=ValueError('native health read superseded by an impact'))
+        self._cancel_health_reads('native health read superseded by an impact')
         self._serial += 1
         generation, epoch, source_index = binding
         identity = f'{self._lease}|{self._serial}|{generation}|{epoch}|{source_index}'
@@ -390,10 +393,15 @@ class NativeGunDamageProvider:
         if (not _valid_binding(binding) or self._active is not None or self._socket.fileno() < 0
                 or self._process is None or self._health_serial >= _MAX_SERIAL):
             raise ValueError('native health read unavailable')
-        if self._health_active is not None:
-            if self._clock() < self._health_active.deadline:
-                raise ValueError('native health read already pending')
-            self._finish_health(error=ValueError('native health read expired'))
+        now = self._clock()
+        for attempt in tuple(self._health_reads.values()):
+            if now >= attempt.deadline:
+                self._fail_health_read(attempt, 'native health read expired')
+        if any(attempt.binding == binding for attempt in self._health_reads.values()):
+            raise ValueError('native health read already pending for this binding')
+        slot = next((slot for slot in range(1, self.max_health_reads + 1) if slot not in self._health_reads), None)
+        if slot is None:
+            raise ValueError('native health read capacity exhausted')
         try:
             self._discover_peer()
             if self._peer is None or not self._owns_peer(self._peer) or not self._health_current(binding):
@@ -405,53 +413,76 @@ class NativeGunDamageProvider:
         generation, epoch, index = binding
         identity = f'{self._lease}|{self._health_serial}|{generation}|{epoch}|{index}'
         deadline = self._clock() + _HEALTH_TIMEOUT
-        packet = f'GUN_HEALTH|{identity}|{deadline:.17g}'.encode('ascii')
-        attempt = _HealthRead(self, binding, deadline, f'GUN_HEALTH_RESULT|{identity}|'.encode('ascii'))
-        self._health_active = attempt
+        # A reused private slot supersedes a previous cue that may still be
+        # pending inside X4. Its exact old receipt identity cannot satisfy this read.
+        packet = f'GUN_HEALTH|{identity}|{deadline:.17g}|{slot}'.encode('ascii')
+        attempt = _HealthRead(self, binding, deadline, f'GUN_HEALTH_RESULT|{identity}|'.encode('ascii'), slot)
+        self._health_reads[slot] = attempt
         try:
             if self._socket.sendto(packet, self._peer) != len(packet):
                 raise ValueError('native health read send incomplete')
         except BaseException as error:
-            failure = ValueError('native health read could not be sent')
-            self._finish_health(error=failure)
+            self._fail_health_read(attempt, 'native health read could not be sent')
             if isinstance(error, Exception):
-                raise failure from error
+                raise attempt.error from error
             raise
         return attempt
 
-    def _finish_health(self, *, health=None, error=None):
-        attempt, self._health_active = self._health_active, None
-        attempt.health, attempt.error = health, error
+    def _fail_health_read(self, attempt, reason):
+        del self._health_reads[attempt.slot]
+        attempt.receipt = None
+        attempt.error = reason if isinstance(reason, ValueError) else ValueError(reason)
+
+    def _cancel_health_reads(self, reason):
+        for attempt in tuple(self._health_reads.values()):
+            self._fail_health_read(attempt, reason)
+
+    def _check_health_read(self, attempt):
+        if self._clock() >= attempt.deadline:
+            raise ValueError('native health read expired')
+        if not self._health_current(attempt.binding):
+            raise ValueError('native health read lost its Company helm')
 
     def _poll_health(self, attempt):
-        if self._health_active is not attempt:
-            raise ValueError('native health read is no longer active')
         try:
-            if self._clock() >= attempt.deadline:
-                raise ValueError('native health read expired')
-            if not self._health_current(attempt.binding):
-                raise ValueError('native health read lost its Company helm')
-            for _ in range(32):
-                try:
-                    packet, peer = self._socket.recvfrom(_MAX_PACKET + 1)
-                except BlockingIOError:
-                    return
-                if peer != self._peer or not packet.startswith(attempt.response_prefix):
-                    continue
-                if (len(packet) > _MAX_PACKET or not self._owns_peer(peer)
-                        or self._clock() >= attempt.deadline or not self._health_current(attempt.binding)):
-                    raise ValueError('native health receipt lost its process, helm or deadline fence')
-                try:
-                    fields = packet[len(attempt.response_prefix):].decode('ascii').split('|')
-                except UnicodeError:
-                    raise ValueError('invalid native health receipt encoding') from None
-                if fields == ['refused']:
-                    raise ValueError('native registry or actor refused health read')
-                self._finish_health(health=_health_sample(fields))
+            self._check_health_read(attempt)
+            if attempt.receipt is None:
+                self._receive_health()
+            packet = attempt.receipt
+            if packet is None:
                 return
+            # The socket may have been drained by a different operation. Fence
+            # ownership and freshness here, immediately before this delivery.
+            if len(packet) > _MAX_PACKET or not self._owns_peer(self._peer):
+                raise ValueError('native health receipt lost its process fence')
+            self._check_health_read(attempt)
+            try:
+                fields = packet[len(attempt.response_prefix):].decode('ascii').split('|')
+            except UnicodeError:
+                raise ValueError('invalid native health receipt encoding') from None
+            if fields == ['refused']:
+                raise ValueError('native registry or actor refused health read')
+            attempt.health = _health_sample(fields)
+            attempt.receipt = None
+            del self._health_reads[attempt.slot]
         except Exception as error:
-            failure = error if isinstance(error, ValueError) else ValueError('native health read unavailable')
-            self._finish_health(error=failure)
+            self._fail_health_read(attempt, error if isinstance(error, ValueError)
+                                   else 'native health read unavailable')
+
+    def _receive_health(self):
+        # One owned socket serves all health operations. Keep replies for other
+        # live slots when the first caller drains the socket.
+        for _ in range(32):
+            try:
+                packet, peer = self._socket.recvfrom(_MAX_PACKET + 1)
+            except BlockingIOError:
+                return
+            if peer != self._peer:
+                continue
+            for attempt in self._health_reads.values():
+                if attempt.receipt is None and packet.startswith(attempt.response_prefix):
+                    attempt.receipt = packet
+                    break
 
     def _finish(self, *, health=None, error=None):
         attempt, self._active = self._active, None

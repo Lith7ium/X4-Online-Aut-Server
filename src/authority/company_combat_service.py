@@ -16,6 +16,7 @@ RECEIPT_HISTORY = 128
 IO_TIMEOUT = 15
 IDLE_TIMEOUT = 60
 HEALTH_READ_TIMEOUT = 2
+MAX_HEALTH_READS = 4
 _LOG = logging.getLogger(__name__)
 
 
@@ -106,8 +107,9 @@ class CompanyCombatService:
     in arrival order and returns one native health pair per impact. A group
     refusal guarantees zero native writes. An uncertain group is never replayed.
 
-    Optional cockpit reads sample the current pilot ship in X4. Pending damage
-    writes take priority over those reads.
+    Optional cockpit reads sample the current pilot ship in X4. The backend
+    can opt into concurrent reads of distinct seats. Its cancel() must release
+    the operation before any native damage write can begin.
 
     A native outcome that cannot be confirmed closes the write path for this
     service. Orders increase across all shooters for one service lifetime.
@@ -115,7 +117,7 @@ class CompanyCombatService:
     """
 
     def __init__(self, lookup_current, apply_impact, *, apply_impacts=None, begin_health_read=None,
-                 health_window=None):
+                 health_window=None, max_health_reads=1):
         if not callable(lookup_current) or (apply_impact is not None and not callable(apply_impact)):
             raise ValueError('invalid combat admission lookup or impact adapter')
         if apply_impacts is not None and not (callable(apply_impact) and callable(apply_impacts)):
@@ -123,11 +125,14 @@ class CompanyCombatService:
         if ((begin_health_read is None) != (health_window is None)
                 or (begin_health_read is not None and not all(map(callable, (begin_health_read, health_window))))):
             raise ValueError('cockpit health requires an in-game reader and a current window')
+        if type(max_health_reads) is not int or not 1 <= max_health_reads <= MAX_HEALTH_READS:
+            raise ValueError('invalid cockpit health read capacity')
         self._lookup_current = lookup_current
         self._apply_impact = apply_impact
         self._apply_impacts = apply_impacts
         self._begin_health_read = begin_health_read
         self._health_window = health_window
+        self._max_health_reads = max_health_reads
         self._health_reads = deque()
         self._health_stats = dict(
             unchanged=0, confirmed=0, unavailable=0, preempted=0, deadline_exceeded=0, not_started=0,
@@ -221,8 +226,26 @@ class CompanyCombatService:
         peer.deadline = time.monotonic() + IO_TIMEOUT
 
     def _health_read_current(self, query):
-        return (self._begin_health_read is not None and time.monotonic() < query.deadline
-                and self._admitted(query.peer) and self._health_window(query.peer.binding) == query.window)
+        peer = query.peer
+        try:
+            return (self._begin_health_read is not None and time.monotonic() < query.deadline
+                    and self._peers.get(peer.connection) is peer and self._admitted(peer)
+                    and self._health_window(peer.binding) == query.window)
+        except (OSError, ValueError):
+            return False
+
+    def _health_peer_connected(self, peer):
+        # A pending request is normally skipped by the frame reader. Detect
+        # a disconnected worker without consuming any queued follow-up bytes.
+        try:
+            if peer.connection.recv(1, socket.MSG_PEEK):
+                return True
+        except BlockingIOError:
+            return True
+        except OSError:
+            pass
+        self._drop(peer)
+        return False
 
     def health_read_stats(self):
         """Summarize queue waits and validated native reads in milliseconds.
@@ -256,55 +279,69 @@ class CompanyCombatService:
             self._health_stats['deadline_exceeded'] += outcome == 'unavailable' and now >= query.deadline
 
     def _complete_health_read(self, query, health=None, *, outcome='unavailable'):
-        self._health_reads.remove(query)
-        self._record_health_outcome(query, 'confirmed' if health is not None else outcome)
         if query.operation is not None:
             query.operation.cancel()
+        self._health_reads.remove(query)
+        self._record_health_outcome(query, 'confirmed' if health is not None else outcome)
         if health is not None:
             query.peer.last_health_window = query.window
             query.peer.last_health_reply_revision = query.sampled_revision
-        self._queue_reply(query.peer, 'combat_health', window=query.window, sequence=query.sequence,
-                          health=health, revision=query.sampled_revision if health is not None else None)
+        if self._peers.get(query.peer.connection) is query.peer:
+            self._queue_reply(query.peer, 'combat_health', window=query.window, sequence=query.sequence,
+                              health=health, revision=query.sampled_revision if health is not None else None)
 
-    def _advance_health_read(self):
-        """Read the pilot ship in X4 when its last observed damage revision is stale."""
-        # An unchanged reply requires the cockpit to confirm the revision last sent
-        # on this connection as well as any damage observed since that reply.
-        for query in tuple(self._health_reads):
-            peer = query.peer
-            required_revision = max(peer.last_health_reply_revision, peer.last_possible_damage_order)
-            if (peer.last_health_window == query.window and query.after_revision is not None
-                    and required_revision <= query.after_revision <= self._settled_order):
-                self._complete_health_read(query, outcome='unchanged')
-        if not self._health_reads:
-            return
-        query = self._health_reads[0]
-        peer = query.peer
-        if self.native_pending and query.operation is not None:
-            # A pending damage write takes priority over a disposable snapshot.
-            self._complete_health_read(query, outcome='preempted')
-            return
-
+    def _poll_health_read(self, query):
         health = None
         try:
-            if self._health_read_current(query):
-                if self.native_pending:
-                    return
-                if query.operation is None:
-                    started_at = time.monotonic()
-                    query.operation = self._begin_health_read(peer.binding)
-                    query.started_at = started_at
-                    self._health_stats['native_started'] += 1
-                    self._record_health_duration('queue_wait', started_at - query.received_at)
-                    query.sampled_revision = self._settled_order
-                result = query.operation.poll()
-                if result is None:
-                    return
-                if self._health_read_current(query) and peer.last_possible_damage_order <= query.sampled_revision:
-                    health = validate_live_health(result)
+            if query.operation is None:
+                started_at = time.monotonic()
+                query.operation = self._begin_health_read(query.peer.binding)
+                query.started_at = started_at
+                self._health_stats['native_started'] += 1
+                self._record_health_duration('queue_wait', started_at - query.received_at)
+                query.sampled_revision = self._settled_order
+            result = query.operation.poll()
+            if result is None:
+                return True
+            if (self._health_read_current(query) and self._health_peer_connected(query.peer)
+                    and query.peer.last_possible_damage_order <= query.sampled_revision):
+                health = validate_live_health(result)
         except (OSError, ValueError):
             pass  # A missed read cannot change the game or invalidate impact receipts.
         self._complete_health_read(query, health)
+        return False
+
+    def _advance_health_reads(self):
+        for query in tuple(self._health_reads):
+            if not self._health_read_current(query) or not self._health_peer_connected(query.peer):
+                self._complete_health_read(query)
+        if self.native_pending:
+            return
+
+        active_seats = {query.peer.binding[1:] for query in self._health_reads if query.operation is not None}
+        for query in tuple(self._health_reads):
+            peer = query.peer
+            seat = peer.binding[1:]
+            if not self._health_read_current(query):
+                if query.operation is not None:
+                    active_seats.remove(seat)
+                self._complete_health_read(query)
+            elif query.operation is not None:
+                if not self._poll_health_read(query):
+                    active_seats.remove(seat)
+            else:
+                required_revision = max(peer.last_health_reply_revision, peer.last_possible_damage_order)
+                if (peer.last_health_window == query.window and query.after_revision is not None
+                        and required_revision <= query.after_revision <= self._settled_order):
+                    self._complete_health_read(query, outcome='unchanged')
+                elif seat not in active_seats and len(active_seats) < self._max_health_reads:
+                    if self._poll_health_read(query):
+                        active_seats.add(seat)
+
+    def _preempt_health_reads(self):
+        for query in tuple(self._health_reads):
+            if query.operation is not None:
+                self._complete_health_read(query, outcome='preempted')
 
     def _get_history(self, ticket, binding):
         history = self._history.get(ticket)
@@ -399,6 +436,9 @@ class CompanyCombatService:
         self._finish_impacts(batch, receipts)
 
     def _dispatch_remaining(self, batch, history):
+        can_dispatch = not self._poisoned and self._apply_impact is not None
+        if can_dispatch:
+            self._preempt_health_reads()
         if batch.single_fallback:
             receipt = batch.single_fallback.popleft()
             receipt['status'] = 'unknown'
@@ -406,7 +446,7 @@ class CompanyCombatService:
         else:
             remaining = batch.impacts[len(batch.receipts):]
             receipts = self._reserve_impacts(history, remaining if self._apply_impacts else remaining[:1])
-        if self._poisoned or self._apply_impact is None:
+        if not can_dispatch:
             for receipt in receipts:
                 receipt['status'] = 'rejected'
             self._finish_impacts(batch, receipts)
@@ -454,7 +494,7 @@ class CompanyCombatService:
             peer.deadline = now + IDLE_TIMEOUT
 
     def poll(self):
-        """Queue complete frames and dispatch at most one native operation in observed order."""
+        """Queue frames, advance ordered damage, then poll independent health reads."""
         self._check_owner()
         now = time.monotonic()
         self._accept(now)
@@ -472,7 +512,7 @@ class CompanyCombatService:
             self.settle_pending()
         else:
             self._advance_batch()
-        self._advance_health_read()
+        self._advance_health_reads()
         now = time.monotonic()
         for peer in tuple(self._peers.values()):
             if peer.outgoing:

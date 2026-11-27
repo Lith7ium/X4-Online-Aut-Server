@@ -2,6 +2,7 @@
 local M = {}
 local screen = 'X4AuthorityCompanyGunDamage'
 local max_group, group_chunk = 32, 8
+local max_health_reads = 4
 local health_fields = {'Amount', 'BeforeShield', 'BeforeHull', 'AfterShield', 'AfterHull', 'MaxShield', 'MaxHull'}
 
 local function split(row)
@@ -62,8 +63,9 @@ local function ship_health(observed)
 end
 
 function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hits)
-    local active, reading, next_hello
-    local last_serial, last_health_serial = 0, 0
+    local active, next_hello
+    local reading, last_health_serial = {}, {}
+    local last_serial = 0
 
     local function finish_impact(reply, reason)
         local attempt = active
@@ -223,13 +225,21 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
     end
 
     assert(RegisterEvent(screen .. '.HealthResult', function(_, row)
-        if not reading or type(row) ~= 'string' or #row > 512
-                or row:sub(1, #reading.identity + 1) ~= reading.identity .. '|' then return end
-        local attempt = reading
-        reading = nil
+        if active or type(row) ~= 'string' or #row > 512 then return end
         local fields = split(row)
+        if #fields ~= 7 then return end
+        local identity = table.concat(fields, '|', 1, 5)
+        local slot, attempt
+        for index, pending in pairs(reading) do
+            if pending.identity == identity then
+                slot, attempt = index, pending
+                break
+            end
+        end
+        if not attempt then return end
+        reading[slot] = nil
         local reply = 'refused'
-        if #fields == 7 and fields[6] == 'registered' and fields[7]:match('^0[xX][0-9a-fA-F]+$')
+        if fields[6] == 'registered' and fields[7]:match('^0[xX][0-9a-fA-F]+$')
                 and not paused() and monotonic() < attempt.deadline then
             local ok, observed = pcall(read_health, fields[7])
             if ok and ship_health(observed) and monotonic() < attempt.deadline then
@@ -265,7 +275,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
             chunk[#chunk + 1] = {target=target, amount=amount}
         end
         if not active then
-            last_serial, reading = serial, nil
+            last_serial, reading = serial, {}
             active = {group=true, identity=identity, deadline=deadline, rows={}, impacts={},
                       args={lease=lease, serial=serial, generation=fields[4], epoch=fields[5],
                             source=source, count=count}}
@@ -290,14 +300,16 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
             return group_chunk_arrived(fields, now)
         end
         if active then return end
-        if #fields == 7 and fields[1] == 'GUN_HEALTH' and fields[2] == lease then
+        if (#fields == 7 or #fields == 8) and fields[1] == 'GUN_HEALTH' and fields[2] == lease then
             local serial = index(fields[3], 2147483647)
             local source = index(fields[6], 200000)
             local deadline = number(fields[7], now, now + 2)
-            if not serial or serial <= last_health_serial or not token(fields[4]) or not token(fields[5])
+            local slot = index(fields[8] or '1', max_health_reads)
+            if not serial or not slot or serial <= (last_health_serial[slot] or 0)
+                    or not token(fields[4]) or not token(fields[5])
                     or not source or not deadline or deadline == now then return end
-            last_health_serial = serial
-            return {identity=table.concat(fields, '|', 2, 6), deadline=deadline,
+            last_health_serial[slot] = serial
+            return {identity=table.concat(fields, '|', 2, 6), deadline=deadline, slot=slot,
                 args={lease=lease, serial=serial, generation=fields[4], epoch=fields[5], source=source}}
         end
         if #fields ~= 9 or fields[1] ~= 'GUN_IMPACT' or fields[2] ~= lease then return end
@@ -309,7 +321,7 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
                 or not source or not target or target == source
                 or not amount or amount == 0 or not deadline or deadline == now then return end
         last_serial = serial
-        reading = nil
+        reading = {}
         active = {identity=table.concat(fields, '|', 2, 7), deadline=deadline, amount=amount, serial=serial, health={}}
         -- Record the attempt before calling the engine. Never reissue on failure.
         pcall(AddUITriggeredEvent, screen, 'Impact', {lease=lease, serial=serial,
@@ -325,18 +337,24 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
             next_hello = now + 1
         end
         if active and now >= active.deadline then finish_impact('unknown', 'native_observations_timed_out') end
-        if reading and now >= reading.deadline then reading = nil end
+        for slot, attempt in pairs(reading) do
+            if now >= attempt.deadline then reading[slot] = nil end
+        end
         if (active and (not active.group or active.dispatched)) or paused() then return end
-        local next_read
+        local next_reads = {}
         for _ = 1, 8 do
             if not net:pending() then break end
             local command = dispatch(net:receive(), now)
             if command == true then return end  -- A queued impact takes precedence over a read in this tick.
-            if command then next_read = command end
+            if command then next_reads[command.slot] = command end
         end
-        if next_read and not active then
-            reading = next_read
-            pcall(AddUITriggeredEvent, screen, 'Health', reading.args)
+        if active then return end
+        for slot = 1, max_health_reads do
+            local read = next_reads[slot]
+            if read and not paused() and monotonic() < read.deadline then
+                reading[slot] = read
+                pcall(AddUITriggeredEvent, screen, 'Health', read.args)
+            end
         end
     end
 end

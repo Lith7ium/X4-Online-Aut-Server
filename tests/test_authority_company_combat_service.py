@@ -64,12 +64,131 @@ class CompanyCombatTests(unittest.TestCase):
         request.update(kind='combat_health_read', window=window, sequence=sequence, after_revision=after_revision)
         return encode_frame(request)
 
+    def configure_health_reads(self, begin_read, window, *, apply=None, capacity=4):
+        self.service.close()
+        self.service = CompanyCombatService(self.grants.get, apply or self.apply, begin_health_read=begin_read,
+                                           health_window=window, max_health_reads=capacity)
+        self.addCleanup(self.service.close)
+
+    def send_health_reads(self, credentials, *, window=3, sequence=1, after_revision=None):
+        connections = [self.open() for _ in credentials]
+        for credential, (connection, _) in zip(credentials, connections, strict=True):
+            connection.sendall(self.health_request(credential, window, sequence, after_revision))
+        return connections
+
+    def test_four_native_reads_progress_independently_and_never_overlap_one_seat(self):
+        grants = [self.grant(index) for index in range(1, 6)]
+        pending = [Mock(poll=Mock(return_value=None)) for _ in range(6)]
+        begin = Mock(side_effect=pending)
+        self.configure_health_reads(begin, lambda binding: 3)
+        peers = self.send_health_reads([*grants[:4], grants[0], grants[4]])
+        self.service.poll()
+        self.assertEqual([call.args[0][2] for call in begin.call_args_list], [1, 2, 3, 4])
+        for read in pending[:4]:
+            read.poll.assert_called_once_with()
+
+        health = dict(shield=30, maxshield=100, hull=90, maxhull=100)
+        pending[2].poll.return_value = health
+        self.service.poll()
+        reply = json.loads(peers[2][1].readline())
+        self.assertEqual((reply['shooter_index'], reply['health'], reply['revision']), (3, health, 0))
+        self.assertEqual([call.args[0][2] for call in begin.call_args_list], [1, 2, 3, 4, 5])
+        pending[0].cancel.assert_not_called()
+
+        pending[0].poll.return_value = health
+        self.service.poll()
+        self.assertEqual(json.loads(peers[0][1].readline())['health'], health)
+        self.assertEqual([call.args[0][2] for call in begin.call_args_list], [1, 2, 3, 4, 5, 1])
+
+    def test_health_reads_drop_closed_revoked_paused_and_expired_seats(self):
+        clock = self.enterContext(patch('authority.company_combat_service.time'))
+        clock.monotonic.return_value = 10
+        grants = [self.grant(index) for index in range(1, 5)]
+        windows = dict.fromkeys(range(1, 5), 3)
+        pending = [Mock(poll=Mock(return_value=None)) for _ in grants]
+        self.configure_health_reads(Mock(side_effect=pending), lambda binding: windows[binding[2]])
+        peers = self.send_health_reads(grants)
+        self.service.poll()
+        for read in pending:
+            read.poll.assert_called_once_with()
+
+        peers[0][1].close()
+        peers[0][0].close()
+        del self.grants[derive_combat_ticket(grants[1]['ticket'])]
+        windows[3] = None
+        clock.monotonic.return_value = 11
+        self.service.poll()
+        for read in pending[:3]:
+            read.poll.assert_called_once_with()
+            read.cancel.assert_called_once_with()
+        self.assertEqual(peers[1][1].readline(), b'')
+        self.assertIsNone(json.loads(peers[2][1].readline())['health'])
+        pending[3].cancel.assert_not_called()
+
+        pending[3].poll.return_value = dict(shield=30, maxshield=100, hull=90, maxhull=100)
+        clock.monotonic.return_value = 12
+        self.service.poll()
+        self.assertEqual(pending[3].poll.call_count, 2)  # No result poll at the deadline.
+        self.assertIsNone(json.loads(peers[3][1].readline())['revision'])
+        stats = self.service.health_read_stats()
+        self.assertEqual((stats['native_started'], stats['unavailable'], stats['deadline_exceeded']), (4, 4, 1))
+
+    def test_all_outstanding_reads_cancel_before_even_synchronous_damage(self):
+        grants = [self.grant(index) for index in (1074, 100, 101, 102)]
+        before = dict(shield=30, maxshield=100, hull=90, maxhull=100)
+        after = dict(before, shield=4)
+        pending = [Mock(poll=Mock(return_value=None)) for _ in grants]
+        begin = Mock(side_effect=[Mock(poll=Mock(return_value=before)), *pending,
+                                  Mock(poll=Mock(return_value=after))])
+
+        def apply(binding, target, amount):
+            for read in pending:
+                read.cancel.assert_called_once_with()
+                read.poll.assert_called_once_with()
+            return self.apply(binding, target, amount)
+
+        self.configure_health_reads(begin, lambda binding: 3, apply=apply)
+        (victim, victim_reply), = self.send_health_reads(grants[:1])
+        self.service.poll()
+        self.assertEqual(json.loads(victim_reply.readline())['revision'], 0)
+        other_peers = self.send_health_reads(grants[1:])
+        victim.sendall(self.health_request(grants[0], 3, 2))
+        self.service.poll()
+        attacker, attack_reply = self.open()
+        attacker.sendall(self.frame(self.first, [hit(1)]))
+        self.service.poll()
+        self.assertEqual(self.receive(attack_reply)[0]['order'], 1)
+        for _, reply in [(victim, victim_reply), *other_peers]:
+            self.assertIsNone(json.loads(reply.readline())['health'])
+        self.assertEqual(self.service.health_read_stats()['preempted'], 4)
+
+        victim.sendall(self.health_request(grants[0], 3, 3, after_revision=0))
+        self.service.poll()
+        fresh = json.loads(victim_reply.readline())
+        self.assertEqual((fresh['health'], fresh['revision']), (after, 1))
+
+    def test_cancelled_window_cannot_use_a_cached_revision(self):
+        window = 3
+        health = dict(shield=30, maxshield=100, hull=90, maxhull=100)
+        begin = Mock(return_value=Mock(poll=Mock(return_value=health)))
+        self.configure_health_reads(begin, lambda binding: window)
+        (connection, reply), = self.send_health_reads([self.first])
+        self.service.poll()
+        self.assertEqual(json.loads(reply.readline())['revision'], 0)
+        window = None
+        connection.sendall(self.health_request(self.first, 3, 2, after_revision=0))
+        self.service.poll()
+        self.assertIsNone(json.loads(reply.readline())['health'])
+        begin.assert_called_once()
+        self.assertEqual(self.service.health_read_stats()['unchanged'], 0)
+
     def test_unchanged_pilot_gets_a_reply_while_another_native_read_is_pending(self):
         self.service.close()
         health = dict(shield=30, maxshield=2366, hull=3600, maxhull=3600)
         first_read = Mock(poll=Mock(return_value=health))
         slow_read = Mock(poll=Mock(return_value=None))
-        begin_read = Mock(side_effect=(first_read, slow_read))
+        queued_read = Mock(poll=Mock(return_value=health))
+        begin_read = Mock(side_effect=(first_read, slow_read, queued_read))
         self.service = CompanyCombatService(self.grants.get, self.apply, begin_health_read=begin_read,
                                            health_window=lambda binding: 3)
         self.addCleanup(self.service.close)
@@ -82,6 +201,8 @@ class CompanyCombatTests(unittest.TestCase):
 
         second.sendall(self.health_request(self.second, 3, 1))
         self.service.poll()
+        third_grant = self.grant(1074)
+        (_, third_reply), = self.send_health_reads([third_grant])
         first.sendall(self.health_request(self.first, 3, 2, after_revision=initial['revision']))
         self.service.poll()
         unchanged = json.loads(first_reply.readline())
@@ -92,6 +213,8 @@ class CompanyCombatTests(unittest.TestCase):
         slow_read.poll.return_value = health
         self.service.poll()
         self.assertEqual(json.loads(second_reply.readline())['health'], health)
+        self.assertEqual(json.loads(third_reply.readline())['health'], health)
+        self.assertEqual(begin_read.call_count, 3)
 
     def test_reconnected_pilot_retries_health_until_confirming_the_new_revision(self):
         self.service.close()
