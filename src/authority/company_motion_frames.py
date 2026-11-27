@@ -9,6 +9,8 @@ MAX_PEERS = 16
 MAX_INDICES = 256
 MAX_COUNTER = 2**53 - 1
 BIND_TIMEOUT = 15
+# A stopped sampler cannot keep refreshing an old pose.
+MAX_SAMPLE_AGE = 3.0
 SECTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 
 

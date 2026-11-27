@@ -7,10 +7,11 @@ import threading
 import time
 
 from .company_cockpit_health import CompanyCockpitHealthBridge
+from .company_motion_frames import MAX_SAMPLE_AGE
 from .company_motion_observer import (MAX_COCKPIT_PILOTS, MAX_OBSERVER_DATAGRAM,
                                       MAX_ORIENTED_OBSERVER_DATAGRAM, CompanyMotionObserver)
 from .company_npc_measurement import (NPC_CODE, NPC_INDEX, PILOT_INDEX, RADAR_ENDED,
-                                      REGISTRY_EPOCH, measurement_value, native_capture_now as _npc_now)
+                                      REGISTRY_EPOCH, measurement_value, native_capture_now)
 from .experimental_tcp_motion import ORIENTATION_AXES, check_motion_progress, motion_value
 
 
@@ -136,6 +137,8 @@ class CompanyMotionSource:
             raise
         self._registry = None
         self._previous = self._returned = None
+        self._pending = None
+        self._discard_captured_through = None
         self._peer = None
         self._observer = None
         self._cockpit_health_enabled = False
@@ -324,7 +327,7 @@ class CompanyMotionSource:
         except (UnicodeError, ValueError):
             return  # Malformed diagnostic data cannot stop pilot motion.
 
-        if self._npc_seat_gap or not 0 <= _npc_now() - sample['capture_time'] <= _MAX_NPC_AGE:
+        if self._npc_seat_gap or not 0 <= native_capture_now() - sample['capture_time'] <= _MAX_NPC_AGE:
             return
         binding = self._observer.cockpit_binding()
         if binding is not None:
@@ -351,7 +354,7 @@ class CompanyMotionSource:
             return None
         if sample is None or sample is RADAR_ENDED:
             return sample
-        now = _npc_now()
+        now = native_capture_now()
         if not 0 <= now - sample['capture_time'] <= _MAX_NPC_AGE:
             return None
         if self._observer.cockpit_binding() != self._npc_binding(sample):
@@ -359,12 +362,20 @@ class CompanyMotionSource:
         self._npc_accepted = _npc_progress(sample)
         return sample
 
+    def discard_pending_motion(self):
+        """Fence retained and queued poses by native capture time."""
+        self._owner()
+        self._pending = self._returned = None
+        self._discard_captured_through = native_capture_now()
+        return True
+
     def poll(self, validate_peer):
         """Return the latest new real-time sample, or None. validate_peer takes (IPv4, port)."""
         self._owner()
         if self._registry is None or not callable(validate_peer):
             raise ValueError('configured company motion source and validator required')
-        newest = None
+        deferred, self._pending = self._pending, None
+        newest = deferred
         checked_peer = None
         prefix = self._prefix()
         packet_limit = (MAX_ORIENTED_OBSERVER_DATAGRAM if self._observer is not None
@@ -445,6 +456,9 @@ class CompanyMotionSource:
                     raise ValueError('invalid local company motion orientation')
                 sample['orientation'] = dict(zip(ORIENTATION_AXES, map(float, angles)))
             sample = motion_value(sample, allow_v4=True)
+            if (self._discard_captured_through is not None
+                    and sample['capture_time'] <= self._discard_captured_through):
+                continue
             if self._previous is not None:
                 if sample['sequence'] <= self._previous['sequence']:
                     continue
@@ -457,7 +471,13 @@ class CompanyMotionSource:
                 self._report_once('first_local_own_pose_validated')
         if newest is not None:
             if select.select([self._socket], [], [], 0)[0]:
-                return None  # Drain a backlog before publishing an old observation.
+                self._pending = newest
+                return None  # Later datagrams may supersede this pose or contain GAP.
+            if newest is deferred and (
+                    not 0 <= native_capture_now() - newest['capture_time'] < MAX_SAMPLE_AGE
+                    or checked_peer is None and validate_peer(self._peer) is not True):
+                newest = None
+        if newest is not None:
             # A coalesced first sample or sector transition has no rate in the
             # receiver's frame until a preceding observation in that frame.
             if self._returned != newest['sector_macro']:
@@ -471,6 +491,7 @@ class CompanyMotionSource:
 
     def close(self):
         self._owner()
+        self._pending = None
         self._npc_latest = None
         if self._cockpit_health is not None:
             self._cockpit_health.close()

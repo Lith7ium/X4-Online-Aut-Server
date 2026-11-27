@@ -39,6 +39,14 @@ class _LocalSource:
         except OSError:
             raise ValueError('local movement source unavailable') from None
 
+    def discard_pending_motion(self):
+        discard = getattr(self._source, 'discard_pending_motion', None)
+        if discard is not None:
+            try:
+                return discard()
+            except OSError:
+                raise ValueError('local movement source unavailable') from None
+
 
 class ReconnectingCompanyMotionClient:
     """Retry only the movement socket. The caller owns control and the local source.

@@ -90,6 +90,8 @@ class CompanyMotionClient:
             self._connection.close()
             raise
         self._source = source
+        self._discard_pending_motion = getattr(source, 'discard_pending_motion', None)
+        self._source_capture_fenced = False
         self._validate_peer = validate_peer
         self._on_snapshot = on_snapshot
         self._on_end = on_end
@@ -229,6 +231,8 @@ class CompanyMotionClient:
         elif window != self._window + 1 or message['running'] == self._running:
             raise ValueError('movement clock transition out of order')
         self._window, self._running = window, message['running']
+        if self._discard_pending_motion is not None:
+            self._source_capture_fenced = self._discard_pending_motion() is True
         if not binding and not self._running:
             self._npc_measurement_source = None
         self._latest = self._awaiting_sample = self._receipt = self._last_sector = None
@@ -400,7 +404,9 @@ class CompanyMotionClient:
                 self.disconnected_before_bind = self._window is None and not self._incoming
                 raise
             sample = self._source.poll(self._validate_peer)
-            if sample is not None and self._running and old_window == self._window:
+            # A timestamp-aware source already removed poses from before the transition.
+            if (sample is not None and self._running
+                    and (old_window == self._window or self._source_capture_fenced)):
                 sample = motion_value(sample, allow_v4=True)
                 if (sample['version'] not in REAL_TIME_MOTION_VERSIONS or
                         (sample['epoch'], sample['index'], sample['generation']) !=
@@ -436,6 +442,9 @@ class CompanyMotionClient:
         self._outgoing = b''
         self._connection.close()
         try:
+            discard = getattr(self, '_discard_pending_motion', None)
+            if discard is not None:
+                discard()
             self._clear_pilot_roster()
         finally:
             self._retire_outside({}, transport_lost=transport_lost)

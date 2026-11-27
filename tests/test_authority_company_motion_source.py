@@ -11,7 +11,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from authority.client_seat_overlay import company_motion_config, company_motion_md, company_motion_ui
-from authority.company_motion_frames import MAX_COUNTER
+from authority.company_motion_client import CompanyMotionClient
+from authority.company_motion_frames import MAX_COUNTER, MAX_SAMPLE_AGE
 from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
 from authority.company_motion_observer import MAX_OBSERVER_DATAGRAM
 from authority.company_motion_source import CompanyMotionSource
@@ -72,7 +73,7 @@ class CompanyMotionSourceTest(unittest.TestCase):
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
                 socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as foreign, \
-                patch('authority.company_motion_source._npc_now', return_value=100) as clock:
+                patch('authority.company_motion_source.native_capture_now', return_value=100) as clock:
             owned.bind(('127.0.0.1', 0))
             validate = Mock(side_effect=lambda address: address == owned.getsockname())
             observer = source.observe(validate)
@@ -167,7 +168,7 @@ class CompanyMotionSourceTest(unittest.TestCase):
         prefix = source._prefix()
         point = f'NPC_POINT|{NPC_INDEX}|{NPC_CODE}|{SECTOR}|0xabc|1|visible|99.9|12|1|2|3|4|5|6'.encode()
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
-                patch('authority.company_motion_source._npc_now', return_value=100):
+                patch('authority.company_motion_source.native_capture_now', return_value=100):
             owned.bind(('127.0.0.1', 0))
             validate = lambda address: address == owned.getsockname()
             owned.sendto(prefix + point, destination)
@@ -275,6 +276,118 @@ class CompanyMotionSourceTest(unittest.TestCase):
             owned.sendto(f'{prefix}SAMPLE3|{epoch}|1960|7|sector_b|20|7|7|2|3|10|0|0|'.encode(), destination)
             with self.assertRaisesRegex(ValueError, 'foreign local'):
                 source.poll(validate)
+
+    def test_bounded_drain_retains_final_brake_but_respects_gap_age_and_peer(self):
+        source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_max_pilots=1)
+        self.addCleanup(source.close)
+        epoch = 'a' * 32
+        config = source.configure(epoch, 1073)
+        destination = ('127.0.0.1', config['port'])
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                patch('authority.company_motion_source.native_capture_now', return_value=102) as clock:
+            owned.bind(('127.0.0.1', 0))
+            validate = Mock(side_effect=lambda address: address == owned.getsockname())
+            source.observe(validate)
+            view = f'VIEW|cockpit|1|{epoch}|sector_a|1074|0xabc|KHI-630'
+
+            def send(body):
+                owned.sendto(source._prefix() + body.encode('ascii'), destination)
+
+            def sample(sequence, rate=0):
+                send(f'SAMPLE3|{epoch}|1073|{sequence}|sector_a|20|{100 + sequence / 10}'
+                     f'|{sequence}|2|3|{rate}|0|0|')
+
+            def backlog(sequence):
+                sample(sequence)
+                for _ in range(32):
+                    send(view)
+                self.assertIsNone(source.poll(validate))  # One VIEW is still queued.
+
+            sample(1, rate=10)
+            self.assertEqual(source.poll(validate)['sequence'], 1)
+            backlog(2)
+            brake = source.poll(validate)
+            self.assertEqual((brake['sequence'], brake['real_velocity']), (2, dict(x=0, y=0, z=0)))
+            self.assertIsNone(source.poll(validate))
+
+            backlog(3)
+            send('GAP')
+            self.assertIsNone(source.poll(validate))
+            backlog(4)
+            sample(5, rate=12)
+            self.assertEqual(source.poll(validate)['sequence'], 5)
+            backlog(6)
+            clock.return_value = 100.6 + MAX_SAMPLE_AGE
+            self.assertIsNone(source.poll(validate))
+            clock.return_value = 102
+            validate.side_effect = None
+            # The observer suffix cannot release a deferred sample once native ownership fails.
+            validate.return_value = True
+            backlog(7)
+            validate.return_value = False
+            self.assertIsNone(source.poll(validate))
+            validate.return_value = True
+            self.assertIsNone(source.poll(validate))
+
+    def test_client_resume_and_rebind_keep_fresh_pose_behind_old_datagrams(self):
+        source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_max_pilots=1)
+        self.addCleanup(source.close)
+        epoch = 'a' * 32
+        config = source.configure(epoch, 1073)
+        destination = ('127.0.0.1', config['port'])
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as owned, \
+                patch('authority.company_motion_client.socket.create_connection') as connect, \
+                patch('authority.company_motion_source.native_capture_now', return_value=100) as clock:
+            owned.bind(('127.0.0.1', 0))
+            validate = lambda address: address == owned.getsockname()
+            source.observe(validate)
+            connect.return_value.send.side_effect = len
+            credential = dict(epoch=epoch, generation='b' * 32, session_epoch='c' * 32,
+                              index=1073, ticket='f' * 64)
+
+            def send(body):
+                owned.sendto(source._prefix() + body.encode('ascii'), destination)
+
+            def sample(sequence):
+                send(f'SAMPLE3|{epoch}|1073|{sequence}|sector_a|20|{100 + sequence / 10}'
+                     f'|{sequence}|2|3|0|0|0|')
+
+            def backlog(sequence):
+                sample(sequence)
+                for _ in range(32):
+                    send(f'VIEW|cockpit|1|{epoch}|sector_a|1074|0xabc|KHI-630')
+                self.assertIsNone(source.poll(validate))
+                sample(sequence + 1)  # Also leave an unread own pose in the old drain.
+
+            def after_resume(window, running):
+                if window == 3 and running:
+                    sample(3)  # Native capture after the resume, in the same UDP drain.
+                    clock.return_value = 100.31
+
+            client = CompanyMotionClient(1, credential, source, validate, on_clock=after_resume)
+            bind = dict(kind='motion_bound', window=1, running=True, last_sequence=0)
+            client._receive(bind)
+            backlog(1)
+            clock.return_value = 100.21
+            client._receive(dict(kind='motion_state', window=2, running=False))
+            clock.return_value = 100.25
+            resume = dict(kind='motion_state', window=3, running=True)
+            with patch('authority.company_motion_client.read_frames', return_value=[resume]):
+                client.poll()
+            self.assertIsNotNone(client._awaiting_sample)
+            self.assertEqual(client._awaiting_sample['sequence'], 3)
+            self.assertIsNone(source.poll(validate))
+
+            backlog(4)
+            clock.return_value = 100.51
+            client.close(transport_lost=True)
+            rebound = CompanyMotionClient(1, credential, source, validate)
+            self.addCleanup(rebound.close)
+            clock.return_value = 100.55
+            rebound._receive(dict(bind, window=3))
+            sample(6)
+            self.assertEqual(source.poll(validate)['sequence'], 6)
+            self.assertIsNone(source.poll(validate))
 
     def test_first_local_motion_stages_require_matching_datagram_owned_peer_and_valid_pose(self):
         stages = []

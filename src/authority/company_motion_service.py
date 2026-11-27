@@ -16,13 +16,11 @@ from .company_limits import MAX_COCKPIT_PLAYBACK_PILOTS
 from .company_ships import _DISPLAY_CODE
 from .company_npc_measurement import MEASUREMENT_KIND, NpcMeasurementIngress
 from .experimental_tcp_motion import REAL_TIME_MOTION_VERSIONS, check_motion_progress, motion_value
-from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, SECTOR, encode_frame,
+from .company_motion_frames import (MAX_PEERS, MAX_COUNTER, MAX_SAMPLE_AGE, SECTOR, encode_frame,
                                     normalize_views, read_frames, view_matches)
 
 _HEX32 = re.compile(r'[0-9a-f]{32}')
 _TICKET = re.compile(r'[0-9a-f]{64}')
-# A stopped game sampler cannot refresh a new viewer from an indefinitely old pose.
-MAX_SAMPLE_AGE = 3.0
 
 
 @dataclass

@@ -347,7 +347,7 @@ class CompanyMotionTLSTests(CompanyMotionTLSHarness):
         for sequence, angles in enumerate(((3.12, .2, -.4), (-3.12, .4, -.1)), start=1):
             rates = '-|-|-' if sequence == 1 else '0|0|0'
             yaw, pitch, roll = angles
-            packet = (f'SAMPLE4|{REGISTRY_EPOCH}|1|{sequence}|sector_a|8|{sequence}|10|20|30|'
+            packet = (f'SAMPLE4|{REGISTRY_EPOCH}|1|{sequence}|sector_a|8|{clock():.9f}|10|20|30|'
                       f'{rates}|{yaw}|{pitch}|{roll}|')
             publisher_socket.send((publisher_prefix + packet).encode('ascii'))
 
