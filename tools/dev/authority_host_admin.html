@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>X4 host menu</title>
+<style>
+:root {
+  --paper: #EAF0F2; --surface: #F7FAFB; --ink: #14233B; --muted: #4E5F73; --line: #B9C7CF;
+  --friend: #1F6FB2; --hostile: #B4235A; --ok: #2F7D5B; --warn: #9A5B00; --focus: #1F6FB2;
+  --plate: #DCE6EA;
+  --display: Bahnschrift, "DIN Alternate", "DIN 2014", "Roboto Condensed", "Arial Narrow", sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0F1A2B; --surface: #16233A; --ink: #E3ECF0; --muted: #9FB0C0; --line: #2C3D57;
+    --friend: #6FB1F0; --hostile: #F07AA5; --ok: #6CCB9C; --warn: #E6B35C; --focus: #6FB1F0; --plate: #22324D;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0F1A2B; --surface: #16233A; --ink: #E3ECF0; --muted: #9FB0C0; --line: #2C3D57;
+  --friend: #6FB1F0; --hostile: #F07AA5; --ok: #6CCB9C; --warn: #E6B35C; --focus: #6FB1F0; --plate: #22324D;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: .01em; margin: 0; }
+h1 { font-size: 1.15rem; }
+h2 { font-size: 1.6rem; margin-bottom: .25rem; }
+h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
+p { margin: .25rem 0 1rem; max-width: 70ch; }
+.hint { color: var(--muted); font-size: .9rem; }
+button, input, select { font: inherit; color: inherit; }
+button {
+  background: var(--surface); border: 1px solid var(--ink); border-radius: 3px; padding: .3rem .75rem; cursor: pointer;
+}
+button.primary { background: var(--ink); color: var(--surface); }
+button.danger { border-color: var(--hostile); color: var(--hostile); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+input, select { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: .3rem .45rem; }
+input[type="number"] { width: 9rem; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.shell { display: grid; grid-template-columns: 13rem 1fr; min-height: 100vh; }
+nav { border-right: 1px solid var(--line); padding: 1rem .75rem; }
+nav h1 { margin: 0 .5rem 1rem; }
+nav button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: .45rem .5rem; border-radius: 3px; }
+nav button[aria-current="page"] { background: var(--plate); font-weight: 600; }
+main { padding: 0 1.5rem 3rem; min-width: 0; }
+.strip {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 2rem; padding: 1rem 0; border-bottom: 1px solid var(--line);
+  margin-bottom: 1.5rem;
+}
+.balance { font-family: var(--display); font-size: 2.1rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.balance small { font-size: 1rem; color: var(--muted); }
+.status { color: var(--muted); }
+.status b { color: var(--ink); font-weight: 600; }
+.dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem; background: var(--hostile); }
+.dot.on { background: var(--ok); }
+.strip .last { flex-basis: 100%; font-size: .9rem; color: var(--muted); }
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: .85rem; border-bottom: 1px solid var(--line); padding: .35rem .5rem; }
+td { border-bottom: 1px solid var(--line); padding: .45rem .5rem; vertical-align: middle; }
+td.actions { white-space: nowrap; }
+td.actions > * + * { margin-left: .35rem; }
+.plate {
+  display: inline-block; font-family: var(--display); font-size: .95rem; letter-spacing: .06em; padding: 0 .4rem;
+  background: var(--plate); border: 1px solid var(--line); border-radius: 2px; font-variant-numeric: tabular-nums;
+}
+.bar { display: inline-block; width: 5rem; height: .45rem; background: var(--line); border-radius: 1px; vertical-align: middle; margin-right: .35rem; }
+.bar > i { display: block; height: 100%; background: var(--friend); border-radius: 1px; }
+.row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0 1rem; }
+.relations { display: grid; grid-template-columns: minmax(10rem, 16rem) 1fr 3rem auto; gap: .35rem 1rem; align-items: center; max-width: 60rem; }
+.relations .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scale { position: relative; }
+.scale input[type="range"] { width: 100%; accent-color: var(--friend); }
+.scale input.hostile { accent-color: var(--hostile); }
+.scale::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; border-left: 1px dashed var(--muted); pointer-events: none; }
+.level { font-family: var(--display); font-size: 1.15rem; text-align: right; font-variant-numeric: tabular-nums; }
+.level.pos { color: var(--friend); } .level.neg { color: var(--hostile); }
+.legend { display: flex; justify-content: space-between; max-width: 60rem; color: var(--muted); font-size: .85rem; margin: 0 0 .5rem; }
+.checklist { columns: 18rem; column-gap: 1.5rem; margin: .5rem 0 1rem; }
+.checklist label { display: block; break-inside: avoid; padding: .1rem 0; }
+.checklist .done { color: var(--muted); }
+.tag { font-size: .8rem; padding: 0 .35rem; border-radius: 2px; border: 1px solid currentColor; }
+.tag.done { color: var(--ok); } .tag.failed { color: var(--hostile); } .tag.partial, .tag.running, .tag.queued { color: var(--warn); }
+.empty { color: var(--muted); padding: 1rem 0; }
+.token { max-width: 34rem; margin: 15vh auto; padding: 0 1rem; }
+.token input { width: 100%; margin: .5rem 0; }
+.tabs { display: flex; gap: .25rem; flex-wrap: wrap; margin: .5rem 0; }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+[hidden] { display: none !important; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  nav { border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: .25rem; padding: .5rem 1rem; }
+  nav h1 { flex-basis: 100%; margin: .25rem 0; }
+  nav button { width: auto; }
+  main { padding: 0 1rem 2rem; }
+  .relations { grid-template-columns: 1fr 3rem; }
+  .relations .scale { grid-column: 1 / -1; }
+  table { display: block; overflow-x: auto; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bar > i { transition: width .4s ease; }
+}
+</style>
+</head>
+<body>
+<div class="token" id="login" hidden>
+  <h2>X4 host menu</h2>
+  <p>Paste the host token. It is in <code>~/.config/x4-authority/host-admin.token</code> on the server.</p>
+  <form id="token-form">
+    <label for="token-input">Host token</label>
+    <input id="token-input" type="password" autocomplete="off" required>
+    <button class="primary" type="submit">Open the menu</button>
+    <p class="hint" id="token-error" role="alert"></p>
+  </form>
+</div>
+
+<div class="shell" id="app" hidden>
+  <nav aria-label="Sections">
+    <h1>X4 host menu</h1>
+    <button data-section="pilots">Pilots</button>
+    <button data-section="ships">Company ships</button>
+    <button data-section="money">Money</button>
+    <button data-section="factions">Faction relations</button>
+    <button data-section="research">Research</button>
+    <button data-section="blueprints">Blueprints</button>
+    <button data-section="stations">Building resources</button>
+    <button data-section="activity">Activity</button>
+  </nav>
+  <main>
+    <div class="strip" aria-live="polite">
+      <div class="balance" id="balance">–</div>
+      <div class="status" id="world"></div>
+      <div class="status" id="link"></div>
+      <button id="save" title="Save the world now. Only while nobody is connected.">Save now</button>
+      <div class="last" id="last"></div>
+    </div>
+
+    <section data-panel="pilots">
+      <h2>Pilots</h2>
+      <p class="hint">Pilots are numbered by connection. A kicked pilot can join again.</p>
+      <table><thead><tr><th>Pilot</th><th>Status</th><th>Ship</th><th>Actions</th></tr></thead><tbody id="pilots"></tbody></table>
+      <h3>Ships kept for the host</h3>
+      <p class="hint">A held ship is not offered to joining pilots. An assigned ship is the only one its pilot is offered.</p>
+      <div class="row">
+        <label for="next-ship">Next pilot to join gets</label>
+        <select id="next-ship"></select>
+        <button id="assign-next">Assign</button>
+      </div>
+      <table><thead><tr><th>Ship</th><th>Kept for</th><th>Actions</th></tr></thead><tbody id="plan"></tbody></table>
+    </section>
+
+    <section data-panel="ships" hidden>
+      <h2>Company ships</h2>
+      <p class="hint">Ships in the server's Company registry. Repair sets hull and shield to 100%.</p>
+      <div class="row">
+        <label for="cargo-ware">Cargo to add</label>
+        <select id="cargo-ware"></select>
+        <input id="cargo-amount" type="number" min="1" max="1000000" value="100" aria-label="Cargo amount">
+      </div>
+      <table><thead><tr><th>Ship</th><th>Name</th><th>Sector</th><th>Hull</th><th>Shield</th><th>Actions</th></tr></thead><tbody id="ships"></tbody></table>
+    </section>
+
+    <section data-panel="money" hidden>
+      <h2>Money</h2>
+      <p class="hint">Changes the Company account on the server.</p>
+      <div class="row">
+        <button data-credits="1000000">Add 1 million</button>
+        <button data-credits="10000000">Add 10 million</button>
+        <button data-credits="100000000">Add 100 million</button>
+      </div>
+      <div class="row">
+        <label for="credits">Credits</label>
+        <input id="credits" type="number" min="1" max="1000000000" step="1" value="50000">
+        <button class="primary" id="add-credits">Add credits</button>
+        <button class="danger" id="remove-credits">Remove credits</button>
+      </div>
+    </section>
+
+    <section data-panel="factions" hidden>
+      <h2>Faction relations</h2>
+      <p class="hint">Relation of your faction to each other faction, from −30 to +30. Locked relations cannot change.</p>
+      <div class="legend" aria-hidden="true"><span>−30 hostile</span><span>neutral</span><span>allied +30</span></div>
+      <div class="relations" id="factions"></div>
+    </section>
+
+    <section data-panel="research" hidden>
+      <h2>Research</h2>
+      <p class="hint">Unlocks research at once, without a research module.</p>
+      <div class="row">
+        <button class="primary" id="research-selected">Unlock selected</button>
+        <button id="research-all">Unlock all research</button>
+      </div>
+      <div class="checklist" id="research"></div>
+    </section>
+
+    <section data-panel="blueprints" hidden>
+      <h2>Blueprints</h2>
+      <p class="hint">Adds blueprints to your faction's library. Blueprints you already own stay as they are.</p>
+      <div class="tabs" id="blueprint-tabs"></div>
+      <div class="row">
+        <input id="blueprint-filter" type="search" placeholder="Filter by name" aria-label="Filter blueprints">
+        <button class="primary" id="blueprints-selected">Add selected</button>
+        <button id="blueprints-group">Add the whole group</button>
+      </div>
+      <div class="checklist" id="blueprints"></div>
+    </section>
+
+    <section data-panel="stations" hidden>
+      <h2>Building resources</h2>
+      <p class="hint">Your stations with a build storage. Fill adds what the current build plans still miss.</p>
+      <div class="row">
+        <label for="store-ware">Ware to add</label>
+        <select id="store-ware"></select>
+        <input id="store-amount" type="number" min="1" max="1000000" value="1000" aria-label="Ware amount">
+      </div>
+      <table><thead><tr><th>Station</th><th>Name</th><th>Sector</th><th>Build tasks</th><th>Actions</th></tr></thead><tbody id="stations"></tbody></table>
+    </section>
+
+    <section data-panel="activity" hidden>
+      <h2>Activity</h2>
+      <p class="hint">The latest host actions. Pilots see world changes after their next join.</p>
+      <table><thead><tr><th>Job</th><th>Time (UTC)</th><th>Action</th><th>Result</th></tr></thead><tbody id="jobs"></tbody></table>
+    </section>
+  </main>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  let token = '';
+  try { token = sessionStorage.getItem('x4-host-token') || ''; } catch (e) { /* storage blocked */ }
+  let state = null, catalog = null, group = 'modules', timer = null;
+  const names = {};
+  const groupNames = {modules: 'Station modules', ships: 'Ships', equipment: 'Equipment', mods: 'Equipment mods'};
+
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (key === 'class') node.className = value;
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else if (value === true) node.setAttribute(key, '');
+      else if (value !== false && value !== null && value !== undefined) node.setAttribute(key, value);
+    }
+    for (const child of children.flat(Infinity)) {
+      if (child !== null && child !== undefined) node.append(child.nodeType ? child : String(child));
+    }
+    return node;
+  }
+  const fill = (node, ...rows) => node.replaceChildren(...rows.flat(Infinity));
+  const plate = (code) => el('span', {class: 'plate'}, code);
+  const number = (value) => new Intl.NumberFormat('en-US').format(value);
+
+  async function api(path, body) {
+    const options = {headers: {'X-Host-Admin-Token': token}, cache: 'no-store'};
+    if (body) {
+      options.method = 'POST';
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, options);
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) { showLogin('That token is not valid for this server.'); throw new Error('token'); }
+    if (!response.ok) throw new Error(data.error || `request failed (${response.status})`);
+    return data;
+  }
+
+  async function act(action, params, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return false;
+    try {
+      const reply = await api('/api/action', {action, params: params || {}});
+      $('last').textContent = `Job ${reply.job} queued.`;
+      refresh();
+      return true;
+    } catch (error) {
+      if (error.message !== 'token') $('last').textContent = `Not queued: ${error.message}.`;
+      return false;
+    }
+  }
+
+  function showLogin(message) {
+    clearInterval(timer);
+    $('app').hidden = true; $('login').hidden = false;
+    $('token-error').textContent = message || '';
+    $('token-input').focus();
+  }
+
+  $('token-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    token = $('token-input').value.trim();
+    try { sessionStorage.setItem('x4-host-token', token); } catch (e) { /* storage blocked */ }
+    start();
+  });
+
+  async function start() {
+    try {
+      catalog = await api('/api/catalog');
+    } catch (error) {
+      if (error.message !== 'token') showLogin(`The server did not answer: ${error.message}.`);
+      return;
+    }
+    for (const list of [catalog.research, catalog.wares, ...Object.values(catalog.blueprints)]) {
+      for (const [id, name] of list) names[id] = name;
+    }
+    $('login').hidden = true; $('app').hidden = false;
+    fillWares($('cargo-ware')); fillWares($('store-ware'));
+    renderBlueprintTabs(); renderBlueprints();
+    refresh();
+    timer = setInterval(refresh, 3000);
+  }
+
+  function fillWares(select) {
+    fill(select, catalog.wares.map(([id, name]) => el('option', {value: id}, name)));
+    if (!catalog.wares.length) select.append(el('option', {value: ''}, 'Ware list unavailable'));
+  }
+
+  async function refresh() {
+    try { state = await api('/api/state'); } catch (error) {
+      if (error.message !== 'token') $('link').textContent = 'The host menu lost its connection to the server.';
+      return;
+    }
+    render();
+  }
+
+  function render() {
+    const world = state.world;
+    fill($('balance'), world.money_credits === null ? '–' : number(world.money_credits), el('small', {}, ' Cr'));
+    fill($('world'), 'World ', el('b', {}, state.world_state || 'unknown'),
+      `, ${state.pilots.length} pilot${state.pilots.length === 1 ? '' : 's'} connected`);
+    fill($('link'), el('span', {class: 'dot' + (state.x4_connected ? ' on' : '')}),
+      state.x4_connected ? 'X4 is connected' : 'Waiting for X4 to load the world');
+    $('save').disabled = state.pilots.length > 0 || state.world_state !== 'running';
+    const latest = state.jobs[0];
+    if (latest) $('last').textContent = `Job ${latest.job}, ${label(latest)}: ${latest.status}${latest.detail ? ' – ' + latest.detail : ''}`;
+    renderPilots(); renderShips(); renderFactions(); renderResearch(); renderStations(); renderJobs();
+  }
+
+  const shipName = (index) => {
+    const ship = state.world.ships.find((item) => item.ship === index);
+    return ship ? `${ship.code} ${ship.name}` : `ship ${index}`;
+  };
+
+  function shipOptions(select) {
+    const keep = select.value;
+    fill(select, state.world.ships.map((ship) => el('option', {value: ship.ship}, `${ship.code} ${ship.name}`)));
+    if (keep) select.value = keep;
+  }
+
+  function renderPilots() {
+    const status = {attached: 'Connecting', offered: 'Choosing a ship', admitted: 'Flying'};
+    fill($('pilots'), state.pilots.length ? state.pilots.map((pilot) => {
+      const select = el('select', {'aria-label': `Ship for pilot ${pilot.pilot}`});
+      shipOptions(select);
+      const flying = pilot.ship && pilot.ship.state === 'flying';
+      return el('tr', {},
+        el('td', {}, `Pilot ${pilot.pilot}`),
+        el('td', {}, status[pilot.stage] || pilot.stage, pilot.ready ? ', loaded' : ''),
+        el('td', {}, pilot.ship ? [plate(pilot.ship.code), ' ', pilot.ship.name || '', pilot.ship.state === 'chosen' ? ' (chosen)' : ''] : '–'),
+        el('td', {class: 'actions'}, select,
+          el('button', {onclick: () => flying
+            ? act('assign', {ship: Number(select.value), pilot: null},
+                `Pilot ${pilot.pilot} is flying. Keep this ship for the next pilot who joins, then kick pilot ${pilot.pilot} so they can rejoin in it?`)
+                .then((queued) => queued && act('kick', {pilot: pilot.pilot}))
+            : act('assign', {ship: Number(select.value), pilot: pilot.pilot})}, flying ? 'Move to ship' : 'Assign ship'),
+          el('button', {class: 'danger', onclick: () => act('kick', {pilot: pilot.pilot}, `Kick pilot ${pilot.pilot}?`)}, 'Kick')));
+    }) : el('tr', {}, el('td', {colspan: 4, class: 'empty'}, 'Nobody is connected. The world keeps running if the server was started that way.')));
+    shipOptions($('next-ship'));
+    fill($('plan'), state.plan.length ? state.plan.map((entry) => el('tr', {},
+      el('td', {}, shipName(entry.ship)),
+      el('td', {}, entry.target === 'held' ? 'Held by the host' : entry.target === 'next' ? 'The next pilot to join' : `Pilot ${entry.pilot}`),
+      el('td', {class: 'actions'}, el('button', {onclick: () => act('hold', {ship: entry.ship, hold: false})}, 'Release'))))
+      : el('tr', {}, el('td', {colspan: 3, class: 'empty'}, 'No ships are kept. Joining pilots can choose any free ship.')));
+  }
+
+  function bar(value) { return [el('span', {class: 'bar'}, el('i', {style: `width:${Math.max(0, Math.min(100, value))}%`})), `${value}%`]; }
+
+  function renderShips() {
+    const kept = new Set(state.plan.map((entry) => entry.ship));
+    if (document.activeElement && document.activeElement.closest('#ships')) return; // keep a rename in progress
+    fill($('ships'), state.world.ships.length ? state.world.ships.map((ship) => {
+      const rename = el('input', {value: ship.name, maxlength: 48, 'aria-label': `New name for ${ship.code}`, size: 16});
+      const params = {ship: ship.ship, code: ship.code};
+      return el('tr', {},
+        el('td', {}, plate(ship.code)),
+        el('td', {}, rename),
+        el('td', {}, ship.sector),
+        el('td', {}, bar(ship.hull)), el('td', {}, bar(ship.shield)),
+        el('td', {class: 'actions'},
+          el('button', {onclick: () => act('ship_rename', {...params, name: rename.value})}, 'Rename'),
+          el('button', {onclick: () => act('ship_repair', params)}, 'Repair'),
+          el('button', {onclick: () => act('ship_cargo', {...params, ware: $('cargo-ware').value, amount: Number($('cargo-amount').value)})}, 'Add cargo'),
+          el('button', {onclick: () => act('hold', {ship: ship.ship, hold: !kept.has(ship.ship)})}, kept.has(ship.ship) ? 'Release' : 'Hold')));
+    }) : el('tr', {}, el('td', {colspan: 6, class: 'empty'}, state.x4_connected ? 'The registry lists no operational Company ships.' : 'Ships appear once X4 has loaded the world.')));
+  }
+
+  function renderFactions() {
+    const box = $('factions');
+    if (box.contains(document.activeElement)) return; // do not move a slider under the host's hand
+    fill(box, state.world.factions.length ? state.world.factions.map((faction) => {
+      const level = el('span', {class: 'level'});
+      const range = el('input', {type: 'range', min: -30, max: 30, step: 1, value: faction.level, 'aria-label': `Relation to ${faction.name}`});
+      const show = () => {
+        const value = Number(range.value);
+        level.textContent = value > 0 ? `+${value}` : String(value);
+        level.className = 'level' + (value > 0 ? ' pos' : value < 0 ? ' neg' : '');
+        range.classList.toggle('hostile', value < 0);
+      };
+      range.addEventListener('input', show); show();
+      return [el('span', {class: 'name', title: faction.id}, faction.name), el('div', {class: 'scale'}, range), level,
+        el('button', {onclick: () => act('relation', {faction: faction.id, level: Number(range.value)})}, 'Set')];
+    }) : el('p', {class: 'empty'}, 'Factions appear once X4 has loaded the world.'));
+  }
+
+  function checklist(box, items, isDone) {
+    const checked = new Set([...box.querySelectorAll('input:checked')].map((input) => input.value));
+    fill(box, items.map(([id, name]) => {
+      const done = isDone(id);
+      return el('label', {class: done ? 'done' : ''},
+        el('input', {type: 'checkbox', value: id, checked: checked.has(id), disabled: done}), ' ', name, done ? ' (unlocked)' : '');
+    }));
+    if (!items.length) box.append(el('p', {class: 'empty'}, 'The game\'s ware list could not be read on the server.'));
+  }
+  const selected = (box) => [...box.querySelectorAll('input:checked')].map((input) => input.value);
+
+  function renderResearch() { checklist($('research'), catalog.research, (id) => state.world.research[id] === true); }
+
+  function renderBlueprintTabs() {
+    fill($('blueprint-tabs'), Object.keys(groupNames).map((key) => el('button', {'aria-pressed': String(key === group),
+      onclick: () => { group = key; renderBlueprintTabs(); renderBlueprints(); }}, `${groupNames[key]} (${catalog.blueprints[key].length})`)));
+  }
+  function renderBlueprints() {
+    const filter = $('blueprint-filter').value.trim().toLowerCase();
+    checklist($('blueprints'), catalog.blueprints[group].filter(([id, name]) => !filter || name.toLowerCase().includes(filter) || id.includes(filter)), () => false);
+  }
+  $('blueprint-filter').addEventListener('input', renderBlueprints);
+
+  function renderStations() {
+    fill($('stations'), state.world.stations.length ? state.world.stations.map((station) => el('tr', {},
+      el('td', {}, plate(station.station)), el('td', {}, station.name), el('td', {}, station.sector),
+      el('td', {}, station.build_tasks),
+      el('td', {class: 'actions'},
+        el('button', {disabled: station.build_tasks === 0, onclick: () => act('station_fill', {station: station.station})}, 'Fill missing resources'),
+        el('button', {onclick: () => act('station_add', {station: station.station, ware: $('store-ware').value, amount: Number($('store-amount').value)})}, 'Add ware'))))
+      : el('tr', {}, el('td', {colspan: 5, class: 'empty'}, 'You own no stations with a build storage yet.')));
+  }
+
+  function label(job) {
+    const p = job.params || {};
+    switch (job.action) {
+      case 'money': return `${p.credits > 0 ? 'add' : 'remove'} ${number(Math.abs(p.credits))} Cr`;
+      case 'relation': return `relation to ${p.faction}: ${p.level}`;
+      case 'research': return p.group ? 'all research' : `research ${(p.wares || []).map((id) => names[id] || id).join(', ')}`;
+      case 'blueprints': return p.group ? `all ${groupNames[p.group] || p.group}` : `${(p.wares || []).length} blueprint(s)`;
+      case 'ship_repair': return `repair ${p.code}`;
+      case 'ship_rename': return `rename ${p.code} to ${p.name}`;
+      case 'ship_cargo': return `${p.amount} ${names[p.ware] || p.ware} to ${p.code}`;
+      case 'station_fill': return `fill ${p.station}`;
+      case 'station_add': return `${p.amount} ${names[p.ware] || p.ware} to ${p.station}`;
+      case 'kick': return `kick pilot ${p.pilot}`;
+      case 'hold': return `${p.hold ? 'hold' : 'release'} ship ${p.ship}`;
+      case 'assign': return `assign ship ${p.ship} to ${p.pilot ? 'pilot ' + p.pilot : 'the next pilot'}`;
+      case 'save': return 'save now';
+      default: return job.action;
+    }
+  }
+
+  function renderJobs() {
+    fill($('jobs'), state.jobs.length ? state.jobs.map((job) => el('tr', {},
+      el('td', {}, job.job), el('td', {}, job.time.replace('T', ' ').replace('Z', '')), el('td', {}, label(job)),
+      el('td', {}, el('span', {class: `tag ${job.status}`}, job.status), job.detail ? ' ' + job.detail : '')))
+      : el('tr', {}, el('td', {colspan: 4, class: 'empty'}, 'No host actions yet.')));
+  }
+
+  for (const button of document.querySelectorAll('nav button')) {
+    button.addEventListener('click', () => {
+      for (const other of document.querySelectorAll('nav button')) other.removeAttribute('aria-current');
+      button.setAttribute('aria-current', 'page');
+      for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== button.dataset.section;
+    });
+  }
+  document.querySelector('nav button').setAttribute('aria-current', 'page');
+
+  for (const button of document.querySelectorAll('[data-credits]')) {
+    button.addEventListener('click', () => act('money', {credits: Number(button.dataset.credits)}));
+  }
+  const credits = () => Math.floor(Number($('credits').value));
+  $('add-credits').addEventListener('click', () => act('money', {credits: credits()}));
+  $('remove-credits').addEventListener('click', () => act('money', {credits: -credits()}, `Remove ${number(credits())} credits from the Company account?`));
+  $('assign-next').addEventListener('click', () => act('assign', {ship: Number($('next-ship').value), pilot: null}));
+  $('save').addEventListener('click', () => act('save', {}));
+  $('research-selected').addEventListener('click', () => {
+    const wares = selected($('research'));
+    if (wares.length) act('research', {wares});
+  });
+  $('research-all').addEventListener('click', () => act('research', {all: true}, 'Unlock every research topic?'));
+  $('blueprints-selected').addEventListener('click', () => {
+    const wares = selected($('blueprints'));
+    if (wares.length) act('blueprints', {wares});
+  });
+  $('blueprints-group').addEventListener('click', () => act('blueprints', {group}, `Add every blueprint in ${groupNames[group]}?`));
+
+  if (token) start(); else showLogin();
+})();
+</script>
+</body>
+</html>

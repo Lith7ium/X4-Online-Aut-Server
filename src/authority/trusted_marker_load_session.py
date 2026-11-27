@@ -20,6 +20,7 @@ from .load_messages import MAX_INTEGER, Offer, Receipt
 from .marker_evidence import verify_saved_marker
 
 _MARKER = re.compile(r'[0-9a-f]{32}\Z')
+_NEXT_PILOT = object()
 
 
 class StaleShipChoice(ValueError):
@@ -90,6 +91,8 @@ class TrustedMarkerLoadSession:
         self._pending_ships = {}
         self._admitted_ships = {}
         self._fleet_targets = {}
+        # Host ship plan: ship index -> None (held), _NEXT_PILOT or a peer label.
+        self._host_plan = {}
 
     def _live(self):
         if self._failed or self._inner._failed:
@@ -121,6 +124,9 @@ class TrustedMarkerLoadSession:
             except BaseException:
                 self._failed = True
                 raise
+            waiting = sorted(index for index, target in self._host_plan.items() if target is _NEXT_PILOT)
+            if waiting:
+                self._host_plan[waiting[0]] = peer
             return handle
 
     def disconnect(self, connection):
@@ -133,6 +139,10 @@ class TrustedMarkerLoadSession:
                 self._pending_ships.pop(peer, None)
                 self._admitted_ships.pop(peer, None)
                 del self._connections[id(connection)]
+                # A pilot who leaves before admission most likely retries.
+                for index, target in self._host_plan.items():
+                    if target == peer:
+                        self._host_plan[index] = _NEXT_PILOT
             except BaseException:
                 self._failed = True
                 raise
@@ -212,10 +222,14 @@ class TrustedMarkerLoadSession:
         occupied_components = {ship.component_ref for ship in occupied}
         _, ships, indices, _ = self._ship_catalog
         admitted = self._admitted_ships.get(peer)
+        assigned = next((index for index, target in self._host_plan.items() if target == peer), None)
         for offset in range(bisect_right(indices, after_index), len(ships)):
             ship = ships[offset]
             if admitted is not None and (ship.ship_index, ship.component_ref) != (
                     admitted.ship_index, admitted.component_ref):
+                continue
+            if admitted is None and (ship.ship_index != assigned if assigned is not None
+                                     else ship.ship_index in self._host_plan):
                 continue
             if ship.ship_index not in occupied_indices and ship.component_ref not in occupied_components:
                 yield ship
@@ -277,6 +291,75 @@ class TrustedMarkerLoadSession:
             if held is None or held[0] != order['order_id'] or held[1].code != order['ship_code']:
                 raise ValueError('fleet target does not belong to this order')
             del self._fleet_targets[index]
+
+    def host_ship_plan(self):
+        """Return the host's held and assigned ships as {ship index: target}.
+
+        A target is 'held', 'next' (the next pilot to connect) or the
+        connection the ship is assigned to.
+        """
+        with self._lock:
+            self._live()
+            connections = {peer: connection for connection, peer in self._connections.values()}
+            return {index: ('held' if target is None else 'next' if target is _NEXT_PILOT
+                            else connections.get(target, 'held'))
+                    for index, target in sorted(self._host_plan.items())}
+
+    def host_pilot_ship(self, connection):
+        """Return ('flying' | 'chosen', ship) for one connection, or None."""
+        with self._lock:
+            self._live()
+            try:
+                peer = self._peer(connection)
+            except ValueError:
+                return None
+            if peer in self._admitted_ships:
+                return 'flying', self._admitted_ships[peer]
+            if peer in self._pending_ships:
+                return 'chosen', self._pending_ships[peer]
+            return None
+
+    def host_hold_ship(self, ship_index, *, hold=True):
+        """Keep a company ship out of every pilot's join list, or release it."""
+        with self._lock:
+            self._live()
+            if type(ship_index) is not int or not 1 <= ship_index <= MAX_INTEGER or type(hold) is not bool:
+                raise ValueError('invalid host ship hold')
+            if hold:
+                self._host_plan[ship_index] = None
+            else:
+                self._host_plan.pop(ship_index, None)
+
+    def host_assign_ship(self, ship_index, connection=None):
+        """Offer only this ship to one connected pilot, or to the next pilot to connect.
+
+        The ship is refused while another pilot flies or has chosen it. A
+        pilot who already chose a different ship must choose again, so the
+        old choice is dropped. Any earlier assignment of that pilot becomes a hold.
+        """
+        with self._lock:
+            self._live()
+            if type(ship_index) is not int or not 1 <= ship_index <= MAX_INTEGER:
+                raise ValueError('invalid host ship assignment')
+            target = _NEXT_PILOT if connection is None else self._peer(connection)
+            if target in self._admitted_ships:
+                raise CompanyShipUnavailable('pilot already flies a ship')
+            catalogue = self._ship_catalog
+            if catalogue is not None and ship_index not in catalogue[2]:
+                raise CompanyShipUnavailable('company ship unavailable')
+            holders = [*self._admitted_ships.items(), *self._pending_ships.items()]
+            if any(ship.ship_index == ship_index and holder != target for holder, ship in holders):
+                raise CompanyShipUnavailable('another pilot holds this ship')
+            if ship_index in self._fleet_targets:
+                raise CompanyShipUnavailable('ship is the target of a fleet order')
+            if target is not _NEXT_PILOT:
+                for index, held in self._host_plan.items():
+                    if held == target:
+                        self._host_plan[index] = None
+                chosen = self._pending_ships.get(target)
+                if chosen is not None and chosen.ship_index != ship_index:
+                    del self._pending_ships[target]
+            self._host_plan[ship_index] = target
 
     def list_company_ships(self, connection, attempt_id, *, after_index=0, limit=None):
         """List verified company ships available to this still-offered connection."""
@@ -363,6 +446,8 @@ class TrustedMarkerLoadSession:
                 reserved = self._pending_ships.pop(peer, None)
                 if reserved is not None:
                     self._admitted_ships[peer] = reserved
+                    if self._host_plan.get(reserved.ship_index) == peer:
+                        del self._host_plan[reserved.ship_index]
             except BaseException:
                 self._failed = True
                 raise

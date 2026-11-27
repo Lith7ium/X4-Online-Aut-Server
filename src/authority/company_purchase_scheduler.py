@@ -173,6 +173,11 @@ class CompanyPurchaseScheduler:
             self._finish(receipt)
         self._check()
 
+    @property
+    def native_busy(self):
+        """True while a native trade, departure or fleet order is in flight."""
+        return self._native_busy()
+
     def _native_busy(self):
         return (self._active is not None or self._active_undock is not None
                 or (self._fleet is not None and self._fleet.active_pilot is not None))

@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Staged only in a server overlay that runs the host admin menu. It reads and
+     edits the player faction, the registered Company ships and player stations. -->
+<mdscript name="X4AuthorityHostAdmin" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="Snapshot" instantiate="true" namespace="this">
+      <conditions><event_ui_triggered screen="'X4AuthorityHostAdmin'" control="'Snapshot'"/></conditions>
+      <actions>
+        <set_value name="$id" exact="@event.param3.$id"/>
+        <set_value name="$ships" exact="@md.X4AuthorityShipRegistry.State.$ships"/>
+        <do_if value="typeof $ships == datatype.table">
+          <set_value name="$keys" exact="$ships.keys.list"/>
+          <do_all exact="$keys.count" counter="$i">
+            <set_value name="$ship" exact="$ships.{$keys.{$i}}"/>
+            <do_if value="@$ship.isoperational and $ship.owner == faction.player">
+              <raise_lua_event name="'X4AuthorityHostAdmin.Row'" param="'%s|SHIP|%s|%s|%s|%s|%s|%s'.[$id, $keys.{$i}, $ship.idcode, $ship.hullpercentage, $ship.shieldpercentage, @$ship.sector.knownname, $ship.knownname]"/>
+            </do_if>
+          </do_all>
+        </do_if>
+        <do_else>
+          <raise_lua_event name="'X4AuthorityHostAdmin.Row'" param="'%s|ERROR|registry_unavailable'.[$id]"/>
+        </do_else>
+        <find_station name="$stations" space="player.galaxy" owner="faction.player" multiple="true"/>
+        <do_all exact="$stations.count" counter="$i">
+          <set_value name="$station" exact="$stations.{$i}"/>
+          <set_value name="$storage" exact="@$station.buildstorage"/>
+          <set_value name="$tasks" exact="0"/>
+          <do_if value="$storage">
+            <set_value name="$tasks" exact="$storage.builds.inprogress.count + $storage.builds.queued.count"/>
+          </do_if>
+          <raise_lua_event name="'X4AuthorityHostAdmin.Row'" param="'%s|STATION|%s|%s|%s|%s'.[$id, $station.idcode, $tasks, @$station.sector.knownname, $station.knownname]"/>
+        </do_all>
+        <raise_lua_event name="'X4AuthorityHostAdmin.Done'" param="'%s'.[$id]"/>
+      </actions>
+    </cue>
+
+    <cue name="Apply" instantiate="true" namespace="this">
+      <conditions><event_ui_triggered screen="'X4AuthorityHostAdmin'" control="'Apply'"/></conditions>
+      <actions>
+        <set_value name="$a" exact="event.param3"/>
+        <set_value name="$id" exact="@$a.$id"/>
+        <set_value name="$verb" exact="@$a.$verb"/>
+        <set_value name="$target" exact="@$a.$a1"/>
+        <set_value name="$result" exact="'refused_unknown_verb'"/>
+        <set_value name="$detail" exact="'-'"/>
+        <set_value name="$ship" exact="null"/>
+        <set_value name="$storage" exact="null"/>
+
+        <do_if value="$verb == 'REPAIR' or $verb == 'RENAME' or $verb == 'CARGO'">
+          <set_value name="$result" exact="'refused_ship'"/>
+          <set_value name="$candidate" exact="@md.X4AuthorityShipRegistry.State.$ships.{$a.$a1}"/>
+          <do_if value="@$candidate.isoperational and $candidate.owner == faction.player and $candidate.idcode == @$a.$a2">
+            <set_value name="$ship" exact="$candidate"/>
+          </do_if>
+        </do_if>
+        <do_elseif value="$verb == 'FILL' or $verb == 'STORE'">
+          <set_value name="$result" exact="'refused_station'"/>
+          <find_station name="$stations" space="player.galaxy" owner="faction.player" multiple="true"/>
+          <do_all exact="$stations.count" counter="$i">
+            <do_if value="$stations.{$i}.idcode == $target and @$stations.{$i}.buildstorage">
+              <set_value name="$storage" exact="$stations.{$i}.buildstorage"/>
+            </do_if>
+          </do_all>
+        </do_elseif>
+
+        <do_if value="$verb == 'RELATION'">
+          <set_value name="$faction" exact="@faction.{$target}"/>
+          <set_value name="$value" exact="@$a.$a2"/>
+          <do_if value="typeof $faction != datatype.faction or $faction == faction.player">
+            <set_value name="$result" exact="'refused_faction'"/>
+          </do_if>
+          <do_elseif value="@$faction.isrelationlocked">
+            <set_value name="$result" exact="'refused_relation_locked'"/>
+          </do_elseif>
+          <do_elseif value="(typeof $value != datatype.float and typeof $value != datatype.integer) or $value lt -1 or $value gt 1">
+            <set_value name="$result" exact="'refused_value'"/>
+          </do_elseif>
+          <do_else>
+            <set_faction_relation faction="faction.player" otherfaction="$faction" value="$value"/>
+            <set_faction_relation faction="$faction" otherfaction="faction.player" value="$value"/>
+            <set_value name="$result" exact="'applied'"/>
+          </do_else>
+        </do_if>
+        <do_elseif value="$verb == 'BLUEPRINT'">
+          <set_value name="$ware" exact="@ware.{$target}"/>
+          <do_if value="typeof $ware != datatype.ware">
+            <set_value name="$result" exact="'refused_ware'"/>
+          </do_if>
+          <do_elseif value="@player.blueprints.{$ware}.any.exists">
+            <set_value name="$result" exact="'unchanged'"/>
+          </do_elseif>
+          <do_else>
+            <add_blueprints wares="$ware"/>
+            <set_value name="$result" exact="if @player.blueprints.{$ware}.any.exists then 'applied' else 'refused_readback'"/>
+          </do_else>
+        </do_elseif>
+        <do_elseif value="$verb == 'RESEARCH'">
+          <set_value name="$ware" exact="@ware.{$target}"/>
+          <do_if value="typeof $ware != datatype.ware or not $ware.isresearchable">
+            <set_value name="$result" exact="'refused_ware'"/>
+          </do_if>
+          <do_elseif value="$ware.research.unlocked">
+            <set_value name="$result" exact="'unchanged'"/>
+          </do_elseif>
+          <do_else>
+            <add_research ware="$ware"/>
+            <set_value name="$result" exact="if $ware.research.unlocked then 'applied' else 'refused_readback'"/>
+          </do_else>
+        </do_elseif>
+        <do_elseif value="$verb == 'REPAIR' and $ship">
+          <set_object_hull object="$ship" exact="100"/>
+          <set_object_shield object="$ship" exact="100"/>
+          <set_value name="$result" exact="'applied'"/>
+          <set_value name="$detail" exact="'%s/%s'.[$ship.hullpercentage, $ship.shieldpercentage]"/>
+        </do_elseif>
+        <do_elseif value="$verb == 'RENAME' and $ship">
+          <set_value name="$name" exact="@$a.$a3"/>
+          <do_if value="typeof $name != datatype.string or $name == ''">
+            <set_value name="$result" exact="'refused_name'"/>
+          </do_if>
+          <do_else>
+            <set_object_name object="$ship" name="$name"/>
+            <set_value name="$result" exact="'applied'"/>
+          </do_else>
+        </do_elseif>
+        <do_elseif value="($verb == 'CARGO' and $ship) or ($verb == 'STORE' and $storage)">
+          <set_value name="$ware" exact="@ware.{if $verb == 'CARGO' then $a.$a3 else $a.$a2}"/>
+          <set_value name="$amount" exact="(if $verb == 'CARGO' then @$a.$a4 else @$a.$a3)i"/>
+          <do_if value="typeof $ware != datatype.ware">
+            <set_value name="$result" exact="'refused_ware'"/>
+          </do_if>
+          <do_elseif value="$amount lt 1 or $amount gt 1000000">
+            <set_value name="$result" exact="'refused_amount'"/>
+          </do_elseif>
+          <do_elseif value="$verb == 'CARGO'">
+            <add_cargo object="$ship" ware="$ware" exact="$amount" result="$added"/>
+            <set_value name="$result" exact="if $added gt 0 then 'applied' else 'refused_no_space'"/>
+            <set_value name="$detail" exact="'%s'.[$added]"/>
+          </do_elseif>
+          <do_else>
+            <add_wares object="$storage" ware="$ware" exact="$amount" result="$added"/>
+            <set_value name="$result" exact="if $added then 'applied' else 'refused_no_space'"/>
+            <set_value name="$detail" exact="'%s'.[$storage.cargo.{$ware}.count]"/>
+          </do_else>
+        </do_elseif>
+        <do_elseif value="$verb == 'FILL' and $storage">
+          <!-- Like the game's own debug fill, but only for what the build plan still misses. -->
+          <set_value name="$total" exact="0"/>
+          <set_value name="$failed" exact="0"/>
+          <set_value name="$lists" exact="[$storage.builds.inprogress, $storage.builds.queued]"/>
+          <do_all exact="$lists.count" counter="$j">
+            <set_value name="$builds" exact="$lists.{$j}"/>
+            <do_all exact="$builds.count" counter="$k">
+              <set_value name="$needed" exact="$storage.neededbuildresources.{$builds.{$k}}.table"/>
+              <set_value name="$wares" exact="$needed.keys.list"/>
+              <do_all exact="$wares.count" counter="$i">
+                <set_value name="$ware" exact="$wares.{$i}"/>
+                <add_wares object="$storage" ware="$ware" exact="$needed.{$ware}" result="$added"/>
+                <do_if value="$added">
+                  <set_value name="$total" exact="$total + $needed.{$ware}"/>
+                </do_if>
+                <do_else>
+                  <set_value name="$failed" exact="$failed + 1"/>
+                </do_else>
+              </do_all>
+            </do_all>
+          </do_all>
+          <set_value name="$result" exact="if $failed gt 0 then 'partial' else 'applied'"/>
+          <set_value name="$detail" exact="'%s'.[$total]"/>
+        </do_elseif>
+
+        <raise_lua_event name="'X4AuthorityHostAdmin.Row'" param="'%s|RESULT|%s|%s|%s|%s'.[$id, $verb, $target, $result, $detail]"/>
+      </actions>
+    </cue>
+  </cues>
+</mdscript>

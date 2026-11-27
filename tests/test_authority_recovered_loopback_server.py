@@ -880,6 +880,33 @@ class KeepWorldRunningTests(unittest.TestCase):
         # The wait starts on the first settled running tick and restarts after each checkpoint.
         self.assertEqual(requested_at, [210.0, 420.0])
 
+    def test_host_admin_options_are_opt_in(self):
+        options = MODULE.host_admin_options
+        self.assertEqual(options(SimpleNamespace(), True), (None, None))
+        self.assertEqual(options(SimpleNamespace(host_admin_port=8765), True), (8765, None))
+        self.assertEqual(options(SimpleNamespace(host_admin_port=8765, host_admin_token_file=Path('t')), True),
+                         (8765, Path('t')))
+        for args, snapshot in ((SimpleNamespace(host_admin_token_file=Path('t')), True),
+                               (SimpleNamespace(host_admin_port=8765), False),
+                               (SimpleNamespace(host_admin_port=80), True),
+                               (SimpleNamespace(host_admin_port='8765'), True),
+                               (SimpleNamespace(host_admin_port=8765, diagnostic_overlap=True), True),
+                               (SimpleNamespace(host_admin_port=8765, fixture_overlap=True), True)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                options(args, snapshot)
+
+    def test_host_admin_steps_once_per_tick(self):
+        from authority.session import SessionCoordinator
+        host = _SteppingHost(SessionCoordinator('world-1'))
+        steps = []
+        admin = SimpleNamespace(step=lambda: steps.append(len(steps)))
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            MODULE.serve(listener, host, deadline=None, check=lambda: None, should_stop=lambda: len(steps) >= 3,
+                         tick_interval=.01, host_admin=admin)
+        self.assertEqual(steps, [0, 1, 2])
+
     def test_invalid_checkpoint_interval_is_refused(self):
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))

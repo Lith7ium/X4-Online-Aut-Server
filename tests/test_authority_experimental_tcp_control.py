@@ -76,6 +76,21 @@ class TCPControlTest(unittest.TestCase):
         request = {'version': 1, 'kind': kind, 'attempt_id': offer.attempt_id, **fields}
         return json.dumps(request).encode('ascii') + b'\n'
 
+    def test_host_kick_drops_one_pilot_like_a_lost_connection(self):
+        first = self.connect()
+        self.connect()
+        connections = self.owner.host_connections()
+        handles = [handle for _, handle, _ in connections]
+        self.assertEqual([stage for _, _, stage in connections], ['attached', 'attached'])
+        self.assertEqual(len(self.world.session.players), 2)
+        self.owner.kick(handles[0])
+        self.assertEqual([handle for _, handle, _ in self.owner.host_connections()], handles[1:])
+        self.assertEqual(first.recv(1), b'')
+        self.assertEqual(len(self.world.session.players), 1)
+        for bad in (handles[0], True, None):
+            with self.assertRaises(ValueError):
+                self.owner.kick(bad)
+
     def test_fleet_and_sale_negotiation_is_opt_in_and_reset_with_the_offer(self):
         self.owner.close()
         self.read_company_ships.return_value = CompanyShipCatalogue('d' * 32, (

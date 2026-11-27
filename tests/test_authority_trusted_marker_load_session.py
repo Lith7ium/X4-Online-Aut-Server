@@ -180,6 +180,53 @@ class TrustedMarkerSessionTest(unittest.TestCase):
         self.adapter.disconnect(self.a)
         self.assertEqual(self.adapter.list_company_ships(self.b, new_attempt_b), self.catalogue)
 
+    def test_host_holds_and_assigns_company_ships(self):
+        attempt_a = self.adapter.begin(self.a).offer.attempt_id
+        attempt_b = self.adapter.begin(self.b).offer.attempt_id
+        first, second = self.catalogue
+        self.adapter.host_hold_ship(1)
+        self.assertEqual(self.adapter.host_ship_plan(), {1: 'held'})
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a), (second,))
+        with self.assertRaises(CompanyShipUnavailable):
+            self.adapter.choose_company_ship(self.a, attempt_a, 1)
+        # Assigning drops the pilot's other choice and offers only the assigned ship.
+        self.assertEqual(self.adapter.choose_company_ship(self.b, attempt_b, 2), second)
+        self.adapter.host_assign_ship(1, self.b)
+        self.assertIsNone(self.adapter.host_pilot_ship(self.b))
+        self.assertEqual(self.adapter.host_ship_plan(), {1: self.b})
+        self.assertEqual(self.adapter.list_company_ships(self.b, attempt_b), (first,))
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a), (second,))
+        self.assertEqual(self.adapter.choose_company_ship(self.a, attempt_a, 2), second)
+        self.assertEqual(self.adapter.host_pilot_ship(self.a), ('chosen', second))
+        for index, connection in ((2, self.b), (3, self.b), (True, self.b), (1, object())):
+            with self.assertRaises(ValueError):
+                self.adapter.host_assign_ship(index, connection)
+        # Admission consumes the assignment.
+        self.assertEqual(self.adapter.choose_company_ship(self.b, attempt_b, 1), first)
+        offer_b = self.adapter.begin(self.b).offer
+        self.adapter.choose_company_ship(self.b, offer_b.attempt_id, 1)
+        self.adapter.accept(self.b, claim_for(offer_b))
+        self.assertEqual(self.adapter.host_ship_plan(), {})
+        self.assertEqual(self.adapter.host_pilot_ship(self.b), ('flying', first))
+        with self.assertRaises(CompanyShipUnavailable):
+            self.adapter.host_assign_ship(2, self.b)
+
+    def test_host_assignment_to_the_next_pilot_follows_a_retry(self):
+        self.adapter.host_assign_ship(2)
+        self.assertEqual(self.adapter.host_ship_plan(), {2: 'next'})
+        newcomer = object()
+        self.adapter.attach(newcomer)
+        self.assertEqual(self.adapter.host_ship_plan(), {2: newcomer})
+        attempt_a = self.adapter.begin(self.a).offer.attempt_id
+        self.assertEqual(self.adapter.list_company_ships(self.a, attempt_a), (self.catalogue[0],))
+        self.adapter.disconnect(newcomer)
+        self.assertEqual(self.adapter.host_ship_plan(), {2: 'next'})
+        self.adapter.host_hold_ship(2, hold=False)
+        self.assertEqual(self.adapter.host_ship_plan(), {})
+        for bad in (0, True, 2**63):
+            with self.assertRaises(ValueError):
+                self.adapter.host_hold_ship(bad)
+
     def test_admitted_reservation_survives_world_resume_and_new_checkpoint(self):
         class Participants:
             def pause(self, handles):

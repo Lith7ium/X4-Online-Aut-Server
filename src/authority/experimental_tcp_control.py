@@ -178,6 +178,26 @@ class ExperimentalTCPControl:
             self._fatal(error)
         return handle
 
+    def host_connections(self):
+        """Return (connection, handle, stage) for each peer that has a session handle."""
+        self._owner()
+        return [(conn, peer['handle'], peer['stage']) for conn, peer in self._peers.items()
+                if peer['handle'] is not None]
+
+    def kick(self, handle):
+        """Disconnect one pilot by connection handle, as a lost connection would be."""
+        self._owner()
+        if type(handle) is not int:
+            raise ValueError('unknown pilot connection')
+        try:
+            self._reader_free(motion=True)
+        except RuntimeError:
+            raise ValueError('connections are busy; try again') from None
+        conn = next((conn for conn, peer in self._peers.items() if peer['handle'] == handle), None)
+        if conn is None:
+            raise ValueError('unknown pilot connection')
+        self._drop(conn)
+
     def _account_host_blocked(self, started, ended):
         """Compensate bounded host-owned I/O starvation, never peer activity.
 

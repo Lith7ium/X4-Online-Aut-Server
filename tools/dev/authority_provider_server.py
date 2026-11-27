@@ -103,6 +103,10 @@ def main(argv=None):
                         help='with --persistent: save on last departure, then keep simulating the empty world')
     parser.add_argument('--empty-checkpoint-seconds', type=float,
                         help='with --keep-world-running: also save the empty running world this often (60-86400)')
+    parser.add_argument('--host-admin-port', type=int,
+                        help='serve the private host admin page on 127.0.0.1:PORT (needs --require-registry-snapshot)')
+    parser.add_argument('--host-admin-token-file', type=Path,
+                        help='host admin token file, created if missing (default ~/.config/x4-authority/host-admin.token)')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--company-combat', action='store_true',
@@ -206,6 +210,16 @@ def main(argv=None):
         if not math.isfinite(args.empty_checkpoint_seconds) or not 60 <= args.empty_checkpoint_seconds <= 86400:
             parser.error('--empty-checkpoint-seconds must be 60 to 86400')
         server_flags.extend(('--empty-checkpoint-seconds', str(args.empty_checkpoint_seconds)))
+    if args.host_admin_token_file is not None and args.host_admin_port is None:
+        parser.error('--host-admin-token-file requires --host-admin-port')
+    if args.host_admin_port is not None:
+        if not 1024 <= args.host_admin_port <= 65535:
+            parser.error('--host-admin-port must be 1024 to 65535')
+        if not args.require_registry_snapshot:
+            parser.error('--host-admin-port requires --require-registry-snapshot')
+        server_flags.extend(('--host-admin-port', str(args.host_admin_port)))
+        if args.host_admin_token_file is not None:
+            server_flags.extend(('--host-admin-token-file', str(args.host_admin_token_file)))
     if args.base_game_only:
         server_flags.append('--base-game-only')
     if args.registry_status:

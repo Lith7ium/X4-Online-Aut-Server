@@ -198,6 +198,9 @@ Checkpoints from a crashed run are still not a restart source. The launcher
 restarts from the previous clean stop instead.
 [Crash restart proposal](AUTHORITY-CRASH-RESTART-PLAN.md)
 
+The host can manage pilots and edit the world from a private web page.
+[Host admin menu](AUTHORITY-HOST-ADMIN.md)
+
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
 and records the Vulkan probe in `.local/provider-run-01/software-vulkan.log`.

@@ -603,6 +603,28 @@ def persistent_world_options(args):
     return keep, interval
 
 
+def host_admin_options(args, require_snapshot):
+    """Return (port, token file) for the opt-in host admin page, or (None, None).
+
+    The page edits the server world through the registry-aware bridge, so it
+    needs --require-registry-snapshot and the ordinary serve path.
+    """
+    port = getattr(args, 'host_admin_port', None)
+    token_file = getattr(args, 'host_admin_token_file', None)
+    if port is None:
+        if token_file is not None:
+            raise ValueError('--host-admin-token-file requires --host-admin-port')
+        return None, None
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise ValueError('host admin port must be 1024 to 65535')
+    if not require_snapshot:
+        raise ValueError('--host-admin-port requires --require-registry-snapshot')
+    if (getattr(args, 'diagnostic_client', False) or getattr(args, 'diagnostic_clients', None) is not None
+            or getattr(args, 'diagnostic_overlap', False) or getattr(args, 'fixture_overlap', False)):
+        raise ValueError('--host-admin-port is for the ordinary serve path, not diagnostics')
+    return port, token_file
+
+
 def settle_shutdown(control, world, store, check, *, purchases=None, combat_service=None):
     """Disconnect clients and settle their last-disconnect pause/save once.
 
@@ -719,7 +741,7 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
 
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
           motion_service=None, pose_trial=None, purchases=None, npc_source=None, combat_service=None,
-          empty_checkpoint_interval=None):
+          empty_checkpoint_interval=None, host_admin=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
@@ -727,6 +749,7 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
     development process; they do not assert that a running world was saved.
     With empty_checkpoint_interval, a world that has run with nobody connected for
     that long is paused, saved and resumed; any join, pause or save restarts the wait.
+    A host_admin runs one step of queued host menu work per tick.
     """
     if listener.family != socket.AF_INET or listener.getsockname()[0] != '127.0.0.1':
         raise ValueError('loopback listener required')
@@ -805,6 +828,8 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
                     next_empty_checkpoint = None
             else:
                 next_empty_checkpoint = None
+        if host_admin is not None:
+            host_admin.step()
         current_handles = {peer['handle'] for peer in host._control._peers.values() if peer['stage'] == 'admitted'}
         admitted += len(current_handles - admitted_handles)
         admitted_handles = current_handles
@@ -1064,6 +1089,7 @@ def run(args):
     motion_service = None
     gun_damage_provider = combat_service = None
     purchase_provider = undock_provider = market_provider = fleet_provider = purchases = purchase_ledger = None
+    host_admin_channel = host_admin = host_admin_web = None
     bootstrap_snapshot = getattr(args, 'bootstrap_registry_snapshot', False)
     software_icd = getattr(args, 'software_vulkan_icd', None)
     # Software rendering can slow the full paused registry pass. Extend only
@@ -1090,7 +1116,13 @@ def run(args):
             type(args.seed) is not int or not 0 <= args.seed <= 0xffffffff):
         raise ValueError('invalid timeout or seed')
     keep_world_running, empty_checkpoint_seconds = persistent_world_options(args)
+    host_admin_port, host_admin_token_file = host_admin_options(args, require_snapshot)
     user = pwd.getpwuid(os.geteuid()); home = Path(user.pw_dir)
+    host_admin_token = host_admin_token_created = None
+    if host_admin_port is not None:
+        from authority_host_admin import load_or_create_token
+        host_admin_token, host_admin_token_created = load_or_create_token(
+            host_admin_token_file or home/'.config/x4-authority/host-admin.token')
     steam = live.steam_identity(home, user.pw_uid)
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     operations=[]
@@ -1287,6 +1319,10 @@ def run(args):
                 from authority_native_purchase import NativePurchaseProvider
                 purchase_provider = NativePurchaseProvider()
                 protected.extend(purchase_provider.install(case))
+            if host_admin_port is not None:
+                from authority_host_admin import HostAdminChannel
+                host_admin_channel = HostAdminChannel()
+                protected.extend(host_admin_channel.install(case))
             if company_undock:
                 from authority_native_undock import NativeUndockProvider
                 undock_provider = NativeUndockProvider()
@@ -1743,6 +1779,18 @@ def run(args):
             purchases = CompanyPurchaseScheduler(world._participants, purchase_provider, purchase_ledger,
                                                  guard=world._participants.check_process, market=market_provider,
                                                  **purchase_options)
+        if host_admin_port is not None:
+            from authority_host_admin import HostAdmin, HostAdminWeb, read_game_catalog
+            lifecycle = world.session
+            def host_admin_quiet():
+                # Edit X4 only between saves, trades and combat writes.
+                return (lifecycle.state == 'running' and lifecycle.pending is None
+                        and (purchases is None or not purchases.native_busy)
+                        and (combat_service is None or not combat_service.native_pending))
+            host_admin = HostAdmin(control=control, session=session, lifecycle=lifecycle,
+                                   channel=host_admin_channel, catalog=read_game_catalog(game),
+                                   quiet=host_admin_quiet, audit_path=out/'host-admin-audit.jsonl')
+            host_admin_web = HostAdminWeb(host_admin, host_admin_token, port=host_admin_port).start()
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.
@@ -2253,7 +2301,10 @@ def run(args):
         result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
                             purchases=purchases, npc_source=npc_source, combat_service=combat_service,
                             should_stop=lambda: stop[0] or gateway_stopped(),
-                            empty_checkpoint_interval=empty_checkpoint_seconds))
+                            empty_checkpoint_interval=empty_checkpoint_seconds, host_admin=host_admin))
+        if host_admin is not None:
+            result['host_admin'] = {'port': host_admin_port, 'token_created': host_admin_token_created,
+                                    **host_admin.counts}
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -2343,6 +2394,16 @@ def run(args):
                 purchase_provider.close()
             except OSError as error:
                 errors.append('purchase provider cleanup: ' + type(error).__name__)
+        if host_admin_web is not None:
+            try:
+                host_admin_web.close()
+            except OSError as error:
+                errors.append('host admin page cleanup: ' + type(error).__name__)
+        if host_admin_channel is not None:
+            try:
+                host_admin_channel.close()
+            except OSError as error:
+                errors.append('host admin channel cleanup: ' + type(error).__name__)
         if undock_provider is not None:
             try:
                 undock_provider.close()
@@ -2495,6 +2556,10 @@ def main(argv=None, *, display_hostname=None):
                         help='with --persistent: save, then keep simulating while nobody is connected')
     parser.add_argument('--empty-checkpoint-seconds', type=float,
                         help='with --keep-world-running: save the empty running world this often (60-86400)')
+    parser.add_argument('--host-admin-port', type=int,
+                        help='serve the private host admin page on 127.0.0.1:PORT (needs --require-registry-snapshot)')
+    parser.add_argument('--host-admin-token-file', type=Path,
+                        help='host admin token file, created if missing (default ~/.config/x4-authority/host-admin.token)')
     parser.add_argument('--software-vulkan-icd', type=Path,
                         help='use this Mesa CPU Vulkan ICD and remove GPU devices from X4')
     parser.add_argument('--seed',type=int,default=276944566)
