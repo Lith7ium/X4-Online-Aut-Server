@@ -353,6 +353,8 @@ class TrialBridge:
         self.vel_sets = []
         self.vel_stops = []
         self.vel_refusals = []
+        self.vel_fenced = []
+        self.vel_uncertain = []
         self.error = None
         self.hwnd = None
         self._thread = threading.Thread(target=self._watch, daemon=True)
@@ -432,6 +434,11 @@ class TrialBridge:
                 self._cond.notify_all()
             elif '[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_REFUSED ' in line:
                 self.vel_refusals.append(self._parse_kv(line.split('[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_REFUSED ', 1)[1]))
+            elif '[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_FENCED ' in line:
+                self.vel_fenced.append(self._parse_kv(line.split('[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_FENCED ', 1)[1]))
+            elif '[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_UNCERTAIN ' in line:
+                self.vel_uncertain.append(self._parse_kv(line.split('[X4LAN] AUTH_COMPANY_COCKPIT_VELOCITY_UNCERTAIN ', 1)[1]))
+                self._cond.notify_all()
 
     def wait_ready(self, timeout=180.0):
         deadline = time.monotonic() + timeout
@@ -888,6 +895,8 @@ def run_trial(view, profile_dir, out, args, network_dll_bytes):
                 'vel_set_log_count': len(bridge.vel_sets),
                 'vel_stops': bridge.vel_stops,
                 'vel_refusals': bridge.vel_refusals,
+                'vel_fenced': bridge.vel_fenced,
+                'vel_uncertain': bridge.vel_uncertain,
                 'observer_stats': recv_source.observer_stats(),
                 'recv_client_stats': client_recv.stats(),
             },

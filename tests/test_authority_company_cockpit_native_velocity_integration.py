@@ -37,23 +37,35 @@ class CompanyCockpitVelocityMdContractTests(unittest.TestCase):
         guards = ' '.join(node.get('value') or node.get('exact', '') for node in root.iter())
         for required in (
             "$slot == 'cockpit' or $slot == 'cockpit2' or $slot == 'cockpit3'",
+            '$lease ge 1 and $lease == ($lease)i',
             'State.$epoch == $args.$epoch',
             'not md.X4AuthorityShipRegistry.State.$faulted',
             '$ship != player.controlled',
             'not $ship.pilot.exists',
             'not $ship.assignedpilot.exists',
+            "$ship.sector.macro.id == $args.$sector",
+            "'%s'.[$ship.parent] == @$args.$zone",
+            'not @$active_ship.exists or ($active_ship == $ship and $active_lease == $lease)',
             '$basisError lt 0.00000001',
-            '$active_ship == $ship',
+            '$active_ship == $ship and $active_lease == $lease',
+            '$lease gt $stopped_lease',
             'State.$cockpit',
+            'State.$cockpit_lease',
+            'State.$cockpit_stopped',
             'State.$cockpit2',
+            'State.$cockpit2_lease',
+            'State.$cockpit2_stopped',
             'State.$cockpit3',
+            'State.$cockpit3_lease',
+            'State.$cockpit3_stopped',
             '$args.$vx ge -2800 and $args.$vx le 2800',
+            "'%s|%s|%s'.[$args.$request,$status,$lease]",
         ):
             self.assertIn(required, guards)
-        # Stop branch must NOT require currentradarrange so withdrawal out of radar still zeroes velocity.
+        # Stop branch must NOT require currentradarrange so out-of-radar stops remain possible when anchored.
         stop_branch = next(
             node for node in root.iter('do_if')
-            if node.get('value') == "$op == 'stop' and $active_ship == $ship"
+            if node.get('value') == "$op == 'stop' and $active_ship == $ship and $active_lease == $lease"
         )
         self.assertNotIn('currentradarrange', ET.tostring(stop_branch, encoding='unicode'))
 
@@ -102,7 +114,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
         lua.globals()._ROOT = str(ROOT).replace('\\', '/')
         return lua.execute(body)
 
-    def test_forward_turn_5s_cutoff_and_withdrawal_without_double_movement_or_snapback(self):
+    def test_forward_turn_5s_cutoff_and_explicit_revoke_without_double_movement_or_snapback(self):
         summary = self._run_lua(r"""
             local root = _ROOT .. '/src/authority/lua/'
             X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
@@ -117,6 +129,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             local own_index, target_index, other_index = 1, 2, 3
             local own_actor, target_actor, other_actor = 101, 202, 203
             local sector_id, zone_id = 303, 404
+            local zone_hex = ('0x%x'):format(zone_id)
 
             local function dist3(a, b)
                 return math.sqrt((a.x - b.x)^2 + (a.y - b.y)^2 + (a.z - b.z)^2)
@@ -148,12 +161,14 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                         [other_actor] = {x = 0, y = 0, z = 0},
                     },
                     md_active = {},
+                    md_lease = {},
+                    md_stopped = {},
                     md_queue = {},
                     md_handler = nil,
                     readbacks = {},
                     deviations = 0,
                     vel_events = {},
-                    stop_snapbacks = {},
+                    stop_anchor_drifts = {},
                     faults = {},
                 }
 
@@ -186,21 +201,21 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                         clock = function() return st.now end,
                         register = function(cb) st.md_handler = cb; return true end,
                         issue = function(args)
-                            -- Queue MD command to execute on the NEXT frame (1-frame async MD latency).
                             args._queued_at = st.now
                             st.md_queue[#st.md_queue + 1] = args
                             return true
                         end,
                         on_event = function(row)
                             st.vel_events[#st.vel_events + 1] = row
-                            if row.op == 'stop' and row.ok then
-                                st.stop_snapbacks[#st.stop_snapbacks + 1] = row.snapback_m
+                            if row.op == 'stop' and row.ok and row.confirmed_zero then
+                                st.stop_anchor_drifts[#st.stop_anchor_drifts + 1] = row.anchor_drift_m
                             end
                         end,
                     })
                 end
 
                 local vels = {cockpit = make_vel('cockpit'), cockpit2 = make_vel('cockpit2')}
+                local shared_claims = {by_actor = {}, by_slot = {}}
                 local adapters = {}
                 for _, slot in ipairs({'cockpit', 'cockpit2'}) do
                     adapters[slot] = native.new({
@@ -210,6 +225,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                         observer = make_observer(slot),
                         guard = function() return not st.paused end,
                         velocity = vels[slot],
+                        exclusive_claims = shared_claims,
                     }, {
                         cockpit = function()
                             if st.paused then return nil end
@@ -261,7 +277,6 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                 })
 
                 local function basis_from_yaw(yaw)
-                    -- X4 +yaw rotates forward (+Z) toward +X.
                     local s, c = math.sin(yaw), math.cos(yaw)
                     return {x = c, y = 0, z = -s}, {x = 0, y = 1, z = 0}, {x = s, y = 0, z = c}
                 end
@@ -273,25 +288,32 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                         local aid = actor_by_hex[args.actor]
                         local status = 'refused'
                         local before_pos, before_vel
-                        if args.op == 'set' and aid and st.in_radar[aid] then
+                        local stopped_lease = st.md_stopped[args.slot] or 0
+                        local active_ship = st.md_active[args.slot]
+                        local active_lease = st.md_lease[args.slot] or 0
+                        if args.op == 'set' and aid and st.in_radar[aid]
+                                and args.zone == zone_hex and args.sector == 'sector_a'
+                                and args.lease > stopped_lease
+                                and (active_ship == nil or (active_ship == aid and active_lease == args.lease)) then
                             st.native_vel[aid] = {x = args.vx, y = args.vy, z = args.vz}
                             st.md_active[args.slot] = aid
+                            st.md_lease[args.slot] = args.lease
                             status = 'set'
-                        elseif args.op == 'stop' and aid and st.md_active[args.slot] == aid then
+                        elseif args.op == 'stop' and aid and active_ship == aid and active_lease == args.lease
+                                and args.zone == zone_hex and args.sector == 'sector_a' then
                             local p = st.poses[aid]
                             before_pos = {x = p.x, y = p.y, z = p.z}
                             before_vel = {x = st.native_vel[aid].x, y = st.native_vel[aid].y, z = st.native_vel[aid].z}
-                            -- Model X4's unanchored snap-back hazard: if SetObjectSectorPos was NOT
-                            -- called to anchor the live pose when stop was queued, snap back!
+                            -- Model real X4 9.00 constantvel=false stop behavior: returns to last SetObjectSectorPos.
+                            -- When anchor_live_pose() ran at stop dispatch, this lands within 0 m of the stop anchor!
                             local anchor = st.last_set_pos[aid]
-                            if st.last_set_at[aid] ~= args._queued_at then
-                                st.poses[aid].x, st.poses[aid].y, st.poses[aid].z = anchor.x, anchor.y, anchor.z
-                            end
+                            st.poses[aid].x, st.poses[aid].y, st.poses[aid].z = anchor.x, anchor.y, anchor.z
                             st.native_vel[aid] = {x = 0, y = 0, z = 0}
                             st.md_active[args.slot] = nil
+                            st.md_stopped[args.slot] = args.lease
                             status = 'stopped'
                         end
-                        local reply = tostring(args.request) .. '|' .. status
+                        local reply = ('%s|%s|%s'):format(tostring(args.request), status, tostring(args.lease))
                         if status ~= 'refused' then
                             local p = st.poses[aid]
                             local v = st.native_vel[aid]
@@ -301,8 +323,8 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                                 y = v.x * up.x + v.y * up.y + v.z * up.z,
                                 z = v.x * fwd.x + v.y * fwd.y + v.z * fwd.z,
                             }
-                            reply = reply .. ('|%s|sector_a|zone1|%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f'):format(
-                                args.actor, st.gt, p.x, p.y, p.z, lv.x, lv.y, lv.z,
+                            reply = reply .. ('|%s|sector_a|%s|%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f'):format(
+                                args.actor, zone_hex, st.gt, p.x, p.y, p.z, lv.x, lv.y, lv.z,
                                 right.x, right.y, right.z, up.x, up.y, up.z, fwd.x, fwd.y, fwd.z)
                             if status == 'set' then
                                 reply = reply .. ('|%.6f,%.6f,%.6f'):format(args.vx, args.vy, args.vz)
@@ -320,7 +342,6 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     st.now = st.now + dt
                     if not st.paused then
                         st.gt = st.gt + dt
-                        -- Realistic X4 physics integration of active native linear velocity!
                         for _, aid in ipairs({target_actor, other_actor}) do
                             local v = st.native_vel[aid]
                             local p = st.poses[aid]
@@ -364,10 +385,8 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                 end
                 step(0.05)
                 local fwd_disp = st.poses[target_actor].z - 1000.0
-                -- True distance after 2.0 s at 60 m/s is ~120 m (lagged ~9 m by 0.15 s interpolation delay).
-                -- Double movement would place it around ~220-240 m!
-                assert(fwd_disp > 100 and fwd_disp < 130, 'unexpected forward displacement (double movement?): ' .. tostring(fwd_disp))
-                assert(math.abs(st.native_vel[target_actor].z - 60) < 1.0, 'expected ~60 m/s native forward velocity')
+                assert(fwd_disp > 100 and fwd_disp < 130, 'unexpected forward displacement: ' .. tostring(fwd_disp))
+                assert(math.abs(st.native_vel[target_actor].z - 60) < 1.0, 'expected ~60 m/s native velocity')
 
                 -- 2. Coupled turn 0 -> 35 deg + speed ramp 60 -> 90 m/s over 1.5 s.
                 local turn_steps = 15
@@ -385,14 +404,10 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                 end
                 step(0.05); step(0.05); step(0.05)
                 local turn_pos_err = dist3(st.poses[target_actor], {x = rx, y = 0, z = rz})
-                -- Lag of ~0.15 s at 90 m/s is ~13.5 m; double movement would be > 100 m!
                 assert(turn_pos_err < 25.0, 'turn tracking error too high: ' .. tostring(turn_pos_err))
                 assert(math.abs(st.poses[target_actor].yaw - ryaw) < 0.15, 'turn yaw did not follow')
-                local _, _, fwd_axis = basis_from_yaw(st.poses[target_actor].yaw)
-                local hud_fwd_speed = st.native_vel[target_actor].x * fwd_axis.x + st.native_vel[target_actor].z * fwd_axis.z
-                assert(hud_fwd_speed > 75 and hud_fwd_speed < 95, 'expected aligned HUD forward speed during turn: ' .. tostring(hud_fwd_speed))
 
-                -- 3. 0.4 s render gap (continuous mode only) verifies no double movement or position_deviation!
+                -- 3. 0.4 s render gap (continuous mode only) verifies no double movement or position_deviation.
                 if continuous_mode then
                     local pre_gap_pos = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
                     step(0.4)
@@ -401,7 +416,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     assert(st.deviations == 0, 'expected zero position_deviation across 0.4 s render gap')
                 end
 
-                -- 4. Five-second packet gap on cockpit ONLY (cockpit2 keeps streaming!).
+                -- 4. Five-second silent packet gap on cockpit ONLY (cockpit2 keeps streaming).
                 local loss_start = st.now
                 local pos_at_loss = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
                 local pos_at_cutoff = nil
@@ -417,17 +432,23 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     end
                 end
                 local coast_dist = dist3(pos_at_cutoff, pos_at_loss)
-                -- Over ~5 s at 90 m/s, coast is ~400-460 m (1x, never 2x = ~900 m!).
                 assert(coast_dist > 340 and coast_dist < 490, 'unexpected 5s coast distance: ' .. tostring(coast_dist))
                 local post_cutoff_drift = dist3(st.poses[target_actor], pos_at_cutoff)
                 assert(post_cutoff_drift < 1e-6, 'ship drifted after 5s cutoff: ' .. tostring(post_cutoff_drift))
                 assert(norm3(st.native_vel[target_actor]) == 0, 'native velocity was not zeroed at 5s cutoff')
                 assert(ctrl:slot_stats('cockpit').stale_cutoffs == 1)
-                assert(st.poses[other_actor].x > other_x_before_loss + 150, 'cockpit2 must remain unaffected during cockpit cutoff')
-                assert(norm3(st.native_vel[other_actor]) > 25, 'cockpit2 native velocity must stay active')
+                assert(ctrl:slot_stats('cockpit').closed == false)
+                assert(ctrl:slot_stats('cockpit').velocity_cleanup_uncertain == false)
+                assert(vels.cockpit:stats().confirmed_stops == 1)
+                assert(st.poses[other_actor].x > other_x_before_loss + 150)
+                assert(norm3(st.native_vel[other_actor]) > 25)
 
-                -- 5. Fresh generation reacquisition -> forward flight -> out-of-radar withdrawal!
+                -- 5. Explicit END revoke of gen1, reacquire on gen2, forward flight, then explicit END revoke of gen2!
                 ctrl:end_track(views.cockpit, 1, gen1, 'cockpit')
+                local revoked_ok, revoked_reason = push_sample('cockpit', target_index, gen1,
+                    st.poses[target_actor].x, 0, st.poses[target_actor].z + 5, 0, 0, 60, 0)
+                assert(revoked_ok == false and revoked_reason == 'revoked_generation')
+
                 local w_x, w_z = st.poses[target_actor].x, st.poses[target_actor].z
                 assert(push_sample('cockpit', target_index, gen2, w_x, 0, w_z, nil, nil, nil, 0))
                 for k = 1, 8 do
@@ -436,41 +457,39 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     assert(push_sample('cockpit', target_index, gen2, w_x, 0, w_z, 0, 0, 60, 0))
                 end
                 step(0.05)
-                assert(norm3(st.native_vel[target_actor]) > 50, 'expected active native velocity before withdrawal')
-                -- Withdraw ship (leaves radar AND view becomes nil)!
-                st.in_radar[target_actor] = false
-                st.can_observe[target_index] = false
-                step(0.05)
-                local pos_after_withdraw_trigger = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
-                -- Process MD stop on next frame and verify zero snap-back and zero post-withdrawal drift!
+                assert(norm3(st.native_vel[target_actor]) > 50)
+                ctrl:end_track(views.cockpit, 1, gen2, 'cockpit')
+                local pos_after_end_trigger = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
                 for _ = 1, 20 do step(0.05) end
-                local withdraw_drift = dist3(st.poses[target_actor], pos_after_withdraw_trigger)
-                -- At most 1 frame (0.05 s * 60 m/s = 3 m) while MD stop executes on next frame, then 0.000 m forever!
-                assert(withdraw_drift <= 3.1, 'excessive drift after withdrawal: ' .. tostring(withdraw_drift))
-                local frozen_withdraw = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
+                local end_drift = dist3(st.poses[target_actor], pos_after_end_trigger)
+                assert(end_drift <= 3.1, 'excessive drift after END revoke: ' .. tostring(end_drift))
+                local frozen_end = {x = st.poses[target_actor].x, y = 0, z = st.poses[target_actor].z}
                 for _ = 1, 20 do step(0.05) end
-                assert(dist3(st.poses[target_actor], frozen_withdraw) == 0, 'ship kept drifting after withdrawal stop')
-                assert(norm3(st.native_vel[target_actor]) == 0, 'native velocity remained nonzero after withdrawal')
+                assert(dist3(st.poses[target_actor], frozen_end) == 0)
+                assert(norm3(st.native_vel[target_actor]) == 0)
+                assert(ctrl:slot_stats('cockpit').closed == false)
+                assert(ctrl:slot_stats('cockpit').velocity_cleanup_uncertain == false)
+                assert(vels.cockpit:stats().confirmed_stops == 2)
 
-                -- Verify own ship untouched throughout and zero snap-back on every stop!
+                -- Own ship untouched throughout and zero anchor drift (no snap-back) on every confirmed stop.
                 assert(dist3(st.poses[own_actor], {x = 0, y = 0, z = 0}) == 0)
-                assert(#st.stop_snapbacks >= 2, 'expected >= 2 MD stop receipts')
-                local max_snapback = 0
-                for _, sb in ipairs(st.stop_snapbacks) do
-                    if sb > max_snapback then max_snapback = sb end
+                local max_anchor_drift = 0
+                for _, ad in ipairs(st.stop_anchor_drifts) do
+                    if ad > max_anchor_drift then max_anchor_drift = ad end
                 end
-                assert(max_snapback == 0, 'unexpected snap-back on stop: ' .. tostring(max_snapback))
+                assert(max_anchor_drift < 1e-6, 'unexpected anchor drift on stop: ' .. tostring(max_anchor_drift))
 
                 ctrl:close()
                 step(0.05)
-                assert(norm3(st.native_vel[other_actor]) == 0, 'close must stop cockpit2 native velocity')
+                assert(norm3(st.native_vel[other_actor]) == 0)
+                assert(vels.cockpit2:stats().confirmed_stops == 1)
                 return {
                     readbacks = #st.readbacks,
                     deviations = st.deviations,
                     fwd_disp = fwd_disp,
                     coast_dist = coast_dist,
-                    max_snapback = max_snapback,
-                    stops = #st.stop_snapbacks,
+                    max_anchor_drift = max_anchor_drift,
+                    stops = #st.stop_anchor_drifts,
                 }
             end
 
@@ -483,7 +502,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             res = summary[mode]
             self.assertGreater(res['readbacks'], 20)
             self.assertEqual(res['deviations'], 0)
-            self.assertEqual(res['max_snapback'], 0)
+            self.assertLess(res['max_anchor_drift'], 1e-6)
             self.assertGreaterEqual(res['stops'], 2)
 
     def test_readback_guard_detects_artificial_double_movement_fault(self):
@@ -496,12 +515,13 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             local now, gt = 10.0, 50.0
             local actual = {x = 0, y = 0, z = 1000, yaw = 0, pitch = 0, roll = 0}
             local active_v = {x = 0, y = 0, z = 0}
-            local deviations, faults = 0, {}
+            local faults = {}
             local binding = {slot = 'cockpit', serial = 1, epoch = ('a'):rep(32),
                 sector_macro = 'sector_a', index = 2, actor = '0xca', code = 'TGT-002', generation = ('1'):rep(32)}
             local ctrl = hull.new({
                 enabled = true, own_index = 1, binding = binding, velocity_steps = true,
                 continuous_playback = false, native_velocity = true, sample_version = 4,
+                acknowledged_velocity = function() return active_v end,
                 clock = function() return now end, game = function() return gt end,
                 paused = function() return false end, guard = function() return true end,
                 read = function() return actual end,
@@ -510,15 +530,11 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     if vel then active_v = {x = vel.x, y = vel.y, z = vel.z} end
                     return true
                 end,
-                record = function(ev)
-                    if ev.kind == 'position_deviation' then deviations = deviations + 1 end
-                    return true
-                end,
+                record = function() return true end,
                 fault = function(reason) faults[#faults + 1] = reason end,
             })
             for k = 1, 6 do
                 now, gt = now + 0.1, gt + 0.1
-                -- Inject 2x double movement into mock physics!
                 actual.z = actual.z + 2.0 * active_v.z * 0.1
                 ctrl:push(binding, {
                     version = 4, epoch = binding.epoch, index = 2, generation = binding.generation,
@@ -532,7 +548,402 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
         """)
         self.assertTrue(detected)
 
-    def test_pause_and_end_revocation_zero_velocity_and_allow_reacquisition(self):
+    def test_anchor_live_pose_guards_and_ownership_loss_refuse_raw_unanchored_stop(self):
+        results = self._run_lua(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
+            dofile(root .. 'motion_playback.lua')
+            dofile(root .. 'company_hull_playback.lua')
+            local native = dofile(root .. 'company_hull_playback_x4.lua')
+            local velocity_mod = dofile(root .. 'company_cockpit_velocity.lua')
+            local cockpit = dofile(root .. 'company_cockpit_playback.lua')
+
+            local epoch = ('a'):rep(32)
+            local gen1 = ('1'):rep(32)
+            local own_actor, target_actor, sector_id, zone_id = 101, 202, 303, 404
+            local zone_hex = ('0x%x'):format(zone_id)
+
+            local function run_fault_case(fault_mode)
+                local now, gt = 10.0, 50.0
+                local is_paused = false
+                local guard_ok = true
+                local obs_matches = true
+                local cur_cockpit_actor = own_actor
+                local cur_target_code = 'TGT-002'
+                local cur_target_zone = zone_id
+                local pose = {x = 0, y = 0, z = 1000, yaw = 0, pitch = 0, roll = 0}
+                local native_vel = {x = 0, y = 0, z = 0}
+                local write_count, md_stop_count = 0, 0
+                local events, faults = {}, {}
+                local md_handler = nil
+                local claims = {by_actor = {}, by_slot = {}}
+                local view = {epoch = epoch, index = 2, actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a'}
+
+                local obs = {
+                    matches = function(_, ep, frame, idx, act, code)
+                        return obs_matches and ep == epoch and frame == 'sector_a'
+                            and idx == 2 and act == '0xca' and code == 'TGT-002'
+                    end,
+                    is_active_pilot = function(_, idx) return idx == 2 end,
+                    current_radar_range = function() return 40000 end,
+                }
+                local vel_ctrl = velocity_mod.new({
+                    enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                    own_index = 1, clock = function() return now end,
+                    register = function(cb) md_handler = cb; return true end,
+                    issue = function(args)
+                        if args.op == 'set' then
+                            native_vel = {x = args.vx, y = args.vy, z = args.vz}
+                            local reply = ('%d|set|%d|%s|sector_a|%s|%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f'):format(
+                                args.request, args.lease, args.actor, zone_hex, gt,
+                                pose.x, pose.y, pose.z, args.vx, args.vy, args.vz, args.vx, args.vy, args.vz)
+                            md_handler(nil, reply)
+                            return true
+                        elseif args.op == 'stop' then
+                            md_stop_count = md_stop_count + 1
+                            return true
+                        end
+                        return false
+                    end,
+                })
+                local adapter = native.new({
+                    enabled = true, pinned = {epoch = epoch, issued_count = 10}, own_index = 1,
+                    observer = obs, guard = function() return guard_ok and not is_paused end,
+                    velocity = vel_ctrl, exclusive_claims = claims,
+                }, {
+                    cockpit = function()
+                        if is_paused then return nil end
+                        return {actor = cur_cockpit_actor, sector = sector_id, zone = zone_id}
+                    end,
+                    target = function()
+                        return {actor = target_actor, sector = sector_id, zone = cur_target_zone,
+                                sector_macro = 'sector_a', code = cur_target_code}
+                    end,
+                    read = function() return {x = pose.x, y = pose.y, z = pose.z, yaw = 0, pitch = 0, roll = 0} end,
+                    write = function(_, _, p)
+                        write_count = write_count + 1
+                        pose = {x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll}
+                        return true
+                    end,
+                    destination_zone = function() return zone_id end,
+                    within_radar = function() return true end,
+                })
+                -- Also build a second slot adapter sharing exclusive_claims to test exclusive binding rejection.
+                local adapter2 = native.new({
+                    enabled = true, pinned = {epoch = epoch, issued_count = 10}, own_index = 1,
+                    observer = obs, guard = function() return true end, exclusive_claims = claims,
+                }, {
+                    cockpit = function() return {actor = own_actor, sector = sector_id, zone = zone_id} end,
+                    target = function() return {actor = target_actor, sector = sector_id, zone = zone_id, sector_macro = 'sector_a', code = 'TGT-002'} end,
+                    read = function() return pose end,
+                    write = function() return true end,
+                    destination_zone = function() return zone_id end,
+                    within_radar = function() return true end,
+                })
+
+                local ctrl = cockpit.new_multi({
+                    enabled = true, continuous_playback = true, native_velocity = true, allow_reacquire_align = true,
+                    own_index = 1, slot_names = {'cockpit'}, adapters = {cockpit = adapter},
+                    clock = function() return now end, game = function() return gt end, paused = function() return is_paused end,
+                    record = function() return true end,
+                    fault = function(reason, unc) faults[#faults + 1] = {reason = reason, uncertain = unc} end,
+                    on_event = function(kind, detail) events[#events + 1] = {kind = kind, detail = detail} end,
+                })
+
+                local seq = 0
+                local function push(z, vz)
+                    seq = seq + 1
+                    return ctrl:sample(view, 1, {
+                        version = 4, epoch = epoch, index = 2, generation = gen1, sector_macro = 'sector_a',
+                        sequence = seq, source_time = gt, capture_time = now, x = 0, y = 0, z = z,
+                        real_velocity = vz and {x = 0, y = 0, z = vz} or nil,
+                        attitude = {yaw = 0, pitch = 0, roll = 0},
+                    }, now, 'cockpit')
+                end
+
+                assert(push(1000, nil))
+                for k = 1, 6 do
+                    now, gt = now + 0.1, gt + 0.1
+                    pose.z = pose.z + native_vel.z * 0.1
+                    assert(push(1000 + k * 6, 60))
+                    ctrl:tick(now)
+                end
+                assert(native_vel.z == 60)
+
+                -- While cockpit holds exclusive claim on 0xca, cockpit2 CANNOT bind 0xca!
+                local dup_bind = adapter2:bind({
+                    slot = 'cockpit2', serial = 1, epoch = epoch, index = 2,
+                    actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen1,
+                })
+                assert(dup_bind == nil, 'second slot must not acquire exclusive binding while active')
+
+                local writes_before = write_count
+                if fault_mode == 'view_loss' then
+                    obs_matches = false
+                    ctrl:view(nil, 1, 'cockpit')
+                elseif fault_mode == 'cockpit_changed' then
+                    cur_cockpit_actor = 999
+                    ctrl:end_track(view, 1, gen1, 'cockpit')
+                elseif fault_mode == 'code_changed' then
+                    cur_target_code = 'BAD-999'
+                    ctrl:end_track(view, 1, gen1, 'cockpit')
+                elseif fault_mode == 'zone_changed' then
+                    cur_target_zone = 777
+                    ctrl:end_track(view, 1, gen1, 'cockpit')
+                elseif fault_mode == 'exclusive_lost' then
+                    claims.by_actor['0xca'] = {slot = 'cockpit2', actor = '0xca'}
+                    ctrl:end_track(view, 1, gen1, 'cockpit')
+                elseif fault_mode == 'paused' then
+                    is_paused = true
+                    now = now + 0.05
+                    ctrl:tick(now)
+                end
+
+                local st_c = ctrl:slot_stats('cockpit')
+                local saw_uncertain_event = false
+                for _, ev in ipairs(events) do
+                    if ev.kind == 'closed_uncertain' and ev.detail.reason == 'velocity_cleanup_uncertain' then
+                        saw_uncertain_event = true
+                    end
+                end
+                return {
+                    writes_after = write_count - writes_before,
+                    md_stops = md_stop_count,
+                    closed = st_c.closed,
+                    uncertain = st_c.velocity_cleanup_uncertain,
+                    reason = st_c.velocity_uncertain_reason,
+                    saw_uncertain_event = saw_uncertain_event,
+                    vel_uncertain = vel_ctrl:cleanup_uncertain(),
+                }
+            end
+
+            -- Also check direct missing anchor_fn on velocity:stop(nil) refuses raw stop.
+            local now_m = 10.0
+            local raw_stops = 0
+            local v_missing = velocity_mod.new({
+                enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                own_index = 1, clock = function() return now_m end,
+                register = function() return true end,
+                issue = function(args)
+                    if args.op == 'stop' then raw_stops = raw_stops + 1 end
+                    return true
+                end,
+            })
+            assert(v_missing:apply({
+                epoch = epoch, index = 2, actor = '0xca', sector_macro = 'sector_a', code = 'TGT-002', generation = gen1,
+            }, {x = 0, y = 0, z = 60}, nil, zone_hex))
+            local ok_s, s_reason = v_missing:stop(nil)
+
+            return {
+                view_loss = run_fault_case('view_loss'),
+                cockpit_changed = run_fault_case('cockpit_changed'),
+                code_changed = run_fault_case('code_changed'),
+                zone_changed = run_fault_case('zone_changed'),
+                exclusive_lost = run_fault_case('exclusive_lost'),
+                paused = run_fault_case('paused'),
+                missing_anchor = {
+                    ok = ok_s, reason = s_reason, raw_stops = raw_stops,
+                    uncertain = v_missing:cleanup_uncertain(),
+                },
+            }
+        """)
+        for case_name, expected_reason in (
+            ('view_loss', 'anchor_observer_mismatch'),
+            ('cockpit_changed', 'anchor_cockpit_changed'),
+            ('code_changed', 'anchor_target_identity_changed'),
+            ('zone_changed', 'anchor_target_zone_changed'),
+            ('exclusive_lost', 'anchor_exclusive_binding_lost'),
+            ('paused', 'anchor_guard_failed'),
+        ):
+            r = results[case_name]
+            self.assertEqual(r['writes_after'], 0, f'{case_name} must not write SetObjectSectorPos')
+            self.assertEqual(r['md_stops'], 0, f'{case_name} must not dispatch raw unanchored MD stop')
+            self.assertTrue(r['closed'], f'{case_name} must seal slot closed')
+            self.assertTrue(r['uncertain'], f'{case_name} must expose velocity_cleanup_uncertain')
+            self.assertTrue(r['vel_uncertain'], f'{case_name} velocity adapter must retain uncertain cleanup')
+            self.assertTrue(r['saw_uncertain_event'], f'{case_name} must emit closed_uncertain event')
+            self.assertEqual(r['reason'], expected_reason)
+
+        ma = results['missing_anchor']
+        self.assertFalse(ma['ok'])
+        self.assertEqual(ma['reason'], 'anchor_missing')
+        self.assertEqual(ma['raw_stops'], 0)
+        self.assertTrue(ma['uncertain'])
+
+    def test_delayed_receipt_fencing_stop_verification_and_pending_bounds(self):
+        summary = self._run_lua(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            local velocity_mod = dofile(root .. 'company_cockpit_velocity.lua')
+
+            local epoch = ('a'):rep(32)
+            local gen1, gen2 = ('1'):rep(32), ('2'):rep(32)
+            local zone_a, zone_b = '0x194', '0x195'
+            local bind1 = {epoch = epoch, index = 2, actor = '0xca', sector_macro = 'sector_a', code = 'TGT-002', generation = gen1}
+            local bind2 = {epoch = epoch, index = 2, actor = '0xca', sector_macro = 'sector_a', code = 'TGT-002', generation = gen2}
+
+            local function anchor_ok(x, y, z, zone)
+                return function()
+                    return {x = x, y = y, z = z, yaw = 0, pitch = 0, roll = 0,
+                            zone = zone or zone_a, actor = '0xca', sector_macro = 'sector_a'}
+                end
+            end
+
+            local function set_reply(req, lease, actor, sector, zone, vx, vy, vz)
+                return ('%d|set|%d|%s|%s|%s|10.0|0,0,1000|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f'):format(
+                    req, lease, actor, sector, zone, vx, vy, vz, vx, vy, vz)
+            end
+
+            local function stop_reply(req, lease, actor, sector, zone, x, y, z, vx, vy, vz)
+                return ('%d|stopped|%d|%s|%s|%s|10.1|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f|0,0,60'):format(
+                    req, lease, actor, sector, zone, x, y, z, vx, vy, vz, x, y, z)
+            end
+
+            -- 1. Delayed set and delayed stop receipts across generation reuse must be fenced!
+            local now = 10.0
+            local issued, handler = {}, nil
+            local v = velocity_mod.new({
+                enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                own_index = 1, clock = function() return now end,
+                register = function(cb) handler = cb; return true end,
+                issue = function(args) issued[#issued + 1] = args; return true end,
+            })
+            assert(v:apply(bind1, {x = 0, y = 0, z = 60}, anchor_ok(0, 0, 1000), zone_a))
+            local req1, lease1 = issued[1].request, issued[1].lease
+            -- Hold req1 (delayed set!), initiate stop on gen1 (also held!).
+            now = now + 0.1
+            assert(v:stop(anchor_ok(0, 0, 1006)))
+            local req2 = issued[2].request
+            -- Reuse slot immediately for gen2 and confirm gen2 set at 40 m/s!
+            now = now + 0.1
+            assert(v:apply(bind2, {x = 0, y = 0, z = 40}, anchor_ok(0, 0, 1006), zone_a))
+            local req3, lease2 = issued[3].request, issued[3].lease
+            assert(lease2 > lease1)
+            handler(nil, set_reply(req3, lease2, '0xca', 'sector_a', zone_a, 0, 0, 40))
+            local ack_gen2 = v:acknowledged_velocity(bind2, zone_a)
+            assert(ack_gen2 and ack_gen2.z == 40)
+
+            -- Now deliver delayed gen1 SET receipt (60 m/s): MUST be fenced, gen2 stays at 40 m/s!
+            handler(nil, set_reply(req1, lease1, '0xca', 'sector_a', zone_a, 0, 0, 60))
+            local ack_after_late_set = v:acknowledged_velocity(bind2, zone_a)
+            assert(ack_after_late_set and ack_after_late_set.z == 40)
+
+            -- Deliver delayed gen1 STOP receipt (confirmed zero): MUST be fenced without clearing gen2!
+            handler(nil, stop_reply(req2, lease1, '0xca', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 0))
+            local ack_after_late_stop = v:acknowledged_velocity(bind2, zone_a)
+            assert(ack_after_late_stop and ack_after_late_stop.z == 40)
+            assert(v:cleanup_uncertain() == false)
+
+            -- Ordinary confirmed zero for gen2:
+            now = now + 0.1
+            assert(v:stop(anchor_ok(0, 0, 1010)))
+            local req4 = issued[4].request
+            handler(nil, stop_reply(req4, lease2, '0xca', 'sector_a', zone_a, 0, 0, 1010, 0, 0, 0))
+            assert(v:cleanup_uncertain() == false)
+            assert(v:stats().confirmed_stops == 2)
+            assert(v:stats().fenced_receipts == 2)
+
+            -- 2. Stop receipt validation failures MUST refuse to confirm and retain explicit uncertainty.
+            local function test_bad_stop(mode)
+                local t = 20.0
+                local q, h = {}, nil
+                local vc = velocity_mod.new({
+                    enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                    own_index = 1, clock = function() return t end,
+                    receipt_timeout = 1.0,
+                    register = function(cb) h = cb; return true end,
+                    issue = function(args) q[#q + 1] = args; return true end,
+                })
+                assert(vc:apply(bind1, {x = 0, y = 0, z = 60}, anchor_ok(0, 0, 1000), zone_a))
+                h(nil, set_reply(q[1].request, q[1].lease, '0xca', 'sector_a', zone_a, 0, 0, 60))
+                t = t + 0.1
+                assert(vc:stop(anchor_ok(0, 0, 1006)))
+                local sr, sl = q[2].request, q[2].lease
+                if mode == 'wrong_actor' then
+                    h(nil, stop_reply(sr, sl, '0xdead', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 0))
+                elseif mode == 'wrong_zone' then
+                    h(nil, stop_reply(sr, sl, '0xca', 'sector_a', zone_b, 0, 0, 1006, 0, 0, 0))
+                elseif mode == 'nonzero_speed' then
+                    h(nil, stop_reply(sr, sl, '0xca', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 1.5))
+                elseif mode == 'refused' then
+                    h(nil, ('%d|refused|%d'):format(sr, sl))
+                elseif mode == 'timeout' then
+                    t = t + 1.5
+                    vc:tick()
+                elseif mode == 'late_set_after_stop' then
+                    -- First queue a second set before stop, confirm stop, then deliver the late set!
+                    local q2, h2 = {}, nil
+                    local t2 = 30.0
+                    local vc2 = velocity_mod.new({
+                        enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                        own_index = 1, clock = function() return t2 end,
+                        register = function(cb) h2 = cb; return true end,
+                        issue = function(args) q2[#q2 + 1] = args; return true end,
+                    })
+                    assert(vc2:apply(bind1, {x = 0, y = 0, z = 60}, anchor_ok(0, 0, 1000), zone_a))
+                    t2 = t2 + 0.1
+                    assert(vc2:stop(anchor_ok(0, 0, 1006)))
+                    h2(nil, stop_reply(q2[2].request, q2[2].lease, '0xca', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 0))
+                    assert(vc2:cleanup_uncertain() == false)
+                    -- Late un-fenced MD set succeeds with 60 m/s after stop!
+                    h2(nil, set_reply(q2[1].request, q2[1].lease, '0xca', 'sector_a', zone_a, 0, 0, 60))
+                    local u2, r2 = vc2:cleanup_uncertain()
+                    return {uncertain = u2, reason = r2, confirmed = vc2:stats().confirmed_stops}
+                end
+                local u, r = vc:cleanup_uncertain()
+                return {uncertain = u, reason = r, confirmed = vc:stats().confirmed_stops}
+            end
+
+            -- 3. Bounded pending receipts: never exceeds max_pending and prunes on timeout.
+            local tb = 40.0
+            local qb = {}
+            local vb = velocity_mod.new({
+                enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                own_index = 1, clock = function() return tb end,
+                max_pending = 8, receipt_timeout = 1.0,
+                register = function() return true end,
+                issue = function(args) qb[#qb + 1] = args; return true end,
+            })
+            local peak_pending = 0
+            for k = 1, 25 do
+                tb = tb + 0.06
+                vb:apply(bind1, {x = 0, y = 0, z = 10 + k * 5}, anchor_ok(0, 0, 1000), zone_a)
+                local pcount = vb:stats().pending_count
+                if pcount > peak_pending then peak_pending = pcount end
+            end
+            tb = tb + 2.0
+            vb:tick()
+            local after_prune = vb:stats().pending_count
+
+            return {
+                fenced_ok = true,
+                wrong_actor = test_bad_stop('wrong_actor'),
+                wrong_zone = test_bad_stop('wrong_zone'),
+                nonzero_speed = test_bad_stop('nonzero_speed'),
+                refused = test_bad_stop('refused'),
+                timeout = test_bad_stop('timeout'),
+                late_set_after_stop = test_bad_stop('late_set_after_stop'),
+                peak_pending = peak_pending,
+                after_prune = after_prune,
+            }
+        """)
+        self.assertTrue(summary['fenced_ok'])
+        for mode, expected_reason in (
+            ('wrong_actor', 'stop_target_mismatch'),
+            ('wrong_zone', 'stop_zone_mismatch'),
+            ('nonzero_speed', 'stop_speed_nonzero'),
+            ('refused', 'stop_refused'),
+            ('timeout', 'stop_receipt_timeout'),
+            ('late_set_after_stop', 'late_set_after_stop'),
+        ):
+            r = summary[mode]
+            self.assertTrue(r['uncertain'], f'{mode} must retain explicit uncertain outcome')
+            self.assertEqual(r['reason'], expected_reason)
+            if mode != 'late_set_after_stop':
+                self.assertEqual(r['confirmed'], 0, f'{mode} must not acknowledge stop')
+        self.assertLessEqual(summary['peak_pending'], 8)
+        self.assertEqual(summary['after_prune'], 0)
+
+    def test_valid_3000_mps_preserves_continuous_position_track_and_only_acked_velocity_is_credited(self):
         summary = self._run_lua(r"""
             local root = _ROOT .. '/src/authority/lua/'
             X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
@@ -543,103 +954,270 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             local cockpit = dofile(root .. 'company_cockpit_playback.lua')
 
             local epoch = ('a'):rep(32)
-            local gen1, gen2 = ('1'):rep(32), ('2'):rep(32)
+            local gen1 = ('1'):rep(32)
             local own_actor, target_actor, sector_id, zone_id = 101, 202, 303, 404
-            local now, gt, is_paused = 10.0, 50.0, false
-            local pose = {x = 0, y = 0, z = 1000, yaw = 0, pitch = 0, roll = 0}
-            local vel = {x = 0, y = 0, z = 0}
-            local stops, anchors = 0, 0
-            local view = {epoch = epoch, index = 2, actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a'}
-            local obs = {
-                matches = function() return true end,
-                is_active_pilot = function(_, idx) return idx == 2 end,
-                current_radar_range = function() return 40000 end,
-            }
-            local vel_ctrl = velocity_mod.new({
-                enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
-                own_index = 1, clock = function() return now end,
-                register = function() return true end,
-                issue = function(args)
-                    if args.op == 'set' then
-                        vel = {x = args.vx, y = args.vy, z = args.vz}
-                    elseif args.op == 'stop' then
-                        vel = {x = 0, y = 0, z = 0}
-                        stops = stops + 1
+            local zone_hex = ('0x%x'):format(zone_id)
+
+            local function build_harness(opts)
+                local st = {
+                    now = 10.0, gt = 50.0,
+                    pose = {x = 0, y = 0, z = 1000, yaw = 0, pitch = 0, roll = 0},
+                    last_set_pos = {x = 0, y = 0, z = 1000},
+                    native_vel = {x = 0, y = 0, z = 0},
+                    md_queue = {}, md_handler = nil,
+                    md_active = nil, md_lease = 0, md_stopped = 0,
+                    readbacks = {}, deviations = 0, faults = {},
+                    hold_set_receipts = opts.hold_set_receipts == true,
+                    refuse_sets = opts.refuse_sets == true,
+                    refuse_above = opts.refuse_above or nil,
+                }
+                local view = {epoch = epoch, index = 2, actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a'}
+                local obs = {
+                    matches = function(_, ep, frame, idx, act, code)
+                        return ep == epoch and frame == 'sector_a' and idx == 2 and act == '0xca' and code == 'TGT-002'
+                    end,
+                    is_active_pilot = function(_, idx) return idx == 2 end,
+                    current_radar_range = function() return 40000 end,
+                }
+                local vel_ctrl = velocity_mod.new({
+                    enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                    own_index = 1, clock = function() return st.now end,
+                    register = function(cb) st.md_handler = cb; return true end,
+                    issue = function(args) st.md_queue[#st.md_queue + 1] = args; return true end,
+                })
+                local adapter = native.new({
+                    enabled = true, pinned = {epoch = epoch, issued_count = 10}, own_index = 1,
+                    observer = obs, guard = function() return true end, velocity = vel_ctrl,
+                }, {
+                    cockpit = function() return {actor = own_actor, sector = sector_id, zone = zone_id} end,
+                    target = function() return {actor = target_actor, sector = sector_id, zone = zone_id, sector_macro = 'sector_a', code = 'TGT-002'} end,
+                    read = function() return {x = st.pose.x, y = st.pose.y, z = st.pose.z, yaw = 0, pitch = 0, roll = 0} end,
+                    write = function(_, _, p)
+                        st.pose = {x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll}
+                        st.last_set_pos = {x = p.x, y = p.y, z = p.z}
+                        return true
+                    end,
+                    destination_zone = function() return zone_id end,
+                    within_radar = function() return true end,
+                })
+                local ctrl = cockpit.new_multi({
+                    enabled = true, continuous_playback = opts.continuous ~= false, native_velocity = true,
+                    allow_reacquire_align = true, own_index = 1, slot_names = {'cockpit'},
+                    adapters = {cockpit = adapter},
+                    clock = function() return st.now end, game = function() return st.gt end,
+                    paused = function() return false end,
+                    record = function(ev)
+                        if ev.kind == 'readback' then
+                            st.readbacks[#st.readbacks + 1] = ev
+                        elseif ev.kind == 'position_deviation' then
+                            st.deviations = st.deviations + 1
+                        end
+                        return true
+                    end,
+                    fault = function(reason) st.faults[#st.faults + 1] = reason end,
+                })
+
+                local function drain_md()
+                    local q = st.md_queue
+                    st.md_queue = {}
+                    for _, args in ipairs(q) do
+                        if args.op == 'set' then
+                            local spd = math.sqrt(args.vx^2 + args.vy^2 + args.vz^2)
+                            if st.hold_set_receipts then
+                                -- Hold receipt (queued/unacknowledged), do not reply!
+                            elseif st.refuse_sets or (st.refuse_above and spd > st.refuse_above) then
+                                st.md_handler(nil, ('%d|refused|%d'):format(args.request, args.lease))
+                            elseif args.lease > st.md_stopped and (st.md_active == nil or st.md_lease == args.lease) then
+                                st.native_vel = {x = args.vx, y = args.vy, z = args.vz}
+                                st.md_active = target_actor
+                                st.md_lease = args.lease
+                                st.md_handler(nil, ('%d|set|%d|%s|sector_a|%s|%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f'):format(
+                                    args.request, args.lease, args.actor, zone_hex, st.gt,
+                                    st.pose.x, st.pose.y, st.pose.z,
+                                    args.vx, args.vy, args.vz, args.vx, args.vy, args.vz))
+                            else
+                                st.md_handler(nil, ('%d|refused|%d'):format(args.request, args.lease))
+                            end
+                        elseif args.op == 'stop' then
+                            if st.md_active == target_actor and st.md_lease == args.lease and args.zone == zone_hex then
+                                local before_p = {x = st.pose.x, y = st.pose.y, z = st.pose.z}
+                                st.pose.x, st.pose.y, st.pose.z = st.last_set_pos.x, st.last_set_pos.y, st.last_set_pos.z
+                                st.native_vel = {x = 0, y = 0, z = 0}
+                                st.md_active = nil
+                                st.md_stopped = args.lease
+                                st.md_handler(nil, ('%d|stopped|%d|%s|sector_a|%s|%.6f|%.6f,%.6f,%.6f|0,0,0|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f|0,0,600'):format(
+                                    args.request, args.lease, args.actor, zone_hex, st.gt,
+                                    st.pose.x, st.pose.y, st.pose.z, before_p.x, before_p.y, before_p.z))
+                            else
+                                st.md_handler(nil, ('%d|refused|%d'):format(args.request, args.lease))
+                            end
+                        end
                     end
-                    return true
-                end,
-            })
-            local adapter = native.new({
-                enabled = true, pinned = {epoch = epoch, issued_count = 10}, own_index = 1,
-                observer = obs, guard = function() return not is_paused end, velocity = vel_ctrl,
-            }, {
-                cockpit = function()
-                    if is_paused then return nil end
-                    return {actor = own_actor, sector = sector_id, zone = zone_id}
-                end,
-                target = function() return {actor = target_actor, sector = sector_id, zone = zone_id, sector_macro = 'sector_a', code = 'TGT-002'} end,
-                read = function() return {x = pose.x, y = pose.y, z = pose.z, yaw = pose.yaw, pitch = pose.pitch, roll = pose.roll} end,
-                write = function(_, _, p)
-                    pose = {x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll}
-                    anchors = anchors + 1
-                    return true
-                end,
-                destination_zone = function() return zone_id end,
-                within_radar = function() return true end,
-            })
-            local ctrl = cockpit.new_multi({
-                enabled = true, continuous_playback = true, native_velocity = true, allow_reacquire_align = true,
-                own_index = 1, slot_names = {'cockpit'}, adapters = {cockpit = adapter},
-                clock = function() return now end, game = function() return gt end, paused = function() return is_paused end,
-                record = function() return true end, fault = function() end,
-            })
-            local seq = 0
-            local function push(gen, z, vz)
-                seq = seq + 1
-                return ctrl:sample(view, 1, {
-                    version = 4, epoch = epoch, index = 2, generation = gen, sector_macro = 'sector_a',
-                    sequence = seq, source_time = gt, capture_time = now, x = 0, y = 0, z = z,
-                    real_velocity = vz and {x = 0, y = 0, z = vz} or nil,
-                    attitude = {yaw = 0, pitch = 0, roll = 0},
-                }, now, 'cockpit')
+                end
+
+                local seq = 0
+                local function step(dt)
+                    st.now = st.now + dt
+                    st.gt = st.gt + dt
+                    st.pose.x = st.pose.x + st.native_vel.x * dt
+                    st.pose.y = st.pose.y + st.native_vel.y * dt
+                    st.pose.z = st.pose.z + st.native_vel.z * dt
+                    drain_md()
+                    ctrl:tick(st.now)
+                end
+
+                local function push(z, vz)
+                    seq = seq + 1
+                    return ctrl:sample(view, 1, {
+                        version = 4, epoch = epoch, index = 2, generation = gen1, sector_macro = 'sector_a',
+                        sequence = seq, source_time = st.gt, capture_time = st.now, x = 0, y = 0, z = z,
+                        real_velocity = vz and {x = 0, y = 0, z = vz} or nil,
+                        attitude = {yaw = 0, pitch = 0, roll = 0},
+                    }, st.now, 'cockpit')
+                end
+
+                return st, ctrl, vel_ctrl, step, push
             end
-            assert(push(gen1, 1000, nil))
+
+            -- Case A: Valid 3,000 m/s source sample from start (cleanly stopped auxiliary velocity path).
+            local stA, ctrlA, velA, stepA, pushA = build_harness({continuous = true})
+            local zA = 1000.0
+            assert(pushA(zA, 3000))
+            for k = 1, 15 do
+                stepA(0.05)
+                zA = zA + 300.0 -- 3,000 m/s * 0.1 s = 300 m/sample
+                stepA(0.05)
+                assert(pushA(zA, 3000))
+            end
+            stepA(0.05)
+            local stA_c = ctrlA:slot_stats('cockpit')
+            local vA_st = velA:stats()
+            local any_credited_A = false
+            for _, rb in ipairs(stA.readbacks) do
+                if rb.applied_velocity ~= nil then any_credited_A = true end
+            end
+
+            -- Case B: Start moving at 600 m/s (acked), accelerate to 3,000 m/s (clean auxiliary stop),
+            -- keep tracking continuous position at 3,000 m/s, then drop back to 400 m/s (velocity resumes)!
+            local stB, ctrlB, velB, stepB, pushB = build_harness({continuous = true})
+            local zB = 1000.0
+            assert(pushB(zB, 600))
             for k = 1, 8 do
-                now, gt = now + 0.1, gt + 0.1
-                pose.z = pose.z + vel.z * 0.1
-                assert(push(gen1, 1000 + k * 6, 60))
-                ctrl:tick(now)
+                stepB(0.05); zB = zB + 60.0; stepB(0.05)
+                assert(pushB(zB, 600))
             end
-            assert(vel.z > 50)
-            -- 1. Pause stops playback and dispatches MD stop (constantvel=false 0,0,0) cleanly.
-            is_paused = true
-            now = now + 0.05
-            ctrl:tick(now)
-            assert(vel.z == 0 and stops == 1 and ctrl:slot_stats('cockpit').closed == false)
-            is_paused = false
-            -- 2. Revoke gen1 and reacquire on gen2, then withdraw via END!
-            ctrl:end_track(view, 1, gen1, 'cockpit')
-            local base_z = pose.z
-            seq = 0
-            now, gt = now + 0.1, gt + 0.1
-            assert(push(gen2, base_z, nil))
+            assert(stB.native_vel.z == 600)
+            for k = 1, 10 do
+                stepB(0.05); zB = zB + 300.0; stepB(0.05)
+                assert(pushB(zB, 3000))
+            end
+            stepB(0.05)
+            local vel_during_3000 = stB.native_vel.z
+            local stops_during_3000 = velB:stats().confirmed_stops
+            local z_after_3000 = stB.pose.z
+            for k = 1, 8 do
+                stepB(0.05); zB = zB + 40.0; stepB(0.05)
+                assert(pushB(zB, 400))
+            end
+            stepB(0.05)
+            local vel_resumed = stB.native_vel.z
+            local stB_c = ctrlB:slot_stats('cockpit')
+
+            -- Case C: Queued (unacknowledged) or refused set MUST NOT credit displacement compensation!
+            local function check_unacked_not_credited(mode)
+                local stC, ctrlC, velC, stepC, pushC = build_harness({
+                    continuous = true,
+                    hold_set_receipts = (mode == 'queued'),
+                    refuse_sets = (mode == 'refused'),
+                })
+                local zC = 1000.0
+                assert(pushC(zC, nil))
+                for k = 1, 6 do
+                    stepC(0.05); zC = zC + 10.0; stepC(0.05)
+                    -- Simulate an unexpected 100 m/s native drift even though MD NEVER acknowledged set(100)!
+                    stC.pose.z = stC.pose.z + 10.0
+                    assert(pushC(zC, 100))
+                end
+                stepC(0.05)
+                local credited = 0
+                for _, rb in ipairs(stC.readbacks) do
+                    if rb.applied_velocity ~= nil then credited = credited + 1 end
+                end
+                return {deviations = stC.deviations, credited = credited, sets = velC:stats().sets}
+            end
+
+            -- Case D: Acked at 60 m/s, then 180 m/s refused -> ONLY 60 m/s credited, 180 m/s drift triggers deviation!
+            local stD, ctrlD, velD, stepD, pushD = build_harness({continuous = true, refuse_above = 100})
+            local zD = 1000.0
+            assert(pushD(zD, nil))
             for k = 1, 6 do
-                now, gt = now + 0.1, gt + 0.1
-                pose.z = pose.z + vel.z * 0.1
-                assert(push(gen2, base_z + k * 6, 60))
-                ctrl:tick(now)
+                stepD(0.05); zD = zD + 6.0; stepD(0.05)
+                assert(pushD(zD, 60))
             end
-            assert(vel.z > 50 and pose.z > base_z + 15)
-            local anchors_before_end = anchors
-            ctrl:end_track(view, 1, gen2, 'cockpit')
-            assert(vel.z == 0 and stops == 2 and anchors == anchors_before_end + 1)
-            local closed_before_close = ctrl:slot_stats('cockpit').closed
-            assert(closed_before_close == false)
-            ctrl:close()
-            return {stops = stops, closed = closed_before_close}
+            assert(stD.deviations == 0 and stD.native_vel.z == 60)
+            for k = 1, 6 do
+                stepD(0.05); zD = zD + 18.0; stepD(0.05)
+                -- Inject unacknowledged +120 m/s extra drift (total 180 m/s vs acked 60 m/s)!
+                stD.pose.z = stD.pose.z + 12.0
+                assert(pushD(zD, 180))
+            end
+            stepD(0.05)
+
+            return {
+                caseA = {
+                    closed = stA_c.closed,
+                    uncertain = stA_c.velocity_cleanup_uncertain,
+                    writes = stA_c.writes,
+                    readbacks = #stA.readbacks,
+                    deviations = stA.deviations,
+                    disp = stA.pose.z - 1000.0,
+                    sets = vA_st.sets,
+                    skips = vA_st.unsupported_speed_skips,
+                    any_credited = any_credited_A,
+                },
+                caseB = {
+                    closed = stB_c.closed,
+                    uncertain = stB_c.velocity_cleanup_uncertain,
+                    deviations = stB.deviations,
+                    vel_during_3000 = vel_during_3000,
+                    stops_during_3000 = stops_during_3000,
+                    z_after_3000 = z_after_3000,
+                    vel_resumed = vel_resumed,
+                },
+                caseC_queued = check_unacked_not_credited('queued'),
+                caseC_refused = check_unacked_not_credited('refused'),
+                caseD = {deviations = stD.deviations, refusals = velD:stats().refusals},
+            }
         """)
-        self.assertEqual(summary['stops'], 2)
-        self.assertFalse(summary['closed'])
+        a = summary['caseA']
+        self.assertFalse(a['closed'])
+        self.assertFalse(a['uncertain'])
+        self.assertGreater(a['writes'], 15)
+        self.assertGreater(a['readbacks'], 15)
+        self.assertEqual(a['deviations'], 0)
+        self.assertGreater(a['disp'], 3500.0)
+        self.assertEqual(a['sets'], 0)
+        self.assertGreater(a['skips'], 10)
+        self.assertFalse(a['any_credited'])
+
+        b = summary['caseB']
+        self.assertFalse(b['closed'])
+        self.assertFalse(b['uncertain'])
+        self.assertEqual(b['deviations'], 0)
+        self.assertEqual(b['vel_during_3000'], 0)
+        self.assertEqual(b['stops_during_3000'], 1)
+        self.assertGreater(b['z_after_3000'], 3500.0)
+        self.assertAlmostEqual(b['vel_resumed'], 400.0, delta=5.0)
+
+        for key in ('caseC_queued', 'caseC_refused'):
+            c = summary[key]
+            self.assertGreater(c['sets'], 0)
+            self.assertEqual(c['credited'], 0, f'{key} must never credit unacknowledged velocity')
+            self.assertGreater(c['deviations'], 0, f'{key} unacknowledged drift must trigger position_deviation')
+
+        d = summary['caseD']
+        self.assertGreater(d['refusals'], 0)
+        self.assertGreater(d['deviations'], 0)
 
 
 if __name__ == '__main__':

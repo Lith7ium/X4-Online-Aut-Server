@@ -105,7 +105,7 @@ function M.new(options)
     local velocity_steps = cfg.velocity_steps == true
     local continuous = cfg.continuous_playback == true
     local native_velocity = cfg.native_velocity == true
-    local rendered_velocity, write_velocity, prev_write_velocity, write_game_time = nil, nil, nil, nil
+    local rendered_velocity, write_acked_velocity, write_game_time = nil, nil, nil
     local maximum_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP
     if continuous then maximum_step = SECTOR_DIAGONAL end
     local measured_pose, last_display_time, last_display_pose, last_display_rate
@@ -309,8 +309,9 @@ function M.new(options)
             local written, outside_native_limit = cfg.write(
                 copy(binding), position, xyz(before, 1e7), before_dispatch, attitude, desired_velocity)
             if written == true and native_velocity then
-                prev_write_velocity = write_velocity or {x = 0, y = 0, z = 0}
-                write_velocity = {x = desired_velocity.x, y = desired_velocity.y, z = desired_velocity.z}
+                local acked = type(cfg.acknowledged_velocity) == 'function' and cfg.acknowledged_velocity() or nil
+                local valid_ack = acked and xyz(acked, 5000) or nil
+                write_acked_velocity = valid_ack
                 write_game_time = observation and observation.game_time or nil
             end
             if written == false and outside_native_limit then
@@ -323,25 +324,33 @@ function M.new(options)
             local kind = event.kind
             local effective_error = event.error
             local raw_error = nil
+            local credited_velocity = nil
             if readback then
                 if event.elapsed <= 0 then
                     refusal = 'readback_not_later'
                     return false
                 end
-                if native_velocity and write_velocity and write_game_time then
-                    local dt_game = math.max(0, event.game_time - write_game_time)
-                    local pred_old = {
-                        x = event.target.x + prev_write_velocity.x * dt_game,
-                        y = event.target.y + prev_write_velocity.y * dt_game,
-                        z = event.target.z + prev_write_velocity.z * dt_game,
-                    }
-                    local pred_new = {
-                        x = event.target.x + write_velocity.x * dt_game,
-                        y = event.target.y + write_velocity.y * dt_game,
-                        z = event.target.z + write_velocity.z * dt_game,
-                    }
-                    raw_error = event.error
-                    effective_error = segment_distance(event.actual, pred_old, pred_new)
+                if native_velocity and write_game_time then
+                    local ack_now = type(cfg.acknowledged_velocity) == 'function' and cfg.acknowledged_velocity() or nil
+                    local valid_now = ack_now and xyz(ack_now, 5000) or nil
+                    if write_acked_velocity or valid_now then
+                        local v0 = write_acked_velocity or {x = 0, y = 0, z = 0}
+                        local v1 = valid_now or {x = 0, y = 0, z = 0}
+                        local dt_game = math.max(0, event.game_time - write_game_time)
+                        local pred_old = {
+                            x = event.target.x + v0.x * dt_game,
+                            y = event.target.y + v0.y * dt_game,
+                            z = event.target.z + v0.z * dt_game,
+                        }
+                        local pred_new = {
+                            x = event.target.x + v1.x * dt_game,
+                            y = event.target.y + v1.y * dt_game,
+                            z = event.target.z + v1.z * dt_game,
+                        }
+                        raw_error = event.error
+                        effective_error = segment_distance(event.actual, pred_old, pred_new)
+                        credited_velocity = {x = v1.x, y = v1.y, z = v1.z}
+                    end
                 end
                 if effective_error > READBACK_TOLERANCE then
                     if not continuous then
@@ -365,9 +374,7 @@ function M.new(options)
                     x = write_input.rate[1], y = write_input.rate[2], z = write_input.rate[3],
                 } or nil,
                 input_age = readback and write_input_age or nil,
-                applied_velocity = readback and native_velocity and write_velocity and {
-                    x = write_velocity.x, y = write_velocity.y, z = write_velocity.z,
-                } or nil,
+                applied_velocity = readback and credited_velocity or nil,
                 raw_error = raw_error,
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
