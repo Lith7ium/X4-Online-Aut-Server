@@ -114,8 +114,10 @@ function M.new(options, engine)
         end
 
         function session:write(target, before, recheck, attitude, continuous)
-            -- Only early refusals can prove this call did not dispatch a setter.
-            if pending_zone or not position(target) or not position(before) then return false, nil, 'not_dispatched' end
+            -- An older crossing can remain unresolved after a position deviation.
+            -- Refusing a new setter cannot certify that crossing.
+            if pending_zone then return false end
+            if not position(target) or not position(before) then return false, nil, 'not_dispatched' end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false, nil, 'not_dispatched' end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z

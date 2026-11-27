@@ -166,12 +166,14 @@ binding.slot, binding.index = 'cockpit', 73
 -- Feed actual V3 samples through the regular receiving controller and FFI adapter.
 local function cross_boundary(outcome)
     reset()
-    local now, readbacks, faults = 0, 0, {}
+    local now, readbacks, deviations, faults = 0, 0, 0, {}
     local controller = cockpit_playback.new({
         enabled=true, own_index=cfg.own_index, target_index=binding.index, adapter=adapter,
+        continuous_playback=outcome == 'continuous_deviation',
         clock=function() return now end, game=function() return now end, paused=function() return false end,
         record=function(event)
             if event.kind == 'readback' then readbacks = readbacks + 1 end
+            if event.kind == 'position_deviation' then deviations = deviations + 1 end
             return true
         end,
         fault=function(reason) faults[#faults + 1] = reason end,
@@ -186,7 +188,7 @@ local function cross_boundary(outcome)
         if crossing_write and not crossing_readback then
             if outcome ~= 'wrong_actual_zone' then target_zone = cockpit_zone end
             if outcome == 'observer_changed_zone' then own_zone = zone end
-            if outcome == 'wrong_actual_position' then actual.x = actual.x + 10 end
+            if outcome == 'wrong_actual_position' or outcome == 'continuous_deviation' then actual.x = actual.x + 10 end
             if outcome == 'lost_radar' then observed = false end
             if outcome == 'pilot_disconnected' then active_pilot = false end
         end
@@ -217,10 +219,13 @@ local function cross_boundary(outcome)
         assert(not crossing_write and #faults > 0, outcome)
     else
         assert(crossing_write and not crossing_readback and writes == crossing_write and #faults > 0, outcome)
+        if outcome == 'continuous_deviation' then
+            assert(deviations == 1 and controller:stats().closed, 'unconfirmed zone crossing must fence this slot')
+        end
     end
 end
 for _, outcome in ipairs({'success', 'observer_changed_zone', 'first_write', 'unpiloted', 'unknown_zone', 'foreign_sector',
-        'wrong_actual_zone', 'wrong_actual_position', 'lost_radar', 'pilot_disconnected'}) do
+        'wrong_actual_zone', 'wrong_actual_position', 'continuous_deviation', 'lost_radar', 'pilot_disconnected'}) do
     cross_boundary(outcome)
 end
 
