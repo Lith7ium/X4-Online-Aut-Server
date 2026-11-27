@@ -582,3 +582,15 @@ unchanged. This was a stationary rejoin after the gate crossing.
 Private evidence in
 `.local/two-pilot-cold-rejoin/run-ordinary-gate/verified.json`
 has SHA-256 `a516c7ae0ebfba6df6152a3f4715375c9d1347e203972211e9764072cc453c8b`.
+
+## First contact with a pilot waiting at the exit
+
+Two native Linux cockpits joined one local GPU-free provider at `673db290` on 27 November. KHI-630 waited 8 km above the Superhighway002 exit in Black Hole Sun IV. HVC-420 used stock autopilot to fly there from Black Hole Sun V. The waiting pilot's stock radar had a 40 km range. The test used the regular pilot roster and cockpit movement subscription.
+
+- The provider acknowledged 216 destination positions from HVC during 28.96 seconds. Both pilots reported Black Hole Sun IV. Their separation was 6.41–8.18 km. The longest gap between those acknowledgements was 0.259 seconds.
+- KHI knew HVC's registered ship identity throughout this interval. On all 186 cockpit radar checks KHI's own X4 still placed that ship in Black Hole Sun V, outside the local physics simulation. The radar returned no contact. KHI therefore opened no movement subscription for HVC and received no cockpit positions for the arriving ship.
+- A comparison after the session paired each HVC acknowledgement with the latest accepted KHI position. Both poses were at most 0.545 seconds old for all 216 comparisons. These positions and KHI's measured radar range would have identified a nearby pilot throughout the interval. The server did not send an arrival notification during the test.
+
+A pilot can cross this superhighway while another remains in the destination sector. On this run the waiting pilot could not acquire the arrival on radar. The observing client needs a way to recognize this first contact when its local X4 still places the other ship in the previous sector. The November 26 human travel-drive freeze happened within a single sector.
+
+This test enabled the movement service and cockpit observer. It left the optional server position writer disabled. The saved provider copy therefore retained HVC in its starting sector. The provider paused and saved `checkpoint-2f95822aab8140c0b8179a8bb451b4ec`, independently verified at SHA-256 `5a8f6b2a121236e1b3a800d3078d43dcaaef9d883096a9887a39c6bd1bb8de5b`. Both pilot processes and the provider exited normally. The first offline save verifier lacked its Python import path. It completed on the same save after the path was corrected. The private paired observations are archived with SHA-256 `cc41a6faae4fc6e1f81bdd3b48962348e0f994fc5749e186e0da745d3df2fea1`.
