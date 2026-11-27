@@ -54,6 +54,8 @@ In a separate copied-save experiment HVC-420 started stationary on KHI-630's HUD
 
 This establishes a way to set forward velocity in native Linux X4 and read the value used by the stock HUD. No pilot verified the text on screen, and the networked playback option in this report does not yet set native ship velocity.
 
+On Windows 11, Neon recorded the stock target bracket in a disposable X4 9.00 game. With a native forward impulse of 60 m/s, the other ship travelled 144.04 m in 2.40 game seconds and the bracket showed 59 m/s. At 60 m/s sideways it travelled 172.29 m while the bracket showed 0 m/s and the aim-lead indicator shifted sideways. The diagonal and reverse cases also followed the signed forward component. These screenshots explain how to interpret the target HUD during a multiplayer flight. The test used isolated local input. [Windows measurements and screenshot identifiers](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/75bc03eb645d2d5fd42c7bfc0f8bb87ebffe0d94/reports/AUTHORITY-WINDOWS-TARGET-SPEED-20261127.md)
+
 ## Stopping a ship with native velocity
 
 Two runs on copies of the same save tested whether a receiver can move and turn a ship while X4 also simulates its velocity. After a forward impulse of 60 m/s, the observer moved HVC-420 sideways by 1.5 m and turned it through 12°. X4 kept the original sector velocity. Its stock target-speed field changed from 60 to 58 m/s as the ship turned. During a 0.404 s real pause, game time stood still. The ship travelled 10.041 m between two pose reads. Predicting that distance using elapsed game time missed by less than 0.001 m. Using elapsed wall time missed by 24.25 m.
@@ -89,6 +91,12 @@ A second run viewed the other ship's validated exterior weapon mounts from 850 m
 A separate cockpit test played X4's stock shield-surface impact effect on the controlled ship, on a private save without a multiplayer connection. In a silent private recording, all three effect pulses produced an in-cockpit sound. The quietest active peak exceeded the loudest sham peak by 19.7 dB. Two pulses also produced a blue shield pattern across the canopy, peaking 72 ms and 67 ms after their triggers. The first pulse produced sound but no measurable pattern through 800 ms. One sham coincided with a startup fade. Both later shams showed no pattern. Native shield and hull stayed at 2,366 and 3,600 throughout and the game recorded no shots, attacks or damage.
 
 The target client's current health message carries a global revision and health values. Only the shooter receives the confirmed hit ID and target index. The cosmetic experiment therefore does not establish delivery of each confirmed hit to the victim.
+
+## Selected map ship in a shared Linux session
+
+Two native Bazzite clients joined the standing Fedora server. XNA-002 selected BBS-493 in the stock map. BBS-493 flew using stock throttle. A server-routed sample 18.11 m from its starting position moved the separate arrow from screen coordinates (631, 337) to (631, 334) in presented frames. The selected local ship remained at its original map position. The recorder retained the displaced pixel observations. It saved only the baseline image before a tiny change in the map camera distance stopped the test.
+
+During this interrupted flight the most recent movement acknowledgement seen by BBS-493 was sequence 229, at +214.64 m with 54.25 m/s forward velocity. The next verified Fedora save held +13.44 m, matching sequence 205 to the precision of the save. A transport acknowledgement records acceptance of a sample. The provider log does not say whether X4 received a write for sequence 229 or why an older position was saved. In a separate offline comparison, graceful departure persisted a fresh pending pose and discarded an expired one under the existing three-second rule. Which path ran here remains open.
 
 ## Two real Linux clients at 35.66 km
 
