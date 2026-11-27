@@ -2261,6 +2261,7 @@ def run(args):
         if combat_service is not None:
             try:
                 combat_service.close()
+                result['company_cockpit_health_reads'] = combat_service.health_read_stats()
             except OSError as error:
                 errors.append('Company combat service cleanup: ' + type(error).__name__)
         if gun_damage_provider is not None:

@@ -159,10 +159,12 @@ class CompanyCombatTests(unittest.TestCase):
 
     def test_pending_impact_discards_an_older_native_health_read(self):
         self.service.close()
+        clock = self.enterContext(patch('authority.company_combat_service.time'))
+        clock.monotonic.return_value = 10.0
         old_read = Mock(poll=Mock(return_value=None))
         hit_write = Mock(poll=Mock(return_value=None))
         new_health = dict(shield=4, maxshield=2366, hull=3600, maxhull=3600)
-        new_read = Mock(poll=Mock(return_value=new_health))
+        new_read = Mock(poll=Mock(return_value=None))
         begin_read = Mock(side_effect=(old_read, new_read))
         begin_impact = Mock(return_value=hit_write)
         self.service = CompanyCombatService(self.grants.get, begin_impact,
@@ -177,6 +179,7 @@ class CompanyCombatTests(unittest.TestCase):
         old_read.poll.return_value = dict(new_health, shield=30)
         attacker, attacker_reply = self.open()
         attacker.sendall(self.frame(self.first, [hit(1)]))
+        clock.monotonic.return_value = 10.2
         self.service.poll()
         self.assertTrue(self.service.native_pending)
         old_read.poll.assert_called_once_with()
@@ -184,18 +187,65 @@ class CompanyCombatTests(unittest.TestCase):
         stale_response = json.loads(victim_reply.readline())
         self.assertIsNone(stale_response['health'])
         self.assertIsNone(stale_response['revision'])
+        stats = self.service.health_read_stats()
+        self.assertEqual((stats['unavailable'], stats['preempted'], stats['native_started']), (1, 1, 1))
+        self.assertIsNone(stats['last_confirmed_native_ms'])
+        self.assertIsNone(stats['max_confirmed_native_ms'])
 
         victim.sendall(self.health_request(victim_grant, 3, 2))
+        clock.monotonic.return_value = 10.3
         self.service.poll()
         begin_read.assert_called_once()
         hit_write.poll.return_value = (4, 3600)
+        clock.monotonic.return_value = 10.7
         self.assertTrue(self.service.settle_pending())
+        self.service.poll()
+        new_read.poll.return_value = new_health
+        clock.monotonic.return_value = 11.0
         self.service.poll()
         self.assertEqual(self.receive(attacker_reply)[0]['order'], 1)
         fresh_response = json.loads(victim_reply.readline())
         self.assertEqual(fresh_response['health'], new_health)
         self.assertEqual(fresh_response['revision'], 1)
         begin_impact.assert_called_once()
+        victim.sendall(self.health_request(victim_grant, 3, 3, after_revision=1))
+        self.service.poll()
+        self.assertIsNone(json.loads(victim_reply.readline())['health'])
+        self.assertEqual(self.service.health_read_stats(), {
+            'unchanged': 1, 'confirmed': 1, 'unavailable': 1, 'preempted': 1,
+            'deadline_exceeded': 0, 'not_started': 0, 'native_started': 2,
+            'last_queue_wait_ms': 400.0, 'max_queue_wait_ms': 400.0,
+            'last_confirmed_native_ms': 300.0, 'max_confirmed_native_ms': 300.0,
+        })
+
+    def test_health_deadline_without_native_start_records_no_latency(self):
+        self.service.close()
+        clock = self.enterContext(patch('authority.company_combat_service.time'))
+        clock.monotonic.return_value = 15.0
+        hit_write = Mock(poll=Mock(return_value=None))
+        begin_read = Mock()
+        self.service = CompanyCombatService(self.grants.get, Mock(return_value=hit_write),
+                                           begin_health_read=begin_read, health_window=lambda _: 3)
+        self.addCleanup(self.service.close)
+        victim, reply = self.open()
+        attacker, _ = self.open()
+
+        victim.sendall(self.health_request(self.second, 3, 1))
+        attacker.sendall(self.frame(self.first, [hit(1, self.second['index'])]))
+        self.service.poll()
+        begin_read.assert_not_called()
+
+        clock.monotonic.return_value = 17.0
+        self.service.poll()
+        self.assertIsNone(json.loads(reply.readline())['health'])
+        begin_read.assert_not_called()
+        stats = self.service.health_read_stats()
+        self.assertEqual((stats['unavailable'], stats['deadline_exceeded'], stats['not_started']), (1, 1, 1))
+        self.assertEqual(stats['native_started'], 0)
+        self.assertEqual(stats['last_queue_wait_ms'], 2000.0)
+        self.assertEqual(stats['max_queue_wait_ms'], 2000.0)
+        self.assertIsNone(stats['last_confirmed_native_ms'])
+        self.assertIsNone(stats['max_confirmed_native_ms'])
 
     def test_fifo_batches_multi_reporter_health_and_retry_versions(self):
         second, second_reply = self.open()

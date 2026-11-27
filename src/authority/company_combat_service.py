@@ -85,8 +85,10 @@ class _HealthRead:
     window: int
     sequence: int
     after_revision: int | None
+    received_at: float
     deadline: float
     operation: object | None = None
+    started_at: float | None = None
     sampled_revision: int = 0
 
 
@@ -127,6 +129,10 @@ class CompanyCombatService:
         self._begin_health_read = begin_health_read
         self._health_window = health_window
         self._health_reads = deque()
+        self._health_stats = dict(
+            unchanged=0, confirmed=0, unavailable=0, preempted=0, deadline_exceeded=0, not_started=0,
+            native_started=0, last_queue_wait_ms=None, max_queue_wait_ms=None,
+            last_confirmed_native_ms=None, max_confirmed_native_ms=None)
         self._owner = threading.current_thread()
         self._peers = {}
         self._history = {}
@@ -191,7 +197,9 @@ class CompanyCombatService:
             return
         if frame.get('kind') == 'combat_health_read':
             ticket, binding, window, sequence, after_revision = decode_health_request(frame)
-            request = _HealthRead(peer, window, sequence, after_revision, time.monotonic() + HEALTH_READ_TIMEOUT)
+            received_at = time.monotonic()
+            request = _HealthRead(peer, window, sequence, after_revision, received_at,
+                                  received_at + HEALTH_READ_TIMEOUT)
             queue = self._health_reads
         else:
             ticket, binding, impacts = decode_request(frame)
@@ -216,8 +224,40 @@ class CompanyCombatService:
         return (self._begin_health_read is not None and time.monotonic() < query.deadline
                 and self._admitted(query.peer) and self._health_window(query.peer.binding) == query.window)
 
-    def _complete_health_read(self, query, health=None):
+    def health_read_stats(self):
+        """Summarize queue waits and validated native reads in milliseconds.
+
+        Queue waits end at native start or disposal without a start. Cached
+        replies do not sample the queue, and failed reads do not sample native time.
+        """
+        self._check_owner()
+        return dict(self._health_stats)
+
+    def _record_health_duration(self, name, elapsed):
+        milliseconds = round(elapsed * 1000, 3)
+        maximum = f'max_{name}_ms'
+        self._health_stats[f'last_{name}_ms'] = milliseconds
+        previous = self._health_stats[maximum]
+        self._health_stats[maximum] = milliseconds if previous is None else max(previous, milliseconds)
+
+    def _record_health_outcome(self, query, outcome):
+        now = time.monotonic()
+        if outcome == 'confirmed':
+            self._health_stats['confirmed'] += 1
+            self._record_health_duration('confirmed_native', now - query.started_at)
+        elif outcome == 'unchanged':
+            self._health_stats['unchanged'] += 1
+        else:
+            self._health_stats['unavailable'] += 1
+            if query.started_at is None:
+                self._health_stats['not_started'] += 1
+                self._record_health_duration('queue_wait', now - query.received_at)
+            self._health_stats['preempted'] += outcome == 'preempted'
+            self._health_stats['deadline_exceeded'] += outcome == 'unavailable' and now >= query.deadline
+
+    def _complete_health_read(self, query, health=None, *, outcome='unavailable'):
         self._health_reads.remove(query)
+        self._record_health_outcome(query, 'confirmed' if health is not None else outcome)
         if query.operation is not None:
             query.operation.cancel()
         if health is not None:
@@ -235,14 +275,14 @@ class CompanyCombatService:
             required_revision = max(peer.last_health_reply_revision, peer.last_possible_damage_order)
             if (peer.last_health_window == query.window and query.after_revision is not None
                     and required_revision <= query.after_revision <= self._settled_order):
-                self._complete_health_read(query)
+                self._complete_health_read(query, outcome='unchanged')
         if not self._health_reads:
             return
         query = self._health_reads[0]
         peer = query.peer
         if self.native_pending and query.operation is not None:
             # A pending damage write takes priority over a disposable snapshot.
-            self._complete_health_read(query)
+            self._complete_health_read(query, outcome='preempted')
             return
 
         health = None
@@ -251,7 +291,11 @@ class CompanyCombatService:
                 if self.native_pending:
                     return
                 if query.operation is None:
+                    started_at = time.monotonic()
                     query.operation = self._begin_health_read(peer.binding)
+                    query.started_at = started_at
+                    self._health_stats['native_started'] += 1
+                    self._record_health_duration('queue_wait', started_at - query.received_at)
                     query.sampled_revision = self._settled_order
                 result = query.operation.poll()
                 if result is None:
@@ -446,6 +490,7 @@ class CompanyCombatService:
         self._batches.clear()
         self._history.clear()
         for query in self._health_reads:
+            self._record_health_outcome(query, 'shutdown')
             if query.operation is not None:
                 query.operation.cancel()
         self._health_reads.clear()
