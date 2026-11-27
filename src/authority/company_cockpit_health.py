@@ -102,11 +102,10 @@ class CompanyCockpitHealthBridge:
             self._pending = self._window, self._sequence, now + _LIFETIME, self._sample[0]
             self._counts['requested'] += 1
             after_revision = self._confirmed_revision
-            # Native NPC fire and shield recharge can change health without a
-            # multiplayer damage order. Reuse the existing unconditional read.
+            # NPC fire and shield recharge can change health at the same damage order.
+            # Keep a full read due until the cockpit confirms the returned values.
             if self._needs_fresh_read or now >= self._next_native_refresh:
                 after_revision = None
-                self._next_native_refresh = now + _NATIVE_REFRESH_INTERVAL
             return self._window, self._sequence, after_revision
 
     def accept_reply(self, window, sequence, state, *, interrupted=False):
