@@ -247,7 +247,7 @@ function M.new(options)
             local expired = expiry()
             if expired ~= false then
                 refusal = expired and 'stale' or 'invalid_local_clock'
-                return false
+                return false, 'not_dispatched'
             end
             local position = assert(xyz(target, 1e7))
             write_source = rendered_source
@@ -273,12 +273,12 @@ function M.new(options)
             elseif authorize then
                 before_dispatch = recheck
             end
-            local written, outside_native_limit = cfg.write(
+            local written, outside_native_limit, dispatch = cfg.write(
                 copy(binding), position, xyz(before, 1e7), before_dispatch, attitude)
             if written == false and outside_native_limit then
                 native_refusal, native_refusal_phase = xyz(outside_native_limit, 1e7), 'native_step_limit'
             end
-            return written
+            return written, dispatch
         end,
         record = function(event)
             local readback = event.kind == 'readback'

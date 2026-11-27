@@ -234,9 +234,9 @@ function M.new(options)
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
             write = function(_, target, before, recheck, attitude)
-                local ok, outside_native_limit = active_session:write(target, before, recheck, attitude, continuous)
+                local ok, outside_native_limit, dispatch = active_session:write(target, before, recheck, attitude, continuous)
                 if ok == true then stats.writes = stats.writes + 1 end
-                return ok, outside_native_limit
+                return ok, outside_native_limit, dispatch
             end,
             correction_refused = function(detail)
                 emit('active_correction_refused', detail)

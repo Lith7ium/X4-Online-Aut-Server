@@ -225,7 +225,12 @@ function M.new(options)
    previous_write = {target=copy_pose(target), sequence=rendered.source_sequence,
     latest_source_time=last_source, latest_capture_time=last_capture, local_time=now}
    stage = 'write'
-   local written = configuration.write(copy_pose(target), copy_pose(actual))
+   local written, dispatch = configuration.write(copy_pose(target), copy_pose(actual))
+   if written == false and dispatch == 'not_dispatched' then
+    -- Only an explicit pre-dispatch refusal rules out this write. Any older
+    -- write has already been read back above before this attempt is reached.
+    previous_write, uncertain = nil, false
+   end
    stage = 'write_state'
    assert(written == true and state == 'active')
    check()

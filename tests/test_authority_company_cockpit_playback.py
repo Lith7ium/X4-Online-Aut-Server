@@ -1423,5 +1423,140 @@ class CompanyCockpitLoopbackServiceTests(unittest.TestCase):
             service.close()
 
 
+    @unittest.skipIf(luajit21 is None, 'Lupa LuaJIT 2.1 binding required')
+    def test_transport_withdrawal_roster_and_real_lua_setter_boundary(self):
+        from collections import deque
+        from types import SimpleNamespace
+        from authority.company_motion_reconnect import ReconnectingCompanyMotionClient
+
+        epoch, session, sector = 'a' * 32, 'b' * 32, 'sector_a'
+        script = (ROOT / 'tests/authority_company_cockpit_transport.lua').read_text()
+        for loss in ('socket', 'control', 'revoke', 'uncertain_native'):
+            with self.subTest(loss=loss):
+                service = CompanyMotionService()
+                source = CompanyMotionSource(cockpit_radar_playback=True)
+                source.configure(epoch, 1, operational_bits='11')
+                grant = service.admit(1, '1' * 32, 1, sector, session, epoch)
+                publisher_grant = service.admit(2, '2' * 32, 2, sector, session, epoch)
+                sink = ReconnectingCompanyMotionClient.observing(service.port, grant, source, lambda _: True)
+                observer = source._observer
+                delivered = []
+                observer._send = lambda packet: delivered.append(packet) or True
+                queue = deque()
+                publisher_source = SimpleNamespace(registry=(epoch, 2), local_generation='c' * 32,
+                    poll=lambda _: queue.popleft() if queue else None)
+                publisher = CompanyMotionClient(service.port, publisher_grant, publisher_source, lambda _: True)
+                service.set_running(True)
+
+                def publish_pair(origin):
+                    for seq, delta in ((1, 0.0), (2, 1.0)):
+                        queue.append({'version': 3, 'epoch': epoch, 'generation': 'c' * 32, 'index': 2,
+                                      'sequence': seq, 'sector_macro': sector, 'source_time': 10.0 + seq / 10,
+                                      'capture_time': 20.0 + seq / 10, 'x': origin + delta, 'y': 0.0, 'z': 0.0,
+                                      'real_velocity': {'x': 10.0, 'y': 0.0, 'z': 0.0}})
+
+                def pump_until(ready, *, publish=True):
+                    deadline = time.monotonic() + 4
+                    while not ready():
+                        if time.monotonic() >= deadline:
+                            self.fail('transport loopback timed out')
+                        service.poll()
+                        sink.poll()
+                        if publish:
+                            publisher.poll()
+                        time.sleep(.005)
+
+                lua = luajit21.LuaRuntime(unpack_returned_tuples=True)
+                lua.globals()['_ROOT'] = str(ROOT)
+                fixture = lua.execute(script)
+                try:
+                    pump_until(lambda: observer._pilot_roster == (2,) and publisher._running)
+                    observer.receive(['VIEW', 'cockpit', '1', epoch, sector, '2', '0x200', 'TGT-002'])
+                    pump_until(lambda: sink._client._sent_view == {sector: frozenset({2})})
+                    publish_pair(0.0)
+                    pump_until(lambda: any(packet.startswith('REMOTE|cockpit|') and packet.split('|')[6] == '2'
+                                           for packet in delivered))
+                    remote = [packet for packet in delivered if packet.startswith('REMOTE|cockpit|')]
+                    arrival = float(remote[-1].split('|')[16])
+                    roster = next(packet for packet in delivered if packet.startswith('ROSTER|'))
+                    for packet in delivered:
+                        fixture.ingest(packet)
+                    fixture.step(arrival + .1)
+                    fixture.step(arrival + .2)
+                    before = fixture.writes()
+                    self.assertGreater(before, 0)
+                    delivered.clear()
+
+                    if loss == 'socket':
+                        publisher.close()
+                    elif loss == 'control':
+                        service.transport_lost(2)
+                    elif loss == 'revoke':
+                        service.revoke(2)
+                    else:
+                        fixture.fail_setter()
+                    if loss != 'uncertain_native':
+                        expected_roster = (2,) if loss == 'socket' else ()
+                        def loss_delivered():
+                            received = (sink._client.stats()['visibility_ends'] == 1 if loss == 'revoke'
+                                        else 2 in sink._client._hidden)
+                            return received and observer._pilot_roster == expected_roster
+                        pump_until(loss_delivered, publish=False)
+                        self.assertEqual(any(packet.startswith('END|cockpit|') for packet in delivered),
+                                         loss == 'revoke')
+                        for packet in delivered:
+                            fixture.ingest(packet)
+                    fixture.step(arrival + .3)
+                    if loss in ('control', 'revoke'):
+                        self.assertEqual(fixture.writes(), before)
+                    self.assertEqual(fixture.stats()['closed'], loss == 'uncertain_native')
+                    self.assertEqual(fixture.event('closed_uncertain'), int(loss == 'uncertain_native'))
+
+                    if loss == 'socket':
+                        for tick in range(4, 49):
+                            if tick % 10 == 0:
+                                fixture.ingest(roster)  # unchanged roster heartbeat
+                            fixture.step(arrival + tick / 10)
+                        writes_at_48 = fixture.writes()
+                        fixture.step(arrival + 4.9)
+                        last_write = fixture.writes()
+                        self.assertGreater(last_write, writes_at_48)
+                        self.assertGreater(last_write, before + 20)
+                        self.assertGreater(fixture.x(), 40)
+                        fixture.step(arrival + 5)
+                        fixture.step(arrival + 5.1)
+                        self.assertEqual(fixture.writes(), last_write)
+                        self.assertEqual(fixture.event('stale_5s'), 1)
+                    elif loss == 'uncertain_native':
+                        self.assertEqual(fixture.writes(), before + 1)
+                        self.assertTrue(fixture.stats()['closed'])
+                        self.assertEqual(fixture.event('closed_uncertain'), 1)
+                    else:
+                        self.assertEqual(fixture.event('generation_revoked'), int(loss == 'revoke'))
+                        self.assertEqual(fixture.event('track_stopped'), int(loss == 'control'))
+                    if loss in ('control', 'revoke'):
+                        delivered.clear()
+                        publisher.close()
+                        replacement = service.admit(3, '3' * 32, 2, sector, session, epoch)
+                        publisher = CompanyMotionClient(service.port, replacement, publisher_source, lambda _: True)
+                        pump_until(lambda: observer._pilot_roster == (2,) and publisher._running)
+                        publish_pair(fixture.x())
+                        pump_until(lambda: any(packet.startswith(
+                            f'REMOTE|cockpit|1|{epoch}|2|{replacement["generation"]}|2|')
+                            for packet in delivered))
+                        for packet in delivered:
+                            fixture.ingest(packet)
+                        step_at = max(arrival + .4, time.monotonic() + .1)
+                        fixture.step(step_at)
+                        fixture.step(step_at + .1)
+                        self.assertEqual(fixture.stats()['active_generation'], replacement['generation'])
+                        self.assertGreater(fixture.writes(), before)
+                finally:
+                    sink.close()
+                    publisher.close()
+                    source.close()
+                    service.close()
+
+
 if __name__ == '__main__':
     unittest.main()

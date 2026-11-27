@@ -114,28 +114,29 @@ function M.new(options, engine)
         end
 
         function session:write(target, before, recheck, attitude, continuous)
-            if pending_zone or not position(target) or not position(before) then return false end
+            -- Only early refusals can prove this call did not dispatch a setter.
+            if pending_zone or not position(target) or not position(before) then return false, nil, 'not_dispatched' end
             local actual = self:read()
-            if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
+            if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false, nil, 'not_dispatched' end
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
-            if recheck ~= nil and type(recheck) ~= 'function' then return false end
+            if recheck ~= nil and type(recheck) ~= 'function' then return false, nil, 'not_dispatched' end
             local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
-            if continuous and (not recheck or not self:tracks_active_pilot()) then return false end
+            if continuous and (not recheck or not self:tracks_active_pilot()) then return false, nil, 'not_dispatched' end
             if not continuous and dx * dx + dy * dy + dz * dz > maximum * maximum then
-                return false, recheck and actual or nil
+                return false, recheck and actual or nil, 'not_dispatched'
             end
             local destination_zone = engine.destination_zone(original_target.sector, target)
-            if not destination_zone then return false end
+            if not destination_zone then return false, nil, 'not_dispatched' end
             local crossing = destination_zone ~= confirmed_zone
-            if crossing and (not has_verified_motion or not recheck or not is_pilot()) then return false end
-            if not eligible() then return false end
+            if crossing and (not has_verified_motion or not recheck or not is_pilot()) then return false, nil, 'not_dispatched' end
+            if not eligible() then return false, nil, 'not_dispatched' end
             -- The native read can differ from the playback observation. Check the
             -- actual displacement and prediction deadline again before dispatch.
-            if recheck and recheck(actual) ~= true then return false end
+            if recheck and recheck(actual) ~= true then return false, nil, 'not_dispatched' end
             local rotation = actual
             if attitude ~= nil then
                 rotation = X4LAN_MOTION_BUFFER.copy_attitude(attitude)
-                if not rotation then return false end
+                if not rotation then return false, nil, 'not_dispatched' end
             end
             if crossing then pending_zone = destination_zone end
             local ok, dispatched = pcall(engine.write, original_target.actor, original_target.sector, {
