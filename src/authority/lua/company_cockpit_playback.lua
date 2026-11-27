@@ -724,7 +724,12 @@ local function make_x4_record(readers_by_slot, clock)
                 'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
                 'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
             }
-            if event.continuous_playback then fields[#fields + 1] = 'playback=continuous' end
+            if event.continuous_playback then
+                fields[#fields + 1] = 'playback=continuous'
+                fields[#fields + 1] = 'input_sequence=' .. event.input_sequence
+                fields[#fields + 1] = 'input_age_at_write_s=' .. decimal(event.input_age)
+                fields[#fields + 1] = 'input_velocity_mps=' .. coordinates(event.input_velocity)
+            end
             if event.actual_attitude and event.target_attitude then
                 for _, name in ipairs({'target', 'actual'}) do
                     local angles = event[name .. '_attitude']

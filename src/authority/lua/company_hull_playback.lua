@@ -87,6 +87,7 @@ function M.new(options)
     for _, key in ipairs(BINDING_FIELDS) do binding[key] = claimed[key] end
     local player, terminal, refusal, last_arrival
     local rendered_source, write_source
+    local newest, write_input, write_input_age
     local velocity_steps = cfg.velocity_steps == true
     local continuous = cfg.continuous_playback == true
     local maximum_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP
@@ -167,7 +168,6 @@ function M.new(options)
     local checked_buffer = {}
     function checked_buffer.new(settings)
         local inner, lineage = buffer.new(settings), {}
-        local newest
         return {
             push = function(_, sample, arrival)
                 local ok, reason = inner:push(sample, arrival)
@@ -181,7 +181,7 @@ function M.new(options)
                     capture_time = sample.capture_time,
                     capture_interval = previous and sample.capture_time - previous.capture_time}
                 if #lineage > 16 then table.remove(lineage, 1) end
-                newest = {pose = sample.pose, rate = sample.real_rate, arrival = arrival}
+                newest = {sequence = sample.sequence, pose = sample.pose, rate = sample.real_rate, arrival = arrival}
                 return true
             end,
             render = function(_, now)
@@ -251,6 +251,11 @@ function M.new(options)
             end
             local position = assert(xyz(target, 1e7))
             write_source = rendered_source
+            if continuous then
+                -- A newer input can arrive before X4 reads this write back.
+                write_input = newest
+                write_input_age = observation.local_time - newest.arrival
+            end
             local authorize = authorize_step
             authorize_step = nil
             local function recheck(actual)
@@ -300,6 +305,11 @@ function M.new(options)
             return cfg.record({
                 kind = kind, slot = binding.slot, serial = binding.serial, epoch = binding.epoch,
                 continuous_playback = continuous,
+                input_sequence = readback and write_input and write_input.sequence or nil,
+                input_velocity = readback and write_input and {
+                    x = write_input.rate[1], y = write_input.rate[2], z = write_input.rate[3],
+                } or nil,
+                input_age = readback and write_input_age or nil,
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,

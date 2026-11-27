@@ -177,6 +177,22 @@ local function fresh_lateral_correction(version)
     f:own_untouched()
 end
 
+local function readback_identifies_input_at_write(version)
+    local f = fixture(version)
+    f:warmup()
+    local moving_sequence = f.sequence
+    f:frame(10.65)
+    assert(f:sample(10.68, 900, 0, 0, 0))
+    f:frame(10.70)
+    local moving = f.readbacks[#f.readbacks]
+    assert(moving.input_sequence == moving_sequence and moving.input_velocity.x == 1500)
+    assert(math.abs(moving.input_age - .10) < 1e-6)
+    f:frame(10.75)
+    local braking = f.readbacks[#f.readbacks]
+    assert(braking.input_sequence == f.sequence and braking.input_velocity.x == 0)
+    assert(math.abs(braking.input_age - .02) < 1e-6)
+end
+
 local function local_actor_changes()
     local f = fixture(3)
     f:warmup()
@@ -196,6 +212,7 @@ end
 for _, version in ipairs({3, 4}) do
     sparse_render_and_exact_cutoff(version)
     fresh_lateral_correction(version)
+    readback_identifies_input_at_write(version)
 end
 local_actor_changes()
 print('Company continuous playback acceptance passed for v3 and v4')
