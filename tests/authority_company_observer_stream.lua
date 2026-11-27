@@ -250,7 +250,7 @@ end
 
 clock, incoming, sent = 20, {}, {}
 owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
-    nil, nil, nil, nil, marker)
+    nil, nil, nil, nil, marker, true)
 owner:tick(true)
 map_packet('map', 1, 1, {arrival=18}) -- queued before the UI could process it
 owner:tick(true)
@@ -307,42 +307,61 @@ clock = 21.05
 map_packet('map', 1, 8)
 owner:tick(true)
 assert(menu.frames[3])
+local count_before_end = #sent
 map_end(1, generation)
-map_packet('map', 1, 9)
+map_packet('map', 1, 9) -- old packet queued behind END
 owner:tick(true)
 assert(not menu.frames[3] and #draws == 6)
+assert(#sent == count_before_end + 1 and
+    sent[#sent] == prefix .. 'VIEW|map|2|' .. epoch .. '|sector_b|7354|0xde|WRN-302')
+
+local new_generation = ('f'):rep(32)
+clock = 21.17
+map_end(1, generation)
+map_packet('map', 1, 10, {generation=new_generation})
+map_end(2, ('c'):rep(32)) -- foreign generation cannot refresh the new serial
+map_packet('map', 2, 1, {generation=new_generation, x=65})
+owner:tick(true)
+assert(menu.frames[3] and #draws == 7 and draws[7].x == 56)
+assert(sent[#sent]:match('SEEN|map|2|'))
+for index = count_before_end + 2, #sent - 1 do
+    assert(sent[index]:match('VIEW|cockpit|'))
+end
+
 map.visible = false
+map_packet('map', 2, 2, {generation=new_generation})
 owner:tick(true)
+assert(not menu.frames[3] and sent[#sent] == prefix .. 'VIEW|map|3|' .. epoch .. '|-|0|-|-')
 map.visible = true
-clock = 21.2
+clock = 21.3
 other_layer, menu.frames[3] = true, 501
-map_packet('map', 1, 10) -- withdrawn view serial
-map_packet('map', 3, 1, {generation=('f'):rep(32)})
+map_packet('map', 2, 3, {generation=new_generation})
+map_packet('map', 4, 1, {generation=new_generation})
 owner:tick(true)
-assert(menu.frames[3] == 501 and #draws == 6)
+assert(menu.frames[3] == 501 and #draws == 7)
 other_layer = false
-map_packet('map', 3, 2, {generation=('f'):rep(32)})
+map_packet('map', 4, 2, {generation=new_generation})
 owner:tick(true)
-assert(menu.frames[3] == 501 and #draws == 6) -- occupied stock layer in same menu
+assert(menu.frames[3] == 501 and #draws == 7) -- occupied stock layer in same menu
 menu.frames[3] = nil
-clock = 21.35
-map_packet('map', 3, 3, {generation=('f'):rep(32)})
+clock = 21.45
+map_packet('map', 4, 3, {generation=new_generation})
 owner:tick(true)
-assert(menu.frames[3] and #draws == 7)
-clock = 22.35
+assert(menu.frames[3] and #draws == 8)
+clock = 22.45
 owner:tick(true)
 assert(not menu.frames[3]) -- exactly one second since launcher's receive
-map_packet('map', 3, 3, {generation=('f'):rep(32)})
+map_packet('map', 4, 3, {generation=new_generation})
 owner:tick(true)
 assert(not menu.frames[3]) -- duplicates can't make expired data fresh
-map_packet('map', 3, 4, {generation=('f'):rep(32)})
+map_packet('map', 4, 4, {generation=new_generation})
 owner:tick(true)
 assert(menu.frames[3])
 map.matches_now = false -- withdraw between regular view poll and drawing
 owner:tick(true)
 assert(not menu.frames[3])
 map.matches_now = true
-map_packet('map', 3, 5, {generation=('f'):rep(32)})
+map_packet('map', 4, 5, {generation=new_generation})
 owner:tick(true)
 assert(not menu.frames[3])
 owner:close()
@@ -352,7 +371,7 @@ owner:close()
 map.matches_now = true
 clock, incoming, sent, capacity = 24, {}, {}, false
 owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
-    nil, nil, nil, nil, marker)
+    nil, nil, nil, nil, marker, true)
 local prior_attempts = attempts
 map_packet('map', 1, 1)
 owner:tick(true)
@@ -363,4 +382,75 @@ assert(attempts == prior_attempts + 1 and not menu.frames[3])
 map_packet('map', 1, 2, {x=60})
 owner:tick(true)
 assert(attempts == prior_attempts + 1 and not menu.frames[3])
+owner:close()
+
+
+-- The configured timed wire still works if marker initialization failed.
+clock, incoming, sent = 26, {}, {}
+owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, nil, true)
+owner:tick(true)
+map_packet('map', 1, 1, {arrival=clock + .1})
+owner:tick(true)
+assert(#sent == 2)
+map_packet('map', 1, 1)
+map_packet('map', 1, 2, {oriented=true})
+owner:tick(true)
+assert(#sent == 4 and sent[3]:match('SEEN|map|1|') and sent[4]:match('SEEN4|map|1|'))
+map_end(1, generation)
+map_packet('map', 1, 3)
+owner:tick(true)
+assert(#sent == 5 and sent[5] == prefix .. 'VIEW|map|2|' .. epoch .. '|sector_b|7354|0xde|WRN-302')
+map_packet('map', 2, 1, {generation=new_generation})
+owner:tick(true)
+assert(#sent == 6 and sent[6]:match('SEEN|map|2|'))
+owner:close()
+
+-- An optional renderer fault closes only the renderer. Wire validation and
+-- first- and next-generation SEEN remain on the configured map channel.
+clock, incoming, sent = 27, {}, {}
+local renderer_calls, renderer_closes = 0, 0
+local broken_marker = {
+    sample=function() renderer_calls = renderer_calls + 1 end,
+    tick=function()
+        if renderer_calls > 0 then error('renderer failed to draw') end
+    end,
+    close=function() renderer_closes = renderer_closes + 1 end,
+}
+owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, broken_marker, true)
+owner:tick(true)
+map_packet('map', 1, 1)
+owner:tick(true)
+assert(renderer_calls == 1 and renderer_closes == 1 and sent[#sent]:match('SEEN|map|1|'))
+map_packet('map', 1, 2, {oriented=true})
+owner:tick(true)
+assert(renderer_calls == 1 and #sent == 4 and sent[4]:match('SEEN4|map|1|'))
+map_end(1, generation)
+map_packet('map', 1, 3)
+owner:tick(true)
+assert(#sent == 5 and sent[5]:match('VIEW|map|2|'))
+map_packet('map', 2, 1, {generation=new_generation})
+owner:tick(true)
+assert(#sent == 6 and sent[6]:match('SEEN|map|2|'))
+owner:close()
+assert(renderer_closes == 1)
+
+-- END can overtake its first UDP sample. Only the matching REMOTE
+-- corroborates this unestablished generation, and never gets a receipt.
+clock, incoming, sent = 28, {}, {}
+owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, nil, true)
+owner:tick(true)
+map_end(1, ('d'):rep(32))
+map_end(1, generation)
+owner:tick(true)
+assert(#sent == 2)
+map_packet('map', 1, 1)
+map_packet('map', 1, 2)
+owner:tick(true)
+assert(#sent == 3 and sent[3]:match('VIEW|map|2|'))
+map_packet('map', 2, 1, {generation=new_generation})
+owner:tick(true)
+assert(#sent == 4 and sent[4]:match('SEEN|map|2|'))
 owner:close()

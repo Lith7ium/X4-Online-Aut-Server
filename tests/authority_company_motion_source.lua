@@ -179,6 +179,39 @@ assert(config.normalize_save_path('C:/Users/Player/45857/save') == nil)
 current_path = 'C:/Users/Other/45858/save'
 assert(not native_options.available())
 
+-- Launch configuration negotiates the wire independently of optional UI
+-- construction. Exercise real native-wrapper wiring for both startup faults.
+X4LAN_COMPANY_OBSERVER_STREAM = dofile('src/authority/lua/company_observer_stream.lua')
+local map_binding = {epoch=epoch, sector_macro='sector_a', index=2, actor='0xd', code='ABC-123'}
+X4LAN_COMPANY_OBSERVER_TARGET = {new_x4=function()
+    return {tick=function() end, matches=function() return false end, close=function() end}
+end}
+X4LAN_COMPANY_OBSERVER_MAP = {new_x4=function()
+    return {tick=function() return map_binding end, matches=function() return true end, close=function() end}
+end}
+motion_config.private_map_marker = true
+udp.monotonic = function() return 30 end
+for _, marker in ipairs({false, {new_x4=function() error('renderer initialization failed') end}}) do
+    X4LAN_COMPANY_MAP_MARKER = marker or nil
+    local sent = {}
+    local local_prefix = 'C|test|' .. generation .. '|'
+    local sample = local_prefix .. table.concat(
+        {'REMOTE','map','1',epoch,2,generation,1,'sector_a',1,2,3,'-','-','-',4,5,30}, '|')
+    udp.open = function()
+        return {
+            send=function(_, row) sent[#sent + 1] = row; return true end,
+            receive=function() local row = sample; sample = nil; return row end,
+        }
+    end
+    source.new_x4(motion_config, windows_path, pinned, udp, '45858')
+    assert(lines[#lines] == '[X4LAN] AUTH_COMPANY_MAP_MARKER_UNAVAILABLE')
+    assert(native_options.observer)
+    native_options.observer:tick(true)
+    assert(#sent == 3 and sent[3]:sub(#local_prefix+1):match('^SEEN|map|1|'))
+    native_options.observer:close()
+end
+X4LAN_COMPANY_MAP_MARKER = nil
+
 -- Exercise the real correlated descriptor, sampler, and Company owner.
 local descriptor = dofile('tools/dev/authority_job_descriptor_probe.lua')
 local function transit_case(response, allow_gap, return_to_origin, oriented)

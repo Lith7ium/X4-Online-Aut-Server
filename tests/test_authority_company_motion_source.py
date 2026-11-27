@@ -452,6 +452,24 @@ class CompanyMotionObserverTest(unittest.TestCase):
         self.assertEqual(self.owned.recv(MAX_OBSERVER_DATAGRAM), self.prefix +
                          f'END|map|5|{self.epoch}|7354|{self.generation}|sector_a'.encode('ascii'))
 
+        # Lua renews the same selection at a new serial after END. The
+        # launcher's view subscription stays selected and rejects stale SEEN.
+        self.view('map', 6)
+        self.seen(raw[:-1])
+        self.poll()
+        self.assertEqual(self.views, [[{'sector_macro': 'sector_a', 'indices': [7354]}]])
+        self.assertEqual(self.source.observer_stats()['slots']['map']['samples_confirmed'], 1)
+        replacement = 'c' * 32
+        self.observer.snapshot(dict(self.sample(1), generation=replacement))
+        self.assertEqual(self.remote()[1], 'cockpit')
+        fresh = self.owned.recv(MAX_OBSERVER_DATAGRAM).removeprefix(self.prefix).decode('ascii').split('|')
+        self.assertEqual(fresh[1:8], ['map', '6', self.epoch, '7354', replacement, '1', 'sector_a'])
+        self.seen(fresh[:-1])
+        self.poll()
+        stats = self.source.observer_stats()['slots']['map']
+        self.assertEqual(stats['samples_confirmed'], 2)
+        self.assertEqual(stats['last_confirmed']['generation'], replacement)
+
     def test_simultaneous_views_deduplicate_subscription_but_confirm_each_slot(self):
         self.view('cockpit', 1)
         self.view('map', 5)

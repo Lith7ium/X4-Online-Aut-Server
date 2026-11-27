@@ -51,8 +51,10 @@ local function remote_sample(row, binding, attitude)
         real_velocity=velocity, source_time=tonumber(row[15]), capture_time=tonumber(row[16])}
 end
 
-function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial, cockpit_health, map_marker)
+function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial, cockpit_health,
+               map_marker, map_timing)
     assert(not hold_trial or not playback_trial)
+    assert(not map_marker or map_timing == true)
     local alignment = hold_trial and hold_trial.alignment_enabled
     local slot_names = {'cockpit'}
     local playback_slots = {cockpit = true}
@@ -78,13 +80,14 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         end
     end
 
-    local function publish_view(slot, name, binding, now, running)
+    local function publish_view(slot, name, binding, now, running, refresh)
         if slot.serial == 0 and not running then return end
-        local changed = slot.serial == 0 or not same_binding(binding, slot.binding)
+        local changed = refresh or slot.serial == 0 or not same_binding(binding, slot.binding)
         if changed then
             assert(slot.serial < MAX_COUNTER, 'company view serial exhausted')
             slot.serial = slot.serial + 1
             slot.binding = binding
+            slot.map_generation, slot.map_early_ends = nil, nil
         elseif not running or now < slot.next_heartbeat then
             return
         end
@@ -97,6 +100,36 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             fields[5], fields[6], fields[7], fields[8] = '-', '0', '-', '-'
         end
         net:send(prefix .. table.concat(fields, '|'))
+    end
+
+    local function current_map_binding(slot)
+        local binding = slot.binding
+        if binding and slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then
+            return binding
+        end
+    end
+
+    local function renew_map_view(slot, generation, now)
+        map_display('end_track', slot.serial, generation)
+        -- Reissue the live local selection with a fresh serial before
+        -- processing queued packets from the ended subscription.
+        publish_view(slot, 'map', current_map_binding(slot), now, true, true)
+    end
+
+    local function observe_map_end(slot, generation, now)
+        if slot.map_generation == generation then
+            renew_map_view(slot, generation, now)
+        elseif not slot.map_generation then
+            -- UDP may deliver END first. Remember a bounded set of
+            -- candidates, then act only when a matching REMOTE corroborates
+            -- the generation on this selection serial.
+            local early = slot.map_early_ends or {}
+            for _, ended in ipairs(early) do
+                if ended == generation then return end
+            end
+            if #early < receive_budget then early[#early + 1] = generation end
+            slot.map_early_ends = early
+        end
     end
 
     local function observe_roster(row, packet, now)
@@ -137,13 +170,15 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         end
         local timed_trial = playback_trial and playback_slots[row[2]] and playback_trial
             or alignment and row[2] == 'cockpit' and hold_trial
-        local timed_map = map_marker and row[2] == 'map'
+        -- Wire shape is fixed by the launcher, even if the optional renderer
+        -- never started or was dropped after a UI failure.
+        local timed_map = map_timing == true and row[2] == 'map'
         if (timed_trial or timed_map) and #row == 7 and row[1] == 'END' then
             local slot = slots[row[2]]
             if slot and slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
                     and counter(row[5]) == slot.binding.index and row[7] == slot.binding.sector_macro
                     and #row[6] == 32 and row[6]:match('^[0-9a-f]+$') then
-                if timed_map then map_display('end_track', slot.serial, row[6])
+                if timed_map then observe_map_end(slot, row[6], now)
                 else timed_trial:end_track(slot.binding, slot.serial, row[6], row[2]) end
             end
             return
@@ -173,6 +208,15 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
                 or counter(row[5]) ~= binding.index or row[8] ~= binding.sector_macro
                 or not valid_sample(row) then return end
         if not slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then return end
+        if timed_map and received_at and not slot.map_generation then
+            for _, ended in ipairs(slot.map_early_ends or {}) do
+                if row[6] == ended then
+                    renew_map_view(slot, row[6], now)
+                    return
+                end
+            end
+            slot.map_generation, slot.map_early_ends = row[6], nil
+        end
         -- Echo only after reading the live local hull again. Source rates may be absent.
         local receipt = {version4 and 'SEEN4' or 'SEEN', row[2], row[3], epoch, row[5], row[6], row[7], row[8],
                          binding.actor, binding.code, unpack(row, 9, 16)}
@@ -180,7 +224,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             for index = #row - 2, #row do receipt[#receipt + 1] = row[index] end
         end
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
-        if timed_map and received_at and confirmed == true then
+        if timed_map and received_at and row[6] == slot.map_generation and confirmed == true then
             map_display('sample', slot.serial, remote_sample(row, binding, attitude), received_at)
         end
         if hold_trial and confirmed == true and row[2] == 'cockpit' and not version4 then
@@ -219,11 +263,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         end
         if map_marker then
             local slot = slots.map
-            local binding = slot.binding
-            if binding and not slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then
-                binding = nil
-            end
-            map_display('tick', binding, slot.serial, clock())
+            map_display('tick', current_map_binding(slot), slot.serial, clock())
         end
         if hold_trial then hold_trial:tick(running) end
         if playback_trial and running then playback_trial:tick(now) end
