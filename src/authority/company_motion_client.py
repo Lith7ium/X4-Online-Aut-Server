@@ -91,7 +91,7 @@ class CompanyMotionClient:
             raise
         self._source = source
         self._discard_pending_motion = getattr(source, 'discard_pending_motion', None)
-        self._source_capture_fenced = False
+        self._source_filters_prior_samples = False
         self._validate_peer = validate_peer
         self._on_snapshot = on_snapshot
         self._on_end = on_end
@@ -232,7 +232,7 @@ class CompanyMotionClient:
             raise ValueError('movement clock transition out of order')
         self._window, self._running = window, message['running']
         if self._discard_pending_motion is not None:
-            self._source_capture_fenced = self._discard_pending_motion() is True
+            self._source_filters_prior_samples = self._discard_pending_motion() is True
         if not binding and not self._running:
             self._npc_measurement_source = None
         self._latest = self._awaiting_sample = self._receipt = self._last_sector = None
@@ -406,7 +406,7 @@ class CompanyMotionClient:
             sample = self._source.poll(self._validate_peer)
             # A timestamp-aware source already removed poses from before the transition.
             if (sample is not None and self._running
-                    and (old_window == self._window or self._source_capture_fenced)):
+                    and (old_window == self._window or self._source_filters_prior_samples)):
                 sample = motion_value(sample, allow_v4=True)
                 if (sample['version'] not in REAL_TIME_MOTION_VERSIONS or
                         (sample['epoch'], sample['index'], sample['generation']) !=
@@ -441,13 +441,15 @@ class CompanyMotionClient:
     def close(self, *, transport_lost=False):
         self._outgoing = b''
         self._connection.close()
+        discard = getattr(self, '_discard_pending_motion', None)
         try:
-            discard = getattr(self, '_discard_pending_motion', None)
             if discard is not None:
                 discard()
-            self._clear_pilot_roster()
         finally:
-            self._retire_outside({}, transport_lost=transport_lost)
+            try:
+                self._clear_pilot_roster()
+            finally:
+                self._retire_outside({}, transport_lost=transport_lost)
 
     def _clear_pilot_roster(self):
         previous, self._pilot_roster = self._pilot_roster, None

@@ -137,7 +137,7 @@ class CompanyMotionSource:
             raise
         self._registry = None
         self._previous = self._returned = None
-        self._pending = None
+        self._deferred_motion_sample = None
         self._discard_captured_through = None
         self._peer = None
         self._observer = None
@@ -363,9 +363,9 @@ class CompanyMotionSource:
         return sample
 
     def discard_pending_motion(self):
-        """Fence retained and queued poses by native capture time."""
+        """Drop the held pose and ignore queued samples captured at or before this transition."""
         self._owner()
-        self._pending = self._returned = None
+        self._deferred_motion_sample = self._returned = None
         self._discard_captured_through = native_capture_now()
         return True
 
@@ -374,7 +374,7 @@ class CompanyMotionSource:
         self._owner()
         if self._registry is None or not callable(validate_peer):
             raise ValueError('configured company motion source and validator required')
-        deferred, self._pending = self._pending, None
+        deferred, self._deferred_motion_sample = self._deferred_motion_sample, None
         newest = deferred
         checked_peer = None
         prefix = self._prefix()
@@ -471,7 +471,7 @@ class CompanyMotionSource:
                 self._report_once('first_local_own_pose_validated')
         if newest is not None:
             if select.select([self._socket], [], [], 0)[0]:
-                self._pending = newest
+                self._deferred_motion_sample = newest
                 return None  # Later datagrams may supersede this pose or contain GAP.
             if newest is deferred and (
                     not 0 <= native_capture_now() - newest['capture_time'] < MAX_SAMPLE_AGE
@@ -491,7 +491,7 @@ class CompanyMotionSource:
 
     def close(self):
         self._owner()
-        self._pending = None
+        self._deferred_motion_sample = None
         self._npc_latest = None
         if self._cockpit_health is not None:
             self._cockpit_health.close()
