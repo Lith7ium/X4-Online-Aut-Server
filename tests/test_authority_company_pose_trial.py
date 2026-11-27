@@ -45,11 +45,15 @@ def source_sample():
 
 class ApplicationQueue:
     def __init__(self, record):
+        record.accepted_at = time.monotonic()
         self.queue = deque([record])
         self.current = record
 
     def take_application_batch(self, limit):
         return [self.queue.popleft() for _ in range(min(limit, len(self.queue)))]
+
+    def freeze_application(self):
+        return self.take_application_batch(len(self.queue))
 
     def is_application_current(self, record, *, after_inspect):
         self.after_inspect = after_inspect
@@ -483,8 +487,27 @@ class CompanyPoseTrialTests(unittest.TestCase):
         trial.poll(service)
         self.assertTrue(service.after_inspect)
         self.assertEqual(1, report['expired_before_write'])
+        timing = report['last_rejected_inspection']
+        self.assertEqual((timing['index'], timing['sequence'], timing['action']), (INDEX, 8, 'inspect'))
+        self.assertFalse(timing['started_during_pause_preparation'])
+        self.assertFalse(timing['rechecked_during_pause_preparation'])
+        self.assertGreaterEqual(timing['accept_to_inspection_seconds'], 0)
+        self.assertGreaterEqual(timing['dispatch_seconds'], 0)
+        self.assertGreaterEqual(timing['dispatch_to_recheck_seconds'], 0)
         self.assertEqual(0, report['writes_verified'])
         self.assertIsNone(self.channel.pending)
+        self.assert_no_command()
+
+    def test_inspection_can_start_in_flight_and_expire_while_preparing_to_save(self):
+        trial, report, service = self.trial()
+        trial.poll(service)
+        self.reply(self.command('inspect'), ORIGIN)
+        service.current = None
+        trial.before_pause(service)
+        timing = report['last_rejected_inspection']
+        self.assertFalse(timing['started_during_pause_preparation'])
+        self.assertTrue(timing['rechecked_during_pause_preparation'])
+        self.assertFalse(trial.preparing_pause)
         self.assert_no_command()
 
     def test_paused_and_cold_reads_bind_to_saved_checkpoint_and_stable_ship_code(self):

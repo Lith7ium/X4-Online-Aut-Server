@@ -227,6 +227,7 @@ class CompanyPoseTrial:
         self.last = {}
         self.window_moves = {}
         self.baselines = {}
+        self.preparing_pause = False
         report.update(unavailable_before_write=0, unavailable_reasons={}, unavailable_at_pause={},
                       sector_transfers_verified=0, drained_obsolete_inspections=0)
         report.update(movement_proof_version=_MOVEMENT_PROOF_VERSION, writes_verified=0, within_tolerance=0, expired_before_write=0,
@@ -264,8 +265,11 @@ class CompanyPoseTrial:
         self.report['last_attempt'] = {'index': index, 'sequence': sample['sequence'],
                                        'sector_macro': sample['sector_macro'], 'target': target}
         action = 'locate' if changed_sector else 'inspect'
+        inspect_started = time.monotonic()
         self.channel.begin(action, sample)
-        self.active = dict(record=record, sample=sample, target=target, stage=action)
+        self.active = dict(record=record, sample=sample, target=target, stage=action,
+                           inspect_started=inspect_started, inspect_dispatched=time.monotonic(),
+                           started_during_pause_preparation=self.preparing_pause)
 
     def _advance(self, service, reply):
         active = self.active
@@ -273,6 +277,16 @@ class CompanyPoseTrial:
         if stage in ('inspect', 'locate'):
             active['before'], active['actor'] = reply['ui'], reply['actor']
             if not service.is_application_current(active['record'], after_inspect=True):
+                # Match this row to the service's drop reason and total age by ship and sequence.
+                # The second interval includes the engine, the provider loop and its receipt checks.
+                self.report['last_rejected_inspection'] = {
+                    'index': sample['index'], 'sequence': sample['sequence'], 'action': stage,
+                    'accept_to_inspection_seconds': active['inspect_started'] - active['record'].accepted_at,
+                    'dispatch_seconds': active['inspect_dispatched'] - active['inspect_started'],
+                    'dispatch_to_recheck_seconds': time.monotonic() - active['inspect_dispatched'],
+                    'started_during_pause_preparation': active['started_during_pause_preparation'],
+                    'rechecked_during_pause_preparation': self.preparing_pause,
+                }
                 self.report['expired_before_write'] += 1
                 self.active = None
                 return
@@ -382,10 +396,14 @@ class CompanyPoseTrial:
             self._receive(service, self.channel.wait)
 
     def before_pause(self, service):
-        self._settle(service)
-        for record in service.freeze_application():
-            self._start(record, service)
+        self.preparing_pause = True
+        try:
             self._settle(service)
+            for record in service.freeze_application():
+                self._start(record, service)
+                self._settle(service)
+        finally:
+            self.preparing_pause = False
 
     def after_pause(self):
         paused = {}
