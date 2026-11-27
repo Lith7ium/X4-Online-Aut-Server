@@ -63,3 +63,26 @@ for _, e in ipairs(s) do assert(e.sample.real_velocity ~= nil) end   -- 3,649 < 
 for _, e in ipairs(L.sender(L.flight('steady_345'), {version = 3})) do assert(e.sample.attitude == nil) end
 
 print('flight lab flights ok')
+
+-- loopback_follows_closely
+-- 0.15 s of interpolation delay plus one engine frame at 345 m/s is about 58 m of lag
+local r = L.run{flight = 'steady_345', profile = 'loopback', mode = 'continuous'}
+assert(r.position_error_m.p95 < 80 and r.faults == 0 and r.refusals == 0, L.json(r))
+
+-- deterministic
+assert(L.json(L.scorecard{}) == L.json(L.scorecard{}))
+
+-- long_frame_is_scored: a 1 s gap in frames cannot crash a run, and is counted as a freeze
+local lf = L.run{flight = 'steady_345', profile = 'good', mode = 'ordinary', frames = {long = {{at = 8, length = 1}}}}
+assert(lf.longest_freeze_s >= 0.99, L.json(lf))
+
+-- out_of_radar_is_counted
+local far = L.run{flight = 'fast_travel', profile = 'loopback', mode = 'continuous', radar_m = 1000}
+assert(far.out_of_radar > 0)
+
+-- trace_sees_receiver_events
+local kinds = {}
+L.run{flight = 'close_turns', profile = 'loopback', mode = 'continuous', trace = function(_, kind) kinds[kind] = true end}
+assert(kinds.readback, 'trace saw no readback')
+
+print('flight lab receiver ok')
