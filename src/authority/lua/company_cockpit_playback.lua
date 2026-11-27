@@ -229,12 +229,14 @@ function M.new(options)
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
             continuous_playback = continuous,
+            native_velocity = options.native_velocity == true,
             sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function() return active_session:read() end,
-            write = function(_, target, before, recheck, attitude)
-                local ok, outside_native_limit = active_session:write(target, before, recheck, attitude, continuous)
+            write = function(_, target, before, recheck, attitude, linear_velocity)
+                local ok, outside_native_limit = active_session:write(
+                    target, before, recheck, attitude, continuous, linear_velocity)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok, outside_native_limit
             end,
@@ -592,6 +594,7 @@ function M.new_multi(options)
             playback = options.playback,
             trial_first_contact = options.trial_first_contact,
             continuous_playback = options.continuous_playback,
+            native_velocity = options.native_velocity == true,
             adapter = adapter,
             clock = options.clock,
             game = options.game,
@@ -730,6 +733,10 @@ local function make_x4_record(readers_by_slot, clock)
                 fields[#fields + 1] = 'input_age_at_write_s=' .. decimal(event.input_age)
                 fields[#fields + 1] = 'input_velocity_mps=' .. coordinates(event.input_velocity)
             end
+            if event.applied_velocity then
+                fields[#fields + 1] = 'native_velocity_mps=' .. coordinates(event.applied_velocity)
+                if event.raw_error then fields[#fields + 1] = 'raw_error=' .. decimal(event.raw_error) end
+            end
             if event.actual_attitude and event.target_attitude then
                 for _, name in ipairs({'target', 'actual'}) do
                     local angles = event[name .. '_attitude']
@@ -746,8 +753,13 @@ end
 function M.new_x4(config, pinned, cockpit_reader, guard, clock)
     local ffi = require('ffi')
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local native_velocity = config.cockpit_native_velocity == true
+    local velocity = native_velocity and assert(X4LAN_COMPANY_COCKPIT_VELOCITY).new_x4({
+        enabled = true, slot = 'cockpit', pinned = pinned, own_index = config.index, clock = clock,
+    }) or nil
     local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
+        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader,
+        guard = guard, velocity = velocity,
     })
     return M.new({
         enabled = true,
@@ -755,6 +767,7 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
         own_index = config.index,
         target_index = config.playback_index,
         allow_reacquire_align = true,
+        native_velocity = native_velocity,
         trial_first_contact = config.trial_first_contact == true,
         adapter = adapter,
         clock = clock,
@@ -773,13 +786,18 @@ end
 function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
     local ffi = require('ffi')
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
+    local native_velocity = config.cockpit_native_velocity == true
     local slot_names, adapters = {}, {}
     for _, name in ipairs(COCKPIT_SLOTS) do
         local reader = cockpit_readers[name]
         if reader ~= nil then
             slot_names[#slot_names + 1] = name
+            local velocity = native_velocity and assert(X4LAN_COMPANY_COCKPIT_VELOCITY).new_x4({
+                enabled = true, slot = name, pinned = pinned, own_index = config.index, clock = clock,
+            }) or nil
             adapters[name] = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-                enabled = true, pinned = pinned, own_index = config.index, observer = reader, guard = guard,
+                enabled = true, pinned = pinned, own_index = config.index, observer = reader,
+                guard = guard, velocity = velocity,
             })
         end
     end
@@ -789,6 +807,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
         own_index = config.index,
         allow_reacquire_align = true,
         continuous_playback = config.cockpit_continuous_playback == true,
+        native_velocity = native_velocity,
         trial_first_contact = config.trial_first_contact == true,
         adapters = adapters,
         clock = clock,

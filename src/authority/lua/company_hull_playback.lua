@@ -58,6 +58,20 @@ local function same_binding(value, binding)
     return true
 end
 
+local function segment_distance(point, a, b)
+    local abx, aby, abz = b.x - a.x, b.y - a.y, b.z - a.z
+    local ab2 = abx * abx + aby * aby + abz * abz
+    local t = 0
+    if ab2 > 1e-12 then
+        t = ((point.x - a.x) * abx + (point.y - a.y) * aby + (point.z - a.z) * abz) / ab2
+        if t < 0 then t = 0 elseif t > 1 then t = 1 end
+    end
+    local dx = point.x - (a.x + t * abx)
+    local dy = point.y - (a.y + t * aby)
+    local dz = point.z - (a.z + t * abz)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
 function M.new(options)
     if type(options) ~= 'table' or options.enabled ~= true then return nil, 'disabled' end
     local cfg = copy(options)
@@ -90,6 +104,8 @@ function M.new(options)
     local newest, write_input, write_input_age
     local velocity_steps = cfg.velocity_steps == true
     local continuous = cfg.continuous_playback == true
+    local native_velocity = cfg.native_velocity == true
+    local rendered_velocity, write_velocity, prev_write_velocity, write_game_time = nil, nil, nil, nil
     local maximum_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP
     if continuous then maximum_step = SECTOR_DIAGONAL end
     local measured_pose, last_display_time, last_display_pose, last_display_rate
@@ -215,6 +231,22 @@ function M.new(options)
                     last_display_time, last_display_pose, last_display_rate = now, output, newest.rate
                     rendered.pose = output
                 end
+                if native_velocity then
+                    if rendered.phase == 'frozen' or rendered.phase == 'held-no-rate'
+                            or (rendered.phase == 'held' and not continuous) then
+                        rendered_velocity = {x = 0, y = 0, z = 0}
+                    elseif rendered.linear_velocity then
+                        rendered_velocity = {
+                            x = rendered.linear_velocity[1],
+                            y = rendered.linear_velocity[2],
+                            z = rendered.linear_velocity[3],
+                        }
+                    elseif newest and newest.rate then
+                        rendered_velocity = {x = newest.rate[1], y = newest.rate[2], z = newest.rate[3]}
+                    else
+                        rendered_velocity = {x = 0, y = 0, z = 0}
+                    end
+                end
                 for _, source in ipairs(lineage) do
                     if source.sequence == rendered.source_sequence then
                         rendered_source = source
@@ -273,8 +305,14 @@ function M.new(options)
             elseif authorize then
                 before_dispatch = recheck
             end
+            local desired_velocity = native_velocity and (rendered_velocity or {x = 0, y = 0, z = 0}) or nil
             local written, outside_native_limit = cfg.write(
-                copy(binding), position, xyz(before, 1e7), before_dispatch, attitude)
+                copy(binding), position, xyz(before, 1e7), before_dispatch, attitude, desired_velocity)
+            if written == true and native_velocity then
+                prev_write_velocity = write_velocity or {x = 0, y = 0, z = 0}
+                write_velocity = {x = desired_velocity.x, y = desired_velocity.y, z = desired_velocity.z}
+                write_game_time = observation and observation.game_time or nil
+            end
             if written == false and outside_native_limit then
                 native_refusal, native_refusal_phase = xyz(outside_native_limit, 1e7), 'native_step_limit'
             end
@@ -283,12 +321,29 @@ function M.new(options)
         record = function(event)
             local readback = event.kind == 'readback'
             local kind = event.kind
+            local effective_error = event.error
+            local raw_error = nil
             if readback then
                 if event.elapsed <= 0 then
                     refusal = 'readback_not_later'
                     return false
                 end
-                if event.error > READBACK_TOLERANCE then
+                if native_velocity and write_velocity and write_game_time then
+                    local dt_game = math.max(0, event.game_time - write_game_time)
+                    local pred_old = {
+                        x = event.target.x + prev_write_velocity.x * dt_game,
+                        y = event.target.y + prev_write_velocity.y * dt_game,
+                        z = event.target.z + prev_write_velocity.z * dt_game,
+                    }
+                    local pred_new = {
+                        x = event.target.x + write_velocity.x * dt_game,
+                        y = event.target.y + write_velocity.y * dt_game,
+                        z = event.target.z + write_velocity.z * dt_game,
+                    }
+                    raw_error = event.error
+                    effective_error = segment_distance(event.actual, pred_old, pred_new)
+                end
+                if effective_error > READBACK_TOLERANCE then
                     if not continuous then
                         refusal = 'readback_out_of_bounds'
                         return false
@@ -310,11 +365,15 @@ function M.new(options)
                     x = write_input.rate[1], y = write_input.rate[2], z = write_input.rate[3],
                 } or nil,
                 input_age = readback and write_input_age or nil,
+                applied_velocity = readback and native_velocity and write_velocity and {
+                    x = write_velocity.x, y = write_velocity.y, z = write_velocity.z,
+                } or nil,
+                raw_error = raw_error,
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,
                 actual = xyz(event.actual, 1e7), target = xyz(event.target, 1e7), phase = event.phase,
-                error = event.error, elapsed = event.elapsed,
+                error = effective_error, elapsed = event.elapsed,
                 actual_attitude = follows_attitude and buffer.copy_attitude(event.actual) or nil,
                 target_attitude = follows_attitude and buffer.copy_attitude(event.target) or nil,
             })

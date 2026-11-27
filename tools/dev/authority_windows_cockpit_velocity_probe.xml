@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disposable setup and read-only MD readback probe for the Windows receiving-cockpit
+     one-shot native velocity (constantvel=false) integration trial. -->
+<mdscript name="X4AuthorityCockpitVelProbe" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="Setup" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCockpitVelProbe'" control="'Setup'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <do_if value="$r.$request_id? and $r.$epoch?">
+     <set_value name="$epoch" exact="$r.$epoch"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$epoch" exact="$epoch"/>
+     <set_value name="md.X4AuthorityShipRegistry.State.$faulted" exact="false"/>
+     <do_if value="md.X4AuthorityShipRegistry.State.$epoch == $epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @player.controlled.isclass.ship and @player.sector.isclass.sector">
+      <set_value name="$own" exact="player.controlled"/>
+      <set_value name="$sec" exact="player.sector"/>
+      <create_ship name="$remote" macro="macro.ship_arg_s_fighter_03_a_macro" sector="$sec" seed="7427">
+       <owner exact="faction.player" overridenpc="true"/>
+       <loadout><level exact="1.0"/><variation exact="0"/></loadout>
+       <position object="$own" x="0m" y="0m" z="1200m"/>
+       <rotation yaw="0deg" pitch="0deg" roll="0deg"/>
+      </create_ship>
+      <do_if value="@$remote.isoperational and $remote.owner == faction.player and not $remote.pilot.exists and not $remote.assignedpilot.exists and $remote.sector == $sec and @$remote.parent.isclass.zone">
+       <set_value name="md.X4AuthorityShipRegistry.State.$ships" exact="table[]"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$byship" exact="table[]"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$ships.{1}" exact="$own"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$own}" exact="1"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$ships.{2}" exact="$remote"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$byship.{$remote}" exact="2"/>
+       <set_value name="md.X4AuthorityShipRegistry.State.$last" exact="2"/>
+       <set_value name="$p" exact="$remote.parent.relativerotation.{$remote.sector}"/>
+       <set_value name="$s" exact="$remote.sector.relativerotation.{$remote.cluster}"/>
+       <set_value name="$basisError" exact="$p.forward.x^2 + $p.forward.y^2 + ($p.forward.z - 1)^2 + $p.up.x^2 + ($p.up.y - 1)^2 + $p.up.z^2 + $s.forward.x^2 + $s.forward.y^2 + ($s.forward.z - 1)^2 + $s.up.x^2 + ($s.up.y - 1)^2 + $s.up.z^2"/>
+       <set_value name="$basis" exact="$remote.relativerotation.{$sec}"/>
+       <set_value name="$pos" exact="$remote.relativeposition.{$sec}"/>
+       <set_value name="$ownpos" exact="$own.relativeposition.{$sec}"/>
+       <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Ready|%s|%s|%s|%s|%s|%s|%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s'.[$r.$request_id,$own,$own.idcode,$sec.macro.id,$remote,$remote.idcode,$remote.parent,$basisError,$pos.x / 1m,$pos.y / 1m,$pos.z / 1m,$ownpos.x / 1m,$ownpos.y / 1m,$ownpos.z / 1m,$basis.right.x / 1m,$basis.right.y / 1m,$basis.right.z / 1m,$basis.up.x / 1m,$basis.up.y / 1m,$basis.up.z / 1m,$basis.forward.x / 1m,$basis.forward.y / 1m,$basis.forward.z / 1m]"/>
+      </do_if>
+      <do_else>
+       <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Refused|spawn_check'.[$r.$request_id]"/>
+      </do_else>
+     </do_if>
+     <do_else>
+      <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Refused|registry_state'.[$r.$request_id]"/>
+     </do_else>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Refused|setup_args'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+
+  <cue name="Readback" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCockpitVelProbe'" control="'Readback'"/>
+   </conditions>
+   <actions>
+    <set_value name="$r" exact="event.param3"/>
+    <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$r.$index}"/>
+    <do_if value="$r.$request_id? and $r.$epoch? and md.X4AuthorityShipRegistry.State.$epoch == $r.$epoch and not @md.X4AuthorityShipRegistry.State.$faulted and @$ship.isoperational and $ship.isclass.ship and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $r.$index and $ship.owner == faction.player and not $ship.pilot.exists and not $ship.assignedpilot.exists and @$ship.sector.isclass.sector">
+     <set_value name="$sec" exact="$ship.sector"/>
+     <set_value name="$pos" exact="$ship.relativeposition.{$sec}"/>
+     <set_value name="$vel" exact="$ship.velocity"/>
+     <set_value name="$basis" exact="$ship.relativerotation.{$sec}"/>
+     <set_value name="$own" exact="player.controlled"/>
+     <set_value name="$ownpos" exact="$own.relativeposition.{$sec}"/>
+     <set_value name="$dist" exact="$ship.distanceto.{$own} / 1m"/>
+     <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Readback|%s|%s|%s|%s|%s|%s|%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s'.[$r.$request_id,$r.$index,$ship,$sec,$ship.parent,$sec.macro.id,$ship.idcode,player.age / 1s,$pos.x / 1m,$pos.y / 1m,$pos.z / 1m,$vel.x / 1m,$vel.y / 1m,$vel.z / 1m,$basis.right.x / 1m,$basis.right.y / 1m,$basis.right.z / 1m,$basis.up.x / 1m,$basis.up.y / 1m,$basis.up.z / 1m,$basis.forward.x / 1m,$basis.forward.y / 1m,$basis.forward.z / 1m,$ownpos.x / 1m,$ownpos.y / 1m,$ownpos.z / 1m,$dist]"/>
+    </do_if>
+    <do_else>
+     <raise_lua_event name="'X4AuthorityCockpitVelProbe.Result'" param="'%s|Refused|readback_guard'.[@$r.$request_id]"/>
+    </do_else>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

@@ -78,12 +78,18 @@ COMPANY_COCKPIT_RADAR_UI = {
     'company_cockpit_observer.lua': 'src/authority/lua/company_cockpit_observer.lua',
     'company_cockpit_playback.lua': 'src/authority/lua/company_cockpit_playback.lua',
 }
+COMPANY_COCKPIT_VELOCITY_UI = {
+    'company_cockpit_velocity.lua': 'src/authority/lua/company_cockpit_velocity.lua',
+}
 COMPANY_MOTION_MD = {
     'authority_job_descriptor_probe.xml': 'tools/dev/authority_job_descriptor_probe.xml',
     'company_observer_target.xml': 'src/authority/md/company_observer_target.xml',
 }
 COMPANY_COCKPIT_RADAR_MD = {
     'company_cockpit_observer.xml': 'src/authority/md/company_cockpit_observer.xml',
+}
+COMPANY_COCKPIT_VELOCITY_MD = {
+    'company_cockpit_velocity.xml': 'src/authority/md/company_cockpit_velocity.xml',
 }
 
 SEAT_TAG = b'[X4LAN] AUTH_CLIENT_SEAT '
@@ -118,7 +124,10 @@ def company_motion_ui(source):
     if getattr(source, 'private_map_marker', False):
         scripts = {'company_map_marker.lua': 'src/authority/lua/company_map_marker.lua'} | scripts
     if getattr(source, 'cockpit_radar_playback', False):
-        return COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI | scripts
+        cockpit_ui = COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI
+        if getattr(source, 'cockpit_native_velocity', False):
+            cockpit_ui = cockpit_ui | COMPANY_COCKPIT_VELOCITY_UI
+        return cockpit_ui | scripts
     if source.playback_index is not None:
         return COMPANY_PLAYBACK_UI | scripts
     return scripts
@@ -131,7 +140,10 @@ def company_motion_md(source):
             scripts['authority_saved_replica_control.xml'] = 'tools/dev/authority_saved_replica_control.xml'
         return scripts
     if getattr(source, 'cockpit_radar_playback', False):
-        return COMPANY_MOTION_MD | COMPANY_COCKPIT_RADAR_MD
+        cockpit_md = COMPANY_MOTION_MD | COMPANY_COCKPIT_RADAR_MD
+        if getattr(source, 'cockpit_native_velocity', False):
+            cockpit_md = cockpit_md | COMPANY_COCKPIT_VELOCITY_MD
+        return cockpit_md
     return COMPANY_MOTION_MD
 
 

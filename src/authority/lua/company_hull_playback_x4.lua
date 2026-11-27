@@ -34,6 +34,7 @@ function M.new(options, engine)
     assert(type(observer) == 'table' and type(observer.matches) == 'function'
         and type(options.guard) == 'function', 'verified local cockpit observer and guard required')
     local epoch, count = pinned.epoch, pinned.issued_count
+    local velocity = options.velocity
     local adapter = {}
 
     function adapter:bind(binding)
@@ -113,7 +114,23 @@ function M.new(options, engine)
             return true
         end
 
-        function session:write(target, before, recheck, attitude, continuous)
+        local function anchor_live_pose()
+            local ok_c, c = pcall(engine.cockpit)
+            local ok_t, t = pcall(engine.target, actor_text)
+            if not (ok_c and c and ok_t and t and t.actor == original_target.actor
+                    and t.actor ~= c.actor and t.sector == original_target.sector
+                    and t.sector == c.sector) then
+                return false
+            end
+            local ok_r, live = pcall(engine.read, original_target.actor)
+            if not (ok_r and position(live) and finite(live.yaw) and finite(live.pitch) and finite(live.roll)) then
+                return false
+            end
+            local ok_w, dispatched = pcall(engine.write, original_target.actor, original_target.sector, live)
+            return ok_w and dispatched == true and live or false
+        end
+
+        function session:write(target, before, recheck, attitude, continuous, linear_velocity)
             if pending_zone or not position(target) or not position(before) then return false end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
@@ -146,7 +163,19 @@ function M.new(options, engine)
                 closed = true  -- The native call may have had a partial effect.
                 return false
             end
-            return self:guard()
+            if not self:guard() then
+                if velocity then pcall(velocity.stop, velocity, anchor_live_pose) end
+                return false
+            end
+            if velocity and linear_velocity then
+                local vok, applied = pcall(velocity.apply, velocity, binding, linear_velocity)
+                if not vok or applied ~= true then
+                    pcall(velocity.stop, velocity, anchor_live_pose)
+                    closed = true
+                    return false
+                end
+            end
+            return true
         end
 
         function session:first_contact_in_range(actual, target)
@@ -178,6 +207,7 @@ function M.new(options, engine)
         end
 
         function session:close()
+            if velocity then pcall(velocity.stop, velocity, anchor_live_pose) end
             closed = true
         end
         return session

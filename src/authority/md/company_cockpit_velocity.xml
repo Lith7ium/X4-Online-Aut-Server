@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Opt-in, default-off one-shot (constantvel="false") native linear velocity cue for
+     receiving-cockpit Company playback. Supports cockpit/cockpit2/cockpit3 slots independently
+     and never runs unless explicitly requested by X4LAN_COMPANY_COCKPIT_VELOCITY. -->
+<mdscript name="X4AuthorityCompanyCockpitVelocity" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+ <cues>
+  <cue name="State">
+   <actions>
+    <set_value name="$cockpit" exact="null"/>
+    <set_value name="$cockpit2" exact="null"/>
+    <set_value name="$cockpit3" exact="null"/>
+   </actions>
+  </cue>
+  <cue name="Request" instantiate="true" namespace="this">
+   <conditions>
+    <event_ui_triggered screen="'X4AuthorityCompanyCockpitVelocity'" control="'Request'"/>
+   </conditions>
+   <actions>
+    <set_value name="$args" exact="event.param3"/>
+    <set_value name="$op" exact="@$args.$op"/>
+    <set_value name="$slot" exact="@$args.$slot"/>
+    <set_value name="$status" exact="'refused'"/>
+    <set_value name="$ship" exact="null"/>
+    <set_value name="$active_ship" exact="null"/>
+    <do_if value="$slot == 'cockpit'">
+     <set_value name="$active_ship" exact="State.$cockpit"/>
+    </do_if>
+    <do_elseif value="$slot == 'cockpit2'">
+     <set_value name="$active_ship" exact="State.$cockpit2"/>
+    </do_elseif>
+    <do_elseif value="$slot == 'cockpit3'">
+     <set_value name="$active_ship" exact="State.$cockpit3"/>
+    </do_elseif>
+    <do_if value="($slot == 'cockpit' or $slot == 'cockpit2' or $slot == 'cockpit3')
+        and $args.$index ge 1 and $args.$index le $args.$count and $args.$index == ($args.$index)i and $args.$index != $args.$own
+        and @md.X4AuthorityShipRegistry.State.$epoch == $args.$epoch
+        and @md.X4AuthorityShipRegistry.State.$last ge $args.$count
+        and md.X4AuthorityShipRegistry.State.$faulted? and not md.X4AuthorityShipRegistry.State.$faulted">
+     <set_value name="$ship" exact="@md.X4AuthorityShipRegistry.State.$ships.{$args.$index}"/>
+    </do_if>
+    <do_if value="@$ship.isclass.ship and $ship.isoperational and $ship.owner == faction.player
+        and '%s'.[$ship] == $args.$actor and $ship.idcode == $args.$code
+        and @md.X4AuthorityShipRegistry.State.$byship.{$ship} == $args.$index
+        and $ship != player.ship and $ship != player.controlled and $ship != player.occupiedship and $ship != player.container
+        and not $ship.dock.exists and not $ship.isinternallystored and not $ship.pilot.exists and not $ship.assignedpilot.exists
+        and @$ship.parent.isclass.zone and @$ship.sector.isclass.sector">
+     <do_if value="$op == 'stop' and $active_ship == $ship">
+      <set_value name="$before" exact="$ship.relativeposition.{$ship.sector}"/>
+      <set_value name="$beforevelocity" exact="$ship.velocity"/>
+      <set_object_velocity object="$ship" constantvel="false"><linear x="0" y="0" z="0"/></set_object_velocity>
+      <do_if value="$slot == 'cockpit'">
+       <set_value name="State.$cockpit" exact="null"/>
+      </do_if>
+      <do_elseif value="$slot == 'cockpit2'">
+       <set_value name="State.$cockpit2" exact="null"/>
+      </do_elseif>
+      <do_elseif value="$slot == 'cockpit3'">
+       <set_value name="State.$cockpit3" exact="null"/>
+      </do_elseif>
+      <set_value name="$status" exact="'stopped'"/>
+     </do_if>
+     <do_elseif value="$op == 'set'
+         and @player.controlled.isclass.ship and player.controlled == player.occupiedship and player.controlled == player.container
+         and @md.X4AuthorityShipRegistry.State.$ships.{$args.$own} == player.controlled
+         and $ship.sector == player.sector and $ship.sector.macro.id == $args.$sector
+         and $ship.attention ge attention.visible and $ship.isphysicsready
+         and @player.controlled.currentradarrange gt 0m and $ship.distanceto.{player.controlled} le player.controlled.currentradarrange
+         and $args.$vx ge -2800 and $args.$vx le 2800
+         and $args.$vy ge -2800 and $args.$vy le 2800
+         and $args.$vz ge -2800 and $args.$vz le 2800">
+      <set_value name="$aligned" exact="false"/>
+      <do_if value="$ship.parent.parent == $ship.sector and $ship.sector.parent == $ship.cluster">
+       <set_value name="$p" exact="$ship.parent.relativerotation.{$ship.sector}"/>
+       <set_value name="$s" exact="$ship.sector.relativerotation.{$ship.cluster}"/>
+       <set_value name="$basisError" exact="$p.forward.x^2 + $p.forward.y^2 + ($p.forward.z - 1)^2 + $p.up.x^2 + ($p.up.y - 1)^2 + $p.up.z^2 + $s.forward.x^2 + $s.forward.y^2 + ($s.forward.z - 1)^2 + $s.up.x^2 + ($s.up.y - 1)^2 + $s.up.z^2"/>
+       <set_value name="$aligned" exact="$basisError lt 0.00000001"/>
+      </do_if>
+      <do_if value="$aligned">
+       <set_object_velocity object="$ship" constantvel="false"><linear x="$args.$vx" y="$args.$vy" z="$args.$vz"/></set_object_velocity>
+       <do_if value="$slot == 'cockpit'">
+        <set_value name="State.$cockpit" exact="$ship"/>
+       </do_if>
+       <do_elseif value="$slot == 'cockpit2'">
+        <set_value name="State.$cockpit2" exact="$ship"/>
+       </do_elseif>
+       <do_elseif value="$slot == 'cockpit3'">
+        <set_value name="State.$cockpit3" exact="$ship"/>
+       </do_elseif>
+       <set_value name="$status" exact="'set'"/>
+      </do_if>
+     </do_elseif>
+    </do_if>
+    <set_value name="$reply" exact="'%s|%s'.[$args.$request,$status]"/>
+    <do_if value="$status != 'refused'">
+     <set_value name="$pos" exact="$ship.relativeposition.{$ship.sector}"/>
+     <set_value name="$velocity" exact="$ship.velocity"/>
+     <set_value name="$basis" exact="$ship.relativerotation.{$ship.sector}"/>
+     <set_value name="$reply" exact="$reply + '|%s|%s|%s|%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s|%s,%s,%s'.[$ship,$ship.sector.macro.id,$ship.parent,player.age / 1s,$pos.x / 1m,$pos.y / 1m,$pos.z / 1m,$velocity.x / 1m,$velocity.y / 1m,$velocity.z / 1m,$basis.right.x / 1m,$basis.right.y / 1m,$basis.right.z / 1m,$basis.up.x / 1m,$basis.up.y / 1m,$basis.up.z / 1m,$basis.forward.x / 1m,$basis.forward.y / 1m,$basis.forward.z / 1m]"/>
+     <do_if value="$status == 'set'">
+      <set_value name="$reply" exact="$reply + '|%s,%s,%s'.[$args.$vx,$args.$vy,$args.$vz]"/>
+     </do_if>
+     <do_elseif value="$status == 'stopped'">
+      <set_value name="$reply" exact="$reply + '|%s,%s,%s|%s,%s,%s'.[$before.x / 1m,$before.y / 1m,$before.z / 1m,$beforevelocity.x / 1m,$beforevelocity.y / 1m,$beforevelocity.z / 1m]"/>
+     </do_elseif>
+    </do_if>
+    <raise_lua_event name="'X4AuthorityCompanyCockpitVelocity.Result'" param="$reply"/>
+   </actions>
+  </cue>
+ </cues>
+</mdscript>

@@ -1,0 +1,111 @@
+# Windows X4 9.00 Opt-In Receiving-Cockpit Native Velocity Integration (`constantvel=false`)
+
+- **Date:** 2026-11-27 (CET)
+- **Author / Agent:** Neon (James Molander / `von-Benette`)
+- **Branch:** `work/neon-cockpit-native-velocity`
+- **Base revision:** `origin/trial/velocity-aware-playback-20261126` @ `6a9cc6ccdad752a0738688570ad1b395d9fa16ea`
+- **Directive:** Astra `03:00 CET` Slack directive (`#x4-authorative-server`, `ts=1795744863.152949`)
+- **Scope constraint honored:** Wire protocol (`REMOTE4`/`SEEN4`), shared server (`CompanyMotionService`), `motion_buffer.lua`, `motion_playback.lua`, `company_observer_stream.lua`, `company_cockpit_observer.lua`, `company_motion_source.lua`, clock policy, and normal client launch scripts/defaults are **unchanged**. The integration is strictly opt-in (`cockpit_native_velocity=False` by default) via a small delta across five existing `src/authority/` files (`+141/-12` lines total) plus two new opt-in MD/Lua files.
+
+---
+
+## 1. Host, Build, and Explicit Test Input Provenance
+
+- **Host:** Windows 11 desktop, AMD Radeon RX 9070 XT (Vulkan `1.4.359`), side-by-side Python `3.12.10` (`.venv\Scripts\python.exe`).
+- **Real X4 installation & build:** `X4 Foundations` **`9.00 (611726)`** (`X4.exe` PE file version `9.0.0.0`, SHA-256 `19750a6563889a970f434b5566eb396c6b2dc29ff814bd3e336f838176ad6891`).
+- **Network DLL:** Packaged `x4lan_net_64.dll` (SHA-256 `6ad97e04fd804c031b673af7259e4010b0afb2ad095e8821647998a69e2809e0`).
+- **Isolation & hygiene (`neon-cockpit-vel-win-04`):** Isolated `x4ls` view (`R:\x4ls-lanes\neon-cv-neon-cockpit-vel-win-04`), disposable launcher profile `45850`, windowed `800x600`, `fast=True`, `SW_SHOWNOACTIVATE` + `HWND_BOTTOM`, local lockfile `C:\Users\Observer\Documents\Gemini Projects\.x4-native-test.lock`. Verified post-run: `protected_unchanged=true`, `view_removed=true`, `x4_running_after=false`, `lockfile_removed=true`, `project_error_count=0`.
+- **Explicit Input Provenance:**
+  - **What ran natively in X4 9.00:** A single-machine Windows 11 isolated trial on disposable `custom_creative` save `save_009.xml.gz` (SHA-256 `0ab3a4261069919ae1a4d31a0f4d0f377f9ac6930bd42a33e8ccc06b292d3960`, sector `cluster_14_sector001_macro`, own ship `PBS-021` `0xae11d` at `(0,0,0)`, unoccupied Company `Pulsar Vanguard (GJS-263)` `0xb60a2` at `(0,0,1200)`, `basis_error=0.0`, stock target HUD locked `softtargetConnectionName="connectionui"`, `mode="hud"`, `is_active_pilot=true`).
+  - **Traffic path:** Unmodified loopback `CompanyMotionService` + unmodified `ReconnectingCompanyMotionClient.observing` + OS PID-validated `WindowsMotionPeer` + admitted peer `CompanyMotionClient` streaming a **scripted V4 trajectory** (`REMOTE4`/`SEEN4`, `87/87` samples confirmed, `85` with velocity) into the **genuine opt-in receiving cockpit** (`X4LAN_COMPANY_COCKPIT_OBSERVER.new_multi_x4`, `X4LAN_COMPANY_COCKPIT_PLAYBACK.new_multi_x4` with `cockpit_continuous_playback=true, cockpit_native_velocity=true`, and `X4LAN_COMPANY_OBSERVER_STREAM.new`).
+  - **What this is NOT:** This is **not** a live two-human or WAN flight, and the trajectory is scripted deterministic V4 traffic over authenticated local loopback rather than live keyboard/joystick input from a second player.
+
+---
+
+## 2. Small Opt-In Integration Delta
+
+### Existing `src/authority/` files (`5 files, +141/-12`)
+1. `src/authority/company_motion_source.py` (`+10/-1`): Added default-off `cockpit_native_velocity: bool = False` (requires `cockpit_radar_playback=True`) to `CompanyMotionConfig`; emits `cockpit_native_velocity = true` in Lua config only when explicitly enabled.
+2. `src/authority/client_seat_overlay.py` (`+15/-1`): Added `COMPANY_COCKPIT_VELOCITY_UI` (`company_cockpit_velocity.lua`) and `COMPANY_COCKPIT_VELOCITY_MD` (`company_cockpit_velocity.xml`), packaged into `company_motion_ui` / `company_motion_md` **only** when `cockpit_native_velocity=True`.
+3. `src/authority/lua/company_hull_playback.lua` (`+61/-4`): Added default-off `cfg.native_velocity == true` mode:
+   - Passes `rendered.linear_velocity` from the existing `motion_buffer.lua` output (no new clock policy; falls back to `newest.rate` when `continuous=true`, `{0,0,0}` on `frozen` or held-without-rate) as an optional 6th argument to `cfg.write(...)`.
+   - Keeps readback verification exact under native physics integration: evaluates error against the 1-frame segment `[target + prev_vel * dt_game, target + cur_vel * dt_game]` (using `dt_game = now - pending.at`), while preserving `raw_error` and `applied_velocity` in telemetry. Default `native_velocity=false` behavior is unchanged.
+4. `src/authority/lua/company_hull_playback_x4.lua` (`+32/-2`): Added optional `options.velocity` hook:
+   - After guarded `engine.write(...)` succeeds, calls `velocity:apply(binding, linear_velocity)`.
+   - Inside `session:close(...)` (and on post-write guard failure), calls `velocity:stop(anchor_live_pose)` where `anchor_live_pose()` reads the ship's live pose and writes it via `engine.write` (same-sector, operational, non-own-ship guarded) immediately before dispatching MD `op="stop"`.
+5. `src/authority/lua/company_cockpit_playback.lua` (`+23/-4`): Forwards `native_velocity`, passes optional 6th `linear_velocity` argument, logs `native_velocity_mps` and `raw_error` when present, and instantiates per-slot `X4LAN_COMPANY_COCKPIT_VELOCITY.new_x4(...)` inside `M.new_x4` and `M.new_multi_x4` **only** when `config.cockpit_native_velocity == true`.
+
+### New opt-in production files (2 files)
+1. `src/authority/md/company_cockpit_velocity.xml`: Cue `X4AuthorityCompanyCockpitVelocity` using **`constantvel="false"` exclusively** (zero `constantvel="true"`), independent `State.$cockpit` / `State.$cockpit2` / `State.$cockpit3` slot bindings (avoiding X4 MD table-key string assignment pitfalls found in `win-03`), registry/owner/unoccupied/aligned-basis/speed-bound (`5000 m/s`) guards on `op="set"`, and radar-independent `op="stop"` zeroing `<linear x="0" y="0" z="0"/>` so out-of-radar withdrawal still zeroes velocity.
+2. `src/authority/lua/company_cockpit_velocity.lua`: `X4LAN_COMPANY_COCKPIT_VELOCITY` adapter with shared `RegisterEvent` receipt router, `CHANGE_EPS = 0.25 m/s` + `MIN_INTERVAL = 0.05 s` command throttling (exact zero never throttled), and idempotent `stop(anchor_fn)` emitting `AUTH_COMPANY_COCKPIT_VELOCITY_STOP` with `snapback`, `anchor_drift`, and post-stop `speed`.
+
+### New tests & Windows trial harness (4 files)
+- `tests/test_authority_company_cockpit_native_velocity_integration.py` — Offline MD XML contract, Python default-off config/overlay gating, and LuaJIT 2.1 integration suite.
+- `tools/dev/authority_windows_cockpit_velocity_probe.xml` — Disposable save setup + read-only MD probe (`X4AuthorityCockpitVelProbe`).
+- `tools/dev/authority_windows_cockpit_velocity_x4.lua` — Native X4 9.00 driver wiring the genuine opt-in receiving cockpit.
+- `tools/dev/authority_windows_cockpit_velocity_trial.py` — Isolated Windows runner with DWM `PrintWindow` HUD capture.
+
+---
+
+## 3. Native Windows X4 `9.00 (611726)` Verification (`neon-cockpit-vel-win-04`)
+
+- **Command:** `.venv\Scripts\python.exe tools\dev\authority_windows_cockpit_velocity_trial.py --out .local\neon-cockpit-vel-win-04 --network-dll .local\pkg-d0756d51\x4-authority-windows-diagnostic\network\x4lan_net_64.dll`
+- **Outcome:** Exit `0`, `outcome="done"`, **`project_error_count=0`**, `87/87` `REMOTE4`/`SEEN4` confirmed (`85` with velocity), `850` playback writes / `849` readbacks, **`cockpit_position_deviation_count=0`**, max logged velocity-compensated readback error **`0.00259 m` (2.59 mm)** across all 31 throttled readback logs (while raw 1-frame native advance was `0.63–1.50 m`), **`vel_refusals=[]`**, **`own_ship_displacement_m=0.000000 m`**.
+- **Local evidence hashes (uncommitted under `.local/neon-cockpit-vel-win-04/`):**
+  - `result.json`: `2acf33af438ff2806be5108c00dcb12408320341aced1dde024ff29d2b9c9451`
+  - `neon-cockpit-vel.log`: `453c2f7798253b083be7e868f7d901b808465a276712d62b45c100e959a17198`
+  - Disposable save `save_009.xml.gz`: `0ab3a4261069919ae1a4d31a0f4d0f377f9ac6930bd42a33e8ccc06b292d3960`
+
+### Stage-by-Stage Native Telemetry & Visually Verified Stock HUD Screenshots (`GJS-263`)
+
+All 7/7 live DWM `PrintWindow` PNG frames (`1296x759`, `printwindow_ok=true`) were visually inspected directly:
+
+| Stage | Game Time (s) | FFI Position `(x, y, z)` / Yaw | Requested vs Actual Displacement (Double-Move Check) | MD Forward Speed (`md_fwd_mps`) | `speed_conn` / `speed_empty` | Visually Confirmed Stock HUD (`GJS-263`) | Screenshot SHA-256 (prefix) |
+| --- | ---: | --- | --- | ---: | --- | --- | --- |
+| **0. Baseline stationary** | `3.07` | `(0.00, 0, 1200.00)` / `0.000°` | Stationary baseline | `0.0000 m/s` | `0` / `0` | **`1.2 km / 0 m/s`** (no lead pip) | `00_baseline_stationary.png` (`05461d0b84ecc939`) |
+| **1. Forward `+60 m/s` (`3.0 s`)** | `6.30` | `(0.00, 0, 1379.15)` / `0.000°` | `180.000 m` req vs **`179.146 m`** actual (**`0.9953×`**, no double movement; `223` writes / `222` readbacks) | `59.7996 m/s` | `59` / `59` | **`1.3 km / 59 m/s`** | `01_forward_60mps.png` (`93e7721ececd9f82`) |
+| **2a. Mid coupled turn (`0°→35°`, `60→90 m/s`)** | `7.97` | `(25.45, 0, 1492.74)` / `22.40°` (`0.390954 rad`) | Turning + ramping smoothly (`323` writes / `322` readbacks) | `78.9354 m/s` (lat `1.9e-6`) | `78` / `78` | **`1.5 km / 79 m/s`** + right-offset aim-lead circle | `02a_turn_mid.png` (`8c444af5b3d08019`) |
+| **2b. End coupled turn (`35.0°`, `90 m/s`)** | `9.85` | `(115.08, 0, 1631.81)` / `35.000°` (`0.610865 rad`) | Stage 2: `273.863 m` req vs `276.857 m`; Stages 1+2 total: `444.021 m` req vs **`446.879 m`** actual (**`1.0064×`**, no double movement; `436` writes / `435` readbacks) | `89.6989 m/s` (lat `0.000`) | `89` / `89` | **`1.6 km / 89 m/s`** + live aim-lead circle | `02b_turn_90mps.png` (`546327152bb12fce`) |
+| **3a. 5 s silent packet gap (mid-coast `+2.4 s`)** | `12.39` | `(246.10, 0, 1818.93)` / `35.000°` | Coasting cleanly (`588` writes / `587` readbacks) | `89.6995 m/s` | `89` / `89` | **`1.8 km / 89 m/s`** + live aim-lead circle | `03a_coasting_5s_gap.png` (`6c7d1237d33b920e`) |
+| **3b. Post-`stale_5s` cutoff (`14.74 s` stop + `3` probes `15.65–17.83 s`)** | `15.65`–`17.83` | `(367.54, 0, 1992.37)` / `35.000°` | Total coast **`440.164 m`** (`~4.9 s × 90 m/s`, `1×`, `730` writes / `730` readbacks); **`anchor_drift=0.000492 m` (0.49 mm)**, **`post_cutoff_drift=0.000000 m`** | `0.0000 m/s` | `0` / `0` | **`2.0 km / 0 m/s`** (lead pip gone) | `03b_stopped_after_5s_cutoff.png` (`32363160c25210e8`) |
+| **4a. Reacquired `gen2` forward `+60 m/s` (`2.0 s`)** | `19.92`–`20.42` | `(434.92, 0, 2088.59)` / `35.000°` | `reacquired_direct` (`dist=6.00 m`, `mode=hud`); `120.000 m` req vs **`117.459 m`** actual (**`0.9788×`**, no double movement; `848` writes / `847` readbacks) | `59.7996 m/s` | `59` / `59` | **`2.1 km / 59 m/s`** | `04a_reacquired_60mps.png` (`dcdf3e047d06a0e2`) |
+| **4b. Explicit `END` withdrawal (`service.revoke(3)` at `20.45 s` + `3` probes `21.09–23.24 s`)** | `21.09`–`23.24` | `(436.05, 0, 2090.21)` / `35.000°` | `generation_revoked` -> stop (`850` writes / `849` readbacks); **`anchor_drift=0.000367 m` (0.37 mm)**, **`post_withdraw_drift=0.000000 m`** | `0.0000 m/s` | `0` / `0` | **`2.1 km / 0 m/s`** (lead pip gone) | `04b_stopped_after_withdrawal.png` (`1b200038700285fa`) |
+
+### Key Native X4 Physics & Stop Observations
+
+1. **No double movement (`0.9953×` forward, `1.0064×` coupled turn, `440.16 m` 5 s coast, `0.9788×` post-reacquire):**
+   - Because `company_hull_playback.lua` writes the authoritative continuous trajectory coordinate via `SetObjectSectorPos` every `onUpdate` frame, and `constantvel="false"` only integrates physics across the single ~`12–17 ms` interval between frames before the next frame resets position to the continuous target, displacement stays strictly **1×** while X4's physics state holds the real velocity vector (`md_fwd_mps`, stock HUD speed readout, and weapon aim-lead pip).
+   - Velocity-compensated readback error stayed within **`2.59 mm`** across all logged readbacks (vs. `0.63–1.50 m` raw 1-frame native advance), with `0` `position_deviation` alarms across `850` writes / `849` readbacks.
+2. **No snap-back on stop — why `anchor_live_pose()` matters (`anchor_drift = 0.49 mm` / `0.37 mm`):**
+   - At `14.74 s` (`stale_5s`) and `20.45 s` (`generation_revoked`), `session:close()` calls `anchor_live_pose()` (`SetObjectSectorPos` to the ship's live pose) immediately before signaling MD `op="stop"` (`constantvel="false" linear=(0,0,0)`).
+   - Between Lua `anchor_live_pose()` and async MD `op="stop"` executing 1 frame (~`16.7 ms`) later (`14.76 s` / `20.47 s`), X4 physics advanced `1.499 m` (`90 m/s × 0.0167 s`) / `1.000 m` (`60 m/s × 0.0167 s`), and `constantvel="false" (0,0,0)` then returned the ship to within **`0.000492 m` (0.49 mm)** / **`0.000367 m` (0.37 mm)** of the anchored stop coordinate — with **`0.000000 m`** post-stop drift across the subsequent `~2.2 s` of probes. Without anchoring, as proved in our previous Windows target-speed trial (`75bc03eb`), releasing `constantvel="false"` snaps the ship back hundreds of meters to the last `SetObjectSectorPos`.
+3. **MD bug caught and fixed on real X4 (`win-03` → `win-04`):**
+   - On `win-03`, `State.$active.{$slot}` triggered X4 MD errors (`Failed to set table[].cockpit to value component.{...}`), causing `op="stop"` to refuse (`project_error_count=31`). Replacing the table lookup with explicit `State.$cockpit`, `State.$cockpit2`, `State.$cockpit3` variables resolved it completely (`project_error_count=0` in `win-04`).
+4. **Pre-existing interaction noted for joint review (`win-03` observation, untouched by this patch):**
+   - In `win-03`, calling `service.transport_lost(2)` immediately cleared the participant's grant and broadcast an empty `ROSTER` while `continuous_playback=true` was actively writing every frame. On the next frame (`~0.05 s` after `transport_lost`), `motion_playback.lua` marked the slot `uncertain=true` and `company_hull_playback_x4.lua:140` (`tracks_active_pilot()`) returned `false`, triggering `closed_uncertain` and permanently closing the slot for that session instead of coasting 5 s to `stale_5s`.
+   - Per the directive to keep a small integration delta and leave policy changes for joint review, we left existing `closed_uncertain` / `tracks_active_pilot()` semantics completely untouched and tested Stage 3 via a genuine silent 5-second packet gap (peer stops streaming while still admitted -> full 5 s coast + `stale_5s`), plus Stage 4 via explicit `service.revoke(3)` (`END` -> `generation_revoked`). Whether an observer-side `ROSTER` drop during active continuous coasting should trigger immediate `closed_uncertain` or coast/clean-stop is flagged for joint review.
+
+---
+
+## 4. Offline Unit & LuaJIT Checks (Synthetic / Mocked MD — Not Native X4 Evidence)
+
+All offline checks below ran on the final committed code with zero edits afterward:
+
+1. **Python & LuaJIT (`lupa`) unit + integration suite:**
+   - Command: `$env:PYTHONPATH='src'; .venv\Scripts\python.exe -m unittest -v tests/test_authority_company_cockpit_native_velocity_integration.py tests/test_authority_company_cockpit_playback.py tests/test_authority_company_motion_source.py tests/test_authority_company_motion_service.py`
+   - Result: **`63/63` passed (`0` failures, `0` errors, `0` skips, `1.226 s`)**:
+     - `tests/test_authority_company_cockpit_native_velocity_integration.py` (`5/5`): MD XML `constantvel="false"`-only contract, Python default-off config/overlay packaging, and LuaJIT 2.1 integration with realistic 1-frame physics advance + async MD delay + unanchored snap-back model covering forward motion, coupled turn, 0.4 s render gap, 5 s stale cutoff, explicit `END` withdrawal, pause, multi-pilot slot independence, and negative detection of artificial `2×` double movement.
+     - `tests/test_authority_company_cockpit_playback.py` (`12/12`): Existing receiving-cockpit playback regressions.
+     - `tests/test_authority_company_motion_source.py` (`17/17`): Existing motion config & observer stream regressions.
+     - `tests/test_authority_company_motion_service.py` (`29/29`): Existing shared-service regressions.
+2. **Standalone LuaJIT acceptance scripts (executed via `lupa` LuaJIT 2.1):**
+   - `tests/authority_company_cockpit_continuous_playback.lua` (`v3` and `v4`) -> **PASSED (exit 0)**.
+   - `tests/authority_company_hull_playback_x4.lua` -> **PASSED (exit 0)**.
+
+---
+
+## 5. Remaining Limits & Items Left for Joint Review
+
+- **Not yet tested in this isolated run:** Live two-human or two-client WAN flight, travel-drive speeds (`> 500 m/s`), simultaneous 2–3 moving pilots on screen, and normal client launch flags/defaults (`cockpit_native_velocity` remains default-off and is not yet exposed in normal launcher scripts).
+- **Clock / buffer policy:** Untouched (`motion_buffer.lua` and `motion_playback.lua` unchanged).
+- **Joint-review item:** Behavior of `tracks_active_pilot()` -> `closed_uncertain` when `ROSTER` drops an active pilot mid-coast under `continuous_playback=true` (observed in `win-03`).
