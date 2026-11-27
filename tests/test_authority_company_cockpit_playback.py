@@ -284,7 +284,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             DebugError = function(line)
                 if line:find('AUTH_COMPANY_COCKPIT_READBACK', 1, true) then
                     local fields = {}
-                    for name, value in line:gmatch('(%w+)=([^ ]+)') do fields[name] = value end
+                    for name, value in line:gmatch('([%w_]+)=([^ ]+)') do fields[name] = value end
                     logs[#logs + 1] = fields
                 end
             end
@@ -294,7 +294,11 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                     local function move(_, pose) positions[slot] = pose.x; return true end
                     return {
                         guard = function() return true end,
-                        read = function() return {x = positions[slot], y = 0, z = 0} end,
+                        read = function(_, timed)
+                            local pose = {x = positions[slot], y = 0, z = 0}
+                            if timed and slot == 'cockpit' then return pose, now + .001, now + .002 end
+                            return pose
+                        end,
                         write = move, align = move, close = function() end,
                     }
                 end}
@@ -310,7 +314,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 return controller:sample(binding, serial, {
                     version = 3, epoch = binding.epoch, generation = generation,
                     sector_macro = binding.sector_macro, index = binding.index, sequence = sequence,
-                    source_time = now, capture_time = now, x = x, y = 0, z = 0,
+                    source_time = now + 100, capture_time = now + 200, x = x, y = 0, z = 0,
                     real_velocity = {x = 10, y = 0, z = 0},
                 }, now, slot)
             end
@@ -318,8 +322,17 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
                 for _ = 1, count do now = now + step; controller:tick(now) end
             end
             assert(push('cockpit', 1, 5))
-            tick(7, .05)
+            tick(1, .05)
+            -- A newer input before the readback must not replace the arrival
+            -- paired with the sequence that produced the previous write.
+            assert(push('cockpit', 1, 5.5))
+            tick(6, .05)
             assert(#logs == 3 and logs[1].serial == '1')
+            local first = logs[1]
+            assert(tonumber(first.sequence) == 1 and tonumber(first.source_arrival_observer_monotonic_s) == 10)
+            assert(tonumber(first.capture_time) == 210)
+            assert(math.abs(tonumber(first.native_read_start_observer_monotonic_s) - 10.101) < 1e-9)
+            assert(math.abs(tonumber(first.native_read_end_observer_monotonic_s) - 10.102) < 1e-9)
             assert(tonumber(logs[1].displacement) >= 5)
             tick(1, .5)
             assert(#logs == 4 and tonumber(logs[4].displacement) > tonumber(logs[1].displacement))
@@ -328,6 +341,7 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             assert(push('cockpit2', 1, 2001))
             tick(2, .05)
             assert(#logs == 5 and logs[5].slot == 'cockpit2')
+            assert(not logs[5].native_read_start_observer_monotonic_s and not logs[5].source_arrival_observer_monotonic_s)
             assert(tonumber(logs[5].displacement) >= 1 and tonumber(logs[5].displacement) < 3)
             controller:view(nil, 2, 'cockpit2')
 
@@ -357,6 +371,8 @@ class CompanyCockpitPlaybackLuaTests(unittest.TestCase):
             tick(1, .05)
             local alignment = logs[#logs]
             assert(alignment.kind == 'alignment_readback' and alignment.displacement == '0')
+            assert(math.abs(tonumber(alignment.source_arrival_observer_monotonic_s) - (now - .05)) < 1e-9)
+            assert(math.abs(tonumber(alignment.native_read_start_observer_monotonic_s) - (now + .001)) < 1e-9)
             tick(1, .55)
             assert(push('cockpit', 3, 20002))
             tick(2, .05)

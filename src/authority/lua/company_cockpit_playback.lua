@@ -20,10 +20,10 @@ local function watermark(sample, arrival)
             arrival = arrival, version = sample.version}
 end
 
-local function alignment(sample, written_at, first_contact)
+local function alignment(sample, written_at, arrival, first_contact)
     return {target = {x = sample.x, y = sample.y, z = sample.z}, sequence = sample.sequence,
             source_time = sample.source_time, capture_time = sample.capture_time, generation = sample.generation,
-            written_at = written_at, first_contact = first_contact}
+            written_at = written_at, arrival = arrival, first_contact = first_contact}
 end
 
 local function first_contact_matches(previous, sample, arrival, now)
@@ -146,7 +146,7 @@ function M.new(options)
             options.fault('first_contact_readback_expired')
             return false
         end
-        local actual = session:read()
+        local actual, read_start, read_end = session:read(true)
         if not actual or (initial and not session:first_contact_in_range(actual, pending_align.target)) then
             stop_track()
             options.fault('alignment_read_failed')
@@ -166,6 +166,7 @@ function M.new(options)
             source_sequence = pending_align.sequence,
             source_time = pending_align.source_time,
             capture_time = pending_align.capture_time,
+            native_read_start = read_start, native_read_end = read_end, source_arrival = pending_align.arrival,
             local_time = now,
             game_time = options.game(),
             actual = actual,
@@ -232,7 +233,7 @@ function M.new(options)
             sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
-            read = function() return active_session:read() end,
+            read = function(_, timed) return active_session:read(timed) end,
             write = function(_, target, before, recheck, attitude)
                 local ok, outside_native_limit, dispatch = active_session:write(target, before, recheck, attitude, continuous)
                 if ok == true then stats.writes = stats.writes + 1 end
@@ -280,8 +281,7 @@ function M.new(options)
         accept_binding(verified)
         controller, session = candidate, native_session
         stats.alignments = stats.alignments + 1
-        pending_align = alignment(sample, options.clock(), true)
-        pending_align.arrival = arrival
+        pending_align = alignment(sample, options.clock(), arrival, true)
         last_by_index_gen[watermark_key(verified.index, verified.generation)] = watermark(sample, arrival)
         return true, 'aligned'
     end
@@ -513,7 +513,7 @@ function M.new(options)
                 session = temp_session
                 stats.alignments = stats.alignments + 1
                 stats.reacquisitions = stats.reacquisitions + 1
-                pending_align = alignment(sample, now, false)
+                pending_align = alignment(sample, now, arrival, false)
                 last_by_index_gen[wkey] = watermark(sample, arrival)
                 emit('reacquire_aligned', {
                     index = ship_index, dist = gap, sequence = sample.sequence,
@@ -724,6 +724,18 @@ local function make_x4_record(readers_by_slot, clock)
                 'target=' .. coordinates(event.target), 'actual=' .. coordinates(event.actual),
                 'error=' .. decimal(event.error), 'displacement=' .. decimal(dist3(event.actual, track.origin)),
             }
+            local read_start, read_end = event.native_read_start, event.native_read_end
+            if type(read_start) == 'number' and type(read_end) == 'number'
+                    and read_start >= 0 and read_end >= read_start and read_end < math.huge then
+                -- These and the launcher arrival are observer-host monotonic
+                -- times. capture_time belongs to the remote source host.
+                fields[#fields + 1] = 'native_read_start_observer_monotonic_s=' .. decimal(read_start)
+                fields[#fields + 1] = 'native_read_end_observer_monotonic_s=' .. decimal(read_end)
+                if type(event.source_arrival) == 'number' and event.source_arrival >= 0
+                        and event.source_arrival < math.huge then
+                    fields[#fields + 1] = 'source_arrival_observer_monotonic_s=' .. decimal(event.source_arrival)
+                end
+            end
             if event.continuous_playback then
                 fields[#fields + 1] = 'playback=continuous'
                 fields[#fields + 1] = 'input_sequence=' .. event.input_sequence
@@ -747,7 +759,7 @@ function M.new_x4(config, pinned, cockpit_reader, guard, clock)
     local ffi = require('ffi')
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
     local adapter = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard,
+        enabled = true, pinned = pinned, own_index = config.index, observer = cockpit_reader, guard = guard, read_clock = clock,
     })
     return M.new({
         enabled = true,
@@ -779,7 +791,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
         if reader ~= nil then
             slot_names[#slot_names + 1] = name
             adapters[name] = X4LAN_COMPANY_HULL_PLAYBACK_X4.new_x4({
-                enabled = true, pinned = pinned, own_index = config.index, observer = reader, guard = guard,
+                enabled = true, pinned = pinned, own_index = config.index, observer = reader, guard = guard, read_clock = clock,
             })
         end
     end

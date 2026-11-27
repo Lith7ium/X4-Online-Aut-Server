@@ -171,7 +171,7 @@ function M.new(options)
    if not fresh_arrival and not previous_write then return end
    local previous_state = state
    stage = 'read'
-   local observed = configuration.read()
+   local observed, read_start, read_end = configuration.read(previous_write ~= nil)
    stage = 'read_pose'
    local actual = copy_pose(observed)
    assert(state == previous_state)
@@ -190,6 +190,7 @@ function M.new(options)
      source_sequence=previous_write.sequence, latest_source_time=previous_write.latest_source_time,
      latest_capture_time=previous_write.latest_capture_time,
      local_time=now, game_time=game_time, elapsed=now-previous_write.local_time,
+     native_read_start=read_start, native_read_end=read_end,
      error=distance(actual, previous_write.target)}, 'readback_record')
     previous_write = nil
     uncertain = false

@@ -7,6 +7,7 @@ local owner, docked, docking, stored, pilot, assigned, ai
 local controlled, occupied, contained, cockpit_sector, target_sector, target_zone, destination_zone
 local player, paused, observed, guarded, writes, actual, requested, fault_write, active_pilot
 local cockpit_pose, radar_range
+local read_trace
 
 local c = {
     IsPlayerValid = function() return player end,
@@ -29,6 +30,7 @@ local c = {
     GetObjectPositionInSector = function(id)
         if id == cockpit then return cockpit_pose end
         assert(id == target)
+        if read_trace then read_trace[#read_trace + 1] = 'get' end
         return actual
     end,
     GetZoneAt = function(id, offset)
@@ -112,6 +114,28 @@ assert(session:read().x == 23)
 check_attitude(session:read(), before)
 session:close()
 assert(not session:guard() and session:read() == nil and not session:write(destination, before) and writes == 1)
+
+-- Mark the actual native getter, independent of the timing of guard checks or a write.
+reset()
+read_trace = {}
+local clock_value = 10
+cfg.read_clock = function()
+    read_trace[#read_trace + 1] = 'clock'
+    clock_value = clock_value + .001
+    return clock_value
+end
+session = assert(module.new_x4(cfg):bind(binding))
+local pose, start, finish = session:read(true)
+assert(pose.x == 20 and start == 10.001 and math.abs(finish - 10.002) < 1e-9)
+assert(table.concat(read_trace, ',') == 'clock,get,clock')
+read_trace = {}
+pose, start, finish = session:read()
+assert(pose.x == 20 and start == nil and finish == nil and table.concat(read_trace, ',') == 'get')
+cfg.read_clock = function() error('diagnostic clock unavailable') end
+pose, start, finish = session:read(true)
+assert(pose.x == 20 and start == nil and finish == nil and writes == 0)
+cfg.read_clock, read_trace = nil, nil
+session:close()
 
 reset()
 actual.x = -100

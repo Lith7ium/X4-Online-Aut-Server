@@ -178,7 +178,7 @@ function M.new(options)
                 end
                 local previous = lineage[#lineage]
                 lineage[#lineage + 1] = {sequence = sample.sequence, source_time = sample.source_time,
-                    capture_time = sample.capture_time,
+                    capture_time = sample.capture_time, arrival = arrival,
                     capture_interval = previous and sample.capture_time - previous.capture_time}
                 if #lineage > 16 then table.remove(lineage, 1) end
                 newest = {sequence = sample.sequence, pose = sample.pose, rate = sample.real_rate, arrival = arrival}
@@ -233,15 +233,15 @@ function M.new(options)
         buffer_options = {delay = INTERPOLATION_DELAY, horizon = PREDICTION_SECONDS, start_at_first_pair = cfg.start_at_first_pair,
                           stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = continuous and SECTOR_DIAGONAL or MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
-        read = function()
-            local observed = cfg.read(copy(binding))
+        read = function(timed)
+            local observed, read_start, read_end = cfg.read(copy(binding), timed)
             local actual = assert(xyz(observed, 1e7), 'invalid native company hull read')
             measured_pose = actual
             local attitude = follows_attitude and assert(buffer.copy_attitude(observed)) or nil
             -- Legacy XYZ playback leaves native orientation to the adapter.
             actual.yaw, actual.pitch, actual.roll = attitude and attitude.yaw or 0,
                 attitude and attitude.pitch or 0, attitude and attitude.roll or 0
-            return actual
+            return actual, read_start, read_end
         end,
         write = function(target, before)
             local expired = expiry()
@@ -313,6 +313,8 @@ function M.new(options)
                 index = binding.index, generation = binding.generation, sector_macro = binding.sector_macro,
                 code = binding.code, source_sequence = source.sequence, source_time = source.source_time,
                 capture_time = source.capture_time, local_time = event.local_time, game_time = event.game_time,
+                native_read_start = event.native_read_start, native_read_end = event.native_read_end,
+                source_arrival = readback and source.arrival or nil,
                 actual = xyz(event.actual, 1e7), target = xyz(event.target, 1e7), phase = event.phase,
                 error = event.error, elapsed = event.elapsed,
                 actual_attitude = follows_attitude and buffer.copy_attitude(event.actual) or nil,

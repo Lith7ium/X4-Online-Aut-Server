@@ -86,10 +86,10 @@ function M.new(options, engine)
             return is_pilot() and self:guard()
         end
 
-        function session:read()
+        function session:read(timed)
             local before = eligible()
             if not before then return nil end
-            local actual = engine.read(original_target.actor)
+            local actual, read_start, read_end = engine.read(original_target.actor, timed)
             local after = eligible()
             if not position(actual) or not after then return nil end
             -- The setter can return while the ship is still in its original zone.
@@ -98,7 +98,7 @@ function M.new(options, engine)
                 closed = true
                 return nil
             end
-            return actual
+            return actual, read_start, read_end
         end
 
         -- Called only after the controller checked the later XYZ against its
@@ -257,13 +257,23 @@ function M.new_x4(options)
                 sector_macro = GetComponentData(sector_ref, 'macro')}
     end
 
+    local function read_clock()
+        local ok, seconds = pcall(options.read_clock)
+        if ok and finite(seconds) and seconds >= 0 then return seconds end
+    end
+
     return M.new(options, {
         cockpit = cockpit,
         target = target,
-        read = function(actor)
+        read = function(actor, timed)
+            timed = timed and options.read_clock ~= nil
+            local read_start = timed and read_clock() or nil
             local value = read(actor)
+            local read_end = timed and read_clock() or nil
+            if not (read_start and read_end and read_end >= read_start) then read_start, read_end = nil, nil end
             return {x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z),
-                    yaw = tonumber(value.yaw), pitch = tonumber(value.pitch), roll = tonumber(value.roll)}
+                    yaw = tonumber(value.yaw), pitch = tonumber(value.pitch), roll = tonumber(value.roll)},
+                read_start, read_end
         end,
         within_radar = function(cockpit_actor, actual, destination, radius)
             local origin = read(cockpit_actor)
