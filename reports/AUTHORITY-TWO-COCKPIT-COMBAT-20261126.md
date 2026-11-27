@@ -77,3 +77,16 @@ On 27 November, two native Bazzite cockpits and one GPU-free local X4 provider r
 Both ships kept 3,600 hull. KHI's cockpit later read 2,366 shield again at the same server damage revision, confirming that regeneration reached the pilot. The range did not record aim for the reverse burst. It provides no evidence of a lost hit on that leg. The provider verified the final checkpoint `checkpoint-170e81a5a77b4206b5cead0cf3d44945`. The two pilots and provider exited normally and preserved the input save. The private result has SHA-256 `edc204b92e798002e531eedd155f7dfd5764d4307228cb25f89b52fefec48966`.
 
 A subsequent aim check captured an unpaused frame from each cockpit showing the other ship selected under the stock reticle. The stock lead point lay within 0.38 pixels of the center in both images. The test driver lost its initial readiness record from its log window before delivering the first keypress. Neither pilot fired in that run.
+
+## Confirmed cockpit hits in both directions
+
+A later run on the same Linux range preserved each pilot's unpaused stock cockpit image. Each selected the other ship under the reticle. The private controller retained the initial ship and weapon checks while reading fresh aim and shield values before each keypress. Both pilots pressed and released the normal primary-fire control once.
+
+| Shot | Native projectiles | Shooter's local target shield | Server receipt | Victim's own X4 readback |
+| --- | ---: | --- | --- | --- |
+| HVC-420 → KHI-630 | 30 | 9 × 26, from 2,366 to 2,132 | First hit applied, order 1 | 2,340.00003 shield and 3,600 hull, window 3, sequence 53 |
+| KHI-630 → HVC-420 | 30 | 5 × 26, from 2,366 to 2,236 | First hit applied, order 2 | 2,340.00003 shield and 3,600 hull, window 3, sequence 82 |
+
+Each ordinary sender forwarded one direct X4 attack notification. The other eight and four local hits have no server receipts. The unpaused images establish aim before firing. The post-hit values come from independent X4 health reads in the receiving cockpits. Human recognition of incoming fire and a reciprocal Linux/Windows internet test remain open.
+
+Both pilots and the provider exited normally. The final paused checkpoint was `checkpoint-5d18ec9e95c14450bffb520278ecec44`, SHA-256 `61b8904bc2b3a6e7e2ef87f1b44801d040789f9f096d1f4155ded02b2483dac8`. The private result has SHA-256 `591bd9182d4e846722426c705d5338fc6ef4913a50a199de52b52ea851bce40f`.
