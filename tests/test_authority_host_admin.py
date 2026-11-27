@@ -415,6 +415,28 @@ class WebTests(unittest.TestCase):
                                       **{'Content-Type': 'application/json', 'X-Host-Admin-Token': TOKEN})[0], 403)
         self.assertEqual(self.submitted, [])
 
+    def test_port_is_bound_before_the_admin_is_attached(self):
+        early = admin.HostAdminWeb(None, TOKEN, port=0, page=b'')
+        self.addCleanup(early.close)
+        with self.assertRaises(OSError):
+            admin.HostAdminWeb(None, TOKEN, port=early.port, page=b'')
+        with self.assertRaises(ValueError):
+            early.start()
+        early.attach(SimpleNamespace(catalog=CATALOG))
+        with self.assertRaises(ValueError):
+            early.attach(SimpleNamespace())
+        early.start()
+        self.assertEqual(self.request_to(early.port, '/api/catalog')[0], 200)
+
+    def request_to(self, port, path):
+        connection = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+        try:
+            connection.request('GET', path, headers={'X-Host-Admin-Token': TOKEN})
+            response = connection.getresponse()
+            return response.status, response.read()
+        finally:
+            connection.close()
+
     def test_actions_are_queued_or_refused(self):
         headers = {'Content-Type': 'application/json', 'X-Host-Admin-Token': TOKEN}
         body = json.dumps({'action': 'money', 'params': {'credits': 5}})

@@ -1143,6 +1143,10 @@ def run(args):
     fixture_save_guards = None
     playback_window = None
     try:
+        if host_admin_port is not None:
+            # Bind before X4 starts, so a port in use fails in seconds, not after a launch.
+            from authority_host_admin import HostAdminWeb
+            host_admin_web = HostAdminWeb(None, host_admin_token, port=host_admin_port)
         measure_seconds = diagnostic_process_measure_seconds(args)
         fixture_mode = getattr(args, 'fixture_overlap', False)
         if type(fixture_mode) is not bool or (fixture_mode and (
@@ -1780,7 +1784,7 @@ def run(args):
                                                  guard=world._participants.check_process, market=market_provider,
                                                  **purchase_options)
         if host_admin_port is not None:
-            from authority_host_admin import HostAdmin, HostAdminWeb, read_game_catalog
+            from authority_host_admin import HostAdmin, read_game_catalog
             lifecycle = world.session
             def host_admin_quiet():
                 # Edit X4 only between saves, trades and combat writes.
@@ -1790,7 +1794,7 @@ def run(args):
             host_admin = HostAdmin(control=control, session=session, lifecycle=lifecycle,
                                    channel=host_admin_channel, catalog=read_game_catalog(game),
                                    quiet=host_admin_quiet, audit_path=out/'host-admin-audit.jsonl')
-            host_admin_web = HostAdminWeb(host_admin, host_admin_token, port=host_admin_port).start()
+            host_admin_web.attach(host_admin).start()
         listener=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0)); listener.listen(8)
         # Guard every synchronous engine call, including potentially long save operations.

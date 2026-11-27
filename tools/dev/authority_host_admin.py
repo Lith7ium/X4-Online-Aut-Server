@@ -768,10 +768,17 @@ class _Handler(BaseHTTPRequestHandler):
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 8
+    # Linux: rebind quickly after a restart. Windows: SO_REUSEADDR would let a
+    # second process take the same port, so leave it off there.
+    allow_reuse_address = os.name != 'nt'
 
 
 class HostAdminWeb:
-    """Serve the host menu on 127.0.0.1 in a background thread."""
+    """Serve the host menu on 127.0.0.1 in a background thread.
+
+    The port is bound at construction. Without an admin yet, attach one
+    before start(); nothing is served until then.
+    """
 
     def __init__(self, admin, token, *, port, page=None):
         if type(port) is not int or not (port == 0 or 1024 <= port <= 65535):
@@ -791,7 +798,15 @@ class HostAdminWeb:
     def port(self):
         return self._server.server_address[1]
 
+    def attach(self, admin):
+        if self._server.admin is not None or admin is None:
+            raise ValueError('host admin page already has an admin')
+        self._server.admin = admin
+        return self
+
     def start(self):
+        if self._server.admin is None:
+            raise ValueError('attach the host admin before starting the page')
         self._thread.start()
         return self
 
