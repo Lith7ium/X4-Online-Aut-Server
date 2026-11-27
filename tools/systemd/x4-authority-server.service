@@ -3,8 +3,9 @@
 # Edit WorkingDirectory and ExecStart if the package is not in ~/x4-authority-test-server.
 [Unit]
 Description=X4 authority dedicated world
-Wants=network-online.target
-After=network-online.target
+# The optional headless Steam unit starts first when it is installed; a missing unit is ignored.
+Wants=network-online.target x4-authority-steam.service
+After=network-online.target x4-authority-steam.service
 # Stop retrying after five failed starts within an hour; inspect the newest run first.
 StartLimitIntervalSec=3600
 StartLimitBurst=5

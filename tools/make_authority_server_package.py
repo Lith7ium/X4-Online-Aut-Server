@@ -73,6 +73,7 @@ REQUIRED = {
     'tools/dev/authority_dedicated_server.py',
     'tools/systemd/x4-authority-server.service',
     'tools/systemd/x4-authority-server.env.example',
+    'tools/systemd/x4-authority-steam.service',
     'tools/run_authority_client.sh',
     'tools/dev/authority_linux_player_client.py',
     'tools/dev/authority_recovered_loopback_server.py',

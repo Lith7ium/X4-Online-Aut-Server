@@ -200,9 +200,152 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn('tools/dev/authority_dedicated_server.py', service['ExecStart'])
         self.assertIn('${X4_GAME}', service['ExecStart'])
         self.assertEqual(unit['Install']['WantedBy'], 'default.target')
+        for name in ('Wants', 'After'):
+            self.assertIn('x4-authority-steam.service', unit['Unit'][name].split())
         example = (ROOT / 'tools/systemd/x4-authority-server.env.example').read_text(encoding='utf-8')
         for name in ('X4_GAME=', 'X4_INITIAL_STORE=', 'X4_RUNS=', 'X4_LAUNCHER_OPTIONS='):
             self.assertIn(name, example)
+
+
+    def test_steam_unit_runs_a_headless_client_and_restarts_it(self):
+        unit = configparser.ConfigParser(interpolation=None, strict=False)
+        unit.optionxform = str
+        unit.read(ROOT / 'tools/systemd/x4-authority-steam.service', encoding='utf-8')
+        service = unit['Service']
+        self.assertTrue(service['ExecStart'].startswith('/usr/bin/xvfb-run '))
+        self.assertIn('/usr/bin/steam $STEAM_OPTIONS', service['ExecStart'])
+        self.assertEqual(service['Restart'], 'on-failure')
+        self.assertTrue(service['EnvironmentFile'].startswith('-'))  # the settings file is optional
+        self.assertNotIn('User', service)
+        self.assertEqual(unit['Install']['WantedBy'], 'default.target')
+
+
+class PruneTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.initial = self.root / '.local/source-run/checkpoints'
+        self.initial.mkdir(parents=True)
+        self.runs = (self.root / '.local/dedicated').resolve()
+        self.runs.mkdir(parents=True)
+
+    def name(self, hour):
+        return f'run-20261127T{hour:02d}0000Z-000'
+
+    def test_only_runs_older_than_the_source_beyond_the_newest_n_are_prunable(self):
+        for hour in range(1, 7):
+            make_run(self.runs, self.name(hour), clean_result() if hour <= 4 else None)
+        source = self.runs / self.name(4) / 'checkpoints'
+
+        def prunable(keep):
+            return [run.name for run in launcher.prunable_runs(self.runs, source, keep)]
+
+        self.assertEqual(prunable(2), [self.name(1), self.name(2), self.name(3)])
+        self.assertEqual(prunable(5), [self.name(1)])
+        self.assertEqual(prunable(6), [])
+        self.assertEqual(launcher.prunable_runs(self.runs, self.initial, 1), [])
+
+    def test_remove_run_deletes_the_run_and_its_record_but_not_link_targets(self):
+        run = make_run(self.runs, self.name(1), clean_result())
+        (self.runs / (run.name + '.launch.json')).write_text('{}')
+        outside = self.root / 'outside.txt'
+        outside.write_text('keep')
+        nested = run / 'case/home'
+        nested.mkdir(parents=True)
+        try:
+            (nested / 'link').symlink_to(outside)
+        except OSError:
+            pass  # symlinks need extra rights on Windows
+        if sys.platform != 'win32':
+            nested.chmod(0o500)  # saved cases can hold read-only directories
+        launcher.remove_run(run)
+        self.assertFalse(run.exists())
+        self.assertFalse((self.runs / (run.name + '.launch.json')).exists())
+        self.assertEqual(outside.read_text(), 'keep')
+
+    def launch(self, *extra, clear_lock=lambda: False):
+        argv = ['--game', '/g', '--initial-store', str(self.initial), '--runs', str(self.runs), *extra]
+        calls = []
+        with redirect_stdout(StringIO()) as out, redirect_stderr(StringIO()) as err:
+            code = launcher.main(argv, root=self.root, now=NOW, execv=lambda *a: calls.append(a),
+                                 steam_wait=lambda: True, clear_lock=clear_lock)
+        return code, calls, out.getvalue(), err.getvalue()
+
+    def test_start_prunes_old_clean_runs_and_keeps_crashed_newer_ones(self):
+        for hour in (1, 2, 3):
+            make_run(self.runs, self.name(hour), clean_result())
+        make_run(self.runs, self.name(4), None)  # crashed after the last clean stop
+        code, calls, out, _ = self.launch('--dry-run', '--keep-runs', '1')
+        self.assertEqual((code, calls), (0, []))
+        preview = json.loads(out[:out.rindex('}') + 1])
+        self.assertEqual(preview['would_prune_runs'], [self.name(1), self.name(2)])
+        self.assertTrue((self.runs / self.name(1)).exists())
+        code, calls, _, _ = self.launch('--keep-runs', '1')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sorted(p.name for p in self.runs.iterdir() if p.is_dir()), [self.name(3), self.name(4)])
+        record = json.loads(next(self.runs.glob('*.launch.json')).read_text())
+        self.assertEqual(record['pruned_runs'], [self.name(1), self.name(2)])
+
+    def test_an_unsafe_lock_stops_the_start_before_anything_is_pruned(self):
+        for hour in (1, 2):
+            make_run(self.runs, self.name(hour), clean_result())
+
+        def refuse():
+            raise ValueError('X4 is still running (PID 7)')
+
+        code, calls, _, err = self.launch('--keep-runs', '1', '--clear-stale-x4-lock', clear_lock=refuse)
+        self.assertEqual((code, calls), (launcher.EX_TEMPFAIL, []))
+        self.assertIn('X4 is still running', err)
+        self.assertTrue((self.runs / self.name(1)).exists())
+
+    def test_keep_runs_is_bounded(self):
+        for value in ('0', '1001'):
+            with self.subTest(value=value), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                launcher.parse(['--game', '/g', '--initial-store', '/s', '--runs', '/r', '--keep-runs', value])
+
+
+class StaleLockTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.lock = Path(folder.name, 'EGOSOFT_X4.lock')
+        self.proc = Path(folder.name, 'proc')
+        self.proc.mkdir()
+
+    def process(self, pid, name, uid):
+        (self.proc / str(pid)).mkdir()
+        (self.proc / str(pid) / 'status').write_text(f'Name:\t{name}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n')
+
+    def clear(self, uid):
+        return launcher.clear_stale_x4_lock(uid, lock=self.lock, proc=self.proc)
+
+    def test_missing_lock_needs_nothing(self):
+        self.assertFalse(self.clear(1000))
+
+    def test_stale_lock_of_this_user_is_removed_when_no_x4_runs(self):
+        self.lock.touch()
+        uid = self.lock.lstat().st_uid
+        self.process(10, 'steam', uid)
+        self.process(11, 'X4', uid + 1)  # another user's game does not hold this user's lock
+        self.assertTrue(self.clear(uid))
+        self.assertFalse(self.lock.exists())
+
+    def test_lock_is_kept_while_x4_runs_or_when_it_is_not_a_plain_empty_file(self):
+        self.lock.touch()
+        uid = self.lock.lstat().st_uid
+        self.process(12, 'X4', uid)
+        with self.assertRaisesRegex(ValueError, 'PID 12'):
+            self.clear(uid)
+        self.assertTrue(self.lock.exists())
+        (self.proc / '12/status').unlink()
+        (self.proc / '12').rmdir()
+        with self.assertRaisesRegex(ValueError, 'remove it by hand'):
+            self.clear(uid + 1)
+        self.lock.write_text('x')
+        with self.assertRaisesRegex(ValueError, 'remove it by hand'):
+            self.clear(uid)
+        self.assertTrue(self.lock.exists())
 
 
 if __name__ == '__main__':

@@ -145,6 +145,17 @@ Before starting, the launcher waits up to `--steam-wait-seconds` (default 600)
 for this user's Steam client. Add `--dry-run` to print the choice and the
 command without starting anything.
 
+Two more launcher options suit an unattended host. Both are set in the example
+settings file.
+- `--keep-runs 10` deletes runs older than the restart source, except the
+  newest ten, before each start. It never deletes the source or any newer run,
+  since crashed runs are kept for inspection. Each deletion is listed in the
+  launch record.
+- `--clear-stale-x4-lock` removes `/tmp/EGOSOFT_X4.lock` when a killed run left
+  it behind. That lock otherwise blocks every later start. The launcher removes
+  it only when it is an empty file of this user and no X4 process of this user
+  is running. Otherwise the start fails and systemd retries.
+
 Install the user unit as the unprivileged game user:
 
 ```sh
@@ -152,6 +163,7 @@ mkdir -p ~/.config/systemd/user ~/.config/x4-authority
 install -m 600 tools/systemd/x4-authority-server.env.example ~/.config/x4-authority/server.env
 editor ~/.config/x4-authority/server.env
 cp tools/systemd/x4-authority-server.service ~/.config/systemd/user/
+cp tools/systemd/x4-authority-steam.service ~/.config/systemd/user/   # optional, see below
 python3 tools/dev/authority_dedicated_server.py --game "$X4_GAME"   --initial-store "$X4_INITIAL_STORE" --runs "$X4_RUNS" --dry-run
 systemctl --user daemon-reload
 systemctl --user enable --now x4-authority-server
@@ -169,11 +181,22 @@ The unit expects the package in `~/x4-authority-test-server`; edit
   newest run's `result.json` and `launch.json` before running
   `systemctl --user reset-failed x4-authority-server`.
 
-Three requirements are still open:
-- The supervisor still requires an authenticated native Steam client under the
-  same account. This package does not start Steam at boot.
-- Every restart creates a new run directory, and nothing removes old ones.
-- Checkpoints from a crashed run are not yet a restart source.
+The supervisor needs an authenticated native Steam client under the same
+account. If the host has no desktop session that starts Steam, the optional
+`x4-authority-steam.service` runs Steam with `-silent` on its own virtual
+display (`xvfb-run`). The world service wants and orders itself after that unit
+when it is installed.
+- Log in to Steam once, interactively, as this user and let Steam remember the
+  login. The unit cannot answer Steam Guard.
+- Do not also start Steam in a desktop session for the same user.
+- Put extra client options in `~/.config/x4-authority/steam.env` as
+  `STEAM_OPTIONS=...`.
+- This unit has not yet started Steam on a real host. Check `steam.pid` and
+  `journalctl --user -u x4-authority-steam` the first time.
+
+Checkpoints from a crashed run are still not a restart source. The launcher
+restarts from the previous clean stop instead.
+[Crash restart proposal](AUTHORITY-CRASH-RESTART-PLAN.md)
 
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace

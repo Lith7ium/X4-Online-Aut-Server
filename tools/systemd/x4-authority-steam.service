@@ -1,0 +1,23 @@
+# Optional systemd user unit: a headless Steam client for the dedicated world.
+# Log in once interactively as this user with the login remembered; this unit reuses it.
+# Do not enable it while the same user also runs Steam in a desktop session.
+# Requires xvfb-run (Debian/Ubuntu package xvfb, Fedora xorg-x11-server-Xvfb).
+[Unit]
+Description=Steam client for the X4 authority dedicated world
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=STEAM_OPTIONS=-silent
+EnvironmentFile=-%h/.config/x4-authority/steam.env
+ExecStart=/usr/bin/xvfb-run --auto-servernum "--server-args=-screen 0 1280x800x24" /usr/bin/steam $STEAM_OPTIONS
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=60
+UMask=0077
+
+[Install]
+WantedBy=default.target
