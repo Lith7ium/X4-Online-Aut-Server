@@ -181,6 +181,24 @@ class NativeDamageTests(unittest.TestCase):
         self.engine(lethal)
         self.assertEqual(pending.poll(), (0, 0))
 
+        # Post-wreck Lua readback (all four observed values 0 after MD verified killed=1, max_hull>0)
+        # must also confirm without fencing the provider, while a follow-up hit on the wreck refuses cleanly.
+        post_wreck = self.begin()
+        self.engine('applied|0x102|0x103|1|26|0|10|0|0|5750|6400|0|0|0|0')
+        self.assertEqual(post_wreck.poll(), (0, 0))
+        followup = self.begin()
+        self.engine('refused')
+        with self.assertRaises(CombatImpactRejected):
+            followup.poll()
+        self.assertFalse(self.provider._fenced)
+
+        # Partial zero maxima on a kill must still fence as uncertain.
+        bad_partial = self.begin()
+        self.engine('applied|0x102|0x103|1|26|0|10|0|0|5750|6400|0|0|5750|0')
+        with self.assertRaisesRegex(NativeGunDamageUncertain, 'readbacks disagree'):
+            bad_partial.poll()
+        self.assertTrue(self.provider._fenced)
+
     def test_health_uses_fresh_read_with_exact_registry_identity(self):
         self.hello()
         read = self.begin_health()

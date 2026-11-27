@@ -131,8 +131,14 @@ function M.new(lease, net, monotonic, paused, read_health, game_time, ordered_hi
             finish_impact('unknown', 'amount_mismatch')
             return
         end
-        if not (near(hp.AfterShield, observed.shield) and near(hp.AfterHull, observed.hull)
-                and near(hp.MaxShield, observed.shieldmax) and near(hp.MaxHull, observed.hullmax)) then
+        local is_killed = killed == '1' or killed == 'true'
+        local immediate_match = near(hp.AfterShield, observed.shield) and near(hp.AfterHull, observed.hull)
+            and near(hp.MaxShield, observed.shieldmax) and near(hp.MaxHull, observed.hullmax)
+        local wreck_match = is_killed and hp.BeforeHull > 0 and hp.MaxHull > 0
+            and hp.AfterShield == 0 and hp.AfterHull == 0
+            and observed.shield == 0 and observed.hull == 0
+            and observed.shieldmax == 0 and observed.hullmax == 0
+        if not (immediate_match or wreck_match) then
             finish_impact('unknown', 'health_readback_mismatch')
             return
         end

@@ -219,3 +219,35 @@ input = group_packet(9, 1, 3, 4, '1074,26|943,26|1074,26')
 tick()
 group_result(9, 'refused')
 assert(outputs[15] == 'GUN_GROUP_RESULT|' .. group_identity(9) .. '|refused' and #issued == 12)
+
+-- Lethal single hit with post-wreck zero-maxima Lua readback (e.g. callback >7.8 ms after impact)
+-- must confirm cleanly, and a follow-up hit on the registered wreck (non-null actor ids) must refuse.
+input = input_for(10, 4)
+tick()
+receipt = {ok=true, shield=0, hull=0, shieldmax=0, hullmax=0}
+received('Result', identity(10) .. '|applied|0x102|0x103|1|' .. witness .. '|'
+    .. fixed_point({26, 0, 10, 0, 0, 5750, 6400}))
+local wreck_confirmed = impact_numbers(outputs[16]:gsub('|1|', '|0|', 1), 10)
+assert(outputs[16]:find('|applied|0x102|0x103|1|26|0|10|0|0|5750|6400|0|0|0|0$', 1) ~= nil)
+assert(wreck_confirmed[8] == 0 and wreck_confirmed[9] == 0 and wreck_confirmed[10] == 0 and wreck_confirmed[11] == 0)
+
+-- Second queued hit on the same registered wreck returns MD refused with resolved actor IDs.
+input = input_for(11, 4)
+tick()
+received('Result', identity(11) .. '|refused|0x102|0x103|0|-|-')
+assert(outputs[17] == 'GUN_RESULT|' .. identity(11) .. '|refused')
+
+-- Non-lethal hit or partial zero maxima MUST still fail closed as unknown.
+input = input_for(12, 4)
+tick()
+receipt = {ok=true, shield=0, hull=0, shieldmax=0, hullmax=0}
+received('Result', identity(12) .. '|applied|0x102|0x103|0|' .. witness .. '|'
+    .. fixed_point({26, 0, 100, 0, 74, 5750, 6400}))
+assert(outputs[18] == 'GUN_RESULT|' .. identity(12) .. '|unknown')
+
+input = input_for(13, 4)
+tick()
+receipt = {ok=true, shield=0, hull=0, shieldmax=5750, hullmax=0}
+received('Result', identity(13) .. '|applied|0x102|0x103|1|' .. witness .. '|'
+    .. fixed_point({26, 0, 10, 0, 0, 5750, 6400}))
+assert(outputs[19] == 'GUN_RESULT|' .. identity(13) .. '|unknown')

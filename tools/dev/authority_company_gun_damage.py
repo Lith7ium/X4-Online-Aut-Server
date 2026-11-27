@@ -129,8 +129,11 @@ def _stock_impact(fields, amount):
 
 def _read_health(fields, amount):
     _, _, _, after, observed = _stock_impact(fields, amount)
+    # Once X4 transitions a killed ship into a wreck (~7.5-7.8 ms after impact),
+    # GetComponentData reports zero maxima alongside zero shield and zero hull.
+    wreck_readback = after[:2] == (0, 0) and observed == (0, 0, 0, 0)
     if ((after[1] == 0) != (observed[1] == 0) or (after[1] == 0 and observed[0] != 0)
-            or not _same_health(after, observed)):
+            or (not wreck_readback and not _same_health(after, observed))):
         raise NativeGunDamageUncertain('native impact health readbacks disagree')
     return observed[:2]
 
