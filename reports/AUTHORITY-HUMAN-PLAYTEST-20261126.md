@@ -24,6 +24,8 @@ Windows recorded its initial health and local shots. Both clients use the same c
 
 An offline regression also found that a delayed or duplicated local reset message could disable all subsequent cockpit health updates during a valid write. The client now ignores a reset it has already applied. A newer reset still takes effect, and X4 logs an unconfirmed write once with its reason. The Windows playtest did not retain evidence linking this ordering to the reported symptom.
 
+A later loopback test used one native Linux shooter and a separate native provider on the archived Bolt experiment at `1c1505b2`. Holding Space for 0.369 s produced 36 stock projectiles. Seven hits reduced the local target's shield from 2,366 to 2,184. The shooter received one confirmed 26-point hit over the combat channel. The provider applied it once and its next confirmed save contained 2,340 shield points. The other six local hits did not reach the provider. The private test supervisor stopped during a process ownership check. The recording does not establish why the additional-hit observer did not finish. The target was an empty Company ship. [Earlier two-cockpit test](AUTHORITY-TWO-COCKPIT-COMBAT-20261126.md)
+
 ## What would change the release decision
 
 A new two-person Linux/Windows internet flight needs to show both pilots following each other's turns and speed in close flight, through increasing separation and travel mode. The target speed and the positions on radar and the map need to be usable, and the Bazzite map needs to render clearly. Each pilot needs to see the other's fire and confirm the resulting shield loss in their cockpit against the server record.
