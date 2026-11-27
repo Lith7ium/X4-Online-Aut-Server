@@ -122,6 +122,8 @@ A single native Linux pilot joined a separate Linux provider on revision `6a9cc6
 
 Both games exited normally. This demonstrates that a graceful departure while moving can save an earlier position than the last network acknowledgement. The records distinguish the rejected final sample from the last applied one. They do not break down the 3.246 s into time spent waiting in the queue, processing the native inspection and checking ownership.
 
+In a later run on `e2346578`, the last pilot left at 33.73 m/s just after acknowledging sequence 30. The provider verified sequence 31, 4.542 m farther along the flight path. The paused readback and the confirmed save agreed within 0.2 mm. Confirmation completed 61.46 s after the client’s leave acknowledgement. No inspection expired during this run. It establishes that a newer in-flight sample can reach the save and leaves the cause of the earlier 3.246 s inspection open.
+
 ## Two real Linux clients at 35.66 km
 
 Two separate native X4 processes on Bazzite joined the standing Fedora server over the LAN. BBS-493 and XNA-002 resumed at their saved positions in Black Hole Sun V, 35,663.72 m apart. Both cockpits recognized the other pilot and returned movement receipts. BBS-493's native radar read 35,656 m against a 40,000 m radar range. This trial used the older V3 position-and-velocity format so that the standing provider and existing invitations could be kept.
