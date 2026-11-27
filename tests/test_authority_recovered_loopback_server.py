@@ -815,4 +815,97 @@ class IntegratedLoopTest(unittest.TestCase):
                 listener.close(); service.close(); service.thread.join(2)
 
 
+
+class _SteppingHost:
+    """Completes each pending engine request on the next tick, like a synchronous world step."""
+
+    def __init__(self, session):
+        self._control = Control()
+        self._world = SimpleNamespace(session=session)
+        self.operations = []
+
+    def tick(self, timeout):
+        request = self._world.session.pending
+        if request is not None:
+            self.operations.append(request.operation)
+            self._world.session.complete(request.world_epoch, request.request_id, True)
+
+
+class KeepWorldRunningTests(unittest.TestCase):
+    def test_options_are_opt_in_and_bounded(self):
+        options = MODULE.persistent_world_options
+        self.assertEqual(options(SimpleNamespace()), (False, None))
+        self.assertEqual(options(SimpleNamespace(persistent=True, keep_world_running=True,
+                                                 empty_checkpoint_seconds=600.0)), (True, 600.0))
+        for args in (SimpleNamespace(keep_world_running=True),
+                     SimpleNamespace(persistent=True, empty_checkpoint_seconds=600.0),
+                     SimpleNamespace(persistent=True, keep_world_running=True, empty_checkpoint_seconds=30.0),
+                     SimpleNamespace(persistent=True, keep_world_running=True, empty_checkpoint_seconds=float('nan')),
+                     SimpleNamespace(persistent=True, keep_world_running=True, diagnostic_client=True),
+                     SimpleNamespace(persistent=True, keep_world_running=True, diagnostic_overlap=True),
+                     SimpleNamespace(persistent=True, keep_world_running=1)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                options(args)
+
+    def test_empty_running_world_is_checkpointed_after_each_interval(self):
+        from authority.session import SessionCoordinator
+        session = SessionCoordinator('world-1', run_when_empty=True)
+        host = _SteppingHost(session)
+        now = 0.0
+        requested_at = []
+        original = session.request_checkpoint
+
+        def request_checkpoint():
+            requested_at.append(now)
+            return original()
+
+        session.request_checkpoint = request_checkpoint
+
+        def check():
+            nonlocal now
+            now += 30.0
+            self.assertLess(now, 3000.0, 'checkpoints stopped')
+
+        def done():
+            return len(host.operations) >= 9 and session.pending is None and session.state == 'running'
+
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            with patch.object(MODULE, 'time', SimpleNamespace(monotonic=lambda: now)):
+                result = MODULE.serve(listener, host, deadline=None, check=check, should_stop=done,
+                                      tick_interval=.01, empty_checkpoint_interval=100.0)
+        self.assertEqual(host.operations, ['pause', 'save', 'resume'] * 3)
+        self.assertEqual(result['empty_checkpoints_requested'], 2)
+        # The wait starts on the first settled running tick and restarts after each checkpoint.
+        self.assertEqual(requested_at, [210.0, 420.0])
+
+    def test_invalid_checkpoint_interval_is_refused(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            for interval in (0, -1.0, float('inf'), '600'):
+                with self.subTest(interval=interval), self.assertRaises(ValueError):
+                    MODULE.serve(listener, Host(), deadline=None, check=lambda: None,
+                                 empty_checkpoint_interval=interval)
+
+    def test_shutdown_saves_and_pauses_a_world_running_while_empty(self):
+        from test_authority_restart_integration import FakeEngine, fake_tick, file_service, run_step
+        with tempfile.TemporaryDirectory() as temporary, file_service() as service:
+            root = Path(temporary)
+            (root / 'store').mkdir()
+            store = CheckpointStore(root / 'store')
+            engine = FakeEngine(root / 'save.xml.gz', tick=1)
+            world = WorldCoordinator('world-1', engine, store, SaveOffers(service, store), run_when_empty=True)
+            for operation in ('pause', 'save', 'resume'):
+                run_step(self, world, operation)
+            engine.tick = 7
+            control = SimpleNamespace(closed=False)
+            control.close = lambda: setattr(control, 'closed', True)
+            saved = MODULE.settle_shutdown(control, world, store, lambda: None)
+            self.assertTrue(control.closed and engine.paused)
+            self.assertEqual((world.session.state, world.session.run_when_empty), ('paused', False))
+            self.assertEqual(saved, store.latest_marked_confirmed())
+            self.assertEqual(fake_tick(saved.path.read_bytes()), 7)
+
+
 if __name__ == '__main__': unittest.main()

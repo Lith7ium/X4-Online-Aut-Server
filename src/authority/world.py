@@ -51,8 +51,8 @@ class LoadOffer:
 class WorldCoordinator:
     """Execute one engine action at a time and bind join loads to saved bytes."""
 
-    def __init__(self, world_epoch, engine, store, offers, *, participants=None):
-        self.session = SessionCoordinator(world_epoch)
+    def __init__(self, world_epoch, engine, store, offers, *, participants=None, run_when_empty=False):
+        self.session = SessionCoordinator(world_epoch, run_when_empty=run_when_empty)
         self._engine = engine
         self._store = store
         self._offers = offers
@@ -93,8 +93,9 @@ class WorldCoordinator:
         request = self.session.pending
         if request is None:
             return None
+        empty_run = self.session.run_when_empty and not self.session.players
         if request.operation == 'resume' and (
-            not self.session.ready_players
+            (not self.session.ready_players and not empty_run)
             or len(self.session.ready_players) != len(self.session.players)
             or self.session.save_required
         ):

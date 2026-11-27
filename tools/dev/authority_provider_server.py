@@ -1,6 +1,7 @@
 """Start one recovered authority server on a private software-rendered display."""
 import argparse
 from contextlib import contextmanager
+import math
 import os
 from pathlib import Path
 import secrets
@@ -98,6 +99,10 @@ def main(argv=None):
     parser.add_argument('--timeout', type=float, default=3600, help='run duration in seconds, or startup timeout with --persistent')
     parser.add_argument('--persistent', action='store_true',
                         help='keep accepting pilots after the last one leaves, until the operator stops the server')
+    parser.add_argument('--keep-world-running', action='store_true',
+                        help='with --persistent: save on last departure, then keep simulating the empty world')
+    parser.add_argument('--empty-checkpoint-seconds', type=float,
+                        help='with --keep-world-running: also save the empty running world this often (60-86400)')
     parser.add_argument('--company-motion', action='store_true',
                         help='enable the pinned movement channel and require company ship selection; TLS flags required')
     parser.add_argument('--company-combat', action='store_true',
@@ -191,6 +196,16 @@ def main(argv=None):
                 or args.verify_company_pose or args.company_trade_trial or args.company_cockpit_purchase):
             parser.error('--persistent requires a serving run')
         server_flags.append('--persistent')
+    if args.keep_world_running:
+        if not args.persistent:
+            parser.error('--keep-world-running requires --persistent')
+        server_flags.append('--keep-world-running')
+    if args.empty_checkpoint_seconds is not None:
+        if not args.keep_world_running:
+            parser.error('--empty-checkpoint-seconds requires --keep-world-running')
+        if not math.isfinite(args.empty_checkpoint_seconds) or not 60 <= args.empty_checkpoint_seconds <= 86400:
+            parser.error('--empty-checkpoint-seconds must be 60 to 86400')
+        server_flags.extend(('--empty-checkpoint-seconds', str(args.empty_checkpoint_seconds)))
     if args.base_game_only:
         server_flags.append('--base-game-only')
     if args.registry_status:

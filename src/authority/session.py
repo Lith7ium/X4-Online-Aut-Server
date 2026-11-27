@@ -7,6 +7,13 @@ It must treat an indeterminate result or timeout as a failure. In particular,
 save is complete and usable, and "resume" only after simulation is running.
 The caller serializes all access and supplies a new world_epoch on every server
 restart. Persistence and restoring a saved universe are not implemented here.
+
+By default an empty world stays paused after its last-departure save. With
+run_when_empty=True (opt-in, for a dedicated server) the world is saved and then
+resumed while nobody is connected; joins still pause, save and wait for every
+connected player's confirmed load before resuming. request_checkpoint() lets the
+owner save a running world periodically, and begin_shutdown() returns the world
+to a saved pause before the process stops.
 """
 
 from dataclasses import dataclass
@@ -31,8 +38,11 @@ class SessionCoordinator:
     this model cannot forcibly stop it.
     """
 
-    def __init__(self, world_epoch):
+    def __init__(self, world_epoch, *, run_when_empty=False):
+        if type(run_when_empty) is not bool:
+            raise ValueError("run_when_empty must be a boolean")
         self._world_epoch = _token(world_epoch, "world_epoch")
+        self._run_when_empty = run_when_empty
         self._players = {}
         self._next_connection = 1
         self._next_request = 1
@@ -79,6 +89,35 @@ class SessionCoordinator:
     def save_required(self):
         return self._save_required
 
+    @property
+    def run_when_empty(self):
+        """True while an empty world may run; begin_shutdown() clears it."""
+        return self._run_when_empty
+
+    def request_checkpoint(self):
+        """Ask for pause, save and resume of a running world; return True if scheduled.
+
+        Only a running world without a pending request is affected. A paused world
+        may be serving a confirmed baseline to loading players, which a new save
+        would invalidate, so the request is refused there and in every other state.
+        """
+        if self._state != "running" or self._pending is not None or self._save_required:
+            return False
+        self._save_required = True
+        self._reconcile()
+        return True
+
+    def begin_shutdown(self):
+        """Stop running while empty and settle a saved pause once requests finish.
+
+        Players still connected keep the ordinary rules; the caller disconnects
+        them. A world that may have advanced since its baseline is saved again.
+        """
+        self._run_when_empty = False
+        if self._state in ("running", "resuming") or self._baseline_id is None:
+            self._save_required = True
+        self._reconcile()
+
     def _request(self, operation):
         if self._next_request > _MAX_INTEGER:
             self._state = "faulted"
@@ -95,14 +134,17 @@ class SessionCoordinator:
     def _reconcile(self):
         if self._pending is not None or self._state == "faulted":
             return
+        empty_run = self._run_when_empty and not self._players
         if self._state == "paused":
             waiting = len(self._ready) < len(self._players)
-            if self._save_required or (waiting and self._baseline_id is None):
+            if self._save_required or ((waiting or empty_run) and self._baseline_id is None):
+                # An empty world resumes only from a confirmed save of its current state.
                 self._request("save")
-            elif self._players and not waiting:
+            elif (self._players and not waiting) or empty_run:
                 self._request("resume")
         elif self._state == "running" and (
-            not self._ready or len(self._ready) < len(self._players) or self._save_required
+            (not self._ready and not empty_run) or len(self._ready) < len(self._players)
+            or self._save_required
         ):
             self._request("pause")
 

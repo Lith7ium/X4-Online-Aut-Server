@@ -105,6 +105,32 @@ present, use that run's `checkpoints` directory as `--store`. An empty run
 that produced no checkpoint uses the previous source again. Always choose a
 fresh `--out` directory.
 
+### Keep the world running between sessions
+
+This opt-in mode has offline tests only. It has not yet run in X4.
+Add `--keep-world-running` together with `--persistent` to keep simulating
+while nobody is connected. After startup, and after each last departure, the
+provider saves the world and then resumes it. A join still pauses and saves
+the world, then waits for that pilot's confirmed load before resuming.
+`--empty-checkpoint-seconds 900` also pauses, saves and resumes the empty
+running world after every 15 minutes without a join or departure. Accepted
+values are 60 to 86400 seconds.
+
+SIGTERM or Ctrl+C still saves and pauses the world before X4 stops, so
+`final_checkpoint_id` in `result.json` names the restart source as above.
+Without these flags an empty world pauses after its last-departure save, as
+before.
+
+A crash loses the progress made since the last checkpoint. A restart source
+must also come from a cleanly stopped run: `result.json` has to report success,
+a paused final state and that run's final checkpoint. The checkpoints that a
+crashed run confirmed therefore cannot yet be used to restart.
+
+The following are unmeasured:
+- CPU use of an unattended running world;
+- the length of each checkpoint pause;
+- NPC and economy progress while no pilot is present.
+
 The wrapper starts a private Xvfb display. Before launching X4 it checks the
 device list and Mesa software Vulkan inside the game's Bubblewrap namespace
 and records the Vulkan probe in `.local/provider-run-01/software-vulkan.log`.

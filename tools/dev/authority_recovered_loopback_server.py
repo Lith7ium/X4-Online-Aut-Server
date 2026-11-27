@@ -580,8 +580,34 @@ def capture_first_registry_snapshot(adapter, store, verify):
     return saved
 
 
+def persistent_world_options(args):
+    """Return (run_when_empty, empty checkpoint seconds) for the ordinary serve path.
+
+    Both are opt-in. A world that runs while empty needs the unbounded --persistent
+    service, and empty checkpoints need a world that runs while empty.
+    """
+    keep = getattr(args, 'keep_world_running', False)
+    interval = getattr(args, 'empty_checkpoint_seconds', None)
+    if type(keep) is not bool:
+        raise ValueError('invalid world running option')
+    if keep and getattr(args, 'persistent', False) is not True:
+        raise ValueError('--keep-world-running requires --persistent')
+    if keep and (getattr(args, 'diagnostic_client', False) or getattr(args, 'diagnostic_clients', None) is not None
+                 or getattr(args, 'diagnostic_overlap', False)):
+        raise ValueError('--keep-world-running is for the ordinary serve path, not diagnostics')
+    if interval is not None:
+        if not keep:
+            raise ValueError('--empty-checkpoint-seconds requires --keep-world-running')
+        if type(interval) not in (int, float) or not math.isfinite(interval) or not 60 <= interval <= 86400:
+            raise ValueError('empty checkpoint interval must be 60 to 86400 seconds')
+    return keep, interval
+
+
 def settle_shutdown(control, world, store, check, *, purchases=None, combat_service=None):
-    """Disconnect clients and settle their last-disconnect pause/save once."""
+    """Disconnect clients and settle their last-disconnect pause/save once.
+
+    A world that runs while empty stops doing so first, so it ends saved and paused.
+    """
     if combat_service is not None:
         while combat_service.native_pending:
             check()
@@ -592,6 +618,8 @@ def settle_shutdown(control, world, store, check, *, purchases=None, combat_serv
         while not purchases.before_world_transition():
             check()
             time.sleep(.05)
+    if getattr(world.session, 'run_when_empty', False) is True:
+        world.session.begin_shutdown()
     control.close()
     while world.session.pending is not None:
         check()
@@ -690,20 +718,28 @@ class RecoveredGuardedParticipants(ExperimentalTCPParticipants):
 
 
 def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_interval=.1,
-          motion_service=None, pose_trial=None, purchases=None, npc_source=None, combat_service=None):
+          motion_service=None, pose_trial=None, purchases=None, npc_source=None, combat_service=None,
+          empty_checkpoint_interval=None):
     """Accept and pump local peers until deadline, including while world is empty.
 
     Returns state observations; exceptions fence the caller's entire session.
     The caller owns the listener, host and all cleanup. Timeouts only end this
     development process; they do not assert that a running world was saved.
+    With empty_checkpoint_interval, a world that has run with nobody connected for
+    that long is paused, saved and resumed; any join, pause or save restarts the wait.
     """
     if listener.family != socket.AF_INET or listener.getsockname()[0] != '127.0.0.1':
         raise ValueError('loopback listener required')
     if (not callable(check) or not callable(should_stop) or not 0 < tick_interval <= 1
-            or (deadline is not None and not math.isfinite(deadline))):
+            or (deadline is not None and not math.isfinite(deadline))
+            or (empty_checkpoint_interval is not None and (
+                type(empty_checkpoint_interval) not in (int, float)
+                or not math.isfinite(empty_checkpoint_interval) or empty_checkpoint_interval <= 0))):
         raise ValueError('invalid supervisor configuration')
     listener.setblocking(False)
     accepted = 0
+    empty_checkpoints = 0
+    next_empty_checkpoint = None
     admitted = 0
     admitted_handles = set()
     last_pose_request = None
@@ -757,6 +793,18 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
                 pose_trial.poll(motion_service)
         if combat_service is not None and host._world.session.pending is None:
             combat_service.poll()
+        if empty_checkpoint_interval is not None:
+            session = host._world.session
+            if session.state == 'running' and session.pending is None and not session.players:
+                now = time.monotonic()
+                if next_empty_checkpoint is None:
+                    next_empty_checkpoint = now + empty_checkpoint_interval
+                elif now >= next_empty_checkpoint and session.request_checkpoint():
+                    # The host steps the pause, save and resume on the following ticks.
+                    empty_checkpoints += 1
+                    next_empty_checkpoint = None
+            else:
+                next_empty_checkpoint = None
         current_handles = {peer['handle'] for peer in host._control._peers.values() if peer['stage'] == 'admitted'}
         admitted += len(current_handles - admitted_handles)
         admitted_handles = current_handles
@@ -766,7 +814,10 @@ def serve(listener, host, *, deadline, check, should_stop=lambda: False, tick_in
             wait = tick_interval if deadline is None else min(tick_interval, max(0, deadline - time.monotonic()))
             select.select([listener], [], [], wait)
     check()
-    return {'accepted_connections': accepted, 'admitted_connections': admitted}
+    result = {'accepted_connections': accepted, 'admitted_connections': admitted}
+    if empty_checkpoint_interval is not None:
+        result['empty_checkpoints_requested'] = empty_checkpoints
+    return result
 
 
 
@@ -1038,6 +1089,7 @@ def run(args):
     if (not math.isfinite(args.timeout) or not 0 < args.timeout <= 86400 or
             type(args.seed) is not int or not 0 <= args.seed <= 0xffffffff):
         raise ValueError('invalid timeout or seed')
+    keep_world_running, empty_checkpoint_seconds = persistent_world_options(args)
     user = pwd.getpwuid(os.geteuid()); home = Path(user.pw_dir)
     steam = live.steam_identity(home, user.pw_uid)
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -1622,7 +1674,8 @@ def run(args):
             result.update(success=True, final_world_state='paused')
             raise _WitnessFinished()
         service = owned.start_owned_file_service(secrets.token_hex(16), services)
-        world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store))
+        world = WorldCoordinator(epoch, adapter, store, SaveOffers(service, store),
+                                 run_when_empty=keep_world_running)
         company_ship_reader = None
         if pose_live:
             company_ship_reader = pose_channel.read_company_catalogue
@@ -2199,7 +2252,8 @@ def run(args):
         service_deadline = None if getattr(args, 'persistent', False) else deadline
         result.update(serve(listener, host, deadline=service_deadline, check=check, motion_service=motion_service, pose_trial=pose_trial,
                             purchases=purchases, npc_source=npc_source, combat_service=combat_service,
-                            should_stop=lambda: stop[0] or gateway_stopped()))
+                            should_stop=lambda: stop[0] or gateway_stopped(),
+                            empty_checkpoint_interval=empty_checkpoint_seconds))
         failed_gateway = gateway_stopped()
         try:
             if gateway is not None:
@@ -2437,6 +2491,10 @@ def main(argv=None, *, display_hostname=None):
     parser.add_argument('--display',required=True); parser.add_argument('--timeout',type=float,default=3600)
     parser.add_argument('--persistent', action='store_true',
                         help='keep serving after startup until stopped; --timeout still bounds startup')
+    parser.add_argument('--keep-world-running', action='store_true',
+                        help='with --persistent: save, then keep simulating while nobody is connected')
+    parser.add_argument('--empty-checkpoint-seconds', type=float,
+                        help='with --keep-world-running: save the empty running world this often (60-86400)')
     parser.add_argument('--software-vulkan-icd', type=Path,
                         help='use this Mesa CPU Vulkan ICD and remove GPU devices from X4')
     parser.add_argument('--seed',type=int,default=276944566)
