@@ -6,6 +6,7 @@ from tools.dev import authority_saved_setter_pair_live as subject
 from tools.dev.authority_saved_setter_pair_live import verify_apply
 from authority.experimental_tcp_motion import motion_digest
 from tests import test_authority_experimental_tcp_motion as fixture
+from authority_census_test_fixture import synthetic_sector_witness
 
 class SetterEvidence(unittest.TestCase):
  def setUp(self):
@@ -63,6 +64,7 @@ class SetterEvidence(unittest.TestCase):
     self.assertLess(owner.index('X4LAN_FRAME_READ_DONE()'),owner.index('X4LAN_'+('SOURCE_SINGLE_JOB' if role=='server' else 'PARTICIPANT_JOB')+'_TICK()'))
     self.assertIn('else return end',owner);self.assertTrue((ui/'authority_frame_read.lua').is_file())
    self.assertNotEqual(coord.frame_nonces['server'],coord.frame_nonces['client'])
+ @synthetic_sector_witness()
  def test_full_saved_setter_staging_installs_both_frame_owners(self):
   with tempfile.TemporaryDirectory() as tmp:
    witnesses=subject.motion.client_install.base.inputs.load_witness()

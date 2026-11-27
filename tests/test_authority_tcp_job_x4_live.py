@@ -11,6 +11,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_tcp_job_x4_live as m
+from authority_census_test_fixture import synthetic_sector_witness
 
 class Exited:
     def poll(self):return 0
@@ -49,6 +50,7 @@ class Supervisor(unittest.TestCase):
             else:
                 with self.assertRaises(ValueError):worker.poll()
 
+    @synthetic_sector_witness()
     def test_supervisor_sends_go_only_after_owned_identity_and_paused_load(self):
         ticket=self.ticket();sector='cluster_01_sector001_macro';holders=[]
         class FakeWorker:

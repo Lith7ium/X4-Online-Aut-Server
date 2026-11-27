@@ -8,6 +8,7 @@ sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_client_to_server_apply_pair_live as m
 import authority_client_to_server_apply_worker as worker
 from authority.experimental_tcp_motion import motion_digest
+from authority_census_test_fixture import synthetic_sector_witness
 
 class ApplyPair(unittest.TestCase):
  def setUp(self):
@@ -18,6 +19,7 @@ class ApplyPair(unittest.TestCase):
   return {'role':'server','nonce':'0'*32,'epoch':m.archive.REGISTRY_EPOCH,'index':1318,'code':'WRG-830',
    'macro':'ship_ter_m_corvette_01_a_macro','faction':'pioneers','sector_macro':m.base.SECTOR,
    'game_time':3.,'position':[-3.5,2.,3.]}
+ @synthetic_sector_witness()
  def test_both_installers_and_worker_config(self):
   with tempfile.TemporaryDirectory() as tmp,patch.object(self.c,'check_sources',return_value=True):
    for role in ('server','client'):

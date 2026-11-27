@@ -10,6 +10,7 @@ sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tools/dev')]
 import authority_client_to_server_observe_pair_live as m
 import authority_census_archive_provenance as archive
 from authority.experimental_tcp_motion import motion_digest
+from authority_census_test_fixture import synthetic_sector_witness
 
 class ResultTest(unittest.TestCase):
     def setUp(self):
@@ -72,6 +73,7 @@ class ResultTest(unittest.TestCase):
             with self.assertRaises(ValueError):self.co.verify_final(logs)
 
 class InstallTest(unittest.TestCase):
+    @synthetic_sector_witness()
     def test_both_isolated_overlays_enable_observation_only_on_server(self):
         with patch.object(m.Coordinator,'_sources',side_effect=m.pair.Coordinator._sources):
             co=m.Coordinator({m.base.SECTOR:(1318,1322)},defer_source_ack=True,observe_limit=3)

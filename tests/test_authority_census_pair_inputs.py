@@ -12,19 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_census_pair_inputs as m
 
-
-def artifact():
-    sectors=[]
-    for n in range(152):
-        sectors.append({'sector_macro':f'sector_{n:03d}',
-                        'sector_saved_component_ref':f'[0x{n+1:x}]','witnesses':[]})
-    for index in range(1,m.archive.COUNT+1):
-        sectors[(index-1)%152]['witnesses'].append({'index':index,'saved_under_dockingbay':False,
-                                                     'saved_immediate_parent_zone':True})
-    return {'saved_sector_count':152,'saved_registry_count':m.archive.COUNT,'runtime_binding_proven':False,
-        'cross_instance_frame_identity_proven':False,'exact_loaded_file_proven':False,
-        'registry_entries_without_sector_witness':0,'scope':'one pinned census checkpoint; saved structural evidence only',
-        'checkpoint_id':m.archive.CHECKPOINT_ID,'sha256':m.archive.SHA256,'registry_epoch':m.archive.REGISTRY_EPOCH,'sectors':sectors}
+from authority_census_test_fixture import make_census_witness
 
 
 class Inputs(unittest.TestCase):
@@ -36,7 +24,7 @@ class Inputs(unittest.TestCase):
         with patch.object(m,'WITNESS_SHA256',hashlib.sha256(raw).hexdigest()):return m.load_witness(path)
 
     def test_valid_witness_snapshot_is_immutable_and_bounded(self):
-        data=artifact();data['sectors'][0]['witnesses'][0]['saved_under_dockingbay']=True
+        data=make_census_witness();data['sectors'][0]['witnesses'][0]['saved_under_dockingbay']=True
         result=self.load(data)
         self.assertEqual(len(result),152);self.assertNotIn(1,result['sector_000'])
         self.assertEqual(sum(map(len,result.values())),m.archive.COUNT-1)
@@ -45,7 +33,7 @@ class Inputs(unittest.TestCase):
     def test_bad_saved_mappings_fail_even_with_matching_hash(self):
         for mode in ('duplicate','missing','bool_index','flags','sector_name','sector_ref','wrong_count','epoch','asserted_runtime'):
             with self.subTest(mode=mode):
-                data=artifact();a=data['sectors'][0]['witnesses'][0]
+                data=make_census_witness();a=data['sectors'][0]['witnesses'][0]
                 if mode=='duplicate':data['sectors'][1]['witnesses'][0]['index']=a['index']
                 elif mode=='missing':data['sectors'][0]['witnesses'].pop(0)
                 elif mode=='bool_index':a['index']=True
@@ -58,7 +46,7 @@ class Inputs(unittest.TestCase):
                 with self.assertRaises(ValueError):self.load(data)
 
     def test_witness_hash_and_symlink_fail(self):
-        path=self.root/'witness.json';path.write_text(json.dumps(artifact()))
+        path=self.root/'witness.json';path.write_text(json.dumps(make_census_witness()))
         with self.assertRaisesRegex(ValueError,'differs'):m.load_witness(path)
         link=self.root/'link.json';link.symlink_to(path)
         with self.assertRaises(OSError):m.load_witness(link)

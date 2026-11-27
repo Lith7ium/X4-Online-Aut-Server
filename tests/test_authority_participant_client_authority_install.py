@@ -8,6 +8,7 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_participant_client_authority_install as m
+from authority_census_test_fixture import synthetic_sector_witness
 class ClientAuthorityInstall(unittest.TestCase):
  def test_local_session_ipc(self):
   for script in ('authority_client_authority_motion_session.lua','authority_client_authority_motion_integration.lua'):
@@ -20,6 +21,7 @@ class ClientAuthorityInstall(unittest.TestCase):
    for mode in ('normal','reentrant','reentrant_event'):
     with self.subTest(mode=mode):
      subprocess.run(['luajit','tests/authority_participant_job_session.lua'],cwd=ROOT,env=dict(os.environ,LD_PRELOAD=str(abi),TEST_CLIENT_AUTHORITY=mode),check=True,capture_output=True,text=True,timeout=5)
+ @synthetic_sector_witness()
  def test_explicit_install_and_single_update(self):
   with tempfile.TemporaryDirectory() as tmp:
    case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'

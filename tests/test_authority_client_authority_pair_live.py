@@ -11,6 +11,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_client_authority_pair_live as m
 import authority_client_authority_tcp_worker as worker
+from authority_census_test_fixture import synthetic_sector_witness
 
 class ClientAuthorityPair(unittest.TestCase):
  def setUp(self):
@@ -52,6 +53,7 @@ class ClientAuthorityPair(unittest.TestCase):
    self.assertTrue(self.c.verify_final({'server':b'normal\n','client':client}))
    for bad in (client.replace(b'4.5 2',b'4.5 9'),client+client,client.replace(b'RUNNING 3.037',b'RUNNING 4'),client+b'[X4LAN] AUTH_PARTICIPANT_JOB LOCAL_APPLIED 1 4\n'):
     with self.subTest(bad=bad),self.assertRaises(ValueError):self.c.verify_final({'server':b'normal\n','client':bad})
+ @synthetic_sector_witness()
  def test_private_install_has_explicit_grant_and_one_update_per_role(self):
   self.c.include_orientation=True
   with tempfile.TemporaryDirectory() as tmp,patch.object(self.c,'check_sources',return_value=True):

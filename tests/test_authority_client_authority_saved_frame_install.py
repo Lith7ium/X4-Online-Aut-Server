@@ -4,8 +4,10 @@ import sys,tempfile,unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_client_authority_saved_frame_install as subject
+from authority_census_test_fixture import synthetic_sector_witness
 
 class SavedFrameInstall(unittest.TestCase):
+ @synthetic_sector_witness()
  def test_saved_setter_server_and_pause_handoff(self):
   settings=dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,
     epoch=subject.archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)

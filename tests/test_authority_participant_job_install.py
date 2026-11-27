@@ -8,10 +8,12 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_participant_job_install as m
+from authority_census_test_fixture import synthetic_sector_witness
 class Install(unittest.TestCase):
     def settings(self):
         return dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,
                     epoch=m.archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)
+    @synthetic_sector_witness()
     def test_combined_overlay_has_one_update_and_pinned_witness(self):
         with tempfile.TemporaryDirectory() as tmp:
             case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'
@@ -30,6 +32,7 @@ class Install(unittest.TestCase):
             self.assertNotIn('SetScript(', (ui/'authority_participant_job_session.lua').read_text())
     def test_platform_udp_module_selection(self):
         subprocess.run(['luajit','tests/authority_local_udp_module.lua'],cwd=ROOT,check=True,capture_output=True,text=True,timeout=5)
+    @synthetic_sector_witness()
     def test_multi_mode_requires_the_complete_pinned_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             case=Path(tmp)/'case';profile=case/'profile';lab=case/'extensions/x4_lan_lab';ui=lab/'ui';md=lab/'md'

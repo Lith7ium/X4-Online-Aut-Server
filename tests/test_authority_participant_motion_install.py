@@ -6,7 +6,9 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'tools/dev'),str(ROOT/'src')]
 import authority_participant_motion_install as m
+from authority_census_test_fixture import synthetic_sector_witness
 class Install(unittest.TestCase):
+ @synthetic_sector_witness()
  def test_saved_baseline_overlay_is_explicit(self):
   settings=dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,
       epoch=m.base.archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)
@@ -23,6 +25,7 @@ class Install(unittest.TestCase):
    self.assertIn(ui/'saved_baseline_motion_binding.lua',files)
    self.assertIn('authority_motion_client_saved_enabled=true',(ui/'config.lua').read_text())
    self.assertEqual((ui/'authority_download_load_probe.lua').read_text().count("SetScript('onUpdate'"),1)
+ @synthetic_sector_witness()
  def test_observe_stream_requires_explicit_bounded_install(self):
   settings=dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,
       epoch=m.base.archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)
@@ -46,6 +49,7 @@ class Install(unittest.TestCase):
    self.assertIn(ui/'saved_baseline_motion_binding.lua',files)
    self.assertIn('authority_motion_client_saved_enabled=true',(ui/'config.lua').read_text())
    self.assertEqual((ui/'authority_download_load_probe.lua').read_text().count("SetScript('onUpdate'"),1)
+ @synthetic_sector_witness()
  def test_one_owner_and_conflicting_context_rejected(self):
   settings=dict(participant_port=1234,participant_lease='a'*32,job_port=1235,lease='b'*32,attempt='c'*32,
       epoch=m.base.archive.REGISTRY_EPOCH,generation='d'*32,nonce='e'*32,seed=7183,timeout=20)
