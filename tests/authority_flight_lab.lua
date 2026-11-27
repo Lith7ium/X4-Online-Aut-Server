@@ -37,6 +37,22 @@ for i = 2, #g do assert(g[i] - g[i - 1] < .2) end
 
 print('flight lab link ok')
 
+-- path_two_legs_one_sample_per_round_trip_newest_wins
+local departures = {}
+for i = 0, 99 do departures[#departures + 1] = i * .1 end
+local function path(profile, seed) return L.path(profile, seed, departures) end
+for i, e in ipairs(path('loopback', 1)) do assert(e.k == i and e.arrival == departures[i]) end
+assert(#path('good', 1) == 100, 'a 60 ms round trip keeps up with 10 samples a second')
+for _, profile in ipairs({'home', 'poor'}) do
+    local got = path(profile, 1)
+    assert(#got < 100, profile .. ' should skip samples while waiting for acknowledgements')
+    for i, e in ipairs(got) do
+        assert(e.arrival >= departures[e.k] + 2 * L.PROFILES[profile].delay)
+        if i > 1 then assert(e.k > got[i - 1].k and e.arrival >= got[i - 1].arrival) end
+    end
+end
+assert(#path('poor', 1) < #path('home', 1))
+
 -- flights_are_continuous_and_match_their_speeds
 for _, name in ipairs(L.FLIGHTS) do
     local f = L.flight(name)

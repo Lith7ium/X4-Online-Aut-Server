@@ -4,6 +4,8 @@
 --
 -- Run from the source root:
 --   luajit tools/dev/authority_flight_lab.lua --arrivals PROFILE SEED N
+--   luajit tools/dev/authority_flight_lab.lua --path PROFILE SEED N
+--   luajit tools/dev/authority_flight_lab.lua --scorecard [--seeds 1,2,3] [--version 3|4] [--wan a,b]
 local L = {}
 
 -- Link profiles: one-way delay and mean extra jitter in seconds, loss rate,
@@ -286,13 +288,22 @@ function L.run(spec)
     local seed, version, mode = spec.seed or 1, spec.version or 4, spec.mode or 'continuous'
     local radar_m = spec.radar_m or 100000
     local profile = spec.link and 'custom' or assert(spec.profile, 'profile or link required')
-    local arrival = spec.link
-    if not arrival then
-        local link = L.link(profile, seed)
-        arrival = function(departure) return link:arrival(departure) end
+    local sent, samples = L.sender(flight, {version = version}), {}
+    if spec.link then
+        -- A test link delivers every sample at the time it gives.
+        for _, e in ipairs(sent) do
+            e.arrival = spec.link(e.departure)
+            samples[#samples + 1] = e
+        end
+    else
+        local departures = {}
+        for k, e in ipairs(sent) do departures[k] = e.departure end
+        for _, delivered in ipairs(L.path(profile, seed, departures)) do
+            local e = sent[delivered.k]
+            e.arrival = delivered.arrival
+            samples[#samples + 1] = e
+        end
     end
-    local samples = L.sender(flight, {version = version})
-    for _, e in ipairs(samples) do e.arrival = arrival(e.departure) end
     table.sort(samples, function(a, b)
         if a.arrival ~= b.arrival then return a.arrival < b.arrival end
         return a.sample.sequence < b.sample.sequence
@@ -392,6 +403,37 @@ function L.scorecard(opts)
     return out
 end
 
+-- One leg of the movement path. The real client and service both hold one
+-- unacknowledged sample per connection and replace any waiting sample with
+-- the newest (company_motion_client.py and company_motion_service.py). So a
+-- leg sends the newest ready sample, then waits for its acknowledgement.
+local function leg(ready, forward, back)
+    local out, free, j = {}, -math.huge, 1
+    while j <= #ready do
+        local send_at = math.max(free, ready[j].t)
+        while ready[j + 1] and ready[j + 1].t <= send_at do j = j + 1 end
+        local arrive = forward:arrival(send_at)
+        out[#out + 1] = {k = ready[j].k, t = arrive}
+        free = back:arrival(arrive)
+        j = j + 1
+    end
+    return out
+end
+
+-- The pilot-to-observer path: pilot to server, then server to observer, each
+-- leg over its own link with the profile in both directions. Returns the
+-- delivered samples as {k = index into departures, arrival = time}.
+function L.path(profile, seed, departures)
+    local ready = {}
+    for k, t in ipairs(departures) do ready[k] = {k = k, t = t} end
+    local to_server = leg(ready, L.link(profile, seed), L.link(profile, seed + 1))
+    local out = {}
+    for _, e in ipairs(leg(to_server, L.link(profile, seed + 2), L.link(profile, seed + 3))) do
+        out[#out + 1] = {k = e.k, arrival = e.t}
+    end
+    return out
+end
+
 local function json_string(s)
     return '"' .. s:gsub('[%c"\\]', function(ch)
         if ch == '"' then return '\\"' end
@@ -457,6 +499,16 @@ local function main(argv)
         io.write(L.json(out, '%.17g'), '\n')
         return 0
     end
+    if argv[1] == '--path' and #argv == 4 then
+        local departures = {}
+        for i = 0, assert(tonumber(argv[4]), 'N must be a number') - 1 do departures[#departures + 1] = i * .1 end
+        local out = {}
+        for _, e in ipairs(L.path(argv[2], assert(tonumber(argv[3]), 'SEED must be a number'), departures)) do
+            out[#out + 1] = {e.k, e.arrival}
+        end
+        io.write(L.json(out, '%.17g'), '\n')
+        return 0
+    end
     if argv[1] == '--scorecard' then
         local opts, i = {}, 2
         local function list(text)
@@ -484,6 +536,7 @@ local function main(argv)
         return 0
     end
     io.stderr:write('usage: luajit tools/dev/authority_flight_lab.lua --arrivals PROFILE SEED N\n'
+                    .. '       luajit tools/dev/authority_flight_lab.lua --path PROFILE SEED N\n'
                     .. '       luajit tools/dev/authority_flight_lab.lua --scorecard [--seeds 1,2,3] [--version 3|4] [--wan a,b]\n')
     return 2
 end
