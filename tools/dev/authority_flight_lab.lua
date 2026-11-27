@@ -61,6 +61,123 @@ function L.link(profile, seed)
     return link
 end
 
+-- Identity of the observed pilot in every sample and in the receiver.
+L.EPOCH, L.GENERATION = ('a'):rep(32), ('b'):rep(32)
+L.OWN_INDEX, L.TARGET_INDEX, L.SECTOR = 1, 2, 'sector_a'
+L.OWN_POSE = {x = 0, y = 0, z = 3000, yaw = 0, pitch = 0, roll = 0}
+
+local STEP, STORE = .001, .01
+local rad = math.rad
+
+-- Each flight sets the true speed and yaw for the next integration step and
+-- returns true once the flight has ended. Yaw 0 faces +z; positive yaw turns
+-- towards +x.
+local FLIGHT_SCRIPTS = {
+    close_turns = {start = {0, 0, 2500}, update = function(t, _, s)
+        s.v, s.yaw = 100, rad(30) * math.sin(2 * math.pi * t / 8)
+        return t >= 30
+    end},
+    steady_345 = {start = {-3000, 0, 2000}, update = function(t, _, s)
+        s.v, s.yaw = 345, math.pi / 2
+        return t >= 20
+    end},
+    travel_brake = {start = {-2000, 0, 2000}, update = function(t, dt, s)
+        s.yaw = math.pi / 2
+        if s.rest_since then return t >= s.rest_since + 5 end
+        if t < 1 then
+            s.v = 0
+        elseif not s.braking and s.dist >= 3345.84 then
+            s.braking = true
+        end
+        if s.braking then
+            s.v = math.max(0, s.v - 129.3 * dt)
+            if s.v == 0 then s.rest_since, s.brake_end = t, t end
+        elseif t >= 1 then
+            s.v = math.min(650, 100 * (t - 1))
+        end
+        return false
+    end},
+    turn_while_moving = {start = {-1000, 0, 1000}, update = function(t, _, s)
+        s.v = 150
+        s.yaw = t < 3 and 0 or (t < 6 and rad(30) * (t - 3) or math.pi / 2)
+        return t >= 15
+    end},
+    fast_travel = {start = {-20000, 0, 2000}, update = function(t, dt, s)
+        s.yaw = math.pi / 2
+        if s.rest_since then return t >= s.rest_since + 3 end
+        if not s.cruise_since then
+            s.v = math.min(3649, 500 * t)
+            if s.v == 3649 then s.cruise_since = t end
+        elseif t < s.cruise_since + 5 then
+            s.v = 3649
+        else
+            s.v = math.max(0, s.v - 500 * dt)
+            if s.v == 0 then s.rest_since, s.brake_end = t, t end
+        end
+        return false
+    end},
+}
+L.FLIGHTS = {'close_turns', 'steady_345', 'travel_brake', 'turn_while_moving', 'fast_travel'}
+
+local POSE_FIELDS = {'x', 'y', 'z', 'vx', 'vy', 'vz', 'yaw', 'pitch', 'roll', 'speed'}
+
+-- Integrates the script at 1 ms, keeps every 10 ms and interpolates between.
+function L.flight(name)
+    local script = assert(FLIGHT_SCRIPTS[name], 'unknown flight')
+    local s = {v = 0, yaw = 0, dist = 0}
+    local x, y, z = script.start[1], script.start[2], script.start[3]
+    local rows, t, step, done = {}, 0, 0, false
+    local per_store = math.floor(STORE / STEP + .5)
+    while true do
+        done = script.update(t, STEP, s)
+        local vx, vz = s.v * math.sin(s.yaw), s.v * math.cos(s.yaw)
+        if step % per_store == 0 then
+            rows[#rows + 1] = {x = x, y = y, z = z, vx = vx, vy = 0, vz = vz,
+                               yaw = s.yaw, pitch = 0, roll = 0, speed = s.v}
+        end
+        if done and step % per_store == 0 then break end
+        x, z = x + vx * STEP, z + vz * STEP
+        s.dist = s.dist + s.v * STEP
+        step = step + 1
+        t = step * STEP
+    end
+    local duration = (#rows - 1) * STORE
+    local function at(time)
+        time = math.min(math.max(time, 0), duration)
+        local i = math.min(math.floor(time / STORE), #rows - 2)
+        local f = (time - i * STORE) / STORE
+        local a, b, pose = rows[i + 1], rows[i + 2], {}
+        for _, key in ipairs(POSE_FIELDS) do pose[key] = a[key] + (b[key] - a[key]) * f end
+        return pose
+    end
+    return {name = name, duration = duration, brake_end = s.brake_end, at = at}
+end
+
+-- Samples the true flight as the pilot's client does, every 0.10 s, in the
+-- format company_cockpit_playback.lua accepts. Velocity is left out when any
+-- component is above 5,000 m/s, as the real sampler does.
+function L.sender(flight, opts)
+    opts = opts or {}
+    local interval, version = opts.interval or .10, opts.version or 4
+    local source_offset, capture_offset = opts.source_offset or 100, opts.capture_offset or 200
+    local out, k = {}, 0
+    while k * interval <= flight.duration + 1e-9 do
+        local t = k * interval
+        local p = flight.at(t)
+        local velocity = {x = p.vx, y = p.vy, z = p.vz}
+        if math.abs(p.vx) > 5000 or math.abs(p.vy) > 5000 or math.abs(p.vz) > 5000 then velocity = nil end
+        local sample = {
+            version = version, epoch = L.EPOCH, index = L.TARGET_INDEX, generation = L.GENERATION,
+            sector_macro = L.SECTOR, sequence = k + 1, source_time = t + source_offset,
+            capture_time = t + capture_offset, x = p.x, y = p.y, z = p.z, real_velocity = velocity,
+        }
+        if version == 4 then sample.attitude = {yaw = p.yaw, pitch = p.pitch, roll = p.roll} end
+        out[#out + 1] = {departure = t, sample = sample}
+        k = k + 1
+    end
+    return out
+end
+
 local function json_string(s)
     return '"' .. s:gsub('[%c"\\]', function(ch)
         if ch == '"' then return '\\"' end

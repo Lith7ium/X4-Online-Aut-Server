@@ -36,3 +36,30 @@ local g = arrivals('good', 1, 3000)
 for i = 2, #g do assert(g[i] - g[i - 1] < .2) end
 
 print('flight lab link ok')
+
+-- flights_are_continuous_and_match_their_speeds
+for _, name in ipairs(L.FLIGHTS) do
+    local f = L.flight(name)
+    local prev = f.at(0)
+    for t = .01, f.duration, .01 do
+        local p = f.at(t)
+        local step = math.sqrt((p.x - prev.x)^2 + (p.y - prev.y)^2 + (p.z - prev.z)^2)
+        assert(step <= p.speed * .01 + 0.6, name .. ' jumps at ' .. t)
+        prev = p
+    end
+end
+assert(math.abs(L.flight('steady_345').at(10).speed - 345) < 1e-6)
+local tb = L.flight('travel_brake')
+local peak = 0
+for t = 0, tb.duration, .01 do peak = math.max(peak, tb.at(t).speed) end
+assert(math.abs(peak - 650) < 1e-6 and tb.at(tb.duration).speed == 0)
+local rest = tb.at(tb.duration)
+assert(math.abs((rest.x + 2000) - 4979) < 5, 'travel_brake should stop near 4,980 m')
+
+-- sender_rate_and_velocity_rule
+local s = L.sender(L.flight('fast_travel'), {})
+assert(#s >= 10 and math.abs(s[2].departure - s[1].departure - .1) < 1e-9)
+for _, e in ipairs(s) do assert(e.sample.real_velocity ~= nil) end   -- 3,649 < 5,000 on every axis
+for _, e in ipairs(L.sender(L.flight('steady_345'), {version = 3})) do assert(e.sample.attitude == nil) end
+
+print('flight lab flights ok')
