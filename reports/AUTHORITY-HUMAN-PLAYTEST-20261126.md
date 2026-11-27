@@ -112,6 +112,12 @@ Both games exited and released their native resources. Both Linux launchers repo
 
 A software-rendered Linux provider and two native Linux clients ran in separate processes on one host using an isolated copy. The clients began 4.24 km apart. The BBS-493 pilot applied stock steering for 0.18 s while stationary. Its reported yaw changed by 1.83°. XNA-002 read back three rotations of the same ship on radar while its position stayed fixed. For the largest of these samples X4 applied 0.0312974900 radians against a requested 0.0312974893 radians. The test driver required a 0.035 radian turn before engaging travel drive and ended without issuing the travel command. This run establishes transfer and application of a small rotation. Travel flight and the visible smoothness of a larger turn still need testing.
 
+## Travel drive and braking with two V4 clients
+
+In a fresh copy, BBS-493 steered left by 29.6° and engaged the stock travel drive. Its native HUD reported travel active in 70 samples and a peak of 651 m/s. The largest velocity acknowledged from the pilot’s timed position samples was 582.58 metres per real second. The pilot requested braking at 3,345.84 m and came to rest 4,980.57 m from the starting point. The private runner also required 850 m/s for its high-speed check. That threshold was not reached, and the overall runner timed out.
+
+XNA-002 recorded 146 native position readbacks for BBS-493 on radar. Its local representation went **216.09 m beyond the pilot's final position**. It returned to within one metre in about two seconds and eventually matched the pilot's final XYZ exactly. This is a gameplay-relevant braking error, even though X4 applied each individual position write to within 0.002 m. The target was unselected in all stock HUD checks. This run establishes travel-mode movement across almost five kilometres on Linux loopback. Target-speed display, high-speed WAN flight and human-rated smoothness remain open.
+
 ## Offline validation
 
 The Linux run of `tools/dev/check.py` on `86327b21` discovered 6,057 tests. 6,031 passed and 26 were skipped. There were zero failed assertions and zero test errors. The strict runner returned exit code 1. Fourteen tests require Windows. Twelve require additional reference files or a released tool absent from this checkout. The subsequent cockpit-health and saved-marker fixes passed their focused checks. The full-suite result applies to the named revision.
