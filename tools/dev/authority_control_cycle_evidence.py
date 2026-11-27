@@ -83,25 +83,24 @@ def read_cycle_evidence(store, checkpoint_id, expected_save_name, *, previous_ga
         checkpoint = store.get(checkpoint_id)
         parser = expat.ParserCreate()
         path = []
-        counts = {'info': 0, 'save': 0, 'game': 0}
+        seen = set()
         result = {}
 
         def start(name, attrs):
             path.append(name)
-            if len(path) > MAX_DEPTH:
+            depth = len(path)
+            if depth > MAX_DEPTH:
                 raise EvidenceError('XML nesting exceeds limit')
-            if len(path) == 1 and name != 'savegame':
+            if depth == 1 and name != 'savegame':
                 raise EvidenceError('unexpected save XML root')
-            if path == ['savegame', 'info']:
-                counts['info'] += 1
-            elif path == ['savegame', 'info', 'save']:
-                counts['save'] += 1
-                result['name'] = attrs.get('name')
-            elif path == ['savegame', 'info', 'game']:
-                counts['game'] += 1
-                result['time'] = attrs.get('time')
-            if any(count > 1 for count in counts.values()):
+            if depth == 3 and path[1] == 'info' and name in ('save', 'game'):
+                attr = 'name' if name == 'save' else 'time'
+                result[attr] = attrs.get(attr)
+            elif depth != 2 or name != 'info':
+                return
+            if name in seen:
                 raise EvidenceError('duplicate save identity metadata')
+            seen.add(name)
 
         def end(_name):
             path.pop()
@@ -111,7 +110,6 @@ def read_cycle_evidence(store, checkpoint_id, expected_save_name, *, previous_ga
 
         parser.StartElementHandler = start
         parser.EndElementHandler = end
-        parser.CharacterDataHandler = lambda _text: None
         parser.StartDoctypeDeclHandler = reject
         parser.ExternalEntityRefHandler = reject
         fd = os.open(checkpoint.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
@@ -139,7 +137,7 @@ def read_cycle_evidence(store, checkpoint_id, expected_save_name, *, previous_ga
                 raise EvidenceError('checkpoint changed while reading')
             if (reader.digest.hexdigest(), reader.size) != (checkpoint.sha256, checkpoint.size):
                 raise EvidenceError('checkpoint content changed after store verification')
-        if counts != {'info': 1, 'save': 1, 'game': 1}:
+        if seen != {'info', 'save', 'game'}:
             raise EvidenceError('missing save identity metadata')
         name = result.get('name')
         if name != expected_save_name:

@@ -61,6 +61,19 @@ class CycleEvidenceTests(unittest.TestCase):
                 with self.assertRaises(evidence.EvidenceError):
                     self.check(checkpoint)
 
+    def test_late_duplicate_metadata_fails(self):
+        world = '<world>' + 'x' * (evidence.CHUNK * 2) + '</world>'
+        leading_metadata = xml()
+        for tag, data in (
+            ('info', xml(suffix=world + '<info/>')),
+            ('save', leading_metadata.replace(b'</info>', world.encode() + b'<save name="cycle-one"/></info>')),
+            ('game', leading_metadata.replace(b'</info>', world.encode() + b'<game time="1.25"/></info>')),
+        ):
+            with self.subTest(tag=tag):
+                checkpoint = self.publish(data)
+                with self.assertRaisesRegex(evidence.EvidenceError, 'duplicate save identity metadata'):
+                    self.check(checkpoint)
+
     def test_invalid_and_nonadvancing_times_fail(self):
         for value in ('', '-1', 'NaN', 'Infinity', '1e99999999999999999999999999999', ' 1', '1x'):
             with self.subTest(time=value):
