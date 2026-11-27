@@ -72,11 +72,17 @@ This run used a copy of the base-game save and the pilot's normal graphics optio
 
 The integrated receiver accepted a selected-ship sample in a native X4 map run, but X4 refused the extra UI frame. A follow-up with the player's graphics settings confirmed three active map frames. Its screenshot was taken during the opening fade, so the test stopped before sending a sample. Neither run demonstrated a moving marker from a network pilot.
 
+In a later run with normal graphics, HVC-420 stayed selected. X4 acknowledged two synthetic movement samples, registered distinct marker frames for them and removed the frame at the end. Neither expected rectangle showed a cyan marker. The screenshots taken after the two UI acknowledgements were pixel-identical to the baseline. A UI acknowledgement alone does not establish that the window has presented the frame.
+
 ## Visible fire in the target cockpit
 
 One isolated Linux cockpit faced a stock Bolt Repeater ship across an 850 m firing lane. The recording covered six control triggers with no effect and six triggers that played X4's cosmetic muzzle and impact effects together. In a 566-frame capture all six triggers produced a small lighting change on the cockpit frame 92–107 ms later. The footage did not establish a visible flash on the target. A larger apparent change in that part of the image coincided with the tutorial panel fading. Both ships kept 2,366 shield points and 3,600 hull, and X4 recorded zero weapon-fired, attack or damage events throughout. This form of local feedback can be displayed without applying a second hit. An incoming shot that a pilot can recognize during multiplayer combat remains outstanding.
 
 A second run viewed the other ship's validated exterior weapon mounts from 850 m. The stock HUD was hidden so the crosshair did not mask them. All six cosmetic impact pulses produced a visible flash on the tested exterior mount 87–103 ms after the trigger. The six control windows showed none, and the separate muzzle-only arm produced no clear flash there. Both ships' health and the native fire and damage counters stayed unchanged. This establishes an exterior effect at a known mount. Showing incoming fire in the victim's cockpit over a network remains open.
+
+A separate cockpit test played X4's stock shield-surface impact effect on the controlled ship, on a private save without a multiplayer connection. In a silent private recording, all three effect pulses produced an in-cockpit sound. The quietest active peak exceeded the loudest sham peak by 19.7 dB. Two pulses also produced a blue shield pattern across the canopy, peaking 72 ms and 67 ms after their triggers. The first pulse produced sound but no measurable pattern through 800 ms. One sham coincided with a startup fade. Both later shams showed no pattern. Native shield and hull stayed at 2,366 and 3,600 throughout and the game recorded no shots, attacks or damage.
+
+The target client's current health message carries a global revision and health values. Only the shooter receives the confirmed hit ID and target index. The cosmetic experiment therefore does not establish delivery of each confirmed hit to the victim.
 
 ## Two real Linux clients at 35.66 km
 
@@ -97,3 +103,11 @@ The two ships started inside each other's radar range. For automatic radar disco
 After the last pilot left, both Fedora checkpoint pointers agreed on `checkpoint-0bfdf9b07aa848d089df679fe298478c` (save SHA-256 `8da5731e10a8d1439b58f829d0caf2526a597a7929a92723c66c8ffa73048d55`). The saved BBS-493 position was within 0.001 m of both its final acknowledged position and XNA-002's independently received position. XNA-002 stayed at its saved starting point. The original human-session checkpoint and the preflight checkpoint retained their verified hashes. A cold restart from this newly saved flight was outside this test.
 
 Both games exited and released their native resources. Both Linux launchers reported a participant cleanup failure. The cleanup code did not recognize the valid continuous-playback option when removing the local motion configuration. A regression fix on the trial branch covers this generated format. These clients also reported the expected paused world marker; their stock launcher leaves its independent exact-loaded-file proof flag false.
+
+## Stationary turn across two V4 clients
+
+A software-rendered Linux provider and two native Linux clients ran in separate processes on one host using an isolated copy. The clients began 4.24 km apart. The BBS-493 pilot applied stock steering for 0.18 s while stationary. Its reported yaw changed by 1.83°. XNA-002 read back three rotations of the same ship on radar while its position stayed fixed. For the largest of these samples X4 applied 0.0312974900 radians against a requested 0.0312974893 radians. The test driver required a 0.035 radian turn before engaging travel drive and ended without issuing the travel command. This run establishes transfer and application of a small rotation. Travel flight and the visible smoothness of a larger turn still need testing.
+
+## Offline validation
+
+The Linux run of `tools/dev/check.py` on `86327b21` discovered 6,057 tests. 6,031 passed and 26 were skipped. There were zero failed assertions and zero test errors. The strict runner returned exit code 1. Fourteen tests require Windows. Twelve require additional reference files or a released tool absent from this checkout. The subsequent cockpit-health and saved-marker fixes passed their focused checks. The full-suite result applies to the named revision.
