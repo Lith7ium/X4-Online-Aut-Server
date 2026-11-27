@@ -51,7 +51,7 @@ local function remote_sample(row, binding, attitude)
         real_velocity=velocity, source_time=tonumber(row[15]), capture_time=tonumber(row[16])}
 end
 
-function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial, cockpit_health)
+function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster, hold_trial, cockpit_health, map_marker)
     assert(not hold_trial or not playback_trial)
     local alignment = hold_trial and hold_trial.alignment_enabled
     local slot_names = {'cockpit'}
@@ -70,6 +70,13 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
     local receive_budget = 8 * #slot_names
     local api = {}
     local roster_revision, roster_packet, roster_deadline = 0, nil, nil
+
+    local function map_display(method, ...)
+        if map_marker and not pcall(map_marker[method], map_marker, ...) then
+            pcall(map_marker.close, map_marker)
+            map_marker = nil
+        end
+    end
 
     local function publish_view(slot, name, binding, now, running)
         if slot.serial == 0 and not running then return end
@@ -130,12 +137,14 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         end
         local timed_trial = playback_trial and playback_slots[row[2]] and playback_trial
             or alignment and row[2] == 'cockpit' and hold_trial
-        if timed_trial and #row == 7 and row[1] == 'END' then
+        local timed_map = map_marker and row[2] == 'map'
+        if (timed_trial or timed_map) and #row == 7 and row[1] == 'END' then
             local slot = slots[row[2]]
             if slot and slot.binding and counter(row[3]) == slot.serial and row[4] == epoch
                     and counter(row[5]) == slot.binding.index and row[7] == slot.binding.sector_macro
                     and #row[6] == 32 and row[6]:match('^[0-9a-f]+$') then
-                timed_trial:end_track(slot.binding, slot.serial, row[6], row[2])
+                if timed_map then map_display('end_track', slot.serial, row[6])
+                else timed_trial:end_track(slot.binding, slot.serial, row[6], row[2]) end
             end
             return
         end
@@ -143,7 +152,7 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
         if not version4 and row[1] ~= 'REMOTE' then return end
         local angle_fields = version4 and 3 or 0
         local received_at
-        if #row == 17 + angle_fields and timed_trial then
+        if #row == 17 + angle_fields and (timed_trial or timed_map) then
             -- Both clocks here belong to the receiving machine. Field 16 is
             -- the original capture clock on the remote pilot's machine.
             received_at = coordinate(row[17], 1e12)
@@ -171,6 +180,9 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             for index = #row - 2, #row do receipt[#receipt + 1] = row[index] end
         end
         local confirmed = net:send(prefix .. table.concat(receipt, '|'))
+        if timed_map and received_at and confirmed == true then
+            map_display('sample', slot.serial, remote_sample(row, binding, attitude), received_at)
+        end
         if hold_trial and confirmed == true and row[2] == 'cockpit' and not version4 then
             hold_trial:sample(binding, slot.serial, remote_sample(row, binding), received_at)
         end
@@ -205,11 +217,20 @@ function M.new(readers, epoch, net, prefix, clock, playback_trial, pilot_roster,
             if packet == nil then break end
             if running then observe(packet, now) end
         end
+        if map_marker then
+            local slot = slots.map
+            local binding = slot.binding
+            if binding and not slot.reader:matches(epoch, binding.sector_macro, binding.index, binding.actor, binding.code) then
+                binding = nil
+            end
+            map_display('tick', binding, slot.serial, clock())
+        end
         if hold_trial then hold_trial:tick(running) end
         if playback_trial and running then playback_trial:tick(now) end
     end
 
     function api:close()
+        map_display('close')
         if hold_trial then hold_trial:close() end
         if playback_trial then playback_trial:close() end
         for _, name in ipairs(slot_names) do slots[name].reader:close() end

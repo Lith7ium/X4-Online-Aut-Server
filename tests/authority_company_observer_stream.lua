@@ -187,3 +187,180 @@ incoming[1] = end_packet(generation)
 owner:tick(true)
 assert(writes == 2 and stops == 2)
 owner:close()
+
+-- Keep the real lease, selection and REMOTE/SEEN receive path. Only the
+-- engine's projection inputs and widget renderer are replaced.
+local marker_module = dofile('src/authority/lua/company_map_marker.lua')
+local menu = {name='MapMenu', shown=true, holomap=9, frames={}}
+local camera = {x=0,y=0,z=0,yaw=0,pitch=-1.55,roll=0,distance=20000}
+local viewport = {x=0,y=0,width=100,height=100}
+local viewed_sector, map_pointer, other_layer = 'sector_b', true, false
+local capacity, register = true, true
+local attempts = 0
+local draws, clears, calibrations = {}, 0, 0
+local function point(x,z)
+    return {x=x,z=z,px=x,py=z}
+end
+local helper = {
+    createFrameHandle = function(actual, properties)
+        assert(actual == menu and properties.layer == 3 and properties.scaling == false)
+        assert(properties.enableDefaultInteractions == false and properties.exclusiveInteractions == false)
+        assert(properties.closeOnUnhandledClick == false)
+        attempts = attempts + 1
+        local id = #draws + 1
+        return {id=id, display=function()
+            if not register then return end
+            draws[id] = properties
+            menu.frames[3] = id
+        end}
+    end,
+    clearFrame = function(actual, layer)
+        assert(actual == menu and layer == 3 and not other_layer)
+        menu.frames[layer] = nil
+        clears = clears + 1
+    end,
+}
+local marker = marker_module.new({
+    helper=helper, layer=3, layer_available=function() return not other_layer end,
+    can_allocate=function() return capacity end,
+    view=function(binding, y)
+        if map_pointer and viewed_sector == binding.sector_macro then
+            return {sector=viewed_sector, height=y, menu=menu, holomap=9, camera=camera, viewport=viewport,
+                ui_scale=1, fixed_top_down=true}
+        end
+    end,
+    calibrate=function(view)
+        calibrations = calibrations + 1
+        return marker_module.calibrate(view, {point(10,10), point(90,10), point(90,90), point(10,90)},
+            point(40,60))
+    end,
+})
+local function map_packet(slot, serial, seq, settings)
+    local v = settings or {}
+    local values = {v.x or 40, v.y or 2000, 40, '-', '-', '-', 78900, 120000}
+    if v.arrival ~= false then values[#values + 1] = v.arrival or clock end
+    if v.oriented then values[#values + 1], values[#values + 2], values[#values + 3] = .1,.2,.3 end
+    incoming[#incoming + 1] = prefix .. table.concat({v.oriented and 'REMOTE4' or 'REMOTE', slot, serial,
+        epoch, slot == 'map' and 7354 or 12, v.generation or generation, seq,
+        v.sector or (slot == 'map' and 'sector_b' or 'sector_a'), unpack(values)}, '|')
+end
+local function map_end(serial, gen)
+    incoming[#incoming + 1] = prefix .. table.concat({'END','map',serial,epoch,7354,gen,'sector_b'}, '|')
+end
+
+clock, incoming, sent = 20, {}, {}
+owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, marker)
+owner:tick(true)
+map_packet('map', 1, 1, {arrival=18}) -- queued before the UI could process it
+owner:tick(true)
+assert(#draws == 0 and sent[#sent]:match('SEEN|map|1|'))
+map_packet('map', 1, 2, {sector='sector_a'})
+map_packet('map', 1, 2, {arrival=false})
+map_packet('cockpit', 1, 2, {arrival=false})
+owner:tick(true)
+assert(#draws == 0 and #sent == 5)
+net.send = function() return false end
+map_packet('map', 1, 2)
+owner:tick(true)
+assert(#draws == 0)
+net.send = ordinary_send
+map_packet('map', 1, 3, {x=30, oriented=true})
+owner:tick(true)
+assert(#draws == 1 and draws[1].x == 21 and draws[1].y == 31 and calibrations == 1)
+assert(sent[#sent]:match('SEEN4|map|1|') and sent[#sent]:match('|120000|0.1|0.2|0.3$'))
+clock = 20.15
+map_packet('map', 1, 4, {x=60})
+map_packet('map', 1, 3, {x=80})
+map_packet('map', 1, 5, {x=80,generation=('f'):rep(32)})
+map_end(1, ('f'):rep(32))
+owner:tick(true)
+assert(#draws == 2 and draws[2].x == 51 and calibrations == 1 and clears == 0)
+clock = 20.30
+map_packet('map', 1, 5, {x=60,y=-2000})
+owner:tick(true)
+assert(#draws == 3 and clears == 1 and calibrations == 2)
+camera.distance = 21000
+clock = 20.45
+owner:tick(true)
+assert(calibrations == 3 and #draws == 4 and clears == 2)
+viewport.width = 90
+clock = 20.60
+owner:tick(true)
+assert(calibrations == 4 and not menu.frames[3]) -- the new viewport rejects that fit input
+viewport.width = 100
+viewed_sector = 'sector_c'
+clock = 20.75
+map_packet('map', 1, 6)
+owner:tick(true)
+assert(#draws == 4)
+viewed_sector = 'sector_b'
+clock = 20.9
+map_packet('map', 1, 7)
+owner:tick(true)
+assert(#draws == 5)
+map_pointer = false
+owner:tick(true)
+assert(not menu.frames[3])
+map_pointer = true
+clock = 21.05
+map_packet('map', 1, 8)
+owner:tick(true)
+assert(menu.frames[3])
+map_end(1, generation)
+map_packet('map', 1, 9)
+owner:tick(true)
+assert(not menu.frames[3] and #draws == 6)
+map.visible = false
+owner:tick(true)
+map.visible = true
+clock = 21.2
+other_layer, menu.frames[3] = true, 501
+map_packet('map', 1, 10) -- withdrawn view serial
+map_packet('map', 3, 1, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(menu.frames[3] == 501 and #draws == 6)
+other_layer = false
+map_packet('map', 3, 2, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(menu.frames[3] == 501 and #draws == 6) -- occupied stock layer in same menu
+menu.frames[3] = nil
+clock = 21.35
+map_packet('map', 3, 3, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(menu.frames[3] and #draws == 7)
+clock = 22.35
+owner:tick(true)
+assert(not menu.frames[3]) -- exactly one second since launcher's receive
+map_packet('map', 3, 3, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(not menu.frames[3]) -- duplicates can't make expired data fresh
+map_packet('map', 3, 4, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(menu.frames[3])
+map.matches_now = false -- withdraw between regular view poll and drawing
+owner:tick(true)
+assert(not menu.frames[3])
+map.matches_now = true
+map_packet('map', 3, 5, {generation=('f'):rep(32)})
+owner:tick(true)
+assert(not menu.frames[3])
+owner:close()
+
+-- A full view suppresses requests, and an unreported native registration
+-- refusal is attempted only once for the same calibration.
+map.matches_now = true
+clock, incoming, sent, capacity = 24, {}, {}, false
+owner = stream.new({cockpit=cockpit,map=map}, epoch, net, prefix, function() return clock end,
+    nil, nil, nil, nil, marker)
+local prior_attempts = attempts
+map_packet('map', 1, 1)
+owner:tick(true)
+assert(attempts == prior_attempts and not menu.frames[3])
+capacity, register = true, false
+owner:tick(true)
+assert(attempts == prior_attempts + 1 and not menu.frames[3])
+map_packet('map', 1, 2, {x=60})
+owner:tick(true)
+assert(attempts == prior_attempts + 1 and not menu.frames[3])
+owner:close()

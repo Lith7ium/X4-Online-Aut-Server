@@ -15,7 +15,7 @@ from lockstep.launcher import profile
 
 from .checkpoints import Checkpoint
 from .combat_capture import capture_binding, collect_hits, write_receipt
-from .company_motion_source import validate_npc_observation, validate_playback_index
+from .company_motion_source import validate_map_marker, validate_npc_observation, validate_playback_index
 from .company_npc_measurement import validate_measurement_trial
 from .company_ship_selection import reserve_company_ship
 from .experimental_client_owner import CompanyShipChoiceDenied
@@ -130,7 +130,8 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                         company_sales=False,
                         play_until_exit=False, cockpit_radar_playback=False, cockpit_continuous_playback=False,
                         company_fleet_orders=False, observed_npc=None,
-                        registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
+                        registered_npc_local_measurement=False, combat_capture=False, company_combat=False,
+                        private_map_marker=False):
     """Stage, admit and poll one fixture, stopping its owned job on every exit.
 
     The workspace must provide prepare/view/save_dir/download_dir/guard,
@@ -188,6 +189,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
+    validate_map_marker(private_map_marker, company_motion=company_motion, observed_npc=observed_npc)
     validate_playback_index(company_hull_playback_index, company_motion=company_motion,
                             cockpit_radar_playback=cockpit_radar_playback)
     if type(cockpit_continuous_playback) is not bool or (cockpit_continuous_playback and
@@ -279,6 +281,7 @@ def run_fixture_session(*, enabled=False, workspace, server_host, server_port,
                                                         registered_npc_local_measurement=registered_npc_local_measurement,
                                                         cockpit_radar_playback=cockpit_radar_playback,
                                                         cockpit_continuous_playback=cockpit_continuous_playback,
+                                                        private_map_marker=private_map_marker,
                                                         on_stage=on_stage)
                     source_options['company_motion'] = company_source
                 if company_purchases:

@@ -29,7 +29,7 @@ from authority.experimental_client_owner import CompanyShipChoiceDenied
 from authority.experimental_remote_load_client import SessionFull
 from authority.experimental_client_session import client_connection
 from authority.client_seat_overlay import REFUSALS
-from authority.company_motion_source import CompanyMotionSource, validate_npc_observation, validate_playback_index
+from authority.company_motion_source import CompanyMotionSource, validate_map_marker, validate_npc_observation, validate_playback_index
 from authority.company_npc_measurement import validate_measurement_trial
 from authority.company_purchase_source import CompanyPurchaseSource
 from lockstep.launcher import profile as x4_profile
@@ -266,7 +266,8 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
         company_trade_view=False, company_fleet_orders=False,
         company_sales=False,
         observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
-        registered_npc_local_measurement=False, combat_capture=False, company_combat=False):
+        registered_npc_local_measurement=False, combat_capture=False, company_combat=False,
+        private_map_marker=False):
     player_mode = player_settings is not None
     if type(combat_capture) is not bool or (combat_capture and not player_mode):
         raise ValueError('combat capture requires a Company pilot')
@@ -287,6 +288,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
     observed_npc = validate_npc_observation(observed_npc, company_motion=company_motion,
                                             playback_index=company_hull_playback_index,
                                             cockpit_radar_playback=cockpit_radar_playback)
+    validate_map_marker(private_map_marker, company_motion=company_motion, observed_npc=observed_npc)
     validate_measurement_trial(registered_npc_local_measurement, base_game_only=getattr(args, 'base_game_only', False),
                                observed_npc=observed_npc)
     if registered_npc_local_measurement and registered_npc_hold_trial:
@@ -464,6 +466,7 @@ def run(args, *, playback_driver=None, player_settings=None, select_ship=None, o
                             playback_index=company_hull_playback_index, observed_npc=observed_npc,
                             cockpit_radar_playback=cockpit_radar_playback,
                             cockpit_continuous_playback=cockpit_continuous_playback,
+                            private_map_marker=private_map_marker,
                             registered_npc_hold_trial=registered_npc_hold_trial,
                             registered_npc_alignment_trial=registered_npc_alignment_trial,
                             registered_npc_local_measurement=registered_npc_local_measurement)

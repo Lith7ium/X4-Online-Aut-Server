@@ -419,6 +419,39 @@ class CompanyMotionObserverTest(unittest.TestCase):
     def seen(self, remote, *, actor='0xabcdef', code='WRN-302', peer=None):
         self.send('|'.join(('SEEN', *remote[1:8], actor, code, *remote[8:])), peer=peer)
 
+    def test_opt_in_map_receives_launcher_stamp_and_transport_end(self):
+        default_source = CompanyMotionSource()
+        self.addCleanup(default_source.close)
+        self.assertNotIn('private_map_marker', default_source.configure(self.epoch, 1961))
+        self.assertNotIn('company_map_marker.lua', company_motion_ui(default_source))
+        self.source.close()
+        self.source = CompanyMotionSource(private_map_marker=True)
+        self.addCleanup(self.source.close)
+        config = self.source.configure(self.epoch, 1961)
+        self.assertIs(config['private_map_marker'], True)
+        self.assertIn('company_map_marker.lua', company_motion_ui(self.source))
+        self.destination = ('127.0.0.1', config['port'])
+        self.prefix = f'C|{config["lease"]}|{config["generation"]}|'.encode('ascii')
+        self.observer = self.source.observe(self.validate)
+        self.observer.bind_views(self.views.append)
+        self.view('cockpit', 1)
+        self.view('map', 5)
+        self.poll()
+        with patch('authority.company_motion_observer.time.monotonic', return_value=36.25), \
+                patch('authority.company_motion_observer.time.perf_counter', return_value=36.25):
+            self.observer.snapshot(self.sample(6))
+            cockpit = self.remote()
+            raw = self.owned.recv(MAX_OBSERVER_DATAGRAM).removeprefix(self.prefix).decode('ascii').split('|')
+            self.assertEqual((len(raw), raw[:4]), (17, ['REMOTE', 'map', '5', self.epoch]))
+            self.assertEqual(raw[14:], ['1', '6', '36.25'])
+            self.seen(cockpit)
+            self.seen(raw[:-1])
+            self.poll()
+            self.assertEqual(self.source.observer_stats()['slots']['map']['samples_confirmed'], 1)
+            self.observer.transport_lost(7354, self.generation)
+        self.assertEqual(self.owned.recv(MAX_OBSERVER_DATAGRAM), self.prefix +
+                         f'END|map|5|{self.epoch}|7354|{self.generation}|sector_a'.encode('ascii'))
+
     def test_simultaneous_views_deduplicate_subscription_but_confirm_each_slot(self):
         self.view('cockpit', 1)
         self.view('map', 5)

@@ -49,13 +49,15 @@ def company_trade_options(args: Namespace) -> dict[str, bool]:
 
 
 def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str, bool | int | tuple[int, str]]:
-    from authority.company_motion_source import validate_npc_observation, validate_playback_index
+    from authority.company_motion_source import validate_map_marker, validate_npc_observation, validate_playback_index
 
     cockpit_index = args.company_cockpit_playback_index
     radar_playback = getattr(args, 'company_cockpit_playback', False) or cockpit_index is not None
     playback_index = cockpit_index if cockpit_index is not None else args.company_hull_playback_index
     observed_npc = validate_npc_observation(getattr(args, 'observe_registered_npc', None),
                                             company_motion=args.company_motion, own_index=args.company_ship_index)
+    map_marker = getattr(args, 'company_map_marker', False)
+    validate_map_marker(map_marker, company_motion=args.company_motion, observed_npc=observed_npc)
     measurement = getattr(args, 'trial_registered_npc_measurement', False)
     base_game_only = getattr(args, 'base_game_only', False)
     validate_measurement_trial(measurement, base_game_only=base_game_only,
@@ -73,6 +75,8 @@ def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str
     options: dict[str, bool | int | tuple[int, str]] = {}
     if observed_npc:
         options['observed_npc'] = observed_npc
+    if map_marker:
+        options['private_map_marker'] = True
     if measurement:
         options['registered_npc_local_measurement'] = True
     if playback_index is not None:

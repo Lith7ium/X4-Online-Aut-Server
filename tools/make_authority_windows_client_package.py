@@ -62,7 +62,7 @@ COMPANY_SEAT = {
     'src/authority/lua/client_seat.lua', 'src/authority/md/client_seat.xml',
     'src/authority/lua/company_observer_target.lua', 'src/authority/md/company_observer_target.xml',
     'src/authority/lua/company_observer_map.lua', 'src/authority/lua/map_render_observation.lua',
-    'src/authority/lua/company_observer_stream.lua',
+    'src/authority/lua/company_observer_stream.lua', 'src/authority/lua/company_map_marker.lua',
     'src/authority/lua/company_hull_playback.lua',
     'src/authority/lua/company_hull_playback_x4.lua',
     'src/authority/lua/company_hull_trial.lua',

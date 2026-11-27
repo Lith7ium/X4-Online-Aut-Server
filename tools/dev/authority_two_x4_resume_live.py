@@ -86,8 +86,9 @@ class Participant(LocalParticipantControl):
                     r'(?:,observed_npc_index=[0-9]+,observed_npc_code="[A-Z0-9]{3}-[A-Z0-9]{3}"'
                     r'(?:,registered_npc_hold_trial=true(?:,registered_npc_alignment_trial=true)?'
                     r'|,registered_npc_local_measurement=true)?'
-                    r'|,playback_index=[0-9]+(?:,cockpit_radar_playback=true,cockpit_max_pilots=1)?'
-                    r'|(?:,cockpit_radar_playback=true,cockpit_max_pilots=[1-3]'
+                    r'|(?:,private_map_marker=true)?'
+                    r'(?:,playback_index=[0-9]+(?:,cockpit_radar_playback=true,cockpit_max_pilots=1)?'
+                    r'|,cockpit_radar_playback=true,cockpit_max_pilots=[1-3]'
                     r'(?:,cockpit_continuous_playback=true)?)?)'
                     r'\}(?=[,}])', '', text)
                 if count != 1 or ',authority_company_motion=' in text:

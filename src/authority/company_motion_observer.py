@@ -61,7 +61,7 @@ class _View:
 class CompanyMotionObserver:
     """Keep one observed hull per native slot (up to 3 cockpit slots plus independent map) and a bounded receipt history."""
 
-    def __init__(self, registry, send, *, trial_index=None, cockpit_playback_slots=0):
+    def __init__(self, registry, send, *, trial_index=None, cockpit_playback_slots=0, private_map_marker=False):
         self._epoch, self._own_index = registry
         if trial_index is not None and (type(trial_index) is not int or not 1 <= trial_index <= 200000
                                         or trial_index == self._own_index):
@@ -70,6 +70,7 @@ class CompanyMotionObserver:
             raise ValueError('invalid cockpit playback slot count')
         if trial_index is not None and cockpit_playback_slots > 1:
             raise ValueError('cannot combine single trial_index with multi-pilot cockpit slots')
+        self._private_map_marker = private_map_marker
         self._trial_index = trial_index
         self._cockpit_playback_slots = frozenset(COCKPIT_SLOTS[:cockpit_playback_slots])
         slot_names = (*COCKPIT_SLOTS[:cockpit_playback_slots], 'map') if cockpit_playback_slots > 1 else _SLOTS
@@ -227,17 +228,18 @@ class CompanyMotionObserver:
             if view.active is None or (sample['sector_macro'], sample['index']) != view.active[:2]:
                 continue
             track = None
-            is_playback = (
-                (slot == 'cockpit' and sample['index'] == self._trial_index)
+            is_timed = (
+                (slot == 'map' and self._private_map_marker)
+                or (slot == 'cockpit' and sample['index'] == self._trial_index)
                 or (self._trial_index is None and slot in self._cockpit_playback_slots)
             )
-            if is_playback:
+            if is_timed:
                 track = view.serial, sample['index'], sample['generation'], sample['sector_macro']
                 if self._active_tracks.get(slot) != track:
                     self._end_slot(slot)
             local_clock = ()
             if track is not None:
-                # Only the opt-in local writer needs the original launcher
+                # The opt-in local consumer needs the original launcher
                 # timestamp. The remote sender clock is a separate domain.
                 local_clock = (format(received_at, '.17g'),)
             message = '|'.join(map(str, (
@@ -264,7 +266,10 @@ class CompanyMotionObserver:
         return [by_index[index] for index in sorted(by_index)]
 
     def transport_lost(self, index, generation):
-        """Clear old receipt candidates without revoking the local playback authorization."""
+        """Clear old receipts and revoke the optional map display on transport loss."""
+        map_track = self._active_tracks.get('map')
+        if map_track is not None and map_track[1:3] == (index, generation):
+            self._end_slot('map')
         for view in self._slots.values():
             if view.active is not None and view.active[1] == index:
                 view.pending = deque((item for item in view.pending if item[0]['generation'] != generation),

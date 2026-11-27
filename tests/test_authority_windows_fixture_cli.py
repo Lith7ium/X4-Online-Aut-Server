@@ -255,6 +255,14 @@ class FixtureCliTests(unittest.TestCase):
                 cli.run(cli.parser().parse_args([*base, *measure]))
             cli.run(parsed)
             self.assertNotIn('cockpit_continuous_playback', run_session.call_args.kwargs)
+            self.assertNotIn('private_map_marker', run_session.call_args.kwargs)
+            marker = '--company-map-marker'
+            cli.run(cli.parser().parse_args([*base, '--company-motion', marker]))
+            self.assertIs(run_session.call_args.kwargs['private_map_marker'], True)
+            self.assertNotIn('cockpit_radar_playback', run_session.call_args.kwargs)
+            for extra in ([marker], ['--company-motion', marker, *observe]):
+                with self.assertRaisesRegex(ValueError, '--company-map-marker requires --company-motion'):
+                    cli.run(cli.parser().parse_args([*base, *extra]))
             recovery = '--company-cockpit-continuous-playback'
             cli.run(cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback', recovery]))
             self.assertIs(run_session.call_args.kwargs['cockpit_continuous_playback'], True)

@@ -14,6 +14,7 @@ param(
     [switch] $ChooseCompanyShip,
     [ValidateRange(1, 200000)] [int] $CompanyShipIndex,
     [switch] $CompanyMotion,
+    [switch] $CompanyMapMarker,
     [switch] $CompanyCombat,
     [switch] $CompanyPurchases,
     [switch] $CompanyUndockTest,
@@ -30,6 +31,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($CompanyMapMarker -and (-not $CompanyMotion -or $ObserveRegisteredNpc)) {
+    throw '-CompanyMapMarker requires -CompanyMotion and a Company pilot view'
+}
 if ($CompanyCombat -and -not $CompanyMotion) {
     throw '-CompanyCombat requires -CompanyMotion'
 }
@@ -174,6 +178,7 @@ if ($PSBoundParameters.ContainsKey('CompanyShipIndex')) {
 }
 if ($CompanyMotion) {
     $clientArgs += '--company-motion'
+    if ($CompanyMapMarker) { $clientArgs += '--company-map-marker' }
     if ($CompanyCombat) { $clientArgs += '--company-combat' }
     if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex')) {
         $clientArgs += @('--company-hull-playback-index', [string]$CompanyHullPlaybackIndex)

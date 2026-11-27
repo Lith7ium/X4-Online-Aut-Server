@@ -114,11 +114,14 @@ def company_motion_ui(source):
             hold_modules = ('saved_motion_apply', 'saved_replica_control', 'registered_npc_hold_trial')
             scripts = {f'{name}.lua': f'src/authority/lua/{name}.lua' for name in hold_modules} | scripts
         return scripts
+    scripts = COMPANY_MOTION_UI
+    if getattr(source, 'private_map_marker', False):
+        scripts = {'company_map_marker.lua': 'src/authority/lua/company_map_marker.lua'} | scripts
     if getattr(source, 'cockpit_radar_playback', False):
-        return COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI | COMPANY_MOTION_UI
+        return COMPANY_PLAYBACK_UI | COMPANY_COCKPIT_RADAR_UI | scripts
     if source.playback_index is not None:
-        return COMPANY_PLAYBACK_UI | COMPANY_MOTION_UI
-    return COMPANY_MOTION_UI
+        return COMPANY_PLAYBACK_UI | scripts
+    return scripts
 
 
 def company_motion_md(source):

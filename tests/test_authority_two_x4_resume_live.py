@@ -116,6 +116,9 @@ class ParticipantTest(unittest.TestCase):
             dict(observed, registered_npc_hold_trial=True),
             dict(observed, registered_npc_hold_trial=True, registered_npc_alignment_trial=True),
             dict(observed, registered_npc_local_measurement=True),
+            {'private_map_marker': True},
+            {'private_map_marker': True, 'playback_index': 943},
+            {'private_map_marker': True, 'cockpit_radar_playback': True, 'cockpit_continuous_playback': True},
             {'playback_index': 943},
             {'playback_index': 943, 'cockpit_radar_playback': True},
             *(
@@ -155,6 +158,8 @@ class ParticipantTest(unittest.TestCase):
         continuous = ',cockpit_continuous_playback=true'
         invalid = {
             'unknown field': base + ',unknown=true}',
+            'duplicate map marker': base + ',private_map_marker=true,private_map_marker=true}',
+            'map marker on NPC observer': base + ',private_map_marker=true,observed_npc_index=943,observed_npc_code="MFQ-419"}',
             'incomplete continuous': base + continuous + '}',
             'continuous without radar': base + max_pilots + '3' + continuous + '}',
             'missing limit before continuous': base + radar + continuous + '}',

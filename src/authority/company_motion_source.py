@@ -51,6 +51,11 @@ def validate_playback_index(index, *, company_motion, own_index=None, cockpit_ra
         raise ValueError('hull playback requires company motion and a different valid registry index')
 
 
+def validate_map_marker(enabled, *, company_motion, observed_npc):
+    if type(enabled) is not bool or (enabled and (company_motion is not True or observed_npc is not None)):
+        raise ValueError('--company-map-marker requires --company-motion and a Company pilot view')
+
+
 def validate_npc_observation(target, *, company_motion, playback_index=None, cockpit_radar_playback=False,
                              own_index=None):
     """Read one registered NPC while the pilot is in a read-only observation mode."""
@@ -75,7 +80,7 @@ class CompanyMotionSource:
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
                  cockpit_continuous_playback=False,
                  observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
-                 registered_npc_local_measurement=False):
+                 registered_npc_local_measurement=False, private_map_marker=False):
         validate_playback_index(playback_index, company_motion=True,
                                 cockpit_radar_playback=cockpit_radar_playback)
         if type(cockpit_continuous_playback) is not bool or (cockpit_continuous_playback and
@@ -110,6 +115,8 @@ class CompanyMotionSource:
                 or registered_npc_alignment_trial)):
             raise ValueError('NPC local measurement requires read-only observation of MFQ-419 at index 943')
         self._registered_npc_local_measurement = registered_npc_local_measurement
+        validate_map_marker(private_map_marker, company_motion=True, observed_npc=self._observed_npc)
+        self._private_map_marker = private_map_marker
         self._playback_index = playback_index
         self._cockpit_radar_playback = cockpit_radar_playback
         self._cockpit_max_pilots = cockpit_max_pilots
@@ -150,6 +157,10 @@ class CompanyMotionSource:
     @property
     def playback_index(self):
         return self._playback_index
+
+    @property
+    def private_map_marker(self):
+        return self._private_map_marker
 
     @property
     def registered_npc_hold_trial(self):
@@ -236,6 +247,8 @@ class CompanyMotionSource:
                   'generation': self._generation, 'nonce': self._nonce, 'index': index}
         if self._cockpit_health_enabled:
             config['cockpit_health'] = True
+        if self._private_map_marker:
+            config['private_map_marker'] = True
         if self._observed_npc:
             config['observed_npc_index'], config['observed_npc_code'] = self._observed_npc
         if self._registered_npc_hold_trial:
@@ -280,7 +293,8 @@ class CompanyMotionSource:
         timed_index = self._observed_npc[0] if self.registered_npc_alignment_trial else self.playback_index
         self._observer = CompanyMotionObserver(self._registry, lambda message: self._send_to_peer(validate_peer, message),
                                                trial_index=timed_index,
-                                               cockpit_playback_slots=cockpit_slots)
+                                               cockpit_playback_slots=cockpit_slots,
+                                               private_map_marker=self._private_map_marker)
         return self._observer
 
     def observer_stats(self):

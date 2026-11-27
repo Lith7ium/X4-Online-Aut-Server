@@ -411,7 +411,7 @@ class FixtureSessionTests(unittest.TestCase):
              patch('authority.company_motion_source.CompanyMotionSource', return_value=source) as source_factory, \
              patch.dict(sys.modules, {'authority.company_motion_reconnect': motion_module}):
             result = self.run_session(require_registry_snapshot=True,
-                                      select_ship=lambda ships, pump: 2, company_motion=True,
+                                      select_ship=lambda ships, pump: 2, company_motion=True, private_map_marker=True,
                                       stop_requested=lambda: self.calls.count('motion_poll') == 4,
                                       on_stage=note_stage)
         self.assertEqual(progress, [
@@ -420,7 +420,7 @@ class FixtureSessionTests(unittest.TestCase):
         ])
         source_factory.assert_called_once_with(playback_index=None, observed_npc=None, registered_npc_local_measurement=False,
                                                cockpit_radar_playback=False, cockpit_continuous_playback=False,
-                                               on_stage=note_stage)
+                                               private_map_marker=True, on_stage=note_stage)
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)
         self.assertEqual(result['company_motion'], counts)

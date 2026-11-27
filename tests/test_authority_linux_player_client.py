@@ -297,6 +297,16 @@ class PlayerClientTests(unittest.TestCase):
                         'company_fleet_orders', 'company_trade_view', 'company_sales', 'company_undock_test')
             self.assertTrue(set(features).isdisjoint(options))
             self.assertNotIn('cockpit_continuous_playback', options)
+            self.assertNotIn('private_map_marker', options)
+            marker = '--company-map-marker'
+            with patch.object(native, 'run', return_value={'success': True}) as marker_run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', marker]), 0)
+            self.assertIs(marker_run.call_args.kwargs['private_map_marker'], True)
+            self.assertNotIn('cockpit_radar_playback', marker_run.call_args.kwargs)
+            for extra in ([marker], ['--company-motion', marker, '--observe-registered-npc', '42', 'NPC-042']):
+                with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as error:
+                    cli.main([*args, *extra])
+                self.assertIn('--company-map-marker requires --company-motion', error.getvalue())
             recovery = '--company-cockpit-continuous-playback'
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, '--company-motion', '--company-cockpit-playback', recovery]), 0)

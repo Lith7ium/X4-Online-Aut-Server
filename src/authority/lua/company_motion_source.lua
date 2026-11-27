@@ -276,8 +276,14 @@ function M.new_x4(config, save_path, pinned, udp, windows_company_profile)
                 else DebugError('[X4LAN] AUTH_COMPANY_SHIP_PLAYBACK_STOP initialization') end
             end
         end
+        local map_marker
+        if config.private_map_marker == true and X4LAN_COMPANY_MAP_MARKER then
+            local created, marker = pcall(X4LAN_COMPANY_MAP_MARKER.new_x4)
+            if created then map_marker = marker
+            else DebugError('[X4LAN] AUTH_COMPANY_MAP_MARKER_UNAVAILABLE') end
+        end
         return X4LAN_COMPANY_OBSERVER_STREAM.new(readers, pinned.epoch, net, prefix, udp.monotonic, trial,
-                                                pilot_roster, nil, cockpit_health)
+                                                pilot_roster, nil, cockpit_health, map_marker)
     end)
     if not ok then observer = nil; observer_fault() end
     local source = M.new({
