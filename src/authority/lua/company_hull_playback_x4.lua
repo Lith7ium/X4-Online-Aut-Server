@@ -48,10 +48,11 @@ function M.new(options, engine)
     local enforce_claims = velocity ~= nil or type(claims) == 'table'
     if enforce_claims then
         if type(claims) ~= 'table' then
-            claims = {by_actor = {}, by_slot = {}}
+            claims = {by_actor = {}, by_slot = {}, fenced_actors = {}}
         else
             claims.by_actor = claims.by_actor or {}
             claims.by_slot = claims.by_slot or {}
+            claims.fenced_actors = claims.fenced_actors or {}
         end
     end
     local adapter = {}
@@ -75,9 +76,35 @@ function M.new(options, engine)
                 or not index_in(binding.index, count) or binding.index == own_index
                 or type(binding.actor) ~= 'string' or type(binding.sector_macro) ~= 'string'
                 or type(binding.code) ~= 'string' then return nil end
-        if velocity and velocity.cleanup_uncertain and velocity:cleanup_uncertain() then return nil end
+        if velocity and velocity.tick then pcall(velocity.tick, velocity) end
         local index, actor_text, frame, code, slot = binding.index, binding.actor, binding.sector_macro, binding.code, binding.slot
-        if enforce_claims and (claims.by_actor[actor_text] ~= nil or claims.by_slot[slot] ~= nil) then return nil end
+        if enforce_claims then
+            local existing_actor = claims.by_actor[actor_text]
+            if existing_actor and existing_actor.tick then pcall(existing_actor.tick) end
+            local existing_slot = claims.by_slot[slot]
+            if existing_slot and existing_slot ~= existing_actor and existing_slot.tick then
+                pcall(existing_slot.tick)
+            end
+        end
+        if velocity and velocity.cleanup_uncertain and velocity:cleanup_uncertain() then
+            return nil, 'velocity_cleanup_uncertain'
+        end
+        if enforce_claims and claims.fenced_actors[actor_text] ~= nil then
+            return nil, 'actor_fenced'
+        end
+        if velocity and velocity.has_pending_stop and velocity:has_pending_stop() then
+            return nil, 'stop_pending'
+        end
+        if enforce_claims then
+            local actor_claim = claims.by_actor[actor_text]
+            local slot_claim = claims.by_slot[slot]
+            if actor_claim ~= nil or slot_claim ~= nil then
+                if (actor_claim and actor_claim.pending_stop) or (slot_claim and slot_claim.pending_stop) then
+                    return nil, 'stop_pending'
+                end
+                return nil, 'claim_active'
+            end
+        end
 
         local function inspect()
             if options.guard() ~= true or not observer:matches(epoch, frame, index, actor_text, code) then return end
@@ -92,7 +119,11 @@ function M.new(options, engine)
 
         local ok, original_cockpit, original_target = pcall(inspect)
         if not ok or not original_cockpit then return nil end
-        local claim = enforce_claims and {slot = slot, actor = actor_text, index = index, generation = binding.generation} or nil
+        local claim = enforce_claims and {
+            slot = slot, actor = actor_text, index = index, generation = binding.generation,
+            pending_stop = false,
+            tick = velocity and velocity.tick and function() return velocity:tick() end or nil,
+        } or nil
         if enforce_claims then
             claims.by_actor[actor_text] = claim
             claims.by_slot[slot] = claim
@@ -101,12 +132,41 @@ function M.new(options, engine)
         local confirmed_cockpit_zone = original_cockpit.zone
         local confirmed_zone, pending_zone = original_target.zone, nil
         local session_cleanup_uncertain, session_cleanup_reason = false, nil
+        local stop_watcher_attached = false
         local session = {}
 
         local function release_claim()
             if not enforce_claims then return end
             if claims.by_actor[actor_text] == claim then claims.by_actor[actor_text] = nil end
             if claims.by_slot[slot] == claim then claims.by_slot[slot] = nil end
+        end
+
+        local function fence_actor(reason)
+            if not enforce_claims then return end
+            if claims.fenced_actors[actor_text] == nil then
+                claims.fenced_actors[actor_text] = reason or 'velocity_cleanup_uncertain'
+            end
+            release_claim()
+        end
+
+        local function hold_claim_until_stop_settled()
+            if not enforce_claims then return end
+            claim.pending_stop = true
+            if stop_watcher_attached then return end
+            stop_watcher_attached = true
+            if velocity and velocity.on_pending_stops_settled then
+                velocity:on_pending_stops_settled(function(confirmed, err)
+                    if confirmed then
+                        release_claim()
+                    else
+                        session_cleanup_uncertain = true
+                        session_cleanup_reason = session_cleanup_reason or err or 'velocity_stop_unproved'
+                        fence_actor(session_cleanup_reason)
+                    end
+                end)
+            else
+                fence_actor('velocity_stop_unwatchable')
+            end
         end
 
         local function is_pilot()
@@ -251,6 +311,7 @@ function M.new(options, engine)
                 if v_unc then
                     session_cleanup_uncertain = true
                     session_cleanup_reason = session_cleanup_reason or v_reason
+                    fence_actor(session_cleanup_reason)
                 end
             end
             return session_cleanup_uncertain, session_cleanup_reason
@@ -261,9 +322,18 @@ function M.new(options, engine)
             -- Refusing a new setter cannot certify that crossing.
             if pending_zone then return false end
             if velocity and velocity.tick then pcall(velocity.tick, velocity) end
-            if velocity and velocity.cleanup_uncertain and velocity:cleanup_uncertain() then
-                closed = true
-                return false
+            if velocity and velocity.cleanup_uncertain then
+                local v_unc, v_reason = velocity:cleanup_uncertain()
+                if v_unc then
+                    session_cleanup_uncertain = true
+                    session_cleanup_reason = session_cleanup_reason or v_reason
+                    fence_actor(session_cleanup_reason)
+                    closed = true
+                    return false
+                end
+            end
+            if velocity and velocity.has_pending_stop and velocity:has_pending_stop() then
+                return false, nil, 'not_dispatched'
             end
             if not position(target) or not position(before) then return false, nil, 'not_dispatched' end
             local actual = self:read()
@@ -303,6 +373,7 @@ function M.new(options, engine)
                     if not ok_s or stopped ~= true then
                         session_cleanup_uncertain = true
                         session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'post_write_stop_failed')
+                        fence_actor(session_cleanup_reason)
                     end
                 end
                 return false
@@ -314,6 +385,7 @@ function M.new(options, engine)
                     if not ok_s or stopped ~= true then
                         session_cleanup_uncertain = true
                         session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'zone_stop_failed')
+                        fence_actor(session_cleanup_reason)
                         closed = true
                         return false
                     end
@@ -329,6 +401,7 @@ function M.new(options, engine)
                         local _, v_reason = velocity:cleanup_uncertain()
                         session_cleanup_uncertain = true
                         session_cleanup_reason = session_cleanup_reason or v_reason or (type(vel_reason) == 'string' and vel_reason)
+                        fence_actor(session_cleanup_reason)
                     end
                     closed = true
                     return false
@@ -347,6 +420,10 @@ function M.new(options, engine)
 
         function session:align(target, first_contact_guard)
             if pending_zone or not position(target) then return false end
+            if velocity and ((velocity.cleanup_uncertain and velocity:cleanup_uncertain())
+                    or (velocity.has_pending_stop and velocity:has_pending_stop())) then
+                return false
+            end
             local actual = self:read()
             if not actual or not finite(actual.yaw) or not finite(actual.pitch) or not finite(actual.roll) then return false end
             if engine.destination_zone(original_target.sector, target) ~= confirmed_zone or not eligible() then
@@ -372,6 +449,22 @@ function M.new(options, engine)
                     session_cleanup_uncertain = true
                     session_cleanup_reason = session_cleanup_reason or (type(s_reason) == 'string' and s_reason or 'stop_failed')
                 end
+                if velocity.cleanup_uncertain then
+                    local v_unc, v_reason = velocity:cleanup_uncertain()
+                    if v_unc then
+                        session_cleanup_uncertain = true
+                        session_cleanup_reason = session_cleanup_reason or v_reason
+                    end
+                end
+                closed = true
+                if session_cleanup_uncertain then
+                    fence_actor(session_cleanup_reason)
+                elseif velocity.has_pending_stop and velocity:has_pending_stop() then
+                    hold_claim_until_stop_settled()
+                else
+                    release_claim()
+                end
+                return not session_cleanup_uncertain, session_cleanup_reason
             end
             release_claim()
             closed = true

@@ -808,7 +808,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
                     req, lease, actor, sector, zone, x, y, z, vx, vy, vz, x, y, z)
             end
 
-            -- 1. Delayed set and delayed stop receipts across generation reuse must be fenced!
+            -- 1. Pending STOP serializes new dispatches, and delayed set/stop receipts are fenced!
             local now = 10.0
             local issued, handler = {}, nil
             local v = velocity_mod.new({
@@ -822,7 +822,19 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             now = now + 0.1
             assert(v:stop(anchor_ok(0, 0, 1006)))
             local req2 = issued[2].request
+            assert(v:has_pending_stop() == true)
             now = now + 0.1
+            -- While lease1 STOP is unacknowledged, a new apply on this slot MUST refuse with 'stop_pending'.
+            local ok_during_stop, why_during_stop = v:apply(bind2, {x = 0, y = 0, z = 40}, anchor_ok(0, 0, 1006), zone_a)
+            assert(ok_during_stop == false and why_during_stop == 'stop_pending')
+            assert(#issued == 2)
+
+            -- Once lease1 STOP is confirmed cleanly, lease2 can dispatch cleanly.
+            handler(nil, stop_reply(req2, lease1, '0xca', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 0))
+            assert(v:has_pending_stop() == false)
+            assert(v:cleanup_uncertain() == false)
+            assert(v:stats().confirmed_stops == 1)
+
             assert(v:apply(bind2, {x = 0, y = 0, z = 40}, anchor_ok(0, 0, 1006), zone_a))
             local req3, lease2 = issued[3].request, issued[3].lease
             assert(lease2 > lease1)
@@ -830,13 +842,10 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             local ack_gen2 = v:acknowledged_velocity(bind2, zone_a)
             assert(ack_gen2 and ack_gen2.z == 40 and ack_gen2.game_time == 10.2 and ack_gen2.request == req3)
 
+            -- Delayed set receipt from lease1 arriving after lease2 is active MUST be fenced!
             handler(nil, set_reply(req1, lease1, '0xca', 'sector_a', zone_a, 0, 0, 60, 10.0))
             local ack_after_late_set = v:acknowledged_velocity(bind2, zone_a)
             assert(ack_after_late_set and ack_after_late_set.z == 40)
-
-            handler(nil, stop_reply(req2, lease1, '0xca', 'sector_a', zone_a, 0, 0, 1006, 0, 0, 0))
-            local ack_after_late_stop = v:acknowledged_velocity(bind2, zone_a)
-            assert(ack_after_late_stop and ack_after_late_stop.z == 40)
             assert(v:cleanup_uncertain() == false)
 
             now = now + 0.1
@@ -845,7 +854,7 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             handler(nil, stop_reply(req4, lease2, '0xca', 'sector_a', zone_a, 0, 0, 1010, 0, 0, 0))
             assert(v:cleanup_uncertain() == false)
             assert(v:stats().confirmed_stops == 2)
-            assert(v:stats().fenced_receipts == 2)
+            assert(v:stats().fenced_receipts == 1)
 
             -- 2. Stop receipt validation failures MUST refuse to confirm and retain explicit uncertainty.
             local function test_bad_stop(mode)
@@ -2001,6 +2010,556 @@ class CompanyCockpitNativeVelocityLuaIntegrationTests(unittest.TestCase):
             self.assertEqual(r['stopped_vel'], 0)
             self.assertEqual(r['confirmed_stops'], 1)
             self.assertFalse(r['closed'])
+
+    def test_callback_expiry_for_set_stop_zero_and_out_of_order_without_housekeeping(self):
+        """Replies arriving past RECEIPT_TIMEOUT (+2.0 s) BEFORE any housekeeping (tick/apply/stop)
+        must be rejected inside the MD callback for SET, STOP, ordinary zero SET, and out-of-order replies."""
+        summary = self._run_lua(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            local velocity_mod = dofile(root .. 'company_cockpit_velocity.lua')
+            local epoch = ('a'):rep(32)
+            local gen1 = ('1'):rep(32)
+            local zone_a = '0x194'
+            local bind1 = {epoch = epoch, index = 2, actor = '0xca', sector_macro = 'sector_a', code = 'TGT-002', generation = gen1}
+
+            local function anchor_ok()
+                return {x = 0, y = 0, z = 1200, yaw = 0, pitch = 0, roll = 0,
+                        zone = zone_a, actor = '0xca', sector_macro = 'sector_a'}
+            end
+
+            local function set_reply(req, lease, vx, vy, vz, gt)
+                return ('%d|set|%d|0xca|sector_a|%s|%.6f|0,0,1200|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f'):format(
+                    req, lease, zone_a, gt, vx, vy, vz, vx, vy, vz)
+            end
+
+            local function stop_reply(req, lease, gt)
+                return ('%d|stopped|%d|0xca|sector_a|%s|%.6f|0,0,1200|0,0,0|1,0,0|0,1,0|0,0,1|0,0,1200|0,0,100'):format(
+                    req, lease, zone_a, gt)
+            end
+
+            local function make_v(clock_ref)
+                local issued, events, handler = {}, {}, nil
+                local v = velocity_mod.new({
+                    enabled = true, slot = 'cockpit', pinned = {epoch = epoch, issued_count = 10},
+                    own_index = 1, clock = function() return clock_ref.now end,
+                    register = function(cb) handler = cb; return true end,
+                    issue = function(args) issued[#issued + 1] = args; return true end,
+                    on_event = function(row) events[#events + 1] = row end,
+                })
+                return v, issued, events, function(text) handler(nil, text) end
+            end
+
+            -- (a) Expired nonzero SET at +2.0 s BEFORE housekeeping: rejected, never updates acked_velocity,
+            --     preserves possible_motion so stop() still anchors & dispatches STOP.
+            local c_set = {now = 10.0}
+            local v_set, q_set, ev_set, deliver_set = make_v(c_set)
+            assert(v_set:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a))
+            local r1, l1 = q_set[1].request, q_set[1].lease
+            c_set.now = 12.0 -- +2.0 s (> 1.5 s RECEIPT_TIMEOUT), NO tick()/housekeeping!
+            deliver_set(set_reply(r1, l1, 0, 0, 100, 12.0))
+            local ev_a = ev_set[#ev_set]
+            local ack_a = v_set:acknowledged_velocity(bind1, zone_a)
+            local pm_a = v_set:stats().possible_motion
+            local anchor_a = 0
+            local ok_sa, res_sa = v_set:stop(function() anchor_a = anchor_a + 1; return anchor_ok() end, 'after_exp_set')
+
+            -- (b) Expired STOP at +2.0 s BEFORE housekeeping: rejected, marks stop_receipt_timeout uncertain,
+            --     never increments confirmed_stops or reports clean cleanup!
+            local c_stop = {now = 20.0}
+            local v_stop, q_stop, ev_stop, deliver_stop = make_v(c_stop)
+            assert(v_stop:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a))
+            deliver_stop(set_reply(q_stop[1].request, q_stop[1].lease, 0, 0, 100, 20.0))
+            c_stop.now = 20.1
+            assert(v_stop:stop(anchor_ok, 'test_exp_stop'))
+            local sr, sl = q_stop[2].request, q_stop[2].lease
+            c_stop.now = 22.1 -- +2.0 s (> 1.5 s), NO tick()/housekeeping!
+            deliver_stop(stop_reply(sr, sl, 22.1))
+            local ev_b = ev_stop[#ev_stop]
+            local unc_b, why_b = v_stop:cleanup_uncertain()
+
+            -- (c) Expired ordinary 0 m/s SET at +2.0 s BEFORE housekeeping: rejected, MUST NOT clear
+            --     possible_motion, so subsequent stop() still anchors & dispatches MD STOP!
+            local c_zero = {now = 30.0}
+            local v_zero, q_zero, ev_zero, deliver_zero = make_v(c_zero)
+            assert(v_zero:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a)) -- lost receipt
+            c_zero.now = 30.1
+            assert(v_zero:apply(bind1, {x = 0, y = 0, z = 0}, anchor_ok, zone_a))
+            local zr, zl = q_zero[2].request, q_zero[2].lease
+            c_zero.now = 32.1 -- +2.0 s (> 1.5 s), NO tick()/housekeeping!
+            deliver_zero(set_reply(zr, zl, 0, 0, 0, 32.1))
+            local ev_c = ev_zero[#ev_zero]
+            local pm_c = v_zero:stats().possible_motion
+            local ack_c = v_zero:acknowledged_velocity(bind1, zone_a)
+            local anchor_c = 0
+            local ok_sc, res_sc = v_zero:stop(function() anchor_c = anchor_c + 1; return anchor_ok() end, 'after_exp_zero')
+            assert(ok_sc and res_sc == 'stop_dispatched:after_exp_zero')
+            deliver_zero(stop_reply(q_zero[#q_zero].request, zl, 32.1))
+
+            -- (d) Out-of-order delayed reply: (d1) in-window fenced without overwriting acked_velocity;
+            --     (d2) expired at +2.0 s before housekeeping rejected as set_receipt_timeout!
+            local c_ooo = {now = 40.0}
+            local v_ooo, q_ooo, ev_ooo, deliver_ooo = make_v(c_ooo)
+            assert(v_ooo:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a))
+            local ooo_r1, ooo_l1 = q_ooo[1].request, q_ooo[1].lease
+            c_ooo.now = 40.1
+            assert(v_ooo:apply(bind1, {x = 0, y = 0, z = 60}, anchor_ok, zone_a))
+            local ooo_r2 = q_ooo[2].request
+            c_ooo.now = 40.2
+            deliver_ooo(set_reply(ooo_r2, ooo_l1, 0, 0, 60, 40.2))
+            c_ooo.now = 40.3 -- in-window out-of-order
+            deliver_ooo(set_reply(ooo_r1, ooo_l1, 0, 0, 100, 40.0))
+            local ev_d1 = ev_ooo[#ev_ooo]
+            local ack_d1 = v_ooo:acknowledged_velocity(bind1, zone_a)
+
+            local c_ooo_exp = {now = 50.0}
+            local v_ooo_exp, q_ooo_exp, ev_ooo_exp, deliver_ooo_exp = make_v(c_ooo_exp)
+            assert(v_ooo_exp:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a))
+            local oe_r1, oe_l1 = q_ooo_exp[1].request, q_ooo_exp[1].lease
+            c_ooo_exp.now = 50.1
+            assert(v_ooo_exp:apply(bind1, {x = 0, y = 0, z = 60}, anchor_ok, zone_a))
+            local oe_r2 = q_ooo_exp[2].request
+            c_ooo_exp.now = 50.2
+            deliver_ooo_exp(set_reply(oe_r2, oe_l1, 0, 0, 60, 50.2))
+            c_ooo_exp.now = 52.1 -- +2.1 s (> 1.5 s), NO tick()/housekeeping!
+            deliver_ooo_exp(set_reply(oe_r1, oe_l1, 0, 0, 100, 50.0))
+            local ev_d2 = ev_ooo_exp[#ev_ooo_exp]
+            local ack_d2 = v_ooo_exp:acknowledged_velocity(bind1, zone_a)
+
+            -- (e) Expired late nonzero SET arriving after confirmed STOP (active == nil) at +2.0 s
+            --     WITHOUT housekeeping MUST still surface late_set_after_stop uncertainty!
+            local c_late = {now = 60.0}
+            local v_late, q_late, ev_late, deliver_late = make_v(c_late)
+            assert(v_late:apply(bind1, {x = 0, y = 0, z = 100}, anchor_ok, zone_a))
+            local lr1, ll1 = q_late[1].request, q_late[1].lease
+            c_late.now = 60.1
+            assert(v_late:stop(anchor_ok, 'clean_first'))
+            deliver_late(stop_reply(q_late[2].request, ll1, 60.1))
+            assert(v_late:cleanup_uncertain() == false)
+            c_late.now = 62.1 -- +2.1 s (> 1.5 s), NO tick()/housekeeping!
+            deliver_late(set_reply(lr1, ll1, 0, 0, 100, 62.1))
+            local ev_e = ev_late[#ev_late]
+            local unc_e, why_e = v_late:cleanup_uncertain()
+
+            return {
+                set_case = {
+                    ok = ev_a.ok, expired = ev_a.expired, fenced = ev_a.fenced, fail = ev_a.fail_reason,
+                    acked = ack_a ~= nil, possible_motion = pm_a,
+                    timeouts = v_set:stats().timeouts, receipts = v_set:stats().receipts,
+                    stop_ok = ok_sa, stop_res = res_sa, anchor_calls = anchor_a,
+                },
+                stop_case = {
+                    ok = ev_b.ok, expired = ev_b.expired, fenced = ev_b.fenced,
+                    confirmed_zero = ev_b.confirmed_zero, fail = ev_b.fail_reason,
+                    confirmed_stops = v_stop:stats().confirmed_stops,
+                    pending_stops = v_stop:stats().pending_stops,
+                    timeouts = v_stop:stats().timeouts,
+                    uncertain = unc_b, why = why_b,
+                },
+                zero_case = {
+                    ok = ev_c.ok, expired = ev_c.expired, fenced = ev_c.fenced, fail = ev_c.fail_reason,
+                    possible_motion = pm_c, acked = ack_c ~= nil,
+                    anchor_calls = anchor_c, stop_res = res_sc,
+                    confirmed_stops = v_zero:stats().confirmed_stops,
+                    uncertain = v_zero:cleanup_uncertain(),
+                },
+                ooo_in_window = {
+                    fenced = ev_d1.fenced, expired = ev_d1.expired == true,
+                    acked_z = ack_d1 and ack_d1.z or nil,
+                    fenced_count = v_ooo:stats().fenced_receipts,
+                },
+                ooo_expired = {
+                    ok = ev_d2.ok, expired = ev_d2.expired, fenced = ev_d2.fenced, fail = ev_d2.fail_reason,
+                    acked_z = ack_d2 and ack_d2.z or nil,
+                    timeouts = v_ooo_exp:stats().timeouts,
+                },
+                late_after_stop = {
+                    ok = ev_e.ok, expired = ev_e.expired, fenced = ev_e.fenced,
+                    uncertain = unc_e, why = why_e,
+                    timeouts = v_late:stats().timeouts,
+                },
+            }
+        """)
+        a = summary['set_case']
+        self.assertFalse(a['ok'])
+        self.assertTrue(a['expired'])
+        self.assertTrue(a['fenced'])
+        self.assertEqual(a['fail'], 'set_receipt_timeout')
+        self.assertFalse(a['acked'])
+        self.assertTrue(a['possible_motion'])
+        self.assertEqual(a['timeouts'], 1)
+        self.assertEqual(a['receipts'], 0)
+        self.assertTrue(a['stop_ok'])
+        self.assertEqual(a['stop_res'], 'stop_dispatched:after_exp_set')
+        self.assertEqual(a['anchor_calls'], 1)
+
+        b = summary['stop_case']
+        self.assertFalse(b['ok'])
+        self.assertTrue(b['expired'])
+        self.assertTrue(b['fenced'])
+        self.assertFalse(b['confirmed_zero'])
+        self.assertEqual(b['fail'], 'stop_receipt_timeout')
+        self.assertEqual(b['confirmed_stops'], 0)
+        self.assertEqual(b['pending_stops'], 0)
+        self.assertEqual(b['timeouts'], 1)
+        self.assertTrue(b['uncertain'])
+        self.assertEqual(b['why'], 'stop_receipt_timeout')
+
+        c = summary['zero_case']
+        self.assertFalse(c['ok'])
+        self.assertTrue(c['expired'])
+        self.assertTrue(c['fenced'])
+        self.assertEqual(c['fail'], 'set_receipt_timeout')
+        self.assertTrue(c['possible_motion'])
+        self.assertFalse(c['acked'])
+        self.assertEqual(c['anchor_calls'], 1)
+        self.assertEqual(c['stop_res'], 'stop_dispatched:after_exp_zero')
+        self.assertEqual(c['confirmed_stops'], 1)
+        self.assertFalse(c['uncertain'])
+
+        d1 = summary['ooo_in_window']
+        self.assertTrue(d1['fenced'])
+        self.assertFalse(d1['expired'])
+        self.assertEqual(d1['acked_z'], 60)
+        self.assertEqual(d1['fenced_count'], 1)
+
+        d2 = summary['ooo_expired']
+        self.assertFalse(d2['ok'])
+        self.assertTrue(d2['expired'])
+        self.assertTrue(d2['fenced'])
+        self.assertEqual(d2['fail'], 'set_receipt_timeout')
+        self.assertEqual(d2['acked_z'], 60)
+        self.assertEqual(d2['timeouts'], 1)
+
+        e = summary['late_after_stop']
+        self.assertFalse(e['ok'])
+        self.assertTrue(e['expired'])
+        self.assertTrue(e['fenced'])
+        self.assertTrue(e['uncertain'])
+        self.assertEqual(e['why'], 'late_set_after_stop')
+        self.assertEqual(e['timeouts'], 1)
+
+    def test_pending_stop_serializes_same_actor_handoff_and_fences_ambiguous_actor(self):
+        """After a guarded STOP is dispatched, a new generation of the same actor MUST NOT dispatch
+        either pose or velocity before the old STOP is confirmed; if the STOP fails/expires or view
+        loss blocks anchoring, the ambiguous actor must remain fenced across all slots."""
+        summary = self._run_lua(r"""
+            local root = _ROOT .. '/src/authority/lua/'
+            X4LAN_MOTION_BUFFER = dofile(root .. 'motion_buffer.lua')
+            dofile(root .. 'motion_playback.lua')
+            dofile(root .. 'company_hull_playback.lua')
+            local native = dofile(root .. 'company_hull_playback_x4.lua')
+            local velocity_mod = dofile(root .. 'company_cockpit_velocity.lua')
+            local cockpit = dofile(root .. 'company_cockpit_playback.lua')
+
+            local epoch = ('a'):rep(32)
+            local gen1, gen2 = ('1'):rep(32), ('2'):rep(32)
+            local own_actor, target_actor, sector_id, zone_id = 101, 202, 303, 404
+            local zone_hex = ('0x%x'):format(zone_id)
+
+            local function build_rig()
+                local st = {
+                    now = 10.0, gt = 50.0,
+                    obs_matches = true,
+                    pose = {x = 0, y = 0, z = 1000, yaw = 0, pitch = 0, roll = 0},
+                    last_set = {x = 0, y = 0, z = 1000},
+                    native_vel = {x = 0, y = 0, z = 0},
+                    writes = 0, md_sets = 0, md_stops = 0,
+                    hold_stops = false,
+                    held_stops = {},
+                    md_queue = {},
+                    md_handler = nil,
+                    md_active = {}, md_lease = {}, md_stopped = {},
+                    faults = {}, events = {},
+                }
+                local view = {epoch = epoch, index = 2, actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a'}
+                local obs = {
+                    matches = function(_, ep, frame, idx, act, code)
+                        return st.obs_matches and ep == epoch and frame == 'sector_a'
+                            and idx == 2 and act == '0xca' and code == 'TGT-002'
+                    end,
+                    is_active_pilot = function(_, idx) return st.obs_matches and idx == 2 end,
+                    current_radar_range = function() return 40000 end,
+                }
+                local claims = {by_actor = {}, by_slot = {}, fenced_actors = {}}
+                local vels, adapters = {}, {}
+                for _, slot in ipairs({'cockpit', 'cockpit2'}) do
+                    vels[slot] = velocity_mod.new({
+                        enabled = true, slot = slot, pinned = {epoch = epoch, issued_count = 10},
+                        own_index = 1, clock = function() return st.now end,
+                        register = function(cb) st.md_handler = cb; return true end,
+                        issue = function(args)
+                            if args.op == 'set' then st.md_sets = st.md_sets + 1 end
+                            if args.op == 'stop' then st.md_stops = st.md_stops + 1 end
+                            if args.op == 'stop' and st.hold_stops then
+                                st.held_stops[#st.held_stops + 1] = args
+                            else
+                                st.md_queue[#st.md_queue + 1] = args
+                            end
+                            return true
+                        end,
+                    })
+                    adapters[slot] = native.new({
+                        enabled = true, pinned = {epoch = epoch, issued_count = 10}, own_index = 1,
+                        observer = obs, guard = function() return true end,
+                        velocity = vels[slot], exclusive_claims = claims,
+                    }, {
+                        cockpit = function() return {actor = own_actor, sector = sector_id, zone = zone_id} end,
+                        target = function() return {actor = target_actor, sector = sector_id, zone = zone_id, sector_macro = 'sector_a', code = 'TGT-002'} end,
+                        read = function() return {x = st.pose.x, y = st.pose.y, z = st.pose.z, yaw = 0, pitch = 0, roll = 0} end,
+                        write = function(_, _, p)
+                            st.writes = st.writes + 1
+                            st.pose = {x = p.x, y = p.y, z = p.z, yaw = p.yaw, pitch = p.pitch, roll = p.roll}
+                            st.last_set = {x = p.x, y = p.y, z = p.z}
+                            return true
+                        end,
+                        destination_zone = function() return zone_id end,
+                        within_radar = function() return true end,
+                    })
+                end
+                local ctrl = cockpit.new_multi({
+                    enabled = true, continuous_playback = true, native_velocity = true,
+                    allow_reacquire_align = true, own_index = 1,
+                    slot_names = {'cockpit', 'cockpit2'}, adapters = adapters,
+                    clock = function() return st.now end, game = function() return st.gt end,
+                    paused = function() return false end, record = function() return true end,
+                    fault = function(reason, unc, stage, slot)
+                        st.faults[#st.faults + 1] = {reason = reason, unc = unc, stage = stage, slot = slot}
+                    end,
+                    on_event = function(kind, detail)
+                        st.events[#st.events + 1] = {kind = kind, detail = detail}
+                    end,
+                })
+
+                local function exec_md(args)
+                    local stopped = st.md_stopped[args.slot] or 0
+                    local active_ship = st.md_active[args.slot]
+                    local active_lease = st.md_lease[args.slot] or 0
+                    if args.op == 'set' and args.lease > stopped
+                            and (active_ship == nil or (active_ship == target_actor and active_lease == args.lease)) then
+                        st.native_vel = {x = args.vx, y = args.vy, z = args.vz}
+                        st.md_active[args.slot] = target_actor
+                        st.md_lease[args.slot] = args.lease
+                        st.md_handler(nil, ('%d|set|%d|0xca|sector_a|%s|%.6f|%.6f,%.6f,%.6f|%.6f,%.6f,%.6f|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f'):format(
+                            args.request, args.lease, zone_hex, st.gt, st.pose.x, st.pose.y, st.pose.z,
+                            args.vx, args.vy, args.vz, args.vx, args.vy, args.vz))
+                    elseif args.op == 'stop' and active_ship == target_actor and active_lease == args.lease then
+                        local b = {x = st.pose.x, y = st.pose.y, z = st.pose.z}
+                        st.pose.x, st.pose.y, st.pose.z = st.last_set.x, st.last_set.y, st.last_set.z
+                        st.native_vel = {x = 0, y = 0, z = 0}
+                        st.md_active[args.slot] = nil
+                        st.md_stopped[args.slot] = args.lease
+                        st.md_handler(nil, ('%d|stopped|%d|0xca|sector_a|%s|%.6f|%.6f,%.6f,%.6f|0,0,0|1,0,0|0,1,0|0,0,1|%.6f,%.6f,%.6f|0,0,60'):format(
+                            args.request, args.lease, zone_hex, st.gt, st.pose.x, st.pose.y, st.pose.z, b.x, b.y, b.z))
+                    else
+                        st.md_handler(nil, ('%d|refused|%d|op'):format(args.request, args.lease))
+                    end
+                end
+
+                local function drain_md()
+                    local q = st.md_queue
+                    st.md_queue = {}
+                    for _, args in ipairs(q) do exec_md(args) end
+                end
+
+                local function step(dt)
+                    st.now, st.gt = st.now + dt, st.gt + dt
+                    st.pose.z = st.pose.z + st.native_vel.z * dt
+                    drain_md()
+                    ctrl:tick(st.now)
+                end
+
+                local seq = 0
+                local function push(slot, gen, z, vz)
+                    seq = seq + 1
+                    return ctrl:sample(view, 1, {
+                        version = 4, epoch = epoch, index = 2, generation = gen, sector_macro = 'sector_a',
+                        sequence = seq, source_time = st.gt, capture_time = st.now, x = 0, y = 0, z = z,
+                        real_velocity = vz and {x = 0, y = 0, z = vz} or nil,
+                        attitude = {yaw = 0, pitch = 0, roll = 0},
+                    }, st.now, slot)
+                end
+
+                -- Establish moving gen1 at 60 m/s on cockpit.
+                local z = 1000.0
+                assert(push('cockpit', gen1, z, nil))
+                for _ = 1, 6 do
+                    step(0.05); z = z + 6.0; step(0.05)
+                    assert(push('cockpit', gen1, z, 60))
+                end
+                step(0.05)
+                assert(st.native_vel.z == 60)
+
+                return st, view, claims, vels, adapters, ctrl, exec_md, step, push, z
+            end
+
+            -- Path A: Pending STOP blocks gen2 pose & velocity on BOTH same slot and second slot,
+            --         then confirmed STOP releases claim so gen2 cleanly binds and flies!
+            local stA, viewA, claimsA, velsA, adaptersA, ctrlA, execA, stepA, pushA, zA = build_rig()
+            stA.hold_stops = true
+            ctrlA:end_track(viewA, 1, gen1, 'cockpit')
+            assert(#stA.held_stops == 1)
+            local writes_at_stop, sets_at_stop = stA.writes, stA.md_sets
+
+            -- Advance 0.05 s (within timeout) and try gen2 on BOTH cockpit and cockpit2 BEFORE STOP confirms!
+            stA.now, stA.gt = stA.now + 0.05, stA.gt + 0.05
+            local ok_same, why_same = pushA('cockpit', gen2, stA.pose.z + 3, 50)
+            local ok_other, why_other = pushA('cockpit2', gen2, stA.pose.z + 3, 50)
+            local a_bind_same, a_bind_same_why = adaptersA.cockpit:bind({
+                slot = 'cockpit', serial = 1, epoch = epoch, index = 2,
+                actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen2,
+            })
+            local a_bind_other, a_bind_other_why = adaptersA.cockpit2:bind({
+                slot = 'cockpit2', serial = 1, epoch = epoch, index = 2,
+                actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen2,
+            })
+            local writes_while_pending = stA.writes - writes_at_stop
+            local sets_while_pending = stA.md_sets - sets_at_stop
+            local faults_while_pending = #stA.faults
+
+            -- Now confirm the held gen1 STOP within timeout!
+            execA(stA.held_stops[1])
+            stA.held_stops = {}
+            stA.hold_stops = false
+            assert(velsA.cockpit:stats().confirmed_stops == 1)
+            assert(claimsA.by_actor['0xca'] == nil and claimsA.by_slot.cockpit == nil)
+
+            -- gen2 now cleanly binds, writes pose, and applies native velocity (50 m/s)!
+            local zA2 = stA.pose.z
+            assert(pushA('cockpit', gen2, zA2, nil))
+            for _ = 1, 6 do
+                stepA(0.05); zA2 = zA2 + 5.0; stepA(0.05)
+                assert(pushA('cockpit', gen2, zA2, 50))
+            end
+            stepA(0.05)
+
+            -- Path B: Held STOP expires (+2.0 s) inside callback BEFORE housekeeping ->
+            --         fences BOTH original slot (closed_uncertain) AND ambiguous actor across ALL slots!
+            local stB, viewB, claimsB, velsB, adaptersB, ctrlB, execB, _, pushB = build_rig()
+            stB.hold_stops = true
+            ctrlB:end_track(viewB, 1, gen1, 'cockpit')
+            assert(#stB.held_stops == 1)
+            local writes_B0, sets_B0 = stB.writes, stB.md_sets
+            stB.now, stB.gt = stB.now + 2.0, stB.gt + 2.0 -- +2.0 s (> 1.5 s), NO tick()!
+            execB(stB.held_stops[1]) -- Late STOP reply arrives in callback past timeout!
+            local b_same_ok, b_same_why = pushB('cockpit', gen2, stB.pose.z + 3, 50)
+            local b2_sess, b2_why = adaptersB.cockpit2:bind({
+                slot = 'cockpit2', serial = 1, epoch = epoch, index = 2,
+                actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen2,
+            })
+            local b2_sample_ok, b2_sample_why = pushB('cockpit2', gen2, stB.pose.z + 3, 50)
+
+            -- Path C1: Held STOP times out silently (+2.0 s) and slot 2 tries to bind BEFORE slot 1 ticks ->
+            --          cross-slot claim tick expires slot 1 stop and fences actor immediately!
+            local stC1, viewC1, claimsC1, velsC1, adaptersC1, ctrlC1 = build_rig()
+            stC1.hold_stops = true
+            ctrlC1:end_track(viewC1, 1, gen1, 'cockpit')
+            local writes_C1, sets_C1 = stC1.writes, stC1.md_sets
+            stC1.now, stC1.gt = stC1.now + 2.0, stC1.gt + 2.0 -- NO slot 1 tick!
+            local c1_sess, c1_why = adaptersC1.cockpit2:bind({
+                slot = 'cockpit2', serial = 1, epoch = epoch, index = 2,
+                actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen2,
+            })
+
+            -- Path C2: View-loss unanchored stop failure fences ambiguous actor across ALL slots!
+            local stC2, _, claimsC2, _, adaptersC2, ctrlC2 = build_rig()
+            local writes_C2, sets_C2 = stC2.writes, stC2.md_sets
+            stC2.obs_matches = false
+            ctrlC2:view(nil, 1, 'cockpit')
+            stC2.obs_matches = true -- Even if observer reappears on slot 2, ambiguous actor stays fenced!
+            local c2_sess, c2_why = adaptersC2.cockpit2:bind({
+                slot = 'cockpit2', serial = 1, epoch = epoch, index = 2,
+                actor = '0xca', code = 'TGT-002', sector_macro = 'sector_a', generation = gen2,
+            })
+
+            return {
+                pathA = {
+                    ok_same = ok_same, why_same = why_same,
+                    ok_other = ok_other, why_other = why_other,
+                    b_same_nil = a_bind_same == nil, b_same_why = a_bind_same_why,
+                    b_other_nil = a_bind_other == nil, b_other_why = a_bind_other_why,
+                    writes_while_pending = writes_while_pending,
+                    sets_while_pending = sets_while_pending,
+                    faults_while_pending = faults_while_pending,
+                    writes_after_confirm = stA.writes - writes_at_stop,
+                    sets_after_confirm = stA.md_sets - sets_at_stop,
+                    gen2_vel = stA.native_vel.z,
+                    closed = ctrlA:slot_stats('cockpit').closed,
+                    uncertain = ctrlA:slot_stats('cockpit').velocity_cleanup_uncertain,
+                },
+                pathB = {
+                    vel_unc = velsB.cockpit:cleanup_uncertain(),
+                    confirmed_stops = velsB.cockpit:stats().confirmed_stops,
+                    fenced_reason = claimsB.fenced_actors['0xca'],
+                    same_ok = b_same_ok, same_why = b_same_why,
+                    same_closed = ctrlB:slot_stats('cockpit').closed,
+                    same_unc = ctrlB:slot_stats('cockpit').velocity_cleanup_uncertain,
+                    other_bind_nil = b2_sess == nil, other_bind_why = b2_why,
+                    other_sample_ok = b2_sample_ok, other_sample_why = b2_sample_why,
+                    writes_after = stB.writes - writes_B0,
+                    sets_after = stB.md_sets - sets_B0,
+                },
+                pathC1 = {
+                    bind_nil = c1_sess == nil, bind_why = c1_why,
+                    vel1_unc = velsC1.cockpit:cleanup_uncertain(),
+                    fenced_reason = claimsC1.fenced_actors['0xca'],
+                    writes_after = stC1.writes - writes_C1,
+                    sets_after = stC1.md_sets - sets_C1,
+                },
+                pathC2 = {
+                    bind_nil = c2_sess == nil, bind_why = c2_why,
+                    fenced_reason = claimsC2.fenced_actors['0xca'],
+                    writes_after = stC2.writes - writes_C2,
+                    sets_after = stC2.md_sets - sets_C2,
+                },
+            }
+        """)
+        a = summary['pathA']
+        self.assertFalse(a['ok_same'])
+        self.assertEqual(a['why_same'], 'stop_pending')
+        self.assertFalse(a['ok_other'])
+        self.assertEqual(a['why_other'], 'stop_pending')
+        self.assertTrue(a['b_same_nil'])
+        self.assertEqual(a['b_same_why'], 'stop_pending')
+        self.assertTrue(a['b_other_nil'])
+        self.assertEqual(a['b_other_why'], 'stop_pending')
+        self.assertEqual(a['writes_while_pending'], 0)
+        self.assertEqual(a['sets_while_pending'], 0)
+        self.assertEqual(a['faults_while_pending'], 0)
+        self.assertGreater(a['writes_after_confirm'], 5)
+        self.assertGreater(a['sets_after_confirm'], 0)
+        self.assertAlmostEqual(a['gen2_vel'], 50.0, delta=1.0)
+        self.assertFalse(a['closed'])
+        self.assertFalse(a['uncertain'])
+
+        b = summary['pathB']
+        self.assertTrue(b['vel_unc'])
+        self.assertEqual(b['confirmed_stops'], 0)
+        self.assertEqual(b['fenced_reason'], 'stop_receipt_timeout')
+        self.assertFalse(b['same_ok'])
+        self.assertEqual(b['same_why'], 'velocity_cleanup_uncertain')
+        self.assertTrue(b['same_closed'])
+        self.assertTrue(b['same_unc'])
+        self.assertTrue(b['other_bind_nil'])
+        self.assertEqual(b['other_bind_why'], 'actor_fenced')
+        self.assertFalse(b['other_sample_ok'])
+        self.assertEqual(b['other_sample_why'], 'native_binding')
+        self.assertEqual(b['writes_after'], 0)
+        self.assertEqual(b['sets_after'], 0)
+
+        c1 = summary['pathC1']
+        self.assertTrue(c1['bind_nil'])
+        self.assertEqual(c1['bind_why'], 'actor_fenced')
+        self.assertTrue(c1['vel1_unc'])
+        self.assertEqual(c1['fenced_reason'], 'stop_receipt_timeout')
+        self.assertEqual(c1['writes_after'], 0)
+        self.assertEqual(c1['sets_after'], 0)
+
+        c2 = summary['pathC2']
+        self.assertTrue(c2['bind_nil'])
+        self.assertEqual(c2['bind_why'], 'actor_fenced')
+        self.assertEqual(c2['fenced_reason'], 'anchor_observer_mismatch')
+        self.assertEqual(c2['writes_after'], 0)
+        self.assertEqual(c2['sets_after'], 0)
 
 
 if __name__ == '__main__':

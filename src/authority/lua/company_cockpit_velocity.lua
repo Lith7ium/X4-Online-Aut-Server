@@ -1,10 +1,12 @@
 -- Opt-in, default-off one-shot (constantvel="false") native linear velocity bridge
 -- for the receiving cockpit. Keeps wire protocol, shared server, and clock policy unchanged;
--- enforces guarded pose anchoring before every stop, fences delayed set/stop receipts across
--- generation and slot reuse, preserves possible prior physical motion until a matching
--- independently confirmed near-zero receipt arrives, bounds pending receipts, preserves
--- continuous position playback above MAX_SPEED when cleanly stopped, and exposes acknowledged
--- native velocity alongside receipt game_time and request id for established-duration readback.
+-- enforces guarded pose anchoring before every stop, checks receipt expiry inside the MD
+-- callback before accepting any SET/STOP/zero/out-of-order reply, serializes new dispatches
+-- behind confirmed stop cleanup, fences delayed set/stop receipts across generation and slot
+-- reuse, preserves possible prior physical motion until a matching independently confirmed
+-- near-zero receipt arrives, bounds pending receipts, preserves continuous position playback
+-- above MAX_SPEED when cleanly stopped, and exposes acknowledged native velocity alongside
+-- receipt game_time and request id for established-duration readback.
 local M = {}
 local SCREEN = 'X4AuthorityCompanyCockpitVelocity'
 local COCKPIT_SLOTS = {cockpit = true, cockpit2 = true, cockpit3 = true}
@@ -251,11 +253,23 @@ function M.new(options)
         return false
     end
 
+    local function settle_stop(meta, confirmed, reason)
+        if not meta or meta.settled then return end
+        meta.settled = true
+        local waiters = meta.waiters
+        meta.waiters = nil
+        if waiters then
+            for _, cb in ipairs(waiters) do
+                pcall(cb, confirmed, reason)
+            end
+        end
+    end
+
     local function prune_pending(now)
         if not finite(now) then return end
         local expired = {}
         for id, entry in pairs(pending_local) do
-            if now - entry.sent_at >= receipt_timeout then
+            if now < entry.sent_at or (now - entry.sent_at) >= receipt_timeout then
                 expired[#expired + 1] = id
             end
         end
@@ -263,16 +277,17 @@ function M.new(options)
             local entry = remove_pending_entry(id)
             if entry then
                 stats.timeouts = stats.timeouts + 1
-                if entry.op == 'stop' and pending_stops[entry.lease_id] then
+                if entry.op == 'stop' and pending_stops[entry.lease_id] == entry then
                     pending_stops[entry.lease_id] = nil
                     pending_stop_count = math.max(0, pending_stop_count - 1)
                     mark_uncertain('stop_receipt_timeout', entry)
+                    settle_stop(entry, false, 'stop_receipt_timeout')
                 end
             end
         end
     end
 
-    local function dispatch(op, lease, velocity, anchor_pose, expected_zone)
+    local function dispatch(op, lease, velocity, anchor_pose, expected_zone, on_settled)
         local now = clock()
         if not finite(now) then return false, 'invalid_clock' end
         prune_pending(now)
@@ -331,6 +346,8 @@ function M.new(options)
             dispatched_velocity = dispatched_vel,
             anchor_pose = copy_vec(anchor_pose),
             sent_at = now,
+            settled = false,
+            waiters = type(on_settled) == 'function' and {on_settled} or {},
         }
         meta.on_evict = function()
             remove_pending_entry(id)
@@ -348,16 +365,51 @@ function M.new(options)
             row.expected_lease = meta.lease_id
             row.generation = meta.generation
 
+            -- Enforce receipt expiry inside the callback itself before accepting any
+            -- SET, STOP, ordinary zero SET, or out-of-order reply (even without prior housekeeping).
+            local now_cb = clock()
+            local expired = (not finite(now_cb)) or (now_cb < meta.sent_at) or ((now_cb - meta.sent_at) >= receipt_timeout)
+            if expired then
+                local raw_ok = row.ok
+                local raw_status = row.status
+                local raw_speed = row.total_speed_mps
+                local lease_matches_reply = row.lease == meta.lease_id
+                stats.timeouts = stats.timeouts + 1
+                stats.fenced_receipts = stats.fenced_receipts + 1
+                row.expired = true
+                row.fenced = true
+                row.ok = false
+                if op == 'stop' then
+                    if pending_stops[meta.lease_id] == meta then
+                        pending_stops[meta.lease_id] = nil
+                        pending_stop_count = math.max(0, pending_stop_count - 1)
+                    end
+                    row.confirmed_zero = false
+                    row.fail_reason = 'stop_receipt_timeout'
+                    mark_uncertain('stop_receipt_timeout', meta)
+                    settle_stop(meta, false, 'stop_receipt_timeout')
+                else
+                    row.fail_reason = 'set_receipt_timeout'
+                    if lease_matches_reply and raw_ok and raw_status == 'set' and active == nil
+                            and raw_speed and raw_speed > STOP_SPEED_TOLERANCE then
+                        mark_uncertain('late_set_after_stop', meta)
+                    end
+                end
+                notify_event(row)
+                return
+            end
+
             local lease_matches_reply = row.lease == meta.lease_id
             if not lease_matches_reply then
                 row.ok = false
                 row.fenced = true
                 row.fail_reason = 'lease_mismatch'
                 stats.fenced_receipts = stats.fenced_receipts + 1
-                if op == 'stop' and pending_stops[meta.lease_id] then
+                if op == 'stop' and pending_stops[meta.lease_id] == meta then
                     pending_stops[meta.lease_id] = nil
                     pending_stop_count = math.max(0, pending_stop_count - 1)
                     mark_uncertain('stop_lease_mismatch', meta)
+                    settle_stop(meta, false, 'stop_lease_mismatch')
                 end
                 notify_event(row)
                 return
@@ -417,7 +469,7 @@ function M.new(options)
             end
 
             -- op == 'stop'
-            local was_pending = pending_stops[meta.lease_id] ~= nil
+            local was_pending = pending_stops[meta.lease_id] == meta
             if was_pending then
                 pending_stops[meta.lease_id] = nil
                 pending_stop_count = math.max(0, pending_stop_count - 1)
@@ -450,12 +502,14 @@ function M.new(options)
                 stats.last_snapback_m = row.snapback_m
                 stats.last_stop_speed_mps = row.total_speed_mps
                 stats.last_anchor_drift_m = row.anchor_drift_m
+                settle_stop(meta, true, nil)
             else
                 row.ok = false
                 row.confirmed_zero = false
                 row.fail_reason = fail_reason
                 stats.refusals = stats.refusals + 1
                 mark_uncertain(fail_reason, meta)
+                settle_stop(meta, false, fail_reason)
             end
             notify_event(row)
         end
@@ -464,10 +518,18 @@ function M.new(options)
         pending_local[id] = meta
         pending_local_count = pending_local_count + 1
         global_pending_count = global_pending_count + 1
+        if op == 'stop' then
+            pending_stops[lease.id] = meta
+            pending_stop_count = pending_stop_count + 1
+        end
 
         local ok, dispatched = pcall(issue, args)
         if not ok or dispatched ~= true then
             remove_pending_entry(id)
+            if op == 'stop' and pending_stops[lease.id] == meta then
+                pending_stops[lease.id] = nil
+                pending_stop_count = math.max(0, pending_stop_count - 1)
+            end
             stats.refusals = stats.refusals + 1
             return false, 'issue_failed'
         end
@@ -475,8 +537,6 @@ function M.new(options)
             stats.sets = stats.sets + 1
         else
             stats.stops = stats.stops + 1
-            pending_stops[lease.id] = meta
-            pending_stop_count = pending_stop_count + 1
         end
         return true, id
     end
@@ -496,6 +556,18 @@ function M.new(options)
     function api:has_pending_stop()
         prune_pending(clock())
         return pending_stop_count > 0, pending_stop_count
+    end
+
+    function api:on_pending_stops_settled(cb)
+        if type(cb) ~= 'function' then return end
+        prune_pending(clock())
+        if pending_stop_count == 0 then
+            pcall(cb, not cleanup_uncertain, uncertain_reason)
+            return
+        end
+        for _, entry in pairs(pending_stops) do
+            entry.waiters[#entry.waiters + 1] = cb
+        end
     end
 
     function api:acknowledged_velocity(binding, expected_zone)
@@ -519,6 +591,7 @@ function M.new(options)
         local now = clock()
         prune_pending(now)
         if cleanup_uncertain then return false, uncertain_reason end
+        if pending_stop_count > 0 then return false, 'stop_pending' end
         if type(binding) ~= 'table' or type(velocity) ~= 'table'
                 or binding.epoch ~= pinned.epoch or binding.index == own_index
                 or type(binding.actor) ~= 'string' or type(binding.sector_macro) ~= 'string'
@@ -615,7 +688,7 @@ function M.new(options)
         return true, 'dispatched'
     end
 
-    function api:stop(anchor_fn, reason)
+    function api:stop(anchor_fn, reason, on_settled)
         prune_pending(clock())
         local bound = active
         local needs_stop = lease_needs_stop(bound)
@@ -640,7 +713,7 @@ function M.new(options)
             return false, fail
         end
         local anchored_pose = {x = pose.x, y = pose.y, z = pose.z}
-        local ok_d, disp_err = dispatch('stop', bound, nil, anchored_pose, pose.zone)
+        local ok_d, disp_err = dispatch('stop', bound, nil, anchored_pose, pose.zone, on_settled)
         if not ok_d then
             mark_uncertain(disp_err or 'stop_dispatch_failed', bound)
             return false, disp_err or 'stop_dispatch_failed'

@@ -535,8 +535,14 @@ function M.new(options)
                 actor = observed.actor, code = observed.code, sector_macro = observed.sector_macro,
                 generation = sample.generation,
             }
-            local temp_session = options.adapter:bind(probe_binding)
+            local temp_session, bind_reason = options.adapter:bind(probe_binding)
             if not temp_session then
+                if bind_reason == 'stop_pending' then
+                    emit('handoff_deferred_stop_pending', {
+                        index = ship_index, generation = sample.generation, sequence = sample.sequence,
+                    })
+                    return false, 'stop_pending'
+                end
                 options.fault('native_binding')
                 return false, 'native_binding'
             end
@@ -851,7 +857,7 @@ function M.new_multi_x4(config, pinned, cockpit_readers, guard, clock)
     ffi.cdef[[double GetCurrentGameTime(void); bool IsGamePaused(void);]]
     local native_velocity = config.cockpit_native_velocity == true
     local slot_names, adapters = {}, {}
-    local exclusive_claims = {by_actor = {}, by_slot = {}}
+    local exclusive_claims = {by_actor = {}, by_slot = {}, fenced_actors = {}}
     for _, name in ipairs(COCKPIT_SLOTS) do
         local reader = cockpit_readers[name]
         if reader ~= nil then
