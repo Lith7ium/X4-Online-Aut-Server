@@ -176,6 +176,14 @@ A single Linux X4 observer replayed 18 position and orientation samples from the
 
 At the two ends of the replay, screenshots showed BBS-493's selected contact on the cockpit radar at (673.5, 602) and (693.5, 620.5) in a 1280 × 720 window, a **27.24 px displacement**. Clearing the target removed the gold corners and left the green contact visible. Reselecting BBS-493 restored the corners at the same final position. The starting selection was dimmed by the cockpit fade. Later brighter frames at the starting position showed the same corners. These images establish the two radar positions. Smoothness through the intervening frames and radar behavior during a Linux/Windows internet flight remain open.
 
+## Native target speed during a travel-speed transition
+
+An isolated Linux observer at `4e6ff418` replayed 64 localhost movement packets against BBS-493 from XNA-002's cockpit. The first two positions came from the recorded superhighway flight. The remaining packets described a scripted 180 → 2,900 → 150 m/s flight. This internal option uses X4's native velocity for ordinary flight. Above its 2,500 m/s limit it requests a native stop and continues displaying movement from positions.
+
+X4 measured 180.00 m/s on BBS-493, and the stock target-speed getter returned 178 m/s. The fixture then held the first genuine stop reply for 354 ms after X4 executed the stop. Four new positions arrived while the client waited. Playback kept tracking the same ship, issued no pose writes during the wait and covered another 3.75 km from position updates after confirmation. On slowing down, the native reading reached 149.71 m/s and the stock getter returned 149 m/s.
+
+When packets ceased, the observer requested its final stop after 5.009 seconds. X4 confirmed the stop 7.1 ms later. The target stayed at zero speed, with a 0.24 mm difference between its stop position and the verified anchor. XNA-002 stayed fixed across 1,355 frame checks. The trial recorded 1,162 pose readbacks and a maximum deviation of 1.447 m from the expected pose. The sealed source was preserved and X4 exited. This test used one running observer. Target speed during an independently piloted internet flight remains open. The private result has SHA-256 `5ff53b5683bc969bb391727bf7c1c7b0ba611385ad52bd4b12d887eec40bbedf`.
+
 ## Offline validation
 
 The Linux run of `tools/dev/check.py` on `86327b21` discovered 6,057 tests. 6,031 passed and 26 were skipped. There were zero failed assertions and zero test errors. The strict runner returned exit code 1. Fourteen tests require Windows. Twelve require additional reference files or a released tool absent from this checkout. The subsequent cockpit-health and saved-marker fixes passed their focused checks. The full-suite result applies to the named revision.

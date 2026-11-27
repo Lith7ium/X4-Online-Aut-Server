@@ -60,3 +60,11 @@ The following poll required no new health read. The adapter applied the hit
 once. Shield recharge and cockpit replies were supplied by the fixture.
 The same sequence in running Windows and Linux X4 cockpits is still open.
 [Cockpit retry test](../tests/test_authority_company_cockpit_health_bridge.py) · [Provider reconnection test](../tests/test_authority_company_combat_service.py)
+
+## Four independent cockpit reads in one X4 update
+
+Four ordinary sender workers on loopback requested fresh cockpit health for 62 seconds. The adapter simulated a sustained 1.138 s read. With serial reads one pilot never received a confirmed baseline. Each of the other three received two. An internal scheduler at `29d4b6f6` allowed up to four independent reads of distinct ships, and each pilot received ten confirmations. The client, service and native read deadlines stayed at two seconds. Damage writes retained their existing order and took priority over reads.
+
+A second experiment used a running, GPU-free X4 and four loopback workers. The workers held synthetic seat grants for four distinct registered Company ships. The native adapter resolved each ship in X4, and an independent getter checked its ship code and health. Two rounds returned all four ships' shield and hull in **895–900 ms** and **651–654 ms** respectively. In a third round the test revoked XNA-002's grant after dispatch. The other three workers received their results. X4 still read XNA-002 about 509 ms after its worker disconnected, and the adapter delivered no health to that worker. All three rounds ran through the native UDP, Mission Director and Lua path. The provider paused and exited normally. The private result has SHA-256 `4892d99ee4f67e328a440f5c54375e915b601c23921c1b8b53bc6be608737577`.
+
+A separate pinned TLS test kept twelve connections active on the same port, four each for control, motion and combat. Four simulated shooters each hit the next pilot for 26 shield while four slow reads were outstanding. Each shooter received one confirmed receipt, all four simulated cockpits received their new shield value, all control probes returned and the four observers received 138–140 motion snapshots each. This test used a simulated damage and health adapter. Four simultaneous game clients in combat remain to be tested.
