@@ -130,6 +130,11 @@ X4 matched. Native Windows flight and visible playback require separate
 gameplay verification. The temporary motion credential stays
 in memory.
 
+For an internal flight tracking active pilots automatically, the development
+branch supports `-CompanyMotion -CompanyCockpitPlayback -CompanyCockpitContinuousPlayback`.
+The [continuous cockpit playback guide](AUTHORITY-SERVER-PACKAGE.md#continuous-cockpit-playback-on-the-development-branch)
+covers acquisition, travel speed and the five-second prediction deadline.
+
 ### Try an opt-in Company purchase
 
 Use a matching Windows package and a private `connection.json` from a provider
@@ -259,11 +264,6 @@ python .\tools\dev\authority_combat_capture_receipt.py --checkpoint checkpoint-.
   --sha256 ... --registry-epoch ... --piloted-ship-index 1074 `
   --log "$env:USERPROFILE\Documents\Egosoft\X4\45851\x4authority.log" --out C:\X4Test\receipt.json
 ```
-
-For an internal flight tracking active pilots automatically, the development
-branch supports `-CompanyMotion -CompanyCockpitPlayback -CompanyCockpitContinuousPlayback`.
-The [continuous cockpit playback guide](AUTHORITY-SERVER-PACKAGE.md#continuous-cockpit-playback-on-the-development-branch)
-covers acquisition, travel speed and the five-second prediction deadline.
 
 ### Run the isolated HUD playback diagnostic
 

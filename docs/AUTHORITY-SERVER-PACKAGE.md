@@ -374,6 +374,23 @@ desired `config.xml` using `--graphics-config PATH` on Linux or
 `-GraphicsConfig PATH` in PowerShell. A new pilot profile with no saved
 preferences uses X4's display defaults.
 
+The Linux launcher allows up to an hour to connect and join. Once admitted,
+close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
+add `--timeout SECONDS` (up to 3600), which covers both joining and playing.
+
+With matching observer builds, the player can target a company ship in the
+cockpit and select another company ship on the open map, including in another
+sector. The cockpit target has to remain within sensor range and high
+attention. The map selection has to appear in the native rendered list.
+When a remote pilot occupies an observed hull, the movement channel forwards
+its current sample. The receiver records a confirmation after X4 matches the
+same hull again. On exit, `company_observer.slots.cockpit` and
+`company_observer.slots.map` in the player result give the counts and last
+confirmed sample for each view. Each slot also retains
+`last_nonzero_velocity_confirmed` after a later stationary sample arrives.
+For the separate relay-only test, see the
+[two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
+
 ### Continuous cockpit playback on the development branch
 
 For an internal flight with matching builds, add `--company-cockpit-continuous-playback`
@@ -395,23 +412,6 @@ Version 4 also carries orientation. The observer interpolates between measured
 attitudes and holds the last one during silence. This trial updates the ship's
 pose in X4. In a two-pilot Linux travel run, stock target range and bearing
 changed while the stock target-speed display stayed at zero. [Flight and braking measurements](../reports/AUTHORITY-HUMAN-PLAYTEST-20261126.md#travel-drive-and-braking-with-two-v4-clients)
-
-The Linux launcher allows up to an hour to connect and join. Once admitted,
-close X4 or press Ctrl+C in the launcher terminal to leave. For a timed run,
-add `--timeout SECONDS` (up to 3600), which covers both joining and playing.
-
-With matching observer builds, the player can target a company ship in the
-cockpit and select another company ship on the open map, including in another
-sector. The cockpit target has to remain within sensor range and high
-attention. The map selection has to appear in the native rendered list.
-When a remote pilot occupies an observed hull, the movement channel forwards
-its current sample. The receiver records a confirmation after X4 matches the
-same hull again. On exit, `company_observer.slots.cockpit` and
-`company_observer.slots.map` in the player result give the counts and last
-confirmed sample for each view. Each slot also retains
-`last_nonzero_velocity_confirmed` after a later stationary sample arrives.
-For the separate relay-only test, see the
-[two-pilot flight procedure](https://github.com/Lith7ium/X4-Online-Aut-Server/blob/experiment/authoritative-server-20261115/docs/AUTHORITY-WINDOWS-CLIENT-PACKAGE.md#observe-a-short-cross-sector-flight).
 
 ### Two-pilot cockpit playback
 
