@@ -64,3 +64,16 @@ the supervisor result has SHA-256
 This load ended while paused, before multiplayer admission, with no pilot
 at KHI's controls. Live reciprocal cockpit damage over the Internet
 remains an acceptance test.
+
+## Both pilots fire on the same range
+
+On 27 November, two native Bazzite cockpits and one GPU-free local X4 provider ran `673db290` on copies of a base-game world. Both pilots occupied Company Pulsars at a measured separation of 849.875 m. Each used ordinary Space input with six stock Bolt Repeater Mk2 guns.
+
+| Shooter → target | Native projectiles | Locally confirmed shield contacts | Target cockpit |
+| --- | ---: | ---: | --- |
+| HVC-420 → KHI-630 | 24 | 1 | The provider applied hit 1 for 26 damage. KHI's own cockpit changed from 2,366 to 2,340.00003 shield. |
+| KHI-630 → HVC-420 | 18 | 0 | HVC stayed at 2,366 shield. The shooting client submitted no damage for this burst. |
+
+Both ships kept 3,600 hull. KHI's cockpit later read 2,366 shield again at the same server damage revision, confirming that regeneration reached the pilot. The range did not record aim for the reverse burst. It provides no evidence of a lost hit on that leg. The provider verified the final checkpoint `checkpoint-170e81a5a77b4206b5cead0cf3d44945`. The two pilots and provider exited normally and preserved the input save. The private result has SHA-256 `edc204b92e798002e531eedd155f7dfd5764d4307228cb25f89b52fefec48966`.
+
+A subsequent aim check captured an unpaused frame from each cockpit showing the other ship selected under the stock reticle. The stock lead point lay within 0.38 pixels of the center in both images. The test driver lost its initial readiness record from its log window before delivering the first keypress. Neither pilot fired in that run.
