@@ -126,3 +126,20 @@ local wide = {} for i = 1, 50 do wide[i] = 5 + (i % 10) end
 assert(hull.adaptive_delay(wide) == .50)
 
 print('flight lab adaptive delay ok')
+
+-- burst_after_stall_is_not_replayed: arrivals normal, then 0.6 s with nothing, then the backlog at
+-- once. The buffer renders at the fastest transit seen plus its delay, which a stall never raises,
+-- so the backlog fills the past and the shown ship scores the same as without the stall.
+local function stall(departure)
+    if departure >= 8 and departure < 8.6 then return 8.6 + .06 end
+    return departure + .06
+end
+local function steady(departure) return departure + .06 end
+for _, mode in ipairs({'ordinary', 'continuous'}) do
+    local stalled = L.run{flight = 'steady_345', profile = 'good', mode = mode, link = stall, wan = {speed_limit = true}}
+    local smooth = L.run{flight = 'steady_345', profile = 'good', mode = mode, link = steady, wan = {speed_limit = true}}
+    assert(stalled.position_error_m.max <= smooth.position_error_m.max + 1, L.json(stalled))
+    assert(stalled.jumps == 0 and stalled.backwards == 0 and stalled.faults == 0, L.json(stalled))
+end
+
+print('flight lab burst ok')
