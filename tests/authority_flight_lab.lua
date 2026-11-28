@@ -114,3 +114,15 @@ end
 assert(L.run{flight = 'steady_345', profile = 'poor', mode = 'ordinary', version = 3, wan = {speed_limit = true}}.faults == 0)
 
 print('flight lab speed limit ok')
+
+-- adaptive_delay_follows_the_spread
+local hull = L.modules.hull
+local function rep(v, n) local t = {} for i = 1, n do t[i] = v end return t end
+assert(hull.adaptive_delay(rep(5, 9)) == .15)
+assert(math.abs(hull.adaptive_delay(rep(5, 30)) - .10) < 1e-9)
+local spread = {} for i = 1, 50 do spread[i] = 5 + (i % 10) * .02 end   -- p95 - min = 0.18
+assert(math.abs(hull.adaptive_delay(spread) - .28) < 1e-9)
+local wide = {} for i = 1, 50 do wide[i] = 5 + (i % 10) end
+assert(hull.adaptive_delay(wide) == .50)
+
+print('flight lab adaptive delay ok')

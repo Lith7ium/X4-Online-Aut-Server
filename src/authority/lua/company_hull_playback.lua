@@ -6,6 +6,10 @@ local INTERPOLATION_DELAY = .15
 -- Opt-in WAN correction limit: speed times (time since the last good sample
 -- or confirmed write + margin), never below MAX_STEP and never above the cap.
 local SPEED_LIMIT_CAP, SPEED_LIMIT_MARGIN = 5000, .25
+-- Measured, not wired: a delay covering the spread of recent transit times.
+-- In the flight lab it removed backward frames but added lag (see
+-- reports/AUTHORITY-FLIGHT-LAB-20261128.md), so playback does not use it.
+local ADAPTIVE_DELAY_MIN, ADAPTIVE_DELAY_MAX, ADAPTIVE_DELAY_MIN_COUNT = .10, .50, 10
 -- Largest distance between two valid sector positions, each with axes in ±10⁷ m.
 local SECTOR_DIAGONAL = 2 * math.sqrt(3) * 1e7
 M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
@@ -59,6 +63,19 @@ local function same_binding(value, binding)
         if value[key] ~= binding[key] then return false end
     end
     return true
+end
+
+-- Interpolation delay for transits (arrival - capture_time, up to the last 50):
+-- .10 s plus the spread from the fastest to the 95th percentile (nearest rank),
+-- within .10 to .50 s; the ordinary .15 s until 10 values are known.
+function M.adaptive_delay(transits)
+    local count = #transits
+    if count < ADAPTIVE_DELAY_MIN_COUNT then return INTERPOLATION_DELAY end
+    local sorted = {}
+    for i = 1, count do sorted[i] = transits[i] end
+    table.sort(sorted)
+    local spread = sorted[math.ceil(.95 * count)] - sorted[1]
+    return math.min(ADAPTIVE_DELAY_MAX, math.max(ADAPTIVE_DELAY_MIN, ADAPTIVE_DELAY_MIN + spread))
 end
 
 function M.new(options)
