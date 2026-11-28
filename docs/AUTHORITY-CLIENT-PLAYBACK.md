@@ -279,3 +279,14 @@ correction bound remains unchanged. Distinguish this one-ship result from
 AI suppression, visual smoothness and shared-world synchronization. Player
 controls, remote orientation, cross-sector transitions, Windows and Internet
 gameplay remain outstanding.
+
+## Internet links
+
+The [flight lab](AUTHORITY-FLIGHT-LAB.md) replays scripted flights through a
+simulated internet link into these modules, without X4. It showed that one
+refused correction froze ordinary cockpit playback for good at 345 m/s and
+faster. The opt-in `--company-cockpit-wan-playback` scales the 50-metre
+correction bound with ship speed and the time since the last good sample, up
+to 5 km, and ends a refusal with one realignment. Without the flag the bound
+and the playback path are unchanged. The lab results are synthetic; see
+[reports/AUTHORITY-FLIGHT-LAB-20261128.md](../reports/AUTHORITY-FLIGHT-LAB-20261128.md).
