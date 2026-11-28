@@ -102,3 +102,15 @@ L.run{flight = 'close_turns', profile = 'loopback', mode = 'continuous', trace =
 assert(kinds.readback, 'trace saw no readback')
 
 print('flight lab receiver ok')
+
+-- speed_limit_ends_the_travel_freeze
+for _, mode in ipairs({'ordinary', 'continuous'}) do
+    local base = L.run{flight = 'travel_brake', profile = 'poor', mode = mode}
+    local fixed = L.run{flight = 'travel_brake', profile = 'poor', mode = mode, wan = {speed_limit = true}}
+    assert(fixed.longest_freeze_s < 0.5 and fixed.refusals <= 1, L.json(fixed))
+    assert(fixed.position_error_m.p95 <= base.position_error_m.p95, mode)
+end
+-- version3_has_no_faults
+assert(L.run{flight = 'steady_345', profile = 'poor', mode = 'ordinary', version = 3, wan = {speed_limit = true}}.faults == 0)
+
+print('flight lab speed limit ok')

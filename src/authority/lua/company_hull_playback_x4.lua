@@ -113,7 +113,7 @@ function M.new(options, engine)
             return true
         end
 
-        function session:write(target, before, recheck, attitude, continuous)
+        function session:write(target, before, recheck, attitude, continuous, limit)
             -- An older crossing can remain unresolved after a position deviation.
             -- Refusing a new setter cannot certify that crossing.
             if pending_zone then return false end
@@ -123,6 +123,10 @@ function M.new(options, engine)
             local dx, dy, dz = target.x - actual.x, target.y - actual.y, target.z - actual.z
             if recheck ~= nil and type(recheck) ~= 'function' then return false, nil, 'not_dispatched' end
             local maximum = recheck and VELOCITY_STEP_LIMIT or MAX_STEP
+            -- The opt-in WAN speed limit raises the rechecked bound; recheck applies the real limit.
+            if recheck and type(limit) == 'number' and limit > VELOCITY_STEP_LIMIT and limit <= 5000 then
+                maximum = limit
+            end
             if continuous and (not recheck or not self:tracks_active_pilot()) then return false, nil, 'not_dispatched' end
             if not continuous and dx * dx + dy * dy + dz * dz > maximum * maximum then
                 return false, recheck and actual or nil, 'not_dispatched'

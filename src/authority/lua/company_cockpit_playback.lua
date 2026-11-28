@@ -4,6 +4,8 @@ local M = {}
 local MAX_STEP = 50
 local FIRST_CONTACT_DISTANCE, FIRST_CONTACT_AGE = 250, .25
 local READBACK_TOLERANCE = 3
+-- Opt-in WAN speed limit, as in company_hull_playback.lua.
+local SPEED_LIMIT_CAP, SPEED_LIMIT_MARGIN = 5000, .25
 local COCKPIT_SLOTS = {'cockpit', 'cockpit2', 'cockpit3'}
 
 local function dist3(a, b)
@@ -56,6 +58,11 @@ function M.new(options)
     local factory = options.playback or X4LAN_COMPANY_HULL_PLAYBACK
     local prediction_seconds = assert(factory.MAX_PREDICTION_SECONDS)
     local allow_reacquire_align = options.allow_reacquire_align == true
+    local wan = type(options.wan) == 'table' and options.wan or {}
+    local speed_limit = wan.speed_limit == true
+    -- The last confirmed reacquire alignment (local write time, sample capture time) while the
+    -- next track waits, and the start of the gap the new track's first correction may cover.
+    local aligned_at, aligned_capture, wan_anchor
 
     -- Shared per-ship ledgers preserve revocation, reacquisition eligibility, and monotone watermarks across slot re-entry.
     local revoked_by_index = options.revoked_by_index or {}
@@ -189,6 +196,7 @@ function M.new(options)
         end
         -- Close the alignment session so the next velocity sample opens a fresh controller on this aligned pose.
         stop_track()
+        if speed_limit then aligned_at, aligned_capture = now - elapsed, rec.capture_time end
         emit('reacquire_aligned_confirmed', {
             index = rec.index, error = err, elapsed = elapsed, sequence = rec.source_sequence,
         })
@@ -210,6 +218,8 @@ function M.new(options)
             emit('stale_5s', {index = idx, reason = reason})
         elseif reason == 'correction_out_of_bounds' then
             stats.refusals_over_50m = stats.refusals_over_50m + 1
+            -- With the WAN speed limit, a refused correction ends in one bounded realignment.
+            if idx and wan.speed_limit == true then reacquire_by_index[idx] = true end
             emit('refused_over_50m', {index = idx, reason = reason})
         else
             if idx then reacquire_by_index[idx] = true end
@@ -223,19 +233,37 @@ function M.new(options)
         active_generation = verified.generation
     end
 
+    local function reacquire_limit(sample, now)
+        local v = sample.real_velocity
+        wan_anchor = nil
+        if not speed_limit or not aligned_at or type(v) ~= 'table' then return MAX_STEP end
+        local squared = 0
+        for _, axis in ipairs({'x', 'y', 'z'}) do
+            local rate = v[axis]
+            if type(rate) ~= 'number' or not (math.abs(rate) <= 5000) then return MAX_STEP end
+            squared = squared + rate * rate
+        end
+        -- Source capture time measures the ship's travel even when transit time varies.
+        local gap = math.max(0, now - aligned_at,
+            type(sample.capture_time) == 'number' and sample.capture_time - aligned_capture or 0)
+        wan_anchor = now - gap
+        return math.min(SPEED_LIMIT_CAP, math.max(MAX_STEP, math.sqrt(squared) * (gap + SPEED_LIMIT_MARGIN)))
+    end
+
     local function new_controller(verified, active_session, sample_version, start_at_first_pair)
         stats.binds = stats.binds + 1
         local continuous = options.continuous_playback == true and active_session.tracks_active_pilot
             and active_session:tracks_active_pilot()
         return assert(factory.new({
             enabled = true, own_index = own_index, binding = verified, velocity_steps = true,
-            continuous_playback = continuous,
+            continuous_playback = continuous, wan = options.wan, wan_confirmed_write_at = wan_anchor,
             sample_version = sample_version, start_at_first_pair = start_at_first_pair,
             clock = options.clock, game = options.game, paused = options.paused,
             guard = function() return active_session:guard() end,
             read = function(_, timed) return active_session:read(timed) end,
             write = function(_, target, before, recheck, attitude)
-                local ok, outside_native_limit, dispatch = active_session:write(target, before, recheck, attitude, continuous)
+                local ok, outside_native_limit, dispatch = active_session:write(
+                    target, before, recheck, attitude, continuous, speed_limit and SPEED_LIMIT_CAP or nil)
                 if ok == true then stats.writes = stats.writes + 1 end
                 return ok, outside_native_limit, dispatch
             end,
@@ -484,7 +512,8 @@ function M.new(options)
             local align_allowed = reacquire_by_index[ship_index] == true or replacing_generation
             local previous = first_contact
             first_contact = nil
-            if gap > MAX_STEP then
+            local limit = reacquire_limit(sample, now)
+            if gap > limit then
                 local initial = previous and not align_allowed and gap <= FIRST_CONTACT_DISTANCE
                     and previous.serial == serial and same_hull(previous, probe_binding)
                     and previous.generation == sample.generation
@@ -496,7 +525,7 @@ function M.new(options)
                     temp_session:close()
                     stats.refusals_over_50m = stats.refusals_over_50m + 1
                     emit('refused_over_50m', {
-                        index = ship_index, dist = gap, max_step = MAX_STEP, stage = 'reacquire',
+                        index = ship_index, dist = gap, max_step = limit, stage = 'reacquire',
                     })
                     return false, 'correction_out_of_bounds'
                 end
@@ -557,6 +586,7 @@ function M.new(options)
                 })
             end
             reacquire_by_index[ship_index] = false
+            aligned_at, aligned_capture, wan_anchor = nil, nil, nil
         else
             local ok, reason = controller:push(binding, sample, arrival)
             if not ok then
@@ -592,6 +622,7 @@ function M.new_multi(options)
             playback = options.playback,
             trial_first_contact = options.trial_first_contact,
             continuous_playback = options.continuous_playback,
+            wan = options.wan,
             adapter = adapter,
             clock = options.clock,
             game = options.game,

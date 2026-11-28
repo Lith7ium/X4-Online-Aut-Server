@@ -3,6 +3,9 @@ local M = {}
 local MAX_STEP, PREDICTION_SECONDS, READBACK_TOLERANCE = 50, 5, 3
 local VELOCITY_STEP_LIMIT, VELOCITY_INTERVAL_LIMIT = 250, .100
 local INTERPOLATION_DELAY = .15
+-- Opt-in WAN correction limit: speed times (time since the last good sample
+-- or confirmed write + margin), never below MAX_STEP and never above the cap.
+local SPEED_LIMIT_CAP, SPEED_LIMIT_MARGIN = 5000, .25
 -- Largest distance between two valid sector positions, each with axes in ±10⁷ m.
 local SECTOR_DIAGONAL = 2 * math.sqrt(3) * 1e7
 M.MAX_PREDICTION_SECONDS = PREDICTION_SECONDS
@@ -92,11 +95,26 @@ function M.new(options)
     local continuous = cfg.continuous_playback == true
     local maximum_step = velocity_steps and VELOCITY_STEP_LIMIT or MAX_STEP
     if continuous then maximum_step = SECTOR_DIAGONAL end
+    local speed_limit = not continuous and type(cfg.wan) == 'table' and cfg.wan.speed_limit == true
+    if speed_limit then maximum_step = SPEED_LIMIT_CAP end
+    -- A confirmed reacquire alignment counts as the last confirmed write for a new track.
+    local confirmed_write_at = speed_limit and type(cfg.wan_confirmed_write_at) == 'number'
+        and cfg.wan_confirmed_write_at or nil
     local measured_pose, last_display_time, last_display_pose, last_display_rate
     local velocity, sample_count, previous_update = nil, 0, nil
     local authorize_step
     local observation, prior_update, last_real_velocity
     local native_refusal, native_refusal_phase
+
+    local function newest_speed()
+        local rate = newest and newest.rate
+        return rate and math.sqrt(rate[1] * rate[1] + rate[2] * rate[2] + rate[3] * rate[3]) or 0
+    end
+
+    local function correction_limit(gap)
+        if not speed_limit then return MAX_STEP end
+        return math.min(SPEED_LIMIT_CAP, math.max(MAX_STEP, newest_speed() * (math.max(0, gap) + SPEED_LIMIT_MARGIN)))
+    end
 
     local function report_correction(phase, actual)
         if not observation or type(cfg.correction_refused) ~= 'function' then return end
@@ -121,18 +139,24 @@ function M.new(options)
         local previous = previous_update
         previous_update = {time = now, velocity = velocity, samples = sample_count}
         local elapsed = previous and now - previous.time
+        -- After a stall the newest sample's predecessor marks the last good sample, by
+        -- local arrival or by source capture time, whichever gap is longer.
+        local limit = correction_limit(math.max(confirmed_write_at and now - confirmed_write_at or 0,
+            newest and now - (newest.prior_arrival or newest.arrival) or 0,
+            newest and newest.capture_interval or 0))
+        local ceiling = speed_limit and SPEED_LIMIT_CAP or VELOCITY_STEP_LIMIT
         authorize_step = function(before)
             local dx, dy, dz = target.x - before.x, target.y - before.y, target.z - before.z
             local squared = dx * dx + dy * dy + dz * dz
-            if squared <= MAX_STEP * MAX_STEP then return true end
-            if squared > VELOCITY_STEP_LIMIT * VELOCITY_STEP_LIMIT then return false end
+            if squared <= limit * limit then return true end
+            if squared > ceiling * ceiling then return false end
             if not previous or previous.samples < 2 or elapsed <= 0 or elapsed > VELOCITY_INTERVAL_LIMIT
                     or (phase ~= 'interpolated' and phase ~= 'extrapolated') then
                 return false
             end
             local rate = previous.velocity
             dx, dy, dz = dx - rate.x * elapsed, dy - rate.y * elapsed, dz - rate.z * elapsed
-            return dx * dx + dy * dy + dz * dz <= MAX_STEP * MAX_STEP
+            return dx * dx + dy * dy + dz * dz <= limit * limit
         end
         return authorize_step(actual)
     end
@@ -170,6 +194,18 @@ function M.new(options)
         local inner, lineage = buffer.new(settings), {}
         return {
             push = function(_, sample, arrival)
+                local last = lineage[#lineage]
+                if speed_limit and newest and last then
+                    -- The buffer's own check uses the cap. Here the speed-aware limit
+                    -- replaces its base distance; the gap is the sample interval.
+                    local moved = 0
+                    local dt = math.max(0, sample.capture_time - last.capture_time)
+                    for axis = 1, 3 do moved = moved + (sample.pose[axis] - newest.pose[axis]) ^ 2 end
+                    if math.sqrt(moved) > correction_limit(dt) + newest_speed() * dt then
+                        refusal = 'source_discontinuity'
+                        return false
+                    end
+                end
                 local ok, reason = inner:push(sample, arrival)
                 if not ok or reason ~= 'append' then
                     refusal = reason == 'gap' and 'capture_gap'
@@ -181,7 +217,9 @@ function M.new(options)
                     capture_time = sample.capture_time, arrival = arrival,
                     capture_interval = previous and sample.capture_time - previous.capture_time}
                 if #lineage > 16 then table.remove(lineage, 1) end
-                newest = {sequence = sample.sequence, pose = sample.pose, rate = sample.real_rate, arrival = arrival}
+                newest = {sequence = sample.sequence, pose = sample.pose, rate = sample.real_rate, arrival = arrival,
+                          prior_arrival = newest and newest.arrival,
+                          capture_interval = previous and sample.capture_time - previous.capture_time}
                 return true
             end,
             render = function(_, now)
@@ -229,9 +267,10 @@ function M.new(options)
         enabled = true, buffer = checked_buffer, sample_version = sample_version, frame = binding.sector_macro,
         attitude_changed = follows_attitude and buffer.attitude_changed or nil,
         max_age = PREDICTION_SECONDS, max_step = maximum_step,
-        step_guard = not continuous and velocity_steps and step_guard or nil,
+        step_guard = not continuous and (velocity_steps or speed_limit) and step_guard or nil,
         buffer_options = {delay = INTERPOLATION_DELAY, horizon = PREDICTION_SECONDS, start_at_first_pair = cfg.start_at_first_pair,
-                          stale = CAPTURE_CONTINUITY_LIMIT, teleport_distance = continuous and SECTOR_DIAGONAL or MAX_STEP},
+                          stale = CAPTURE_CONTINUITY_LIMIT,
+                          teleport_distance = continuous and SECTOR_DIAGONAL or speed_limit and SPEED_LIMIT_CAP or MAX_STEP},
         clock = cfg.clock, game = cfg.game, paused = cfg.paused, guard = guard,
         read = function(timed)
             local observed, read_start, read_end = cfg.read(copy(binding), timed)
@@ -302,7 +341,7 @@ function M.new(options)
             end
             local source = readback and write_source or rendered_source
             assert(source and source.sequence == event.source_sequence)
-            return cfg.record({
+            local recorded = cfg.record({
                 kind = kind, slot = binding.slot, serial = binding.serial, epoch = binding.epoch,
                 continuous_playback = continuous,
                 input_sequence = readback and write_input and write_input.sequence or nil,
@@ -320,6 +359,10 @@ function M.new(options)
                 actual_attitude = follows_attitude and buffer.copy_attitude(event.actual) or nil,
                 target_attitude = follows_attitude and buffer.copy_attitude(event.target) or nil,
             })
+            if readback and kind == 'readback' and recorded == true then
+                confirmed_write_at = event.local_time - event.elapsed
+            end
+            return recorded
         end,
         fault = function(_, _, stage)
             local reason = refusal or (stage == 'distance' and 'correction_out_of_bounds') or 'playback_failed'
