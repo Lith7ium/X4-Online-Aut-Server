@@ -88,6 +88,8 @@ def parser():
                         help='internal trial: show the selected Company pilot’s separate map marker (requires --company-motion, expires after one second without a sample)')
     result.add_argument('--company-cockpit-continuous-playback', action='store_true',
                         help='internal trial (requires --company-motion and --company-cockpit-playback)')
+    result.add_argument('--company-cockpit-wan-playback', action='store_true',
+                        help='speed-aware correction limit for internet links (requires --company-motion and --company-cockpit-playback)')
     result.add_argument('--company-combat', action='store_true',
                         help='report throttled stock gun contacts (requires --company-motion)')
     result.add_argument('--combat-capture', action='store_true',

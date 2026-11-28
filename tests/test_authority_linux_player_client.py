@@ -313,6 +313,18 @@ class PlayerClientTests(unittest.TestCase):
             self.assertIs(run.call_args.kwargs['cockpit_continuous_playback'], True)
             with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
                 cli.main([*args, '--company-motion', '--company-cockpit-playback-index', str(INDEX + 1), recovery])
+            self.assertNotIn('cockpit_wan_playback', options)
+            wan = '--company-cockpit-wan-playback'
+            with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main([*args, '--company-motion', '--company-cockpit-playback', wan]), 0)
+            self.assertIs(run.call_args.kwargs['cockpit_wan_playback'], True)
+            self.assertNotIn('cockpit_continuous_playback', run.call_args.kwargs)
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()) as error:
+                cli.main([*args, '--company-motion', wan])
+            self.assertIn('--company-cockpit-wan-playback requires --company-motion and --company-cockpit-playback',
+                          error.getvalue())
+            with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+                cli.main([*args, '--company-cockpit-playback', wan])
             flags = ['--' + name.replace('_', '-') for name in features]
             with patch.object(native, 'run', return_value={'success': True}) as run, redirect_stdout(io.StringIO()):
                 self.assertEqual(cli.main([*args, *flags, '--company-cockpit-playback-index', str(INDEX + 1)]), 0)

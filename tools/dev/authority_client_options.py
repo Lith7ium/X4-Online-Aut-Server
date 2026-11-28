@@ -71,6 +71,9 @@ def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str
     continuous_playback = getattr(args, 'company_cockpit_continuous_playback', False)
     if continuous_playback and (not radar_playback or playback_index is not None or not args.company_motion):
         raise ValueError('--company-cockpit-continuous-playback requires --company-motion and --company-cockpit-playback')
+    wan_playback = getattr(args, 'company_cockpit_wan_playback', False)
+    if wan_playback and (not radar_playback or playback_index is not None or not args.company_motion):
+        raise ValueError('--company-cockpit-wan-playback requires --company-motion and --company-cockpit-playback')
 
     options: dict[str, bool | int | tuple[int, str]] = {}
     if observed_npc:
@@ -85,6 +88,8 @@ def company_view_options(args: Namespace, *, hold_npc: bool = False) -> dict[str
         options['cockpit_radar_playback'] = True
     if continuous_playback:
         options['cockpit_continuous_playback'] = True
+    if wan_playback:
+        options['cockpit_wan_playback'] = True
     return options
 
 

@@ -25,6 +25,7 @@ param(
     [switch] $TrialRegisteredNpcMeasurement,
     [switch] $CompanyCockpitPlayback,
     [switch] $CompanyCockpitContinuousPlayback,
+    [switch] $CompanyCockpitWanPlayback,
     [ValidateRange(1, 200000)] [int] $CompanyCockpitPlaybackIndex,
     [ValidateRange(1, 200000)] [int] $CompanyHullPlaybackIndex,
     [switch] $CombatCapture
@@ -57,6 +58,9 @@ if ($PSBoundParameters.ContainsKey('CompanyHullPlaybackIndex') -and -not $Compan
 }
 if ($CompanyCockpitContinuousPlayback -and (-not $CompanyMotion -or -not $CompanyCockpitPlayback)) {
     throw 'CompanyCockpitContinuousPlayback requires CompanyMotion and CompanyCockpitPlayback.'
+}
+if ($CompanyCockpitWanPlayback -and (-not $CompanyMotion -or -not $CompanyCockpitPlayback)) {
+    throw 'CompanyCockpitWanPlayback requires CompanyMotion and CompanyCockpitPlayback.'
 }
 if ($CompanyCockpitPlayback) {
     if (-not $CompanyMotion) {
@@ -190,6 +194,7 @@ if ($CompanyMotion) {
     } elseif ($CompanyCockpitPlayback) {
         $clientArgs += '--company-cockpit-playback'
         if ($CompanyCockpitContinuousPlayback) { $clientArgs += '--company-cockpit-continuous-playback' }
+        if ($CompanyCockpitWanPlayback) { $clientArgs += '--company-cockpit-wan-playback' }
     }
 } elseif ($ChooseCompanyShip) {
     $clientArgs += '--choose-company-ship'

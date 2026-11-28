@@ -80,7 +80,7 @@ class CompanyMotionSource:
     """Poll the latest authenticated sample on the same thread as the game owner."""
 
     def __init__(self, *, playback_index=None, on_stage=None, cockpit_radar_playback=False, cockpit_max_pilots=None,
-                 cockpit_continuous_playback=False,
+                 cockpit_continuous_playback=False, cockpit_wan_playback=False,
                  observed_npc=None, registered_npc_hold_trial=False, registered_npc_alignment_trial=False,
                  registered_npc_local_measurement=False, private_map_marker=False):
         validate_playback_index(playback_index, company_motion=True,
@@ -88,6 +88,9 @@ class CompanyMotionSource:
         if type(cockpit_continuous_playback) is not bool or (cockpit_continuous_playback and
                 (not cockpit_radar_playback or playback_index is not None)):
             raise ValueError('Company continuous playback requires automatic cockpit playback')
+        if type(cockpit_wan_playback) is not bool or (cockpit_wan_playback and
+                (not cockpit_radar_playback or playback_index is not None)):
+            raise ValueError('Company WAN playback requires automatic cockpit playback')
         if cockpit_radar_playback:
             if cockpit_max_pilots is None:
                 cockpit_max_pilots = 1 if playback_index is not None else MAX_COCKPIT_PILOTS
@@ -123,6 +126,7 @@ class CompanyMotionSource:
         self._cockpit_radar_playback = cockpit_radar_playback
         self._cockpit_max_pilots = cockpit_max_pilots
         self._cockpit_continuous_playback = cockpit_continuous_playback
+        self._cockpit_wan_playback = cockpit_wan_playback
         self._thread = threading.get_ident()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -268,6 +272,8 @@ class CompanyMotionSource:
             config['cockpit_max_pilots'] = self._cockpit_max_pilots
         if self._cockpit_continuous_playback:
             config['cockpit_continuous_playback'] = True
+        if self._cockpit_wan_playback:
+            config['cockpit_wan_playback'] = True
         return config
 
     def _prefix(self):

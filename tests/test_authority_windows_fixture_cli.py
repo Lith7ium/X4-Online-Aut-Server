@@ -268,6 +268,16 @@ class FixtureCliTests(unittest.TestCase):
             self.assertIs(run_session.call_args.kwargs['cockpit_continuous_playback'], True)
             with self.assertRaisesRegex(ValueError, 'requires --company-motion and --company-cockpit-playback'):
                 cli.run(cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback-index', '1074', recovery]))
+            wan = '--company-cockpit-wan-playback'
+            cli.run(parsed)
+            self.assertNotIn('cockpit_wan_playback', run_session.call_args.kwargs)
+            cli.run(cli.parser().parse_args([*base, '--company-motion', '--company-cockpit-playback', wan]))
+            self.assertIs(run_session.call_args.kwargs['cockpit_wan_playback'], True)
+            with self.assertRaisesRegex(ValueError, '--company-cockpit-wan-playback requires --company-motion and '
+                                                    '--company-cockpit-playback'):
+                cli.run(cli.parser().parse_args([*base, '--company-motion', wan]))
+            with self.assertRaises(ValueError):
+                cli.run(cli.parser().parse_args([*base, '--company-cockpit-playback', wan]))
             with self.assertRaisesRegex(ValueError, 'requires company motion'):
                 cli.run(cli.parser().parse_args([*base, '--company-cockpit-playback']))
         self.assertTrue(run_session.call_args.kwargs['company_motion'])

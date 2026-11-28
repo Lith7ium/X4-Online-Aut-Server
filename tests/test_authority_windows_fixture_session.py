@@ -420,6 +420,7 @@ class FixtureSessionTests(unittest.TestCase):
         ])
         source_factory.assert_called_once_with(playback_index=None, observed_npc=None, registered_npc_local_measurement=False,
                                                cockpit_radar_playback=False, cockpit_continuous_playback=False,
+                                               cockpit_wan_playback=False,
                                                private_map_marker=True, on_stage=note_stage)
         self.assertTrue(self.connection_options['motion_enabled'])
         self.assertIs(self.installed_company_source, source)

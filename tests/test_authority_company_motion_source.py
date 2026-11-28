@@ -20,6 +20,22 @@ from authority.company_npc_measurement import NPC_CODE, NPC_INDEX, PILOT_INDEX, 
 
 
 class CompanyMotionSourceTest(unittest.TestCase):
+    def test_wan_playback_requires_automatic_cockpit_and_serializes_explicit_opt_in(self):
+        for options in ({}, {'cockpit_radar_playback': True, 'playback_index': 1074}):
+            with self.assertRaisesRegex(ValueError, 'requires automatic cockpit'):
+                CompanyMotionSource(cockpit_wan_playback=True, **options)
+        with self.assertRaisesRegex(ValueError, 'requires automatic cockpit'):
+            CompanyMotionSource(cockpit_radar_playback=True, cockpit_wan_playback=1)
+        for enabled in (False, True):
+            source = CompanyMotionSource(cockpit_radar_playback=True, cockpit_wan_playback=enabled)
+            try:
+                installed = company_motion_config(source, 1073, {
+                    'epoch': 'a' * 32, 'operational_bits': '1' * 2000,
+                })
+                self.assertEqual('cockpit_wan_playback=true' in installed, enabled)
+            finally:
+                source.close()
+
     def test_continuous_playback_requires_automatic_cockpit_and_serializes_explicit_opt_in(self):
         for options in ({}, {'cockpit_radar_playback': True, 'playback_index': 1074}):
             with self.assertRaisesRegex(ValueError, 'requires automatic cockpit'):
