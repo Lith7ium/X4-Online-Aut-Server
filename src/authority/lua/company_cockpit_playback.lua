@@ -62,7 +62,7 @@ function M.new(options)
     local speed_limit = wan.speed_limit == true
     -- The last confirmed reacquire alignment (local write time, sample capture time) while the
     -- next track waits, and the start of the gap the new track's first correction may cover.
-    local aligned_at, aligned_capture, wan_anchor
+    local aligned_at, aligned_capture, aligned_ship, wan_anchor
 
     -- Shared per-ship ledgers preserve revocation, reacquisition eligibility, and monotone watermarks across slot re-entry.
     local revoked_by_index = options.revoked_by_index or {}
@@ -196,7 +196,10 @@ function M.new(options)
         end
         -- Close the alignment session so the next velocity sample opens a fresh controller on this aligned pose.
         stop_track()
-        if speed_limit then aligned_at, aligned_capture = now - elapsed, rec.capture_time end
+        if speed_limit then
+            aligned_at, aligned_capture = now - elapsed, rec.capture_time
+            aligned_ship = {index = rec.index, generation = rec.generation}
+        end
         emit('reacquire_aligned_confirmed', {
             index = rec.index, error = err, elapsed = elapsed, sequence = rec.source_sequence,
         })
@@ -236,7 +239,11 @@ function M.new(options)
     local function reacquire_limit(sample, now)
         local v = sample.real_velocity
         wan_anchor = nil
-        if not speed_limit or not aligned_at or type(v) ~= 'table' then return MAX_STEP end
+        -- Only the ship that was just realigned may use the wider bound.
+        if not speed_limit or not aligned_at or type(v) ~= 'table' or not aligned_ship
+                or sample.index ~= aligned_ship.index or sample.generation ~= aligned_ship.generation then
+            return MAX_STEP
+        end
         local squared = 0
         for _, axis in ipairs({'x', 'y', 'z'}) do
             local rate = v[axis]
@@ -586,7 +593,7 @@ function M.new(options)
                 })
             end
             reacquire_by_index[ship_index] = false
-            aligned_at, aligned_capture, wan_anchor = nil, nil, nil
+            aligned_at, aligned_capture, aligned_ship, wan_anchor = nil, nil, nil, nil
         else
             local ok, reason = controller:push(binding, sample, arrival)
             if not ok then
